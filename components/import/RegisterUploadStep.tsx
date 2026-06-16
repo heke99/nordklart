@@ -86,7 +86,7 @@ export default function RegisterUploadStep({
               <label>
                 <input
                   type="file"
-                  accept=".xlsx,.xls,.csv,.ods"
+                  accept=".xlsx,.csv"
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0]
@@ -98,7 +98,7 @@ export default function RegisterUploadStep({
                   <span>Välj fil</span>
                 </Button>
               </label>
-              <p className="text-xs text-muted-foreground mt-3">XLSX, XLS, CSV, ODS — max 10 MB</p>
+              <p className="text-xs text-muted-foreground mt-3">XLSX, CSV — max 10 MB</p>
             </>
           )}
         </div>

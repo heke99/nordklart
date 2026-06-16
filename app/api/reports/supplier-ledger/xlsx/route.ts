@@ -51,7 +51,7 @@ export async function GET(request: Request) {
       total_outstanding: e.total_outstanding,
     }))
 
-    const buffer = reportToWorkbook<AgingRow>([
+    const buffer = await reportToWorkbook<AgingRow>([
       {
         name: 'Leverantörsreskontra',
         columns: [

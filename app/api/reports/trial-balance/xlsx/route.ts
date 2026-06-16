@@ -49,7 +49,7 @@ export async function GET(request: Request) {
   try {
     const report = await generateTrialBalance(supabase, companyId, periodId)
 
-    const buffer = reportToWorkbook<TrialBalanceRow>([
+    const buffer = await reportToWorkbook<TrialBalanceRow>([
       {
         name: 'Saldobalans',
         columns: [

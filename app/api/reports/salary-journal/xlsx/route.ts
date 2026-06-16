@@ -41,7 +41,7 @@ export async function GET(request: Request) {
   try {
     const report = await generateSalaryJournal(supabase, companyId, year, monthFrom, monthTo)
 
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: 'Lönejournal',
         columns: [

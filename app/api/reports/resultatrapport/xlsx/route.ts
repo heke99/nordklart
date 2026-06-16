@@ -88,7 +88,7 @@ export async function GET(request: Request) {
       prior_period: report.net_result_prior,
     })
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Resultatrapport',
         columns: [

@@ -1147,7 +1147,7 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
   },
   OB_INVALID_FORMAT: {
     httpStatus: 400,
-    message_sv: 'Filformatet stöds inte. Tillåtna format: .xlsx, .xls, .csv, .ods.',
+    message_sv: 'Filformatet stöds inte. Tillåtna format: .xlsx, .csv.',
     message_en: 'Unsupported file format.',
   },
   OB_INVALID_COLUMN_OVERRIDES: {
@@ -1220,7 +1220,7 @@ const REGISTER_IMPORT: Record<string, StructuredErrorEntry> = {
   },
   REG_IMPORT_INVALID_FORMAT: {
     httpStatus: 400,
-    message_sv: 'Filformatet stöds inte. Tillåtna format: .xlsx, .xls, .csv, .ods.',
+    message_sv: 'Filformatet stöds inte. Tillåtna format: .xlsx, .csv.',
     message_en: 'Unsupported file format.',
   },
   REG_IMPORT_INVALID_COLUMN_OVERRIDES: {

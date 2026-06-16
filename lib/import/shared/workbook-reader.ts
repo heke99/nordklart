@@ -1,58 +1,84 @@
-import * as XLSX from 'xlsx'
+import readXlsxFile from 'read-excel-file/node'
 import { decodeFileContent } from './encoding'
 
-/**
- * Read a workbook from a raw file buffer, with correct encoding handling
- * for CSV files.
- *
- * For binary spreadsheet formats (.xlsx, .xls, .ods), xlsx handles encoding
- * via the embedded codepage and we pass the buffer through as `type: 'array'`.
- *
- * For CSV files, xlsx with `type: 'array'` decodes bytes as Latin-1, which
- * mangles UTF-8 multi-byte sequences (e.g. Ö → Ã–). We instead detect the
- * source encoding (UTF-8 with optional BOM, or Windows-1252) and decode to
- * a string before handing it to xlsx as `type: 'string'`.
- */
-export function readWorkbookFromBuffer(buffer: ArrayBuffer, filename: string): XLSX.WorkBook {
-  const ext = filename.toLowerCase().split('.').pop() ?? ''
-  if (ext === 'csv') {
-    const content = decodeFileContent(buffer)
-    return XLSX.read(content, { type: 'string' })
+export interface WorkbookReadResult {
+  sheetName: string
+  rawData: string[][]
+}
+
+function normalizeCell(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  return String(value).trim()
+}
+
+function parseCsvRows(buffer: ArrayBuffer): string[][] {
+  const content = decodeFileContent(buffer)
+  const rows: string[][] = []
+  let row: string[] = []
+  let cell = ''
+  let quoted = false
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i]
+    const next = content[i + 1]
+
+    if (char === '"') {
+      if (quoted && next === '"') {
+        cell += '"'
+        i++
+      } else {
+        quoted = !quoted
+      }
+      continue
+    }
+
+    if (!quoted && (char === ',' || char === ';' || char === '\t')) {
+      row.push(cell.trim())
+      cell = ''
+      continue
+    }
+
+    if (!quoted && (char === '\n' || char === '\r')) {
+      if (char === '\r' && next === '\n') i++
+      row.push(cell.trim())
+      if (row.some((value) => value !== '')) rows.push(row)
+      row = []
+      cell = ''
+      continue
+    }
+
+    cell += char
   }
-  return XLSX.read(buffer, { type: 'array' })
+
+  row.push(cell.trim())
+  if (row.some((value) => value !== '')) rows.push(row)
+  return rows
+}
+
+function normalizeRows(rows: unknown[][]): string[][] {
+  return rows.map((row) => row.map(normalizeCell))
 }
 
 /**
- * Read the workbook from `buffer` and return raw rows from its largest sheet.
- *
- * Picks the sheet with the most rows (a heuristic that handles files where
- * the header sheet isn't the first one). Returns rows as a 2D string array
- * with the header row included; cells default to empty string.
+ * Read the uploaded register/import file and return normalized rows from the
+ * first worksheet. CSV is decoded through our Swedish-aware text decoder;
+ * XLSX is parsed with read-excel-file to avoid the vulnerable SheetJS package.
  */
-export function readBestSheet(
+export async function readBestSheet(
   buffer: ArrayBuffer,
   filename: string,
-): { sheetName: string; rawData: string[][] } {
-  const workbook = readWorkbookFromBuffer(buffer, filename)
+): Promise<WorkbookReadResult> {
+  const ext = filename.toLowerCase().split('.').pop() ?? ''
 
-  let bestSheet = workbook.SheetNames[0]
-  let bestRowCount = 0
-  for (const name of workbook.SheetNames) {
-    const sheet = workbook.Sheets[name]
-    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
-    const rowCount = range.e.r - range.s.r + 1
-    if (rowCount > bestRowCount) {
-      bestRowCount = rowCount
-      bestSheet = name
-    }
+  if (ext === 'csv') {
+    return { sheetName: 'CSV', rawData: parseCsvRows(buffer) }
   }
 
-  const sheet = workbook.Sheets[bestSheet]
-  const rawData: string[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: false,
-  })
+  if (ext !== 'xlsx') {
+    throw new Error('Filformatet stöds inte. Ladda upp en XLSX- eller CSV-fil.')
+  }
 
-  return { sheetName: bestSheet, rawData }
+  const rows = await readXlsxFile(Buffer.from(buffer))
+  return { sheetName: 'Sheet1', rawData: normalizeRows(rows) }
 }

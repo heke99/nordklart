@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { parseSuppliersFile } from '@/lib/import/suppliers/parser'
+import { parseSupplierImportFile } from '@/lib/import/suppliers/parser'
 import { normalizeOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -10,7 +10,7 @@ import type {
   DetectedSupplierColumns,
 } from '@/lib/import/suppliers/types'
 
-const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.ods']
+const ALLOWED_EXTENSIONS = ['.xlsx', '.csv']
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
 export const POST = withRouteContext(
@@ -54,7 +54,7 @@ export const POST = withRouteContext(
 
     try {
       const buffer = await file.arrayBuffer()
-      const parsed = parseSuppliersFile(buffer, file.name, columnOverrides)
+      const parsed = await parseSupplierImportFile(buffer, file.name, columnOverrides)
 
       const existing = await fetchAllRows(({ from, to }) =>
         supabase
@@ -66,18 +66,22 @@ export const POST = withRouteContext(
 
       const byOrg = new Map<string, { id: string; name: string }>()
       const byEmail = new Map<string, { id: string; name: string }>()
+
       for (const s of existing) {
         const org = normalizeOrgNumber(s.org_number)
         if (org) byOrg.set(org, { id: s.id, name: s.name })
+
         const email = normalizeEmail(s.email)
         if (email) byEmail.set(email, { id: s.id, name: s.name })
       }
 
       let duplicateCount = 0
+
       const annotated: AnnotatedSupplierRow[] = parsed.rows.map((r) => {
         const orgKey = normalizeOrgNumber(r.org_number)
         const emailKey = normalizeEmail(r.email)
         let match: AnnotatedSupplierRow['duplicate_match'] = null
+
         if (orgKey && byOrg.has(orgKey)) {
           const e = byOrg.get(orgKey)!
           match = { supplier_id: e.id, matched_by: 'org_number', existing_name: e.name }
@@ -85,7 +89,9 @@ export const POST = withRouteContext(
           const e = byEmail.get(emailKey)!
           match = { supplier_id: e.id, matched_by: 'email', existing_name: e.name }
         }
-        if (match) duplicateCount++
+
+        if (match) duplicateCount += 1
+
         return { ...r, duplicate_match: match }
       })
 
@@ -104,6 +110,7 @@ export const POST = withRouteContext(
       return NextResponse.json({ data: result })
     } catch (err) {
       opLog.error('supplier import parse failed', err as Error)
+
       return errorResponseFromCode('REG_IMPORT_PARSE_FAILED', opLog, {
         requestId,
         details: { reason: err instanceof Error ? err.message : 'unknown' },

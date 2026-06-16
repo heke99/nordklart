@@ -90,7 +90,7 @@ export async function GET(request: Request) {
       }
     }
 
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: 'Åldersfördelning',
         columns: [

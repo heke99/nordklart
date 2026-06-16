@@ -19,7 +19,7 @@ export default function OpeningBalanceUploadStep({
 }: OpeningBalanceUploadStepProps) {
   const [isDragging, setIsDragging] = useState(false)
 
-  const ACCEPTED_TYPES = '.xlsx,.xls,.csv,.ods'
+  const ACCEPTED_TYPES = '.xlsx,.csv'
 
   const handleFile = useCallback((file: File) => {
     const ext = file.name.split('.').pop()?.toLowerCase()
@@ -98,7 +98,7 @@ export default function OpeningBalanceUploadStep({
                 </Button>
               </label>
               <p className="text-xs text-muted-foreground mt-3">
-                XLSX, XLS, CSV, ODS — max 10 MB
+                XLSX, CSV — max 10 MB
               </p>
             </>
           )}

@@ -192,7 +192,7 @@ export async function GET(request: Request) {
 
     const supplierRows: SupplierRow[] = topSuppliers
 
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: 'Nyckeltal (kr)',
         columns: [textColumn('Nyckeltal'), currencyColumn('Värde')],

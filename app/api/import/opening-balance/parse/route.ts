@@ -4,7 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { DetectedColumns } from '@/lib/import/opening-balance/types'
 
-const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.ods']
+const ALLOWED_EXTENSIONS = ['.xlsx', '.csv']
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
 /**
@@ -54,7 +54,7 @@ export const POST = withRouteContext(
 
     try {
       const buffer = await file.arrayBuffer()
-      const result = parseOpeningBalanceFile(buffer, file.name, columnOverrides)
+      const result = await parseOpeningBalanceFile(buffer, file.name, columnOverrides)
       return NextResponse.json({ data: result })
     } catch (err) {
       opLog.error('opening balance parse failed', err as Error)

@@ -20,16 +20,36 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 function normalizeSupplierType(value: string | null): SupplierType | null {
   if (!value) return null
+
   const lower = value.toLowerCase().trim()
-  if (lower === 'swedish_business' || lower === 'swedish' || lower === 'svensk' || lower === 'företag' || lower === 'foretag' || lower === 'business' || lower === 'ab' || lower === 'aktiebolag') {
+
+  if (
+    lower === 'swedish_business' ||
+    lower === 'swedish' ||
+    lower === 'svensk' ||
+    lower === 'företag' ||
+    lower === 'foretag' ||
+    lower === 'business' ||
+    lower === 'ab' ||
+    lower === 'aktiebolag'
+  ) {
     return 'swedish_business'
   }
+
   if (lower === 'eu_business' || lower === 'eu') {
     return 'eu_business'
   }
-  if (lower === 'non_eu_business' || lower === 'non-eu' || lower === 'utomeu' || lower === 'utländsk' || lower === 'utlandsk') {
+
+  if (
+    lower === 'non_eu_business' ||
+    lower === 'non-eu' ||
+    lower === 'utomeu' ||
+    lower === 'utländsk' ||
+    lower === 'utlandsk'
+  ) {
     return 'non_eu_business'
   }
+
   return VALID_SUPPLIER_TYPES.includes(lower as SupplierType)
     ? (lower as SupplierType)
     : null
@@ -37,29 +57,36 @@ function normalizeSupplierType(value: string | null): SupplierType | null {
 
 function normalizeCountry(value: string | null): string {
   if (!value) return 'SE'
+
   const trimmed = value.trim()
   const lower = trimmed.toLowerCase()
+
   if (lower === 'se' || lower === 'sverige' || lower === 'sweden') return 'SE'
+
   return trimmed
 }
 
 function normalizeCurrency(value: string | null): string {
   if (!value) return 'SEK'
+
   const upper = value.trim().toUpperCase()
+
   return VALID_CURRENCIES.has(upper) ? upper : 'SEK'
 }
 
 function cleanGiroNumber(value: string | null): string | null {
   if (!value) return null
+
   const cleaned = value.replace(/[\s.]/g, '')
+
   return cleaned === '' ? null : cleaned
 }
 
-export function parseSuppliersFile(
+export async function parseSupplierImportFile(
   buffer: ArrayBuffer,
   filename: string,
   columnOverrides?: DetectedSupplierColumns,
-): {
+): Promise<{
   filename: string
   sheet_name: string
   total_rows: number
@@ -68,8 +95,8 @@ export function parseSuppliersFile(
   preview_rows: string[][]
   rows: ParsedSupplierRow[]
   warnings: string[]
-} {
-  const { sheetName, rawData } = readBestSheet(buffer, filename)
+}> {
+  const { sheetName, rawData } = await readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedSupplierColumns = columnOverrides ?? {
@@ -94,6 +121,7 @@ export function parseSuppliersFile(
       notes_col: null,
       confidence: 0,
     }
+
     return {
       filename,
       sheet_name: sheetName,
@@ -113,9 +141,10 @@ export function parseSuppliersFile(
   const rows: ParsedSupplierRow[] = []
   const warnings: string[] = []
 
-  for (let i = 0; i < dataRows.length; i++) {
+  for (let i = 0; i < dataRows.length; i += 1) {
     const row = dataRows[i]
     const name = cellOrNull(row[columns.name_col])
+
     if (!name) continue
 
     const get = (col: number | null) =>
@@ -136,29 +165,34 @@ export function parseSuppliersFile(
     const bankAccount = get(columns.bank_account_col)
     const iban = get(columns.iban_col)?.replace(/\s/g, '').toUpperCase() ?? null
     const bic = get(columns.bic_col)?.replace(/\s/g, '').toUpperCase() ?? null
-    const paymentTermsRaw = columns.payment_terms_col !== null
-      ? row[columns.payment_terms_col]
-      : null
+    const paymentTermsRaw =
+      columns.payment_terms_col !== null ? row[columns.payment_terms_col] : null
     const currencyRaw = get(columns.default_currency_col)
     const notes = get(columns.notes_col)
 
-    const explicitType = columns.supplier_type_col !== null
-      ? normalizeSupplierType(cellOrNull(row[columns.supplier_type_col]))
-      : null
+    const explicitType =
+      columns.supplier_type_col !== null
+        ? normalizeSupplierType(cellOrNull(row[columns.supplier_type_col]))
+        : null
+
     const supplierType: SupplierType =
-      explicitType ?? classifySupplier({
+      explicitType ??
+      classifySupplier({
         org_number: orgNumber,
         vat_number: vatNumber,
         country: countryRaw,
       })
 
     const validationErrors: string[] = []
+
     if (email && !EMAIL_RE.test(email)) {
       validationErrors.push('Ogiltig e-postadress')
     }
+
     if (orgNumber && !/^[\d\s\-]{6,20}$/.test(orgNumber)) {
       validationErrors.push('Ogiltigt org-/personnummer')
     }
+
     if (iban && !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) {
       validationErrors.push('Ogiltigt IBAN')
     }
@@ -190,7 +224,9 @@ export function parseSuppliersFile(
   }
 
   if (rows.length === 0) {
-    warnings.push('Inga giltiga leverantörsrader hittades. Kontrollera att namnkolumnen är korrekt mappad.')
+    warnings.push(
+      'Inga giltiga leverantörsrader hittades. Kontrollera att namnkolumnen är korrekt mappad.',
+    )
   }
 
   return {
@@ -204,3 +240,5 @@ export function parseSuppliersFile(
     warnings,
   }
 }
+
+export const parseSuppliersFile = parseSupplierImportFile

@@ -137,7 +137,7 @@ export async function GET(request: Request) {
     ]
     const mapRow = (r: FlatRow) => [r.section, r.account_number, r.account_name, r.amount]
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       { name: 'Intäkter', columns, rows: revenueRows, mapRow },
       { name: 'Kostnader', columns, rows: expenseRows, mapRow },
       { name: 'Finansiella poster', columns, rows: financialRows, mapRow },

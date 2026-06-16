@@ -74,7 +74,7 @@ export async function GET(request: Request) {
       }
     }
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Grundbok',
         columns: [

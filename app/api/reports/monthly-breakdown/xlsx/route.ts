@@ -43,7 +43,7 @@ export async function GET(request: Request) {
   try {
     const breakdown = await generateMonthlyBreakdown(supabase, companyId, periodId)
 
-    const buffer = reportToWorkbook([
+    const buffer = await reportToWorkbook([
       {
         name: 'Månadsbrytning',
         columns: [

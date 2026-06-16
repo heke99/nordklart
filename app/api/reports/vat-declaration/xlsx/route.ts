@@ -86,7 +86,7 @@ export async function GET(request: Request) {
       }),
     )
 
-    const buffer = reportToWorkbook<RutaRow>([
+    const buffer = await reportToWorkbook<RutaRow>([
       {
         name: `Moms ${formatPeriodLabel(periodType, year, period)}`,
         columns: [

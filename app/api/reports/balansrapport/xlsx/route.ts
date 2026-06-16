@@ -92,7 +92,7 @@ export async function GET(request: Request) {
       ub: report.beraknat_resultat,
     })
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Balansrapport',
         columns: [

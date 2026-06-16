@@ -35,7 +35,6 @@ export async function POST(request: Request) {
 
   const uniqueNumbers = [...new Set(accountNumbers)]
 
-  // Fetch existing rows with current is_active state
   const { data: existing, error: fetchError } = await supabase
     .from('chart_of_accounts')
     .select('account_number, is_active')
@@ -51,7 +50,7 @@ export async function POST(request: Request) {
   )
 
   const toReactivate: string[] = []
-  const toInsert: Array<ReturnType<typeof buildInsertRow>> = []
+  const toInsert: InsertAccountRow[] = []
   const unknown: string[] = []
   let skipped = 0
 
@@ -64,7 +63,9 @@ export async function POST(request: Request) {
       }
       continue
     }
+
     const row = buildInsertRow(num, user.id, companyId)
+
     if (row) {
       toInsert.push(row)
     } else {
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
   }
 
   let reactivatedRows: { account_number: string }[] = []
+
   if (toReactivate.length > 0) {
     const { data, error } = await supabase
       .from('chart_of_accounts')
@@ -80,21 +82,26 @@ export async function POST(request: Request) {
       .eq('company_id', companyId)
       .in('account_number', toReactivate)
       .select('account_number')
+
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
+
     reactivatedRows = data || []
   }
 
   let insertedRows: { account_number: string }[] = []
+
   if (toInsert.length > 0) {
     const { data, error } = await supabase
       .from('chart_of_accounts')
       .insert(toInsert)
       .select('account_number')
+
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
+
     insertedRows = data || []
   }
 
@@ -107,9 +114,12 @@ export async function POST(request: Request) {
   })
 }
 
+type InsertAccountRow = NonNullable<ReturnType<typeof buildInsertRow>>
+
 function buildInsertRow(accountNumber: string, userId: string, companyId: string) {
   const ref = getBASReference(accountNumber)
   if (!ref) return null
+
   return {
     user_id: userId,
     company_id: companyId,

@@ -120,7 +120,7 @@ export async function GET(request: Request) {
       isSubtotal: true,
     })
 
-    const buffer = reportToWorkbook<FlatRow>([
+    const buffer = await reportToWorkbook<FlatRow>([
       {
         name: 'Tillgångar',
         columns: [
