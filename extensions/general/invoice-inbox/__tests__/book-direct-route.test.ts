@@ -1,0 +1,250 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
+import {
+  createQueuedMockSupabase,
+  createMockRequest,
+  parseJsonResponse,
+  makeInvoiceInboxItem,
+} from '@/tests/helpers'
+import type { ExtensionContext } from '@/lib/extensions/types'
+
+const createJournalEntryMock = vi.fn()
+const linkToJournalEntryMock = vi.fn()
+
+vi.mock('@/lib/bookkeeping/engine', () => ({
+  createJournalEntry: (...args: unknown[]) => createJournalEntryMock(...args),
+}))
+
+vi.mock('@/lib/core/documents/document-service', () => ({
+  linkToJournalEntry: (...args: unknown[]) => linkToJournalEntryMock(...args),
+}))
+
+function findRoute(method: string, path: string) {
+  return invoiceInboxExtension.apiRoutes!.find(
+    (r) => r.method === method && r.path === path
+  )!
+}
+
+function buildCtx(supabase: unknown, overrides: Partial<ExtensionContext> = {}): ExtensionContext {
+  return {
+    userId: 'user-1',
+    companyId: 'company-1',
+    extensionId: 'invoice-inbox',
+    supabase: supabase as ExtensionContext['supabase'],
+    emit: vi.fn(),
+    settings: { get: vi.fn(), set: vi.fn() },
+    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
+    services: {},
+    ...overrides,
+  } as ExtensionContext
+}
+
+const PERIOD_UUID = '00000000-0000-4000-8000-000000000010'
+const TX_UUID = '00000000-0000-4000-8000-000000000020'
+
+const VALID_BODY = {
+  fiscal_period_id: PERIOD_UUID,
+  entry_date: '2026-05-14',
+  description: 'Kvitto från Spotify',
+  lines: [
+    { account_number: '6540', debit_amount: 79.2, credit_amount: 0 },
+    { account_number: '2641', debit_amount: 19.8, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 99 },
+  ],
+}
+
+describe('POST /items/:id/book-direct', () => {
+  const route = findRoute('POST', '/items/:id/book-direct')
+
+  beforeEach(() => {
+    createJournalEntryMock.mockReset()
+    linkToJournalEntryMock.mockReset()
+    createJournalEntryMock.mockResolvedValue({
+      id: 'je-1',
+      voucher_series: 'A',
+      voucher_number: 42,
+    })
+    linkToJournalEntryMock.mockResolvedValue({ id: 'doc-1' })
+  })
+
+  it('returns 401 when no context', async () => {
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, undefined)
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(401)
+  })
+
+  it('returns 400 when body is invalid (unbalanced is checked by engine; here we check zod-level)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { fiscal_period_id: 'not-a-uuid' },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(400)
+  })
+
+  it('returns 404 when inbox item not found', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(404)
+  })
+
+  it('returns 409 when item already linked to a supplier invoice', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        created_supplier_invoice_id: 'si-1',
+      }),
+    })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(409)
+  })
+
+  it('returns 409 when item already has a journal entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        created_journal_entry_id: 'je-existing',
+      }),
+    })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(409)
+  })
+
+  it('books a standalone entry and links the document', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // 1. fetch inbox item
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    // 2. update inbox item (status=confirmed, created_journal_entry_id)
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status, body } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      data: { journal_entry: { id: 'je-1' }, transaction_id: null },
+    })
+    expect(createJournalEntryMock).toHaveBeenCalledTimes(1)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        source_type: 'inbox_item',
+        fiscal_period_id: PERIOD_UUID,
+      }),
+    )
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'doc-1',
+      'je-1',
+    )
+  })
+
+  it('returns 404 when transaction_id is provided but not found', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({}) })
+    enqueue({ data: null })  // transaction lookup
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, transaction_id: TX_UUID },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(404)
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when transaction is already booked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({}) })
+    enqueue({ data: { id: TX_UUID, journal_entry_id: 'je-old' } })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, transaction_id: TX_UUID },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(409)
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('books with transaction link: source_type=bank_transaction, source_id=transaction.id', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    enqueue({ data: { id: TX_UUID, journal_entry_id: null } })
+    enqueue({ data: null })  // transaction update
+    enqueue({ data: null })  // inbox item update
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, transaction_id: TX_UUID },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status, body } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      data: { transaction_id: TX_UUID },
+    })
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        source_type: 'bank_transaction',
+        source_id: TX_UUID,
+      }),
+    )
+  })
+})

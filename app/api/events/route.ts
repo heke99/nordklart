@@ -1,0 +1,80 @@
+import { createClient } from '@/lib/supabase/server'
+import { NextResponse } from 'next/server'
+import { extractBearerToken, validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { validateQuery } from '@/lib/api/validate'
+import { EventsQuerySchema } from '@/lib/api/schemas'
+import { requireCompanyId } from '@/lib/company/context'
+import type { SupabaseClient } from '@supabase/supabase-js'
+
+/**
+ * GET /api/events
+ *
+ * Cursor-based polling endpoint for external automation platforms (n8n, Make, Zapier).
+ * Returns events from the event_log table in sequence order.
+ *
+ * Query params:
+ *   - after (bigint, optional): return events with sequence > this value
+ *   - types (string, optional): comma-separated event type filter
+ *   - limit (int, optional): max results, default 50, cap 100
+ *
+ * Supports both session auth (browser) and API key auth (automation platforms).
+ */
+export async function GET(request: Request) {
+  // Dual auth: API key or session
+  let userId: string
+  let supabase: SupabaseClient
+
+  const token = extractBearerToken(request)
+  if (token?.startsWith('nordklart_sk_')) {
+    const authResult = await validateApiKey(token)
+    if ('error' in authResult) {
+      return NextResponse.json({ error: authResult.error }, { status: authResult.status })
+    }
+    userId = authResult.userId
+    supabase = createServiceClientNoCookies()
+  } else {
+    supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    userId = user.id
+  }
+
+  const companyId = await requireCompanyId(supabase, userId)
+
+  // Validate query params
+  const result = validateQuery(request, EventsQuerySchema)
+  if (!result.success) return result.response
+  const { after, types, limit } = result.data
+
+  // Build query
+  let query = supabase
+    .from('event_log')
+    .select('sequence, event_type, entity_id, data, created_at')
+    .eq('company_id', companyId)
+    .order('sequence', { ascending: true })
+    .limit(limit)
+
+  if (after !== undefined) {
+    query = query.gt('sequence', after)
+  }
+
+  if (types && types.length > 0) {
+    query = query.in('event_type', types)
+  }
+
+  const { data, error } = await query
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  const events = data ?? []
+
+  return NextResponse.json({
+    data: events,
+    cursor: events.length > 0 ? events[events.length - 1].sequence : (after ?? 0),
+    has_more: events.length === limit,
+  })
+}

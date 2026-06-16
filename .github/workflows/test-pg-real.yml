@@ -1,0 +1,85 @@
+name: pg-real tests
+
+on: [pull_request]
+
+concurrency:
+  group: pg-real-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage-gate:
+    # Enforces the database.md rule: a migration touching a trigger/RPC/RLS/
+    # DEFERRABLE must come with a *.pg.test.ts change. Previously instruction-
+    # only. Escape hatch: `-- pg-test: covered-by <path>` / `-- pg-test: skip
+    # (<reason>)` comments inside the migration.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the merge-base with the PR base branch exists.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Require pg-real coverage for trigger/RPC/RLS migrations
+        env:
+          PG_GATE_BASE: origin/${{ github.base_ref }}
+        run: node scripts/check-pg-test-coverage.mjs
+
+  pg-real:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Supabase image ships the auth schema, auth.uid(), and the extensions
+        # (uuid-ossp, pg_cron, btree_gist, vector) this repo's migrations need.
+        # Plain postgres:15 would require manual bootstrap SQL.
+        image: supabase/postgres:15.8.1.060
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      PGPASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Bootstrap storage schema
+        # The supabase/postgres image ships a partial storage schema; the rest
+        # is provisioned by the storage-api service at runtime, which we do
+        # not run in CI. This aligns the schema with what migrations expect.
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+
+      - name: Apply migrations
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(supabase/migrations/*.sql)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No migration files found"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "Applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+
+      - run: npm run test:pg

@@ -1,0 +1,97 @@
+import { createClient } from '@/lib/supabase/server'
+import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { requireCompanyId } from '@/lib/company/context'
+import { requireWritePermission } from '@/lib/auth/require-write'
+
+const RejectBodySchema = z.object({
+  rejection_category: z
+    .enum(['wrong_category', 'wrong_amount', 'duplicate', 'wrong_period', 'other'])
+    .optional(),
+  rejection_reason: z.string().max(2000).optional(),
+})
+
+/**
+ * POST /api/pending-operations/:id/reject
+ *
+ * Reject a pending operation. Optionally accepts a JSON body with
+ * `rejection_category` (fixed enum) and `rejection_reason` (free text). Both
+ * are stored on the row so agents can fetch them via nordklart_get_recent_rejections
+ * and learn from "no". The body is optional — bodyless POSTs from older
+ * clients still mark the op rejected with NULL category/reason.
+ */
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const supabase = await createClient()
+  const { id } = await params
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const writeCheck = await requireWritePermission(supabase, user.id)
+  if (!writeCheck.ok) return writeCheck.response
+
+  const companyId = await requireCompanyId(supabase, user.id)
+
+  // Body is optional — accept empty/missing body without rejecting the request.
+  // Old clients posted no body; the UI dialog will now post a body, but we
+  // keep accepting both shapes to avoid coupling the API to the UI version.
+  let rejectionCategory: string | undefined
+  let rejectionReason: string | undefined
+  const contentLength = request.headers.get('content-length')
+  if (contentLength && contentLength !== '0') {
+    try {
+      const raw = await request.json()
+      const parsed = RejectBodySchema.safeParse(raw)
+      if (!parsed.success) {
+        return NextResponse.json(
+          { error: parsed.error.issues.map((i) => i.message).join('; ') },
+          { status: 400 },
+        )
+      }
+      rejectionCategory = parsed.data.rejection_category
+      rejectionReason = parsed.data.rejection_reason?.trim() || undefined
+    } catch {
+      // Body present but unparseable — fail closed.
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
+  }
+
+  const { data: op, error: fetchError } = await supabase
+    .from('pending_operations')
+    .select('id, status')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !op) {
+    return NextResponse.json({ error: 'Pending operation not found' }, { status: 404 })
+  }
+
+  if (op.status !== 'pending') {
+    return NextResponse.json(
+      { error: `Operation already ${op.status}` },
+      { status: 409 }
+    )
+  }
+
+  const { error: updateError } = await supabase
+    .from('pending_operations')
+    .update({
+      status: 'rejected',
+      resolved_at: new Date().toISOString(),
+      ...(rejectionCategory ? { rejection_category: rejectionCategory } : {}),
+      ...(rejectionReason ? { rejection_reason: rejectionReason } : {}),
+    })
+    .eq('id', id)
+
+  if (updateError) {
+    return NextResponse.json({ error: updateError.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ data: { id, status: 'rejected' } })
+}

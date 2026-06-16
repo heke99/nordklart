@@ -1,0 +1,57 @@
+name: compliance — full swarm
+
+# Full hybrid audit: deterministic scanners + LLM-driven deep_audit checks
+# (RoPA drift, Proprietary §13 evaluation, IDOR/access-control reasoning, ISMS clause
+# review, change-management bypass detection).
+#
+# Triggers:
+#   - Nightly cron at 02:00 UTC
+#   - workflow_dispatch (run anytime)
+#   - PRs labeled `compliance:full-audit`
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why are you running this manually?'
+        required: false
+        default: ''
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: compliance-swarm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  swarm:
+    name: Full hybrid audit
+    if: |
+      github.event_name != 'pull_request'
+      || github.event.label.name == 'compliance:full-audit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: erp-mafia/compliancemaxx@v2
+        with:
+          mode: audit                    # v2 name; was `swarm` in v1
+          llm-provider: bedrock
+          fail-on-findings: false        # observational while bedding in
+        env:
+          AWS_REGION: eu-north-1
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          # Override default model if desired:
+          # COMPLIANCE_BEDROCK_MODEL: 'eu.anthropic.claude-sonnet-4-6'

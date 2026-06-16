@@ -1,0 +1,951 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+import {
+  normalizeMerchantName,
+  levenshteinDistance,
+} from '@/lib/documents/core-receipt-matcher'
+import {
+  generateInputVatLine,
+  generateReverseChargeLines,
+  getVatRate,
+} from './vat-entries'
+import type {
+  CategorizationTemplate,
+  CategorizationTemplateSource,
+  EntityType,
+  LinePatternEntry,
+  MappingResult,
+  Transaction,
+  VatJournalLine,
+  VatTreatment,
+} from '@/types'
+import type { SIEVoucher } from '@/lib/import/types'
+
+// ── Normalization ──────────────────────────────────────────────
+
+/**
+ * Normalize a transaction description to a canonical counterparty name.
+ *
+ * Strips bank transfer prefixes, trailing dates, invoice references,
+ * and trailing digit sequences, then delegates to normalizeMerchantName()
+ * for Swedish company suffix removal and lowercasing.
+ */
+export function normalizeCounterpartyName(raw: string): string {
+  const cleaned = raw
+    // Strip common bank transfer prefixes
+    .replace(/^(BANKGIRO|SWISH|KORTKÖP|KORT\s*KÖP|PG|BG|AUTOGIRO|PLUSGIRO)\s*/i, '')
+    // Strip dates (20240615, 2024-06-15, 24-06-15)
+    .replace(/\b\d{2,4}[-/]?\d{2}[-/]?\d{2}\b/g, '')
+    // Strip invoice/reference numbers (F2024-001, #12345, INV-123)
+    .replace(/\b[F#]?\d{4,}\S*/gi, '')
+    .replace(/\bINV[-]?\d+/gi, '')
+    // Strip trailing sequences of 4+ digits (card numbers, transaction refs)
+    .replace(/\s+\d{4,}\s*$/g, '')
+    .trim()
+
+  return normalizeMerchantName(cleaned)
+}
+
+// ── Confidence ─────────────────────────────────────────────────
+
+// ── Display ───────────────────────────────────────────────────
+
+/** Swedish company suffixes that should be uppercased */
+const UPPER_SUFFIXES = new Set(['ab', 'hb', 'kb', 'ek', 'ef', 'uf'])
+
+/**
+ * Capitalize a normalized counterparty name for display.
+ * "telia sverige ab" → "Telia Sverige AB"
+ */
+export function formatCounterpartyName(name: string): string {
+  return name
+    .split(' ')
+    .map(w => UPPER_SUFFIXES.has(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+}
+
+/**
+ * Logarithmic confidence formula.
+ * Starts low, grows slowly, caps at 0.95. Early corrections are cheap,
+ * later corrections are appropriately alarming.
+ */
+export function calculateConfidence(occurrenceCount: number): number {
+  const raw = 0.3 + Math.log2(occurrenceCount + 1) * 0.15
+  return Math.round(Math.min(raw, 0.95) * 100) / 100
+}
+
+// ── Source Priority ───────────────────────────────────────────
+
+const SOURCE_PRIORITY: Record<CategorizationTemplateSource, number> = {
+  sni_default: 0,
+  auto_learned: 1,
+  sie_import: 2,
+  user_approved: 3,
+  // AI-corrected templates carry explicit user validation (they edited the
+  // AI's proposal, then confirmed "remember this"), so rank equal to
+  // user_approved. Fresh incoming AI corrections still win over older
+  // templates of the same rank (>= in resolveSource).
+  ai_corrected: 3,
+}
+
+export function resolveSource(
+  existing: CategorizationTemplateSource,
+  incoming: CategorizationTemplateSource
+): CategorizationTemplateSource {
+  return SOURCE_PRIORITY[incoming] >= SOURCE_PRIORITY[existing] ? incoming : existing
+}
+
+// ── Counterparty Template ID Convention ──────────────────────
+
+export const COUNTERPARTY_PREFIX = 'counterparty:'
+export function isCounterpartyTemplateId(id: string): boolean { return id.startsWith(COUNTERPARTY_PREFIX) }
+export function extractCounterpartyId(id: string): string { return id.slice(COUNTERPARTY_PREFIX.length) }
+export function toCounterpartyTemplateId(id: string): string { return COUNTERPARTY_PREFIX + id }
+
+// ── VAT Account Mapping ──────────────────────────────────────
+
+const VAT_ACCOUNT_TREATMENT: Record<string, string> = {
+  '2611': 'standard_25',
+  '2621': 'reduced_12',
+  '2631': 'reduced_6',
+  '2641': 'standard_25',
+  '2645': 'reverse_charge',
+  '2614': 'reverse_charge',
+  '2624': 'reverse_charge',
+  '2634': 'reverse_charge',
+}
+
+// ── Lookup ─────────────────────────────────────────────────────
+
+export interface CounterpartyTemplateMatch {
+  template: CategorizationTemplate
+  matchMethod: 'exact_alias' | 'exact_normalized' | 'fuzzy'
+  confidence: number
+}
+
+/**
+ * Find a counterparty template matching a transaction.
+ *
+ * Three-tier matching (delegated to batch version with single-element array):
+ * 1. Exact alias match
+ * 2. Exact normalized name match
+ * 3. Fuzzy Levenshtein — distance ≤2 for short names, ≤3 for long names
+ */
+export async function findCounterpartyTemplate(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction
+): Promise<CounterpartyTemplateMatch | null> {
+  const results = await findCounterpartyTemplatesBatch(supabase, companyId, [transaction])
+  return results.get(transaction.id) ?? null
+}
+
+/**
+ * Batch counterparty template matching for multiple transactions.
+ * One DB query, all matching done in memory.
+ */
+export async function findCounterpartyTemplatesBatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactions: Transaction[]
+): Promise<Map<string, CounterpartyTemplateMatch>> {
+  const result = new Map<string, CounterpartyTemplateMatch>()
+
+  const { data: allTemplates } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+
+  if (!allTemplates || allTemplates.length === 0) return result
+
+  const templates = allTemplates as CategorizationTemplate[]
+
+  // Build alias lookup: lowercase alias → template
+  const aliasMap = new Map<string, CategorizationTemplate>()
+  for (const tmpl of templates) {
+    for (const alias of tmpl.counterparty_aliases || []) {
+      aliasMap.set(alias, tmpl)
+    }
+  }
+
+  // Build normalized name lookup
+  const nameMap = new Map<string, CategorizationTemplate>()
+  for (const tmpl of templates) {
+    nameMap.set(tmpl.counterparty_name, tmpl)
+  }
+
+  for (const tx of transactions) {
+    const rawName = tx.merchant_name || tx.description
+    if (!rawName) continue
+
+    const normalized = normalizeCounterpartyName(rawName)
+    if (!normalized || normalized.length < 2) continue
+
+    // 1. Exact alias match
+    const aliasMatch = aliasMap.get(rawName.toLowerCase())
+    if (aliasMatch) {
+      result.set(tx.id, {
+        template: aliasMatch,
+        matchMethod: 'exact_alias',
+        confidence: Math.min(Number(aliasMatch.confidence) * 1.0, 1),
+      })
+      continue
+    }
+
+    // 2. Exact normalized name match
+    const exactMatch = nameMap.get(normalized)
+    if (exactMatch) {
+      result.set(tx.id, {
+        template: exactMatch,
+        matchMethod: 'exact_normalized',
+        confidence: Math.round(Number(exactMatch.confidence) * 0.95 * 100) / 100,
+      })
+      continue
+    }
+
+    // 3. Fuzzy Levenshtein match
+    let bestMatch: CategorizationTemplate | null = null
+    let bestDistance = Infinity
+    for (const tmpl of templates) {
+      const dist = levenshteinDistance(normalized, tmpl.counterparty_name)
+      const maxAllowed = normalized.length <= 10 ? 2 : 3
+      if (dist <= maxAllowed && dist < bestDistance) {
+        bestDistance = dist
+        bestMatch = tmpl
+      }
+    }
+    if (bestMatch) {
+      const similarity = 1 - bestDistance / Math.max(normalized.length, bestMatch.counterparty_name.length)
+      result.set(tx.id, {
+        template: bestMatch,
+        matchMethod: 'fuzzy',
+        confidence: Math.round(Number(bestMatch.confidence) * similarity * 100) / 100,
+      })
+    }
+  }
+
+  return result
+}
+
+// ── Build MappingResult ────────────────────────────────────────
+
+/**
+ * Convert a counterparty template match into a MappingResult
+ * (same shape the mapping engine expects).
+ */
+export function buildMappingResultFromCounterpartyTemplate(
+  match: CounterpartyTemplateMatch,
+  transaction: Transaction,
+  _entityType: EntityType
+): MappingResult {
+  const tmpl = match.template
+
+  // Multi-line pattern path
+  if (tmpl.line_pattern && tmpl.line_pattern.length > 0) {
+    return buildMultiLineMappingResult(tmpl, match, transaction)
+  }
+
+  // Legacy single debit/credit path
+  const absAmount = Math.abs(transaction.amount)
+  const isExpense = transaction.amount < 0
+
+  const vatLines: VatJournalLine[] = []
+  if (isExpense && tmpl.vat_treatment) {
+    const vatTreatment = tmpl.vat_treatment as VatTreatment
+    if (vatTreatment === 'reverse_charge') {
+      const rcLines = generateReverseChargeLines(absAmount)
+      for (const rcl of rcLines) {
+        vatLines.push({
+          account_number: rcl.account_number,
+          debit_amount: rcl.debit_amount,
+          credit_amount: rcl.credit_amount,
+          description: rcl.line_description || '',
+        })
+      }
+    } else {
+      const vatRate = getVatRate(vatTreatment)
+      if (vatRate > 0) {
+        const vatLine = generateInputVatLine(absAmount, vatRate)
+        if (vatLine) {
+          vatLines.push({
+            account_number: vatLine.account_number,
+            debit_amount: vatLine.debit_amount,
+            credit_amount: vatLine.credit_amount,
+            description: vatLine.line_description || '',
+          })
+        }
+      }
+    }
+  }
+
+  const privateAccounts = ['2013', '2893']
+  const isPrivate = privateAccounts.includes(tmpl.debit_account)
+
+  return {
+    rule: null,
+    debit_account: tmpl.debit_account,
+    credit_account: tmpl.credit_account,
+    risk_level: 'NONE',
+    confidence: match.confidence,
+    requires_review: false,
+    default_private: isPrivate,
+    vat_lines: vatLines,
+    description: `Motpart: ${tmpl.counterparty_name} (${tmpl.occurrence_count} ggr)`,
+  }
+}
+
+/**
+ * Build a MappingResult from a multi-line counterparty template pattern.
+ *
+ * VAT is computed from rate (exact), business/tax from ratio against non-VAT subtotal.
+ * Rounding difference goes to 3740 (Öresutjämning).
+ * Settlement line always equals the exact transaction amount.
+ */
+function buildMultiLineMappingResult(
+  tmpl: CategorizationTemplate,
+  match: CounterpartyTemplateMatch,
+  transaction: Transaction
+): MappingResult {
+  const pattern = tmpl.line_pattern!
+  const absAmount = Math.abs(transaction.amount)
+
+  const allLines: VatJournalLine[] = []
+
+  // 1. Compute VAT lines first (from rate, exact)
+  let totalVat = 0
+  for (const entry of pattern) {
+    if (entry.type === 'vat' && entry.vat_rate) {
+      const vatAmount = Math.round(absAmount * entry.vat_rate / (1 + entry.vat_rate) * 100) / 100
+      totalVat += vatAmount
+      allLines.push({
+        account_number: entry.account,
+        debit_amount: entry.side === 'debit' ? vatAmount : 0,
+        credit_amount: entry.side === 'credit' ? vatAmount : 0,
+        description: '',
+      })
+    }
+  }
+
+  // 2. Compute non-VAT subtotal
+  const nonVatAmount = Math.round((absAmount - totalVat) * 100) / 100
+
+  // 3. Compute business/tax lines from ratios against nonVatAmount
+  let nonVatAllocated = 0
+  for (const entry of pattern) {
+    if ((entry.type === 'business' || entry.type === 'tax') && entry.ratio !== undefined) {
+      const amount = Math.round(nonVatAmount * entry.ratio * 100) / 100
+      nonVatAllocated += amount
+      allLines.push({
+        account_number: entry.account,
+        debit_amount: entry.side === 'debit' ? amount : 0,
+        credit_amount: entry.side === 'credit' ? amount : 0,
+        description: '',
+      })
+    }
+  }
+
+  // 4. Check for rounding difference → 3740
+  const totalAllocated = Math.round((totalVat + nonVatAllocated) * 100) / 100
+  const roundingDiff = Math.round((absAmount - totalAllocated) * 100) / 100
+  if (roundingDiff !== 0) {
+    // Determine the side for the rounding line (same side as business lines)
+    const businessSide = pattern.find(e => e.type === 'business')?.side ?? 'credit'
+    allLines.push({
+      account_number: '3740',
+      debit_amount: businessSide === 'debit' ? Math.abs(roundingDiff) : 0,
+      credit_amount: businessSide === 'credit' ? Math.abs(roundingDiff) : 0,
+      description: 'Öresutjämning',
+    })
+  }
+
+  return {
+    rule: null,
+    debit_account: tmpl.debit_account,
+    credit_account: tmpl.credit_account,
+    risk_level: 'NONE',
+    confidence: match.confidence,
+    requires_review: false,
+    default_private: false,
+    vat_lines: allLines,
+    all_lines_complete: true,
+    description: `Motpart: ${tmpl.counterparty_name} (${tmpl.occurrence_count} ggr)`,
+  }
+}
+
+// ── Feedback / Upsert ──────────────────────────────────────────
+
+export interface TemplateUpsertParams {
+  counterpartyName: string
+  aliases: string[]
+  debitAccount: string
+  creditAccount: string
+  vatTreatment: string | null
+  vatAccount: string | null
+  category: string | null
+  occurrenceCount: number
+  confidence: number
+  lastSeenDate: string | null
+  source: CategorizationTemplateSource
+  linePattern?: LinePatternEntry[] | null
+}
+
+/**
+ * Low-level insert-or-update for a counterparty template.
+ *
+ * - existingTemplate undefined → DB lookup by (userId, counterpartyName)
+ * - existingTemplate null → skip lookup (batch mode: caller knows none exists)
+ * - existingTemplate object → use directly (batch mode: pre-fetched)
+ *
+ * Re-approval: accumulates occurrence_count, recalculates confidence from total.
+ * Correction: uses params.occurrenceCount/confidence, updates accounts.
+ * Both paths use resolveSource() so lower-priority sources never overwrite higher.
+ */
+export async function insertOrUpdateTemplate(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: TemplateUpsertParams,
+  existingTemplate?: CategorizationTemplate | null
+): Promise<void> {
+  // Resolve existing template
+  let existing: CategorizationTemplate | null = null
+  if (existingTemplate === undefined) {
+    const { data } = await supabase
+      .from('categorization_templates')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('counterparty_name', params.counterpartyName)
+      .maybeSingle()
+    existing = data as CategorizationTemplate | null
+  } else {
+    existing = existingTemplate
+  }
+
+  if (existing) {
+    const isCorrection =
+      existing.debit_account !== params.debitAccount ||
+      existing.credit_account !== params.creditAccount
+
+    // Merge aliases (deduplicated)
+    const mergedAliases = [...(existing.counterparty_aliases || [])]
+    for (const alias of params.aliases) {
+      if (!mergedAliases.includes(alias)) {
+        mergedAliases.push(alias)
+      }
+    }
+
+    const newSource = resolveSource(existing.source, params.source)
+
+    if (isCorrection) {
+      await supabase
+        .from('categorization_templates')
+        .update({
+          debit_account: params.debitAccount,
+          credit_account: params.creditAccount,
+          vat_treatment: params.vatTreatment ?? existing.vat_treatment,
+          vat_account: params.vatAccount ?? existing.vat_account,
+          category: params.category || existing.category,
+          occurrence_count: params.occurrenceCount,
+          confidence: params.confidence,
+          last_seen_date: params.lastSeenDate,
+          source: newSource,
+          counterparty_aliases: mergedAliases,
+          line_pattern: params.linePattern !== undefined ? params.linePattern : existing.line_pattern,
+        })
+        .eq('id', existing.id)
+    } else {
+      // Re-approval: accumulate count, recalculate confidence from total
+      const newCount = existing.occurrence_count + params.occurrenceCount
+      const newConfidence = calculateConfidence(newCount)
+
+      await supabase
+        .from('categorization_templates')
+        .update({
+          occurrence_count: newCount,
+          confidence: newConfidence,
+          last_seen_date: params.lastSeenDate,
+          source: newSource,
+          counterparty_aliases: mergedAliases,
+          category: params.category || existing.category,
+          ...(params.linePattern !== undefined ? { line_pattern: params.linePattern } : {}),
+        })
+        .eq('id', existing.id)
+    }
+  } else {
+    await supabase
+      .from('categorization_templates')
+      .insert({
+        company_id: companyId,
+        counterparty_name: params.counterpartyName,
+        counterparty_aliases: params.aliases,
+        debit_account: params.debitAccount,
+        credit_account: params.creditAccount,
+        vat_treatment: params.vatTreatment,
+        vat_account: params.vatAccount,
+        category: params.category,
+        line_pattern: params.linePattern ?? null,
+        occurrence_count: params.occurrenceCount,
+        confidence: params.confidence,
+        last_seen_date: params.lastSeenDate,
+        source: params.source,
+      })
+  }
+}
+
+/**
+ * Upsert a counterparty template from a categorization result.
+ * Thin wrapper around insertOrUpdateTemplate for single-transaction callers.
+ */
+export async function upsertCounterpartyTemplate(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction,
+  mappingResult: MappingResult,
+  source: CategorizationTemplateSource
+): Promise<void> {
+  const rawName = transaction.merchant_name || transaction.description
+  if (!rawName) return
+
+  const normalized = normalizeCounterpartyName(rawName)
+  if (!normalized || normalized.length < 2) return
+
+  const category = transaction.category !== 'uncategorized' ? transaction.category : null
+
+  await insertOrUpdateTemplate(supabase, companyId, {
+    counterpartyName: normalized,
+    aliases: [rawName.toLowerCase()],
+    debitAccount: mappingResult.debit_account,
+    creditAccount: mappingResult.credit_account,
+    vatTreatment: mappingResult.vat_lines.length > 0
+      ? detectVatTreatment(mappingResult)
+      : null,
+    vatAccount: mappingResult.vat_lines[0]?.account_number || null,
+    category,
+    occurrenceCount: 1,
+    confidence: calculateConfidence(1),
+    lastSeenDate: transaction.date,
+    source,
+  })
+}
+
+/**
+ * Detect VAT treatment from a MappingResult's VAT lines.
+ */
+function detectVatTreatment(result: MappingResult): string | null {
+  if (result.vat_lines.length === 0) return null
+
+  // Check for reverse charge (2645 debit = fiktiv ingående)
+  const hasReverseCharge = result.vat_lines.some(
+    (l) => l.account_number === '2645'
+  )
+  if (hasReverseCharge) return 'reverse_charge'
+
+  // Check for input VAT (2641 debit)
+  const inputVat = result.vat_lines.find(
+    (l) => l.account_number === '2641' && l.debit_amount > 0
+  )
+  if (!inputVat) return null
+
+  // Derive rate from the line description (generated by generateInputVatLine)
+  // Format: "Ingående moms 25%", "Ingående moms 12%", "Ingående moms 6%"
+  const rateMatch = inputVat.description?.match(/(\d+)%/)
+  if (rateMatch) {
+    const pct = parseInt(rateMatch[1], 10)
+    if (pct === 12) return 'reduced_12'
+    if (pct === 6) return 'reduced_6'
+  }
+  return 'standard_25'
+}
+
+// ── SIE Voucher Template Population ──────────────────────────
+
+const SIE_SKIP_DESCRIPTIONS = new Set([
+  'lön', 'löner', 'löneutbetalning', 'arbetsgivaravgifter',
+  'semesterlöneskuld', 'preliminärskatt', 'momsredovisning', 'moms',
+  'bokslutsdisposition', 'bokslut', 'bokslutstransaktion', 'årsbokslut',
+  'avskrivning', 'avskrivningar', 'periodisering',
+  'upplupna', 'förutbetalda', 'skatteberäkning', 'skattebetalning',
+  'resultatdisposition', 'årets resultat',
+  'omföring', 'intern omföring', 'korrigering', 'rättelse', 'avslut',
+  'öppningsbalans', 'ub', 'ib',
+])
+
+function toDateString(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** Settlement accounts: bank/cash (19xx), receivables (1510), payables (2440), credit card (2890) */
+function isSettlementAccount(account: string): boolean {
+  return account.startsWith('19') || account === '1510' || account === '2440' || account === '2890'
+}
+
+/** Rounding account — excluded from pattern extraction */
+function isRoundingAccount(account: string): boolean {
+  return account === '3740'
+}
+
+/** Tax/duty accounts in 24xx range (except 2440 = AP settlement) */
+function isTaxAccount(account: string): boolean {
+  return account.startsWith('24') && account !== '2440'
+}
+
+/** Check if a 26xx account is a known VAT account */
+function isVatAccount(account: string): boolean {
+  return account.startsWith('26') && account in VAT_ACCOUNT_TREATMENT
+}
+
+/** Get the VAT rate (decimal) from a VAT account treatment string */
+function vatTreatmentToRate(treatment: string): number {
+  if (treatment === 'standard_25') return 0.25
+  if (treatment === 'reduced_12') return 0.12
+  if (treatment === 'reduced_6') return 0.06
+  return 0
+}
+
+// ── Extracted voucher line pattern ───────────────────────────
+
+interface VoucherLinePattern {
+  entries: LinePatternEntry[]
+  settlementAccount: string
+  settlementSide: 'debit' | 'credit'
+}
+
+/**
+ * Extract a line pattern from a single SIE voucher.
+ * Returns null if the voucher can't be represented as a pattern.
+ */
+function extractVoucherLinePattern(
+  lines: { account: string; amount: number }[]
+): VoucherLinePattern | null {
+  const settlement: { account: string; amount: number }[] = []
+  const vat: { account: string; amount: number }[] = []
+  const business: { account: string; amount: number }[] = []
+
+  for (const line of lines) {
+    if (isSettlementAccount(line.account)) {
+      settlement.push(line)
+    } else if (isRoundingAccount(line.account)) {
+      // Skip 3740 lines — rounding artifacts
+      continue
+    } else if (isVatAccount(line.account)) {
+      vat.push(line)
+    } else {
+      business.push(line)
+    }
+  }
+
+  // Need at least 1 business account and 1 settlement account
+  if (business.length === 0 || settlement.length === 0) return null
+  // Skip if too many distinct accounts (likely a complex/manual entry)
+  const distinctBusiness = new Set(business.map(l => l.account))
+  if (distinctBusiness.size > 5) return null
+
+  const settlementTotal = settlement.reduce((s, l) => s + Math.abs(l.amount), 0)
+  if (settlementTotal === 0) return null
+
+  const vatTotal = vat.reduce((s, l) => s + Math.abs(l.amount), 0)
+  const nonVatTotal = settlementTotal - vatTotal
+  if (nonVatTotal <= 0) return null
+
+  // Determine settlement side from the first settlement line
+  const settlementSide: 'debit' | 'credit' = settlement[0].amount >= 0 ? 'debit' : 'credit'
+
+  const entries: LinePatternEntry[] = []
+
+  // VAT lines: store vat_rate, not ratio
+  for (const v of vat) {
+    const treatment = VAT_ACCOUNT_TREATMENT[v.account]
+    if (!treatment) continue
+    const rate = vatTreatmentToRate(treatment)
+    if (rate === 0) continue
+    entries.push({
+      account: v.account,
+      type: 'vat',
+      side: v.amount >= 0 ? 'debit' : 'credit',
+      vat_rate: rate,
+    })
+  }
+
+  // Business/tax lines: compute ratio against nonVatTotal
+  for (const b of business) {
+    const ratio = Math.abs(b.amount) / nonVatTotal
+    entries.push({
+      account: b.account,
+      type: isTaxAccount(b.account) ? 'tax' : 'business',
+      side: b.amount >= 0 ? 'debit' : 'credit',
+      ratio: Math.round(ratio * 10000) / 10000,
+    })
+  }
+
+  return {
+    entries,
+    settlementAccount: settlement[0].account,
+    settlementSide,
+  }
+}
+
+// ── Counterparty group types ─────────────────────────────────
+
+interface CounterpartyGroup {
+  normalizedName: string
+  aliases: Set<string>
+  patterns: Map<string, MultiLinePatternCount>
+  totalCount: number
+}
+
+interface MultiLinePatternCount {
+  accountSet: string  // sorted accounts joined by +
+  voucherPatterns: VoucherLinePattern[]  // all individual patterns in this group
+  count: number
+  latestDate: Date
+}
+
+/**
+ * Normalize non-VAT ratios in a line pattern to sum to exactly 1.0.
+ */
+function normalizeRatios(entries: LinePatternEntry[]): LinePatternEntry[] {
+  const ratioEntries = entries.filter(e => e.ratio !== undefined)
+  if (ratioEntries.length === 0) return entries
+
+  const ratioSum = ratioEntries.reduce((s, e) => s + (e.ratio ?? 0), 0)
+  if (ratioSum === 0) return entries
+
+  const result = entries.map(e => {
+    if (e.ratio === undefined) return { ...e }
+    return { ...e, ratio: Math.round((e.ratio / ratioSum) * 10000) / 10000 }
+  })
+
+  // Assign rounding remainder to the largest ratio entry
+  const normalizedRatioEntries = result.filter(e => e.ratio !== undefined)
+  const newSum = normalizedRatioEntries.reduce((s, e) => s + (e.ratio ?? 0), 0)
+  const diff = Math.round((1.0 - newSum) * 10000) / 10000
+  if (diff !== 0 && normalizedRatioEntries.length > 0) {
+    const largest = normalizedRatioEntries.reduce((a, b) => ((a.ratio ?? 0) >= (b.ratio ?? 0) ? a : b))
+    largest.ratio = Math.round(((largest.ratio ?? 0) + diff) * 10000) / 10000
+  }
+
+  return result
+}
+
+/**
+ * Average line patterns from multiple vouchers into a single normalized pattern.
+ */
+function averageLinePatterns(voucherPatterns: VoucherLinePattern[]): LinePatternEntry[] {
+  if (voucherPatterns.length === 0) return []
+  if (voucherPatterns.length === 1) return normalizeRatios(voucherPatterns[0].entries)
+
+  // Collect all accounts across all patterns
+  const accountMap = new Map<string, { type: LinePatternEntry['type']; side: LinePatternEntry['side']; ratios: number[]; vat_rate?: number }>()
+
+  for (const vp of voucherPatterns) {
+    // Normalize per-voucher ratios before averaging
+    const normalized = normalizeRatios(vp.entries)
+    for (const entry of normalized) {
+      const existing = accountMap.get(entry.account)
+      if (!existing) {
+        accountMap.set(entry.account, {
+          type: entry.type,
+          side: entry.side,
+          ratios: entry.ratio !== undefined ? [entry.ratio] : [],
+          vat_rate: entry.vat_rate,
+        })
+      } else {
+        if (entry.ratio !== undefined) {
+          existing.ratios.push(entry.ratio)
+        }
+      }
+    }
+  }
+
+  const entries: LinePatternEntry[] = []
+  for (const [account, data] of accountMap) {
+    const entry: LinePatternEntry = { account, type: data.type, side: data.side }
+    if (data.vat_rate !== undefined) {
+      entry.vat_rate = data.vat_rate
+    }
+    if (data.ratios.length > 0) {
+      entry.ratio = Math.round((data.ratios.reduce((s, r) => s + r, 0) / data.ratios.length) * 10000) / 10000
+    }
+    entries.push(entry)
+  }
+
+  return normalizeRatios(entries)
+}
+
+/**
+ * Analyze SIE voucher history and create counterparty templates.
+ *
+ * Groups vouchers by normalized description and account set, filters by
+ * dominance and minimum occurrences. Supports both simple (single debit/credit)
+ * and multi-line patterns (stored as line_pattern JSONB).
+ */
+export async function populateTemplatesFromSieVouchers(
+  supabase: SupabaseClient,
+  companyId: string,
+  vouchers: SIEVoucher[],
+  options?: { recencyMonths?: number }
+): Promise<number> {
+  if (vouchers.length === 0) return 0
+
+  const recencyMonths = options?.recencyMonths ?? 24
+
+  // Step 0: Recency filter
+  let maxDate = vouchers[0].date
+  for (const v of vouchers) {
+    if (v.date > maxDate) maxDate = v.date
+  }
+  const cutoff = new Date(maxDate)
+  cutoff.setMonth(cutoff.getMonth() - recencyMonths)
+
+  const recentVouchers = vouchers.filter(v => v.date >= cutoff)
+  if (recentVouchers.length === 0) return 0
+
+  // Step 1: Build counterparty groups
+  const groups = new Map<string, CounterpartyGroup>()
+
+  for (const voucher of recentVouchers) {
+    const desc = voucher.description?.trim()
+    if (!desc) continue
+
+    const normalized = normalizeCounterpartyName(desc)
+    if (!normalized || normalized.length < 2) continue
+    if (SIE_SKIP_DESCRIPTIONS.has(normalized)) continue
+
+    // Extract line pattern from voucher
+    const linePattern = extractVoucherLinePattern(voucher.lines)
+    if (!linePattern) continue
+
+    // Group key: sorted set of non-settlement accounts
+    const accountSet = linePattern.entries
+      .map(e => e.account)
+      .sort()
+      .join('+')
+    const groupKey = `${normalized}|${accountSet}`
+
+    let group = groups.get(normalized)
+    if (!group) {
+      group = { normalizedName: normalized, aliases: new Set(), patterns: new Map(), totalCount: 0 }
+      groups.set(normalized, group)
+    }
+
+    group.aliases.add(desc.toLowerCase())
+    group.totalCount += 1
+
+    let pattern = group.patterns.get(groupKey)
+    if (!pattern) {
+      pattern = { accountSet, voucherPatterns: [], count: 0, latestDate: voucher.date }
+      group.patterns.set(groupKey, pattern)
+    }
+    pattern.voucherPatterns.push(linePattern)
+    pattern.count += 1
+    if (voucher.date > pattern.latestDate) {
+      pattern.latestDate = voucher.date
+    }
+  }
+
+  // Step 2 & 3: Filter by dominance and compute confidence
+  const accepted: {
+    normalizedName: string
+    aliases: string[]
+    pattern: MultiLinePatternCount
+    settlementAccount: string
+    settlementSide: 'debit' | 'credit'
+    confidence: number
+  }[] = []
+
+  for (const group of groups.values()) {
+    if (group.totalCount < 2) continue
+
+    // Find dominant pattern
+    let dominant: MultiLinePatternCount | null = null
+    for (const p of group.patterns.values()) {
+      if (!dominant || p.count > dominant.count) {
+        dominant = p
+      }
+    }
+    if (!dominant) continue
+
+    const dominance = dominant.count / group.totalCount
+    if (dominance < 0.6) continue
+
+    const confidence = Math.round(Math.min(0.95, dominance * (1 - 1 / dominant.count)) * 100) / 100
+
+    // Get settlement info from the first voucher pattern
+    const firstVp = dominant.voucherPatterns[0]
+
+    accepted.push({
+      normalizedName: group.normalizedName,
+      aliases: [...group.aliases],
+      pattern: dominant,
+      settlementAccount: firstVp.settlementAccount,
+      settlementSide: firstVp.settlementSide,
+      confidence,
+    })
+  }
+
+  if (accepted.length === 0) return 0
+
+  // Step 4: Batch write
+  const { data: existingTemplates } = await supabase
+    .from('categorization_templates')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+
+  const templateMap = new Map<string, CategorizationTemplate>()
+  if (existingTemplates) {
+    for (const t of existingTemplates) {
+      templateMap.set(t.counterparty_name, t as CategorizationTemplate)
+    }
+  }
+
+  let count = 0
+  for (const item of accepted) {
+    const existing = templateMap.get(item.normalizedName) ?? null
+
+    // Average the line patterns from all vouchers in the dominant group
+    const avgPattern = averageLinePatterns(item.pattern.voucherPatterns)
+
+    // Decide: simple (1 business + 0-1 VAT) → legacy fields; otherwise → line_pattern
+    const businessEntries = avgPattern.filter(e => e.type === 'business')
+    const vatEntries = avgPattern.filter(e => e.type === 'vat')
+    const taxEntries = avgPattern.filter(e => e.type === 'tax')
+    const isSimple = businessEntries.length === 1 && taxEntries.length === 0 && vatEntries.length <= 1
+
+    // Determine primary business account and settlement for debit/credit fields
+    const primaryBusiness = businessEntries.sort((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0))[0]
+
+    let debitAccount: string
+    let creditAccount: string
+    if (item.settlementSide === 'debit') {
+      debitAccount = item.settlementAccount
+      creditAccount = primaryBusiness?.account ?? item.settlementAccount
+    } else {
+      debitAccount = primaryBusiness?.account ?? item.settlementAccount
+      creditAccount = item.settlementAccount
+    }
+
+    // VAT info from first VAT entry (for legacy fields)
+    const firstVat = vatEntries[0]
+    const vatAccount = firstVat?.account ?? null
+    const vatTreatment = vatAccount ? (VAT_ACCOUNT_TREATMENT[vatAccount] ?? null) : null
+
+    await insertOrUpdateTemplate(supabase, companyId, {
+      counterpartyName: item.normalizedName,
+      aliases: item.aliases,
+      debitAccount,
+      creditAccount,
+      vatTreatment,
+      vatAccount,
+      category: null,
+      occurrenceCount: item.pattern.count,
+      confidence: item.confidence,
+      lastSeenDate: toDateString(item.pattern.latestDate),
+      source: 'sie_import',
+      linePattern: isSimple ? null : avgPattern,
+    }, existing)
+
+    count += 1
+  }
+
+  return count
+}

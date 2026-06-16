@@ -1,0 +1,44 @@
+name: Swedish Accounting Compliance Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Anthropic Bedrock SDK
+        run: npm install --no-save --no-package-lock @anthropic-ai/bedrock-sdk@latest
+      - name: Run compliance review
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'eu-north-1' }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          REVIEW_MODEL: eu.anthropic.claude-sonnet-4-6
+        run: node scripts/swedish-compliance-review.mjs
+      - name: Find previous compliance comment
+        uses: peter-evans/find-comment@v3
+        id: find-comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- swedish-compliance-review-bot -->'
+      - name: Post or update PR comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          body-path: review.md
+          edit-mode: replace

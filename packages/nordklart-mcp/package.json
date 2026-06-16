@@ -1,0 +1,28 @@
+{
+  "name": "nordklart-mcp",
+  "version": "1.0.1",
+  "description": "Connect Claude Desktop to your Nordklart bookkeeping account",
+  "bin": {
+    "nordklart-mcp": "./index.mjs"
+  },
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "nordklart",
+    "bookkeeping",
+    "claude",
+    "accounting"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nordklart/nordklart"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.mjs",
+    "README.md"
+  ]
+}
