@@ -1,3 +1,4 @@
+// This component is used to render the agent's avatar in various places across the app.
 'use client'
 
 import { MessageCircle } from 'lucide-react'
