@@ -67,7 +67,7 @@ const DEFAULT_BRANDING: BrandingConfig = {
   privacyEmail: 'privacy@nordklart.se',
   securityEmail: 'security@nordklart.se',
   authEmailFrom: 'noreply@nordklart.se',
-  appUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://app.nordklart.se',
+  appUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://nordklart.se',
   // The visible brand mark now renders as text via <BrandWordmark>; this
   // image path is kept as a fallback for any surface still using <Image>
   // (e.g. PWA-style metadata that demands a concrete file).
