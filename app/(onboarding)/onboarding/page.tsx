@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import WelcomeOnboarding from '@/components/dashboard/WelcomeOnboarding'
+import NordklartOnboardingRouter from '@/components/onboarding/NordklartOnboardingRouter'
 import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { mapEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
@@ -44,7 +45,7 @@ export async function findCompanyRoleByOrgNumber(
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org_number?: string }>
+  searchParams: Promise<{ org_number?: string; flow?: string; intent?: string }>
 }) {
   const supabase = await createClient()
 
@@ -86,8 +87,22 @@ export default async function OnboardingPage({
   // The BankID picker routes here with ?org_number=… for every pick. Strip
   // formatting so whatever Step 2 displays matches what the rest of the flow
   // will store.
-  const { org_number: rawOrgNumber } = await searchParams
+  const { org_number: rawOrgNumber, flow } = await searchParams
   const initialOrgNumber = rawOrgNumber ? rawOrgNumber.replace(/[\s-]/g, '') : undefined
+
+  // Nordklart onboarding router: users pick the right commercial path first.
+  // Bankgiro/Autogiro and one-time year-end are deliberately separate from
+  // ordinary bookkeeping setup. When a concrete bookkeeping flow starts (or
+  // BankID sends org_number), we continue into the existing compliant company
+  // setup so the accounting foundation stays unchanged.
+  const shouldShowRouter = !initialOrgNumber && !flow
+  if (shouldShowRouter) {
+    return <NordklartOnboardingRouter />
+  }
+
+  if (flow && !['bookkeeping', 'bookkeeping_direct'].includes(flow) && !initialOrgNumber) {
+    return <NordklartOnboardingRouter selectedFlow={flow} />
+  }
 
   // BankID prefill: look up the CompanyRoles row (no Lens call) to pre-fill
   // Step 1's entity_type radio and Step 2's company_name. If no role matches,

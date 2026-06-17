@@ -122,7 +122,8 @@ export default function DashboardNav({
         { href: '/', label: 'Översikt', icon: Home, requiresCompany: true },
         { href: '/pending', label: 'Att göra', icon: ClipboardCheck, badge: pendingOperationsCount, requiresCompany: true },
         { href: '/transactions', label: 'Bank & transaktioner', icon: Landmark, badge: uncategorizedTransactionCount, requiresCompany: true },
-        { href: '/chat', label: 'Automatisering', icon: Sparkles, requiresCompany: true },
+        { href: '/bank-automation', label: 'Bankautomation', icon: Sparkles, requiresCompany: true },
+        { href: '/chat', label: 'AI-assistent', icon: Sparkles, requiresCompany: true },
       ],
     },
     {
