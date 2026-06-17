@@ -16,7 +16,12 @@
     "check:guards": "node scripts/checks/no-new-antipatterns.mjs",
     "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
     "test": "vitest run --project unit",
-    "test:pg": "vitest run --project pg-real"
+    "test:pg": "vitest run --project pg-real",
+    "db:migrate": "node scripts/supabase-migrate.cjs up supabase/migrations",
+    "db:migrate:status": "node scripts/supabase-migrate.cjs status supabase/migrations",
+    "db:migrate:list": "node scripts/supabase-migrate.cjs list supabase/migrations",
+    "db:migrate:plan-after": "node scripts/supabase-migrate.cjs plan-after supabase/migrations",
+    "db:migrate:mark-through": "node scripts/supabase-migrate.cjs mark-through supabase/migrations"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.1",
@@ -80,10 +85,10 @@
     "@types/react-dom": "^19",
     "@types/sharp": "^0.31.1",
     "@types/web-push": "^3.6.4",
-    "dotenv": "^17.2.3",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
-    "pg": "^8.20.0",
+    "pg": "^8.21.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.0.18"
