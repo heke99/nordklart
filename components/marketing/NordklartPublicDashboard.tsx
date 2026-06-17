@@ -5,7 +5,6 @@ import {
   Building2,
   CheckCircle2,
   FileCheck2,
-  Layers3,
   LineChart,
   ShieldCheck,
   Sparkles,
@@ -17,59 +16,82 @@ import {
   marketingSectionLabel,
 } from '@/components/marketing/MarketingChrome'
 
-const paths = [
+const mainPaths = [
   {
-    title: 'Bokföring',
-    eyebrow: 'För löpande arbete',
-    description: 'Sköt verifikationer, fakturor, moms och rapporter i ett svenskt system byggt runt BAS, spårbarhet och tydliga kontroller.',
-    href: '/register?intent=bookkeeping',
-    cta: 'Starta bokföring',
-    icon: LineChart,
-    points: ['BAS-konton', 'Momsrapport', 'Resultat och balans', 'SIE-import/export'],
+    title: 'Automatiserad bokföring',
+    eyebrow: 'Huvudflöde',
+    description:
+      'Koppla bank, fakturor och regler så att Nordklart kan matcha transaktioner, föreslå bokföring och skapa verifikationer med spårbarhet.',
+    href: '/register?intent=automated-bookkeeping',
+    cta: 'Starta automatiserad bokföring',
+    icon: Sparkles,
+    points: ['Banktransaktioner', 'Fakturamatchning', 'Verifikationsförslag', 'Granskningskö'],
+  },
+  {
+    title: 'Fakturor och betalningar',
+    eyebrow: 'Från skickad till betald',
+    description:
+      'Skapa fakturor, följ betalstatus och låt betalningar kopplas till rätt kund, faktura och bokföringsunderlag.',
+    href: '/register?intent=invoicing',
+    cta: 'Kom igång med fakturor',
+    icon: FileCheck2,
+    points: ['Kundfakturor', 'Betalstatus', 'Momsunderlag', 'Reskontra'],
   },
   {
     title: 'Enbart bokslut',
     eyebrow: 'Separat engångsflöde',
-    description: 'Behöver du bara göra bokslut? Importera SIE, välj räkenskapsår och få kontroller, justeringar och rapportpaket.',
+    description:
+      'Behöver du bara göra bokslut? Importera SIE, välj räkenskapsår och få kontroller, justeringar och rapportpaket.',
     href: '/register?intent=year-end',
     cta: 'Gör bokslut',
-    icon: FileCheck2,
+    icon: LineChart,
     points: ['SIE-import', 'Periodiseringar', 'Avskrivningar', 'Exportpaket'],
   },
   {
     title: 'Bankgiro',
     eyebrow: 'Via partner',
-    description: 'Saknar du Bankgiro? Nordklart hjälper dig samla uppgifter, följa ansökan och koppla betalflödet till bokföringen.',
+    description:
+      'Saknar du Bankgiro? Nordklart hjälper dig samla uppgifter, följa ansökan och koppla betalflödet till bokföringen.',
     href: '/register?intent=bankgiro',
     cta: 'Ansök om Bankgiro',
     icon: Banknote,
     points: ['Ansökan', 'Dokument', 'Status', 'Avstämning'],
   },
+]
+
+const automationSteps = [
   {
-    title: 'Allt i ett',
-    eyebrow: 'Komplett paket',
-    description: 'Använd bokföring, bokslut, bankkoppling och Bankgiro i ett sammanhängande flöde när du vill ha hela kedjan på plats.',
-    href: '/register?intent=all-in-one',
-    cta: 'Kom igång med allt',
-    icon: Layers3,
-    points: ['Bokföring', 'Bokslut', 'Bankgiro', 'Rapporter'],
+    title: 'Banken synkas',
+    body: 'Transaktioner hämtas in och dedupliceras innan de hamnar i granskningsflödet.',
   },
+  {
+    title: 'Fakturor matchas',
+    body: 'Belopp, OCR, motpart och betalstatus jämförs mot kundfakturor och leverantörsunderlag.',
+  },
+  {
+    title: 'Verifikation föreslås',
+    body: 'Regler och tidigare mönster skapar bokföringsförslag med tydlig confidence och audit.',
+  },
+  {
+    title: 'Du godkänner eller låter reglerna arbeta',
+    body: 'Säkra träffar kan automatiseras. Osäkra poster hamnar i att-göra-listan för kontroll.',
+  },
+]
+
+const dashboardItems = [
+  { label: 'Automatisering', value: '24 matchade', detail: 'bankhändelser redo för kontroll eller autobokföring' },
+  { label: 'Verifikationer', value: '9 förslag', detail: 'med konto, moms och bilaga kopplad' },
+  { label: 'Fakturor', value: '7 betalningar', detail: 'matchade mot kundfakturor och reskontra' },
+  { label: 'Bankgiro', value: 'Under granskning', detail: 'ansökan följs upp i samma översikt' },
 ]
 
 const bankgiroStatuses = ['Utkast', 'Inskickad', 'Behöver komplettering', 'Under granskning', 'Godkänd', 'Aktiveras', 'Aktiv']
 
-const dashboardItems = [
-  { label: 'Bokföring', value: '18 transaktioner', detail: 'att granska innan momsperioden stängs' },
-  { label: 'Bokslut', value: '68% klart', detail: '4 kontroller kvar för räkenskapsåret' },
-  { label: 'Bankgiro', value: 'Under granskning', detail: '1 dokument behöver kompletteras' },
-  { label: 'Byrå', value: '3 kundbolag', detail: 'har åtgärder som väntar' },
-]
-
 const allInOneFeatures = [
-  'Banktransaktioner kan matchas mot fakturor och verifikationer',
-  'Bokslutet använder samma bokföringsdata och audit-spår',
-  'Bankgirostatus syns tillsammans med betalningar och avstämning',
-  'Byråer kan följa kundernas arbete från en gemensam översikt',
+  'Banktransaktioner matchas mot fakturor och verifikationer',
+  'Automatiska förslag skapas med regler, confidence och audit',
+  'Moms, rapporter och bokslut bygger på samma bokföringsdata',
+  'Bankgiro kopplas till betalningar, avstämning och bokföring',
 ]
 
 export function NordklartPublicDashboard() {
@@ -82,29 +104,29 @@ export function NordklartPublicDashboard() {
             <div className="space-y-8">
               <div className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-card/80 px-4 py-2 text-sm font-semibold text-primary shadow-sm backdrop-blur">
                 <Sparkles className="h-4 w-4" aria-hidden="true" />
-                Välj en del – eller samla allt i ett
+                Automatiserad bokföring med mänsklig kontroll
               </div>
 
               <div className="space-y-5">
                 <h1 className="max-w-4xl text-balance font-display text-5xl font-semibold leading-[0.95] tracking-tight text-foreground md:text-7xl">
-                  Bokföring, bokslut och Bankgiro – tydligt från start.
+                  Automatiserad bokföring från bank till verifikation.
                 </h1>
                 <p className="max-w-2xl text-lg leading-8 text-muted-foreground md:text-xl">
-                  Nordklart hjälper svenska företag och redovisningsbyråer att sköta löpande bokföring, göra enbart bokslut eller få hjälp med Bankgiro via partner. Du väljer själv om du vill börja med en del eller ha hela kedjan kopplad.
+                  Nordklart matchar banktransaktioner, fakturor och regler så att bokföringen går snabbare. Du får verifikationsförslag, tydlig granskning, momsunderlag och rapporter utan att tappa kontrollen.
                 </p>
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                <Link href="/register?intent=bookkeeping" className={marketingPrimaryCta}>
-                  Starta bokföring <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
+                <Link href="/register?intent=automated-bookkeeping" className={marketingPrimaryCta}>
+                  Starta automatiserad bokföring <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
                 </Link>
-                <Link href="/register?intent=year-end" className={marketingSecondaryCta}>Gör enbart bokslut</Link>
+                <Link href="/register?intent=invoicing" className={marketingSecondaryCta}>Automatisera fakturor</Link>
+                <Link href="/register?intent=year-end" className={marketingSecondaryCta}>Gör bokslut</Link>
                 <Link href="/register?intent=bankgiro" className={marketingSecondaryCta}>Ansök om Bankgiro</Link>
-                <Link href="/register?intent=all-in-one" className={marketingSecondaryCta}>Allt i ett</Link>
               </div>
 
               <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-2 lg:max-w-2xl">
-                {['BAS-kontoplan', 'Momsrapport', 'SIE-import/export', 'Bankgiro via partner'].map((item) => (
+                {['Automatiserad bokföring', 'Verifikationer med audit', 'Fakturor och betalstatus', 'Moms, rapporter och bokslut'].map((item) => (
                   <div key={item} className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
                     {item}
@@ -117,18 +139,46 @@ export function NordklartPublicDashboard() {
           </div>
         </section>
 
-        <section className="px-5 py-12 md:px-8" aria-labelledby="valj-behov">
+        <section className="px-5 py-12 md:px-8" aria-labelledby="automation-flow">
           <div className="mx-auto max-w-7xl space-y-8">
             <div className="max-w-3xl space-y-3">
-              <p className={marketingSectionLabel}>Vad behöver du?</p>
-              <h2 id="valj-behov" className="text-balance text-3xl font-semibold md:text-5xl">Starta där behovet är störst.</h2>
+              <p className={marketingSectionLabel}>Det vi säljer in</p>
+              <h2 id="automation-flow" className="text-balance text-3xl font-semibold md:text-5xl">
+                Mindre manuell bokföring. Mer kontroll på det som faktiskt behöver granskas.
+              </h2>
               <p className="text-lg leading-8 text-muted-foreground">
-                Nordklart är byggt för att du ska kunna välja rätt väg direkt: löpande bokföring, ett fristående bokslut, Bankgiroansökan eller hela systemet samlat.
+                Nordklart ska inte bara lagra bokföring. Systemet hjälper till att göra arbetet: läsa bankhändelser, matcha fakturor, föreslå konton och skapa verifikationer när reglerna är säkra.
               </p>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {paths.map((path) => {
+              {automationSteps.map((step, index) => (
+                <article key={step.title} className="rounded-[2rem] border border-border bg-card/90 p-6 shadow-sm">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-sm font-bold text-primary">
+                    {index + 1}
+                  </span>
+                  <h3 className="mt-5 text-xl font-semibold tracking-tight">{step.title}</h3>
+                  <p className="mt-3 leading-7 text-muted-foreground">{step.body}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="px-5 py-12 md:px-8" aria-labelledby="valj-behov">
+          <div className="mx-auto max-w-7xl space-y-8">
+            <div className="max-w-3xl space-y-3">
+              <p className={marketingSectionLabel}>Välj väg</p>
+              <h2 id="valj-behov" className="text-balance text-3xl font-semibold md:text-5xl">
+                Börja med automatisering – eller välj den del du behöver nu.
+              </h2>
+              <p className="text-lg leading-8 text-muted-foreground">
+                Automatiserad bokföring är huvudspåret. Bokslut, Bankgiro och allt-i-ett finns kvar som tydliga flöden för företag och redovisningsbyråer.
+              </p>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {mainPaths.map((path) => {
                 const Icon = path.icon
                 return (
                   <article key={path.title} className="group flex min-h-full flex-col rounded-[2rem] border border-border bg-card/88 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
@@ -154,6 +204,33 @@ export function NordklartPublicDashboard() {
                   </article>
                 )
               })}
+            </div>
+          </div>
+        </section>
+
+        <section id="allt-i-ett" className="px-5 py-14 md:px-8">
+          <div className="mx-auto max-w-7xl rounded-[2.5rem] bg-primary p-6 text-primary-foreground shadow-lg md:p-10">
+            <div className="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+              <div className="space-y-5">
+                <p className="text-sm font-semibold uppercase tracking-[0.22em] text-primary-foreground/75">Allt i ett</p>
+                <h2 className="text-balance text-3xl font-semibold md:text-5xl">
+                  Automatisera bokföring, fakturor, Bankgiro och bokslut i samma kedja.
+                </h2>
+                <p className="text-lg leading-8 text-primary-foreground/82">
+                  När allt hänger ihop slipper du dubbelarbete: transaktioner matchas, fakturor följs upp, verifikationer skapas och bokslutet bygger på samma data.
+                </p>
+                <Link href="/register?intent=all-in-one" className="inline-flex items-center justify-center rounded-full bg-primary-foreground px-5 py-3 text-sm font-semibold text-primary shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                  Starta med allt i ett <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
+                </Link>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {allInOneFeatures.map((item) => (
+                  <div key={item} className="rounded-3xl border border-primary-foreground/18 bg-primary-foreground/10 p-5">
+                    <CheckCircle2 className="mb-4 h-5 w-5" aria-hidden="true" />
+                    <p className="font-semibold leading-6">{item}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </section>
@@ -225,31 +302,6 @@ export function NordklartPublicDashboard() {
           </div>
         </section>
 
-        <section id="allt-i-ett" className="px-5 py-14 md:px-8">
-          <div className="mx-auto max-w-7xl rounded-[2.5rem] bg-primary p-6 text-primary-foreground shadow-lg md:p-10">
-            <div className="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
-              <div className="space-y-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.22em] text-primary-foreground/75">Allt i ett</p>
-                <h2 className="text-balance text-3xl font-semibold md:text-5xl">Vill du ha hela kedjan samlad?</h2>
-                <p className="text-lg leading-8 text-primary-foreground/82">
-                  Använd Nordklart som ett komplett system där bokföring, banktransaktioner, bokslut, Bankgiro, rapporter och byråarbete hänger ihop från början.
-                </p>
-                <Link href="/register?intent=all-in-one" className="inline-flex items-center justify-center rounded-full bg-primary-foreground px-5 py-3 text-sm font-semibold text-primary shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                  Starta med allt i ett <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
-                </Link>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {allInOneFeatures.map((item) => (
-                  <div key={item} className="rounded-3xl border border-primary-foreground/18 bg-primary-foreground/10 p-5">
-                    <CheckCircle2 className="mb-4 h-5 w-5" aria-hidden="true" />
-                    <p className="font-semibold leading-6">{item}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-
         <section id="byra" className="px-5 py-14 md:px-8">
           <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
             <div className="rounded-[2rem] border border-border bg-card p-6 shadow-md">
@@ -257,11 +309,11 @@ export function NordklartPublicDashboard() {
                 <Building2 className="h-7 w-7 text-primary" aria-hidden="true" />
                 <div>
                   <p className="text-sm font-semibold text-primary">Byråöversikt</p>
-                  <h3 className="text-2xl font-semibold">Kundbolag i kontroll</h3>
+                  <h3 className="text-2xl font-semibold">Automatisering per kundbolag</h3>
                 </div>
               </div>
               <div className="space-y-3">
-                {['Moms klar att kontrollera', 'Bokslut pågår', 'Bankgirostatus väntar', 'Transaktioner att granska'].map((item, index) => (
+                {['Transaktioner att granska', 'Fakturor att matcha', 'Bokslut pågår', 'Bankgirostatus väntar'].map((item, index) => (
                   <div key={item} className="flex items-center justify-between rounded-2xl bg-background/75 p-4">
                     <span className="font-medium">{item}</span>
                     <span className="rounded-full bg-secondary px-3 py-1 text-xs font-semibold text-secondary-foreground">{index + 2} bolag</span>
@@ -271,9 +323,9 @@ export function NordklartPublicDashboard() {
             </div>
             <div className="space-y-5">
               <p className={marketingSectionLabel}>För redovisningsbyråer</p>
-              <h2 className="text-balance text-3xl font-semibold md:text-5xl">Se bokföring, bokslut och Bankgirostatus per kund.</h2>
+              <h2 className="text-balance text-3xl font-semibold md:text-5xl">Automatisera återkommande arbete för flera kundbolag.</h2>
               <p className="text-lg leading-8 text-muted-foreground">
-                Byråer kan samla kundbolag, ansvariga konsulter, deadlines, moms, bokslut och betalstatus på en tydlig översikt. Kunden kan arbeta i sitt bolag, medan byrån behåller kontroll.
+                Byråer kan samla kundbolag, ansvariga konsulter, deadlines, moms, bokslut, fakturor och betalstatus på en tydlig översikt. Kunden kan arbeta i sitt bolag medan byrån behåller kontroll.
               </p>
               <Link href="/boka-demo?intent=agency" className={marketingSecondaryCta}>Boka byrådemo</Link>
             </div>
@@ -283,15 +335,17 @@ export function NordklartPublicDashboard() {
         <section className="px-5 py-14 md:px-8">
           <div className="mx-auto max-w-7xl rounded-[2.5rem] border border-border bg-card/90 p-6 text-center shadow-md md:p-12">
             <p className={marketingSectionLabel}>Nästa steg</p>
-            <h2 className="mx-auto mt-3 max-w-3xl text-balance text-3xl font-semibold md:text-5xl">Vad vill du göra först?</h2>
+            <h2 className="mx-auto mt-3 max-w-3xl text-balance text-3xl font-semibold md:text-5xl">
+              Vill du automatisera bokföringen från början?
+            </h2>
             <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-muted-foreground">
-              Börja med bokföring, gör ett fristående bokslut, ansök om Bankgiro – eller koppla ihop allt i ett flöde.
+              Starta med bank, fakturor och verifikationsförslag – eller välj bokslut, Bankgiro eller allt i ett när det passar.
             </p>
             <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap">
-              <Link href="/register?intent=bookkeeping" className={marketingPrimaryCta}>Starta bokföring</Link>
+              <Link href="/register?intent=automated-bookkeeping" className={marketingPrimaryCta}>Starta automatiserad bokföring</Link>
+              <Link href="/register?intent=invoicing" className={marketingSecondaryCta}>Automatisera fakturor</Link>
               <Link href="/register?intent=year-end" className={marketingSecondaryCta}>Gör bokslut</Link>
               <Link href="/register?intent=bankgiro" className={marketingSecondaryCta}>Ansök om Bankgiro</Link>
-              <Link href="/register?intent=all-in-one" className={marketingSecondaryCta}>Allt i ett</Link>
             </div>
           </div>
         </section>
@@ -306,8 +360,8 @@ function DashboardPreview() {
       <div className="rounded-[1.8rem] border border-border bg-background/75 p-5">
         <div className="mb-6 flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold text-primary">Nordklart översikt</p>
-            <h2 className="mt-1 text-2xl font-semibold">Allt som behöver åtgärdas</h2>
+            <p className="text-sm font-semibold text-primary">Nordklart automation</p>
+            <h2 className="mt-1 text-2xl font-semibold">Dagens bokföringsflöde</h2>
           </div>
           <span className="rounded-full bg-success/10 px-3 py-1 text-xs font-semibold text-success">Exempelvy</span>
         </div>

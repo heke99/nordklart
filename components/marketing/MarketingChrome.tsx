@@ -4,7 +4,7 @@ import { ArrowRight, Scale } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 
 const navItems = [
-  { label: 'Bokföring', href: '/bokforing' },
+  { label: 'Automatiserad bokföring', href: '/bokforing' },
   { label: 'Bokslut', href: '/bokslut' },
   { label: 'Bankgiro', href: '/bankgiro' },
   { label: 'Byrå', href: '/byra' },
@@ -16,7 +16,7 @@ const footerGroups = [
   {
     title: 'Produkt',
     links: [
-      { label: 'Bokföring', href: '/bokforing' },
+      { label: 'Automatiserad bokföring', href: '/bokforing' },
       { label: 'Bokslut', href: '/bokslut' },
       { label: 'Bankgiro', href: '/bankgiro' },
       { label: 'Redovisningsbyrå', href: '/byra' },
@@ -26,7 +26,7 @@ const footerGroups = [
   {
     title: 'Kom igång',
     links: [
-      { label: 'Starta bokföring', href: '/register?intent=bookkeeping' },
+      { label: 'Starta automatiserad bokföring', href: '/register?intent=automated-bookkeeping' },
       { label: 'Gör bokslut', href: '/register?intent=year-end' },
       { label: 'Ansök om Bankgiro', href: '/register?intent=bankgiro' },
       { label: 'Boka demo', href: '/boka-demo' },
@@ -88,7 +88,7 @@ export function MarketingHeader() {
           <Link href="/boka-demo" className="hidden rounded-full border border-border bg-card/80 px-4 py-2 text-sm font-semibold text-foreground shadow-sm transition hover:-translate-y-0.5 hover:bg-secondary md:inline-flex">
             Boka demo
           </Link>
-          <Link href="/register" className="inline-flex items-center rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <Link href="/register?intent=automated-bookkeeping" className="inline-flex items-center rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
             Starta <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Link>
         </div>
@@ -109,7 +109,7 @@ export function MarketingFooter() {
             <BrandWordmark size="inline" lowercase={false} className="text-xl" />
           </Link>
           <p className="max-w-sm leading-7 text-muted-foreground">
-            Svensk bokföring, fristående bokslut och hjälp med Bankgiro via partner – byggt för företag och redovisningsbyråer.
+            Automatiserad svensk bokföring med fakturor, verifikationer, fristående bokslut och hjälp med Bankgiro via partner.
           </p>
           <p className="text-sm text-muted-foreground">© Nordklart. Alla rättigheter förbehållna.</p>
         </div>

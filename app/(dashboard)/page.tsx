@@ -2,9 +2,9 @@ import type { Metadata } from 'next'
 import { NordklartPublicDashboard } from '@/components/marketing/NordklartPublicDashboard'
 
 export const metadata: Metadata = {
-  title: 'Nordklart – bokföring, bokslut och Bankgiro',
+  title: 'Nordklart – automatiserad bokföring, fakturor och bokslut',
   description:
-    'Välj bokföring, gör enbart bokslut, ansök om Bankgiro via partner eller samla allt i Nordklart.',
+    'Automatisera bokföring, verifikationer och fakturor. Gör bokslut separat eller koppla Bankgiro via partner.',
 }
 
 export default function HomePage() {
