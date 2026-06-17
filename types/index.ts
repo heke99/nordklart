@@ -604,6 +604,46 @@ export interface Customer {
   updated_at: string
 }
 
+
+// Article (artikelregister) — reusable invoice-line preset. NON-INVENTORY.
+export type ArticleType = 'vara' | 'tjanst'
+
+export interface Article {
+  id: string
+  company_id: string
+  user_id: string
+  article_number: string | null
+  name: string
+  name_en: string | null
+  type: ArticleType
+  unit: string
+  price_excl_vat: number
+  vat_rate: number
+  revenue_account: string | null
+  cost_price: number | null
+  ean: string | null
+  housework_type: string | null
+  notes: string | null
+  active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateArticleInput {
+  name: string
+  type?: ArticleType
+  unit?: string
+  price_excl_vat: number
+  vat_rate?: number
+  revenue_account?: string | null
+  cost_price?: number | null
+  ean?: string | null
+  housework_type?: string | null
+  name_en?: string | null
+  notes?: string | null
+  article_number?: string | null
+}
+
 // Supplier
 export interface Supplier {
   id: string
@@ -722,6 +762,10 @@ export interface SupplierInvoiceItem {
   // for non-RC lines. The supplier charges no VAT so vat_rate stays 0; this
   // rate drives the fiktiv-moms + basbelopp booking. See the booking engine.
   reverse_charge_rate: number | null
+
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
 
   created_at: string
 }
@@ -870,6 +914,11 @@ export interface InvoiceItem {
   // Order
   sort_order: number
 
+  // Line type and article snapshot/back-reference
+  line_type?: 'product' | 'text'
+  article_id?: string | null
+  revenue_account?: string | null
+
   // Description
   description: string
 
@@ -907,6 +956,10 @@ export interface InvoiceItem {
   housing_designation?: string | null
   /** Lägenhetsnummer. Optional, used for ROT in flerbostadshus. */
   apartment_number?: string | null
+
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
 
   created_at: string
 }
@@ -975,6 +1028,11 @@ export interface TaxRate {
   // Validity
   valid_from: string
   valid_to: string | null
+
+  // Line type and article snapshot/back-reference
+  line_type?: 'product' | 'text'
+  article_id?: string | null
+  revenue_account?: string | null
 
   // Description
   description: string
@@ -1212,6 +1270,7 @@ export type JournalEntrySourceType =
   | 'supplier_credit_note'
   | 'currency_revaluation'
   | 'reminder_fee'
+  | 'accrual'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -1575,6 +1634,50 @@ export interface SIEExportOptions {
    * our closing entry would zero out the P&L accounts.
    */
   exclude_year_end_closing?: boolean
+}
+
+
+export type AccrualDirection = 'expense' | 'revenue'
+export type AccrualScheduleStatus = 'active' | 'completed' | 'cancelled'
+export type AccrualInstallmentStatus = 'pending' | 'posted' | 'cancelled'
+
+export interface AccrualSchedule {
+  id: string
+  user_id: string
+  company_id: string
+  direction: AccrualDirection
+  supplier_invoice_id: string | null
+  supplier_invoice_item_id: string | null
+  invoice_id: string | null
+  invoice_item_id: string | null
+  balance_account: string
+  target_account: string
+  total_amount: number
+  period_start: string
+  period_end: string
+  months: number
+  origin_journal_entry_id: string | null
+  posting_floor_date: string
+  status: AccrualScheduleStatus
+  description: string | null
+  created_at: string
+  updated_at: string
+  installments?: AccrualScheduleInstallment[]
+}
+
+export interface AccrualScheduleInstallment {
+  id: string
+  user_id: string
+  company_id: string
+  schedule_id: string
+  period_month: string
+  amount: number
+  status: AccrualInstallmentStatus
+  journal_entry_id: string | null
+  posted_at: string | null
+  last_error: string | null
+  created_at: string
+  updated_at: string
 }
 
 // Input types for creating entries

@@ -28,6 +28,14 @@ const accountNumber = z.string().regex(/^\d{4}$/, 'Account number must be exactl
 /** Non-negative monetary amount (>= 0) */
 const nonNegativeAmount = z.number().nonnegative()
 
+/** BAS class-3 revenue account — exactly 4 digits starting with 3. */
+const revenueAccount = z
+  .string()
+  .regex(/^3\d{3}$/, 'Revenue account must be a 4-digit BAS class-3 account (3xxx)')
+
+/** Swedish VAT rate as an integer percent. */
+const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+
 /** Time string (HH:MM or HH:MM:SS) */
 const timeString = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or HH:MM:SS time format')
 
@@ -137,6 +145,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'supplier_credit_note',
   'currency_revaluation',
   'reminder_fee',
+  'accrual',
 ])
 
 export const AccountTypeSchema = z.enum([
@@ -230,6 +239,32 @@ export const CreateInvoiceSchema = z.object({
 export const CreateCreditNoteSchema = z.object({
   credited_invoice_id: uuid,
   reason: z.string().optional(),
+})
+
+
+// ============================================================
+// Articles (artikelregister)
+// ============================================================
+
+export const ArticleTypeSchema = z.enum(['vara', 'tjanst'])
+
+export const CreateArticleSchema = z.object({
+  name: z.string().min(1, 'Article name is required').max(200),
+  type: ArticleTypeSchema.optional(),
+  unit: z.string().min(1).max(32).optional(),
+  price_excl_vat: nonNegativeAmount,
+  vat_rate: vatRatePercent.optional(),
+  revenue_account: revenueAccount.nullable().optional(),
+  cost_price: nonNegativeAmount.nullable().optional(),
+  ean: z.string().max(32).nullable().optional(),
+  housework_type: z.string().max(64).nullable().optional(),
+  name_en: z.string().max(200).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  article_number: z.string().max(64).nullable().optional(),
+})
+
+export const UpdateArticleSchema = CreateArticleSchema.partial().extend({
+  active: z.boolean().optional(),
 })
 
 // Self-billing received (mottagen självfaktura, ML 17 kap 15§). The customer

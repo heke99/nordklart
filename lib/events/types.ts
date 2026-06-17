@@ -4,6 +4,7 @@ import type {
   Transaction,
   Customer,
   Supplier,
+  Article,
   FiscalPeriod,
   DocumentAttachment,
   Receipt,
@@ -80,6 +81,9 @@ export type CoreEvent =
   | { type: 'customer.created'; payload: { customer: Customer; userId: string; companyId: string } }
   // Suppliers
   | { type: 'supplier.created'; payload: { supplier: Supplier; userId: string; companyId: string } }
+  // Articles
+  | { type: 'article.created'; payload: { article: Article; userId: string; companyId: string } }
+  | { type: 'article.updated'; payload: { article: Article; userId: string; companyId: string } }
   // Receipts
   | { type: 'receipt.extracted'; payload: {
       receipt: Receipt;
@@ -139,6 +143,11 @@ export type CoreEvent =
       userId: string
       companyId: string
     } }
+  // Digital årsredovisning / Bolagsverket
+  | { type: 'arsredovisning.uploaded'; payload: { submissionId: string; fiscalPeriodId: string; idnummer?: string | null; environment?: string | null; status?: string; userId: string; companyId: string } }
+  | { type: 'arsredovisning.status_changed'; payload: { submissionId: string; fiscalPeriodId: string | null; previousStatus?: string | null; status: string; bolagsverketStatus?: string | null; userId: string; companyId: string } }
+  | { type: 'arsredovisning.registered'; payload: { submissionId: string; fiscalPeriodId: string | null; status?: string; userId: string; companyId: string } }
+  | { type: 'arsredovisning.forelagd'; payload: { submissionId: string; fiscalPeriodId: string | null; status?: string; userId: string; companyId: string } }
   // Company & account lifecycle
   | { type: 'company.deleted'; payload: { companyId: string; userId: string; archivedAt: string } }
   | { type: 'account.deleted'; payload: { userId: string; deletedAt: string } }
