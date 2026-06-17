@@ -44,6 +44,31 @@ export async function updateSession(request: NextRequest) {
   // Get the pathname
   const pathname = request.nextUrl.pathname
 
+  const publicMarketingPaths = new Set([
+    '/',
+    '/dashboard',
+    '/bokforing',
+    '/bokslut',
+    '/bankgiro',
+    '/byra',
+    '/priser',
+    '/kontakt',
+    '/boka-demo',
+    '/allmanna-villkor',
+    '/integritetspolicy',
+    '/cookies',
+    '/personuppgifter',
+    '/privacy',
+    '/dpa',
+  ])
+  const isPublicMarketingPath = publicMarketingPaths.has(pathname)
+
+  supabaseResponse.headers.set('x-pathname', pathname)
+
+  if (isPublicMarketingPath) {
+    return supabaseResponse
+  }
+
   // If the refresh token is stale/invalid, clear the session cookies
   // so the browser stops sending them on every request.
   // Skip on auth routes — the callback needs PKCE cookies intact.
@@ -79,7 +104,7 @@ export async function updateSession(request: NextRequest) {
   ) {
     // If user is logged in and trying to access auth pages, redirect to dashboard
     if (user) {
-      return NextResponse.redirect(new URL('/', request.url))
+      return NextResponse.redirect(new URL('/app', request.url))
     }
     return supabaseResponse
   }

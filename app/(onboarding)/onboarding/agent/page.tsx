@@ -30,7 +30,7 @@ export default async function AgentOnboardingPage() {
     .select('is_sandbox')
     .eq('company_id', companyId)
     .maybeSingle()
-  if (settingsForSandbox?.is_sandbox) redirect('/')
+  if (settingsForSandbox?.is_sandbox) redirect('/app')
 
   // Trigger the TIC live-fetch + cache before the field-resolving query
   // below. ensureTicSnapshot is fast on cache-hit (single SELECT) and

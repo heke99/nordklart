@@ -115,7 +115,7 @@ function LoginPageContent() {
 
             if (res.ok) {
               document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
-              window.location.href = '/'
+              window.location.href = '/app'
               return
             }
           } catch (err) {
@@ -186,7 +186,7 @@ function LoginPageContent() {
 
           if (res.ok) {
             document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
-            window.location.href = '/'
+            window.location.href = '/app'
             return
           }
         } catch (err) {
@@ -196,7 +196,7 @@ function LoginPageContent() {
         document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
       }
 
-      router.push('/')
+      router.push('/app')
       router.refresh()
     } catch (error) {
       toast({

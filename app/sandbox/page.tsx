@@ -96,7 +96,7 @@ export default function SandboxPage() {
 
           <div className="mt-6 flex flex-col items-center gap-3">
             <Button asChild className="w-full h-11">
-              <Link href="/">Gå till dashboard</Link>
+              <Link href="/app">Gå till dashboard</Link>
             </Button>
           </div>
         </div>

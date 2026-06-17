@@ -34,6 +34,16 @@ export default async function DashboardLayout({
   // current page on in-app navigation to /settings/*; null otherwise.
   settingsModal: React.ReactNode
 }) {
+  const headerStore = await headers()
+  const pathname = headerStore.get('x-pathname') ?? ''
+
+  // The historical dashboard group owned `/`. Nordklart now uses `/` as the
+  // public hero page, while the authenticated app overview lives at `/app`.
+  // Keep this branch above auth so first-time visitors never land on login.
+  if (pathname === '/' || pathname === '') {
+    return <>{children}</>
+  }
+
   const supabase = await createClient()
 
   const { data: { user } } = await supabase.auth.getUser()
@@ -50,8 +60,6 @@ export default async function DashboardLayout({
   const companyId = await getActiveCompanyId(supabase, user.id)
 
   // Read the pathname forwarded by middleware so we can branch on it.
-  const headerStore = await headers()
-  const pathname = headerStore.get('x-pathname') ?? ''
   const isNoCompanyAllowed = NO_COMPANY_ALLOWED_PATHS.some((p) =>
     pathname.startsWith(p)
   )

@@ -74,7 +74,7 @@ export default function ResetPasswordPage() {
         description: t('saved_description'),
       })
 
-      router.push('/')
+      router.push('/app')
       router.refresh()
     } catch {
       toast({

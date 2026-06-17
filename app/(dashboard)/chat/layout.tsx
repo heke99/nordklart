@@ -47,7 +47,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
     }
   }
 
-  if (!agent?.verified_at) redirect('/')
+  if (!agent?.verified_at) redirect('/app')
 
   const { data: conversations } = await supabase
     .from('agent_conversations')

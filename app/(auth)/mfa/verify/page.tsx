@@ -39,7 +39,7 @@ function MfaVerifyContent() {
   // sensitive (set/change password, unenroll MFA, etc.) — /api/account/password
   // and SecuritySettings redirect here when GoTrue rejects with "AAL2 session
   // is required". Falls back to the dashboard for direct visits.
-  const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
+  const returnTo = safeReturnTo(searchParams.get('returnTo'), '/app')
 
   useEffect(() => {
     async function loadFactor() {
@@ -48,7 +48,7 @@ function MfaVerifyContent() {
       if (verifiedFactor) {
         setFactorId(verifiedFactor.id)
       } else {
-        router.push('/')
+        router.push('/app')
       }
     }
     loadFactor()

@@ -126,7 +126,7 @@ export async function GET(request: NextRequest) {
               .eq('id', invite.id)
 
             // Invited user goes straight to dashboard — no onboarding needed
-            redirectPath = '/'
+            redirectPath = '/app'
 
             // Clear invite cookie and set company cookie on response
             const response = NextResponse.redirect(new URL(redirectPath, origin))
@@ -179,7 +179,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Always redirect to dashboard — it handles zero-company and incomplete states
-      redirectPath = '/'
+      redirectPath = '/app'
     }
 
     // Create redirect and explicitly set auth cookies on the response

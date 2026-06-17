@@ -34,7 +34,7 @@ function MfaEnrollContent() {
   const searchParams = useSearchParams()
   const supabase = createClient()
 
-  const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
+  const returnTo = safeReturnTo(searchParams.get('returnTo'), '/app')
 
   // UX defense — middleware already blocks this route for BankID-only users
   // without a password, but a stale tab might land here too. Bounce them to

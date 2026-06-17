@@ -186,7 +186,7 @@ function NewCompanyContent() {
         title: t('toast_company_created'),
         description: t('toast_switched_to_new'),
       })
-      router.push('/')
+      router.push('/app')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logError('create company action threw', { error: message })
@@ -232,7 +232,7 @@ function NewCompanyContent() {
           <div className="flex items-center justify-between mb-5 md:mb-6">
             <div className="flex items-center gap-2.5">
               <Link
-                href="/"
+                href="/app"
                 className="flex items-center gap-2 text-white/60 hover:text-white transition-colors"
               >
                 <ArrowLeft className="h-4 w-4" />

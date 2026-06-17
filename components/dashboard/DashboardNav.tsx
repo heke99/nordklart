@@ -155,7 +155,7 @@ export default function DashboardNav({
   const Sidebar = (
     <aside className="flex h-full w-72 flex-col border-r border-border/70 bg-card/85 px-4 py-5 shadow-sm backdrop-blur-xl md:w-64">
       <div className="mb-5 flex items-center justify-between gap-3">
-        <Link href="/" className="flex items-center gap-3">
+        <Link href="/app" className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
             <Scale className="h-5 w-5" />
           </div>
@@ -214,7 +214,7 @@ export default function DashboardNav({
       <div className="fixed left-0 top-0 z-40 hidden h-screen md:block">{Sidebar}</div>
       <div className="fixed inset-x-0 top-0 z-40 border-b bg-card/90 px-4 py-3 backdrop-blur-xl md:hidden">
         <div className="flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 font-display text-xl font-semibold nordklart-gradient-text">
+          <Link href="/app" className="flex items-center gap-2 font-display text-xl font-semibold nordklart-gradient-text">
             <Scale className="h-5 w-5 text-primary" />
             {branding.appName}
           </Link>

@@ -10,21 +10,18 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
-
-const primaryCta =
-  'inline-flex items-center justify-center rounded-full bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-md transition hover:-translate-y-0.5 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
-
-const secondaryCta =
-  'inline-flex items-center justify-center rounded-full border border-border bg-card/80 px-5 py-3 text-sm font-semibold text-foreground shadow-sm transition hover:-translate-y-0.5 hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
-
-const sectionLabel = 'text-sm font-semibold uppercase tracking-[0.22em] text-primary'
+import {
+  MarketingChrome,
+  marketingPrimaryCta,
+  marketingSecondaryCta,
+  marketingSectionLabel,
+} from '@/components/marketing/MarketingChrome'
 
 const paths = [
   {
     title: 'Bokföring',
     eyebrow: 'För löpande arbete',
-    description: 'Sköt verifikationer, fakturor, moms och rapporter i ett svenskt system byggt runt BAS och tydliga kontroller.',
+    description: 'Sköt verifikationer, fakturor, moms och rapporter i ett svenskt system byggt runt BAS, spårbarhet och tydliga kontroller.',
     href: '/register?intent=bookkeeping',
     cta: 'Starta bokföring',
     icon: LineChart,
@@ -32,7 +29,7 @@ const paths = [
   },
   {
     title: 'Enbart bokslut',
-    eyebrow: 'Engångsflöde',
+    eyebrow: 'Separat engångsflöde',
     description: 'Behöver du bara göra bokslut? Importera SIE, välj räkenskapsår och få kontroller, justeringar och rapportpaket.',
     href: '/register?intent=year-end',
     cta: 'Gör bokslut',
@@ -41,7 +38,7 @@ const paths = [
   },
   {
     title: 'Bankgiro',
-    eyebrow: 'Via Leslie/partner',
+    eyebrow: 'Via partner',
     description: 'Saknar du Bankgiro? Nordklart hjälper dig samla uppgifter, följa ansökan och koppla betalflödet till bokföringen.',
     href: '/register?intent=bankgiro',
     cta: 'Ansök om Bankgiro',
@@ -59,15 +56,7 @@ const paths = [
   },
 ]
 
-const bankgiroStatuses = [
-  'Utkast',
-  'Inskickad',
-  'Behöver komplettering',
-  'Under granskning',
-  'Godkänd',
-  'Aktiveras',
-  'Aktiv',
-]
+const bankgiroStatuses = ['Utkast', 'Inskickad', 'Behöver komplettering', 'Under granskning', 'Godkänd', 'Aktiveras', 'Aktiv']
 
 const dashboardItems = [
   { label: 'Bokföring', value: '18 transaktioner', detail: 'att granska innan momsperioden stängs' },
@@ -85,35 +74,7 @@ const allInOneFeatures = [
 
 export function NordklartPublicDashboard() {
   return (
-    <div className="min-h-screen overflow-hidden bg-background text-foreground">
-      <header className="sticky top-0 z-40 border-b border-border/70 bg-background/85 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 md:px-8">
-          <Link href="/dashboard" aria-label="Nordklart dashboard" className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-sm font-bold text-primary-foreground shadow-sm">
-              N
-            </span>
-            <BrandWordmark size="inline" lowercase={false} className="text-xl" />
-          </Link>
-
-          <nav className="hidden items-center gap-7 text-sm font-medium text-muted-foreground lg:flex" aria-label="Huvudmeny">
-            <a className="transition hover:text-foreground" href="#bokforing">Bokföring</a>
-            <a className="transition hover:text-foreground" href="#bokslut">Bokslut</a>
-            <a className="transition hover:text-foreground" href="#bankgiro">Bankgiro</a>
-            <a className="transition hover:text-foreground" href="#allt-i-ett">Allt i ett</a>
-            <a className="transition hover:text-foreground" href="#byra">Byrå</a>
-          </nav>
-
-          <div className="flex items-center gap-2">
-            <Link href="/login" className="hidden rounded-full px-4 py-2 text-sm font-semibold text-muted-foreground transition hover:text-foreground sm:inline-flex">
-              Logga in
-            </Link>
-            <Link href="/register" className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-              Starta
-            </Link>
-          </div>
-        </div>
-      </header>
-
+    <MarketingChrome>
       <main>
         <section className="relative px-5 py-16 md:px-8 md:py-24">
           <div className="absolute inset-x-0 top-0 -z-10 h-[34rem] bg-[radial-gradient(circle_at_20%_0%,hsl(var(--accent)/0.8),transparent_28rem),radial-gradient(circle_at_86%_12%,hsl(var(--secondary)/0.95),transparent_30rem)]" />
@@ -134,15 +95,12 @@ export function NordklartPublicDashboard() {
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                <Link href="/register?intent=bookkeeping" className={primaryCta}>
+                <Link href="/register?intent=bookkeeping" className={marketingPrimaryCta}>
                   Starta bokföring <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
                 </Link>
-                <Link href="/register?intent=year-end" className={secondaryCta}>
-                  Gör enbart bokslut
-                </Link>
-                <Link href="/register?intent=bankgiro" className={secondaryCta}>
-                  Ansök om Bankgiro
-                </Link>
+                <Link href="/register?intent=year-end" className={marketingSecondaryCta}>Gör enbart bokslut</Link>
+                <Link href="/register?intent=bankgiro" className={marketingSecondaryCta}>Ansök om Bankgiro</Link>
+                <Link href="/register?intent=all-in-one" className={marketingSecondaryCta}>Allt i ett</Link>
               </div>
 
               <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-2 lg:max-w-2xl">
@@ -162,10 +120,8 @@ export function NordklartPublicDashboard() {
         <section className="px-5 py-12 md:px-8" aria-labelledby="valj-behov">
           <div className="mx-auto max-w-7xl space-y-8">
             <div className="max-w-3xl space-y-3">
-              <p className={sectionLabel}>Vad behöver du?</p>
-              <h2 id="valj-behov" className="text-balance text-3xl font-semibold md:text-5xl">
-                Starta där behovet är störst.
-              </h2>
+              <p className={marketingSectionLabel}>Vad behöver du?</p>
+              <h2 id="valj-behov" className="text-balance text-3xl font-semibold md:text-5xl">Starta där behovet är störst.</h2>
               <p className="text-lg leading-8 text-muted-foreground">
                 Nordklart är byggt för att du ska kunna välja rätt väg direkt: löpande bokföring, ett fristående bokslut, Bankgiroansökan eller hela systemet samlat.
               </p>
@@ -175,11 +131,9 @@ export function NordklartPublicDashboard() {
               {paths.map((path) => {
                 const Icon = path.icon
                 return (
-                  <article key={path.title} id={path.title === 'Bokföring' ? 'bokforing' : undefined} className="group flex min-h-full flex-col rounded-[2rem] border border-border bg-card/88 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+                  <article key={path.title} className="group flex min-h-full flex-col rounded-[2rem] border border-border bg-card/88 p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
                     <div className="mb-5 flex items-center justify-between gap-4">
-                      <span className="rounded-full bg-secondary px-3 py-1 text-xs font-semibold text-secondary-foreground">
-                        {path.eyebrow}
-                      </span>
+                      <span className="rounded-full bg-secondary px-3 py-1 text-xs font-semibold text-secondary-foreground">{path.eyebrow}</span>
                       <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                         <Icon className="h-5 w-5" aria-hidden="true" />
                       </span>
@@ -207,12 +161,12 @@ export function NordklartPublicDashboard() {
         <section id="bokslut" className="px-5 py-14 md:px-8">
           <div className="mx-auto grid max-w-7xl gap-8 rounded-[2.25rem] border border-border bg-card/90 p-6 shadow-md md:p-10 lg:grid-cols-[0.9fr_1.1fr]">
             <div className="space-y-5">
-              <p className={sectionLabel}>Enbart bokslut</p>
+              <p className={marketingSectionLabel}>Enbart bokslut</p>
               <h2 className="text-balance text-3xl font-semibold md:text-5xl">Behöver du bara göra bokslut?</h2>
               <p className="text-lg leading-8 text-muted-foreground">
                 Du behöver inte byta hela bokföringssystemet. Importera SIE, välj räkenskapsår och gå igenom bokslutskontroller, periodiseringar, justeringar och rapportpaket i Nordklart.
               </p>
-              <Link href="/register?intent=year-end" className={primaryCta}>
+              <Link href="/register?intent=year-end" className={marketingPrimaryCta}>
                 Starta bokslut <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
               </Link>
             </div>
@@ -230,10 +184,10 @@ export function NordklartPublicDashboard() {
         <section id="bankgiro" className="px-5 py-14 md:px-8">
           <div className="mx-auto grid max-w-7xl gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-center">
             <div className="space-y-6">
-              <p className={sectionLabel}>Bankgiro via partner</p>
+              <p className={marketingSectionLabel}>Bankgiro via partner</p>
               <h2 className="text-balance text-3xl font-semibold md:text-5xl">Saknar du Bankgiro?</h2>
               <p className="text-lg leading-8 text-muted-foreground">
-                Nordklart hjälper dig att samla in bolagsuppgifter, ägare, dokument och volymuppgifter och följa ansökan via Leslie/partnerflöde. När Bankgiro är aktivt kan det kopplas till betalningar, avstämning och bokföring.
+                Nordklart hjälper dig att samla in bolagsuppgifter, ägarinformation och dokument för ansökan via partner. När Bankgiro är aktivt kan det kopplas till betalningar, avstämning och bokföring.
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 {['Inbetalningar kan följas upp', 'Betalningar kan matchas mot fakturor', 'Avstämning blir enklare', 'Bokföringen får bättre underlag'].map((item) => (
@@ -244,12 +198,10 @@ export function NordklartPublicDashboard() {
                 ))}
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
-                <Link href="/register?intent=bankgiro" className={primaryCta}>
+                <Link href="/register?intent=bankgiro" className={marketingPrimaryCta}>
                   Ansök om Bankgiro <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
                 </Link>
-                <Link href="/register?intent=all-in-one" className={secondaryCta}>
-                  Koppla med bokföring
-                </Link>
+                <Link href="/register?intent=all-in-one" className={marketingSecondaryCta}>Koppla med bokföring</Link>
               </div>
             </div>
 
@@ -264,9 +216,7 @@ export function NordklartPublicDashboard() {
               <ol className="space-y-3">
                 {bankgiroStatuses.map((status, index) => (
                   <li key={status} className="flex items-center gap-3 rounded-2xl border border-border bg-background/70 p-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
-                      {index + 1}
-                    </span>
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">{index + 1}</span>
                     <span className="font-semibold">{status}</span>
                   </li>
                 ))}
@@ -320,54 +270,33 @@ export function NordklartPublicDashboard() {
               </div>
             </div>
             <div className="space-y-5">
-              <p className={sectionLabel}>För redovisningsbyråer</p>
+              <p className={marketingSectionLabel}>För redovisningsbyråer</p>
               <h2 className="text-balance text-3xl font-semibold md:text-5xl">Se bokföring, bokslut och Bankgirostatus per kund.</h2>
               <p className="text-lg leading-8 text-muted-foreground">
                 Byråer kan samla kundbolag, ansvariga konsulter, deadlines, moms, bokslut och betalstatus på en tydlig översikt. Kunden kan arbeta i sitt bolag, medan byrån behåller kontroll.
               </p>
-              <Link href="/register?intent=agency" className={secondaryCta}>
-                Boka byrådemo
-              </Link>
+              <Link href="/boka-demo?intent=agency" className={marketingSecondaryCta}>Boka byrådemo</Link>
             </div>
           </div>
         </section>
 
         <section className="px-5 py-14 md:px-8">
           <div className="mx-auto max-w-7xl rounded-[2.5rem] border border-border bg-card/90 p-6 text-center shadow-md md:p-12">
-            <p className={sectionLabel}>Nästa steg</p>
+            <p className={marketingSectionLabel}>Nästa steg</p>
             <h2 className="mx-auto mt-3 max-w-3xl text-balance text-3xl font-semibold md:text-5xl">Vad vill du göra först?</h2>
             <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-muted-foreground">
               Börja med bokföring, gör ett fristående bokslut, ansök om Bankgiro – eller koppla ihop allt i ett flöde.
             </p>
             <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap">
-              <Link href="/register?intent=bookkeeping" className={primaryCta}>Starta bokföring</Link>
-              <Link href="/register?intent=year-end" className={secondaryCta}>Gör bokslut</Link>
-              <Link href="/register?intent=bankgiro" className={secondaryCta}>Ansök om Bankgiro</Link>
-              <Link href="/register?intent=all-in-one" className={secondaryCta}>Allt i ett</Link>
+              <Link href="/register?intent=bookkeeping" className={marketingPrimaryCta}>Starta bokföring</Link>
+              <Link href="/register?intent=year-end" className={marketingSecondaryCta}>Gör bokslut</Link>
+              <Link href="/register?intent=bankgiro" className={marketingSecondaryCta}>Ansök om Bankgiro</Link>
+              <Link href="/register?intent=all-in-one" className={marketingSecondaryCta}>Allt i ett</Link>
             </div>
           </div>
         </section>
       </main>
-
-      <footer className="border-t border-border bg-card/80 px-5 py-12 md:px-8">
-        <div className="mx-auto grid max-w-7xl gap-10 md:grid-cols-[1.4fr_repeat(3,1fr)]">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-sm font-bold text-primary-foreground">N</span>
-              <BrandWordmark size="inline" lowercase={false} className="text-xl" />
-            </div>
-            <p className="max-w-sm leading-7 text-muted-foreground">
-              Svensk bokföring, fristående bokslut och Bankgiro via partner – byggt för företag och redovisningsbyråer.
-            </p>
-            <p className="text-sm text-muted-foreground">© Nordklart. Alla rättigheter förbehållna.</p>
-          </div>
-
-          <FooterColumn title="Produkt" links={['Bokföring', 'Bokslut', 'Bankgiro', 'Allt i ett']} />
-          <FooterColumn title="Kom igång" links={['Starta bokföring', 'Gör bokslut', 'Ansök om Bankgiro', 'Boka demo']} />
-          <FooterColumn title="Juridik" links={['Integritetspolicy', 'Villkor', 'Personuppgifter', 'Cookies']} />
-        </div>
-      </footer>
-    </div>
+    </MarketingChrome>
   )
 }
 
@@ -380,7 +309,7 @@ function DashboardPreview() {
             <p className="text-sm font-semibold text-primary">Nordklart översikt</p>
             <h2 className="mt-1 text-2xl font-semibold">Allt som behöver åtgärdas</h2>
           </div>
-          <span className="rounded-full bg-success/10 px-3 py-1 text-xs font-semibold text-success">Liveflöde</span>
+          <span className="rounded-full bg-success/10 px-3 py-1 text-xs font-semibold text-success">Exempelvy</span>
         </div>
 
         <div className="grid gap-3">
@@ -398,23 +327,6 @@ function DashboardPreview() {
           ))}
         </div>
       </div>
-    </div>
-  )
-}
-
-function FooterColumn({ title, links }: { title: string; links: string[] }) {
-  return (
-    <div>
-      <h3 className="mb-4 text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">{title}</h3>
-      <ul className="space-y-3 text-sm font-medium text-foreground">
-        {links.map((link) => (
-          <li key={link}>
-            <a href="#" className="text-muted-foreground transition hover:text-foreground">
-              {link}
-            </a>
-          </li>
-        ))}
-      </ul>
     </div>
   )
 }

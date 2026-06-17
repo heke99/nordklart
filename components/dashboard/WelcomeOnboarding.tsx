@@ -230,7 +230,7 @@ export default function WelcomeOnboarding({
         title: t('toast_welcome_title'),
         description: t('toast_company_ready'),
       })
-      router.push('/')
+      router.push('/app')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logError('create company action threw', { error: message })
