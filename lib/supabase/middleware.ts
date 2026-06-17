@@ -60,6 +60,9 @@ export async function updateSession(request: NextRequest) {
     '/personuppgifter',
     '/privacy',
     '/dpa',
+    '/personuppgiftsbitradesavtal',
+    '/angerratt',
+    '/bokslut/villkor',
   ])
   const isPublicMarketingPath = publicMarketingPaths.has(pathname)
 
@@ -98,6 +101,7 @@ export async function updateSession(request: NextRequest) {
   // Public auth routes — allow access
   if (
     pathname.startsWith('/login') ||
+    pathname.startsWith('/forgot-password') ||
     pathname.startsWith('/register') ||
     pathname.startsWith('/auth') ||
     pathname.startsWith('/sandbox')

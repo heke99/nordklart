@@ -22,7 +22,7 @@ const mainPaths = [
     eyebrow: 'Huvudflöde',
     description:
       'Koppla bank, fakturor och regler så att Nordklart kan matcha transaktioner, föreslå bokföring och skapa verifikationer med spårbarhet.',
-    href: '/register?intent=automated-bookkeeping',
+    href: '/register?intent=auto',
     cta: 'Starta automatiserad bokföring',
     icon: Sparkles,
     points: ['Banktransaktioner', 'Fakturamatchning', 'Verifikationsförslag', 'Granskningskö'],
@@ -32,7 +32,7 @@ const mainPaths = [
     eyebrow: 'Från skickad till betald',
     description:
       'Skapa fakturor, följ betalstatus och låt betalningar kopplas till rätt kund, faktura och bokföringsunderlag.',
-    href: '/register?intent=invoicing',
+    href: '/register?intent=auto',
     cta: 'Kom igång med fakturor',
     icon: FileCheck2,
     points: ['Kundfakturor', 'Betalstatus', 'Momsunderlag', 'Reskontra'],
@@ -42,7 +42,7 @@ const mainPaths = [
     eyebrow: 'Separat engångsflöde',
     description:
       'Behöver du bara göra bokslut? Importera SIE, välj räkenskapsår och få kontroller, justeringar och rapportpaket.',
-    href: '/register?intent=year-end',
+    href: '/register?intent=year_end',
     cta: 'Gör bokslut',
     icon: LineChart,
     points: ['SIE-import', 'Periodiseringar', 'Avskrivningar', 'Exportpaket'],
@@ -117,11 +117,11 @@ export function NordklartPublicDashboard() {
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                <Link href="/register?intent=automated-bookkeeping" className={marketingPrimaryCta}>
+                <Link href="/register?intent=auto" className={marketingPrimaryCta}>
                   Starta automatiserad bokföring <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
                 </Link>
-                <Link href="/register?intent=invoicing" className={marketingSecondaryCta}>Automatisera fakturor</Link>
-                <Link href="/register?intent=year-end" className={marketingSecondaryCta}>Gör bokslut</Link>
+                <Link href="/register?intent=auto" className={marketingSecondaryCta}>Automatisera fakturor</Link>
+                <Link href="/register?intent=year_end" className={marketingSecondaryCta}>Gör bokslut</Link>
                 <Link href="/register?intent=bankgiro" className={marketingSecondaryCta}>Ansök om Bankgiro</Link>
               </div>
 
@@ -243,7 +243,7 @@ export function NordklartPublicDashboard() {
               <p className="text-lg leading-8 text-muted-foreground">
                 Du behöver inte byta hela bokföringssystemet. Importera SIE, välj räkenskapsår och gå igenom bokslutskontroller, periodiseringar, justeringar och rapportpaket i Nordklart.
               </p>
-              <Link href="/register?intent=year-end" className={marketingPrimaryCta}>
+              <Link href="/register?intent=year_end" className={marketingPrimaryCta}>
                 Starta bokslut <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
               </Link>
             </div>
@@ -327,7 +327,7 @@ export function NordklartPublicDashboard() {
               <p className="text-lg leading-8 text-muted-foreground">
                 Byråer kan samla kundbolag, ansvariga konsulter, deadlines, moms, bokslut, fakturor och betalstatus på en tydlig översikt. Kunden kan arbeta i sitt bolag medan byrån behåller kontroll.
               </p>
-              <Link href="/boka-demo?intent=agency" className={marketingSecondaryCta}>Boka byrådemo</Link>
+              <Link href="/register?intent=agency" className={marketingSecondaryCta}>Boka byrådemo</Link>
             </div>
           </div>
         </section>
@@ -342,9 +342,9 @@ export function NordklartPublicDashboard() {
               Starta med bank, fakturor och verifikationsförslag – eller välj bokslut, Bankgiro eller allt i ett när det passar.
             </p>
             <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap">
-              <Link href="/register?intent=automated-bookkeeping" className={marketingPrimaryCta}>Starta automatiserad bokföring</Link>
-              <Link href="/register?intent=invoicing" className={marketingSecondaryCta}>Automatisera fakturor</Link>
-              <Link href="/register?intent=year-end" className={marketingSecondaryCta}>Gör bokslut</Link>
+              <Link href="/register?intent=auto" className={marketingPrimaryCta}>Starta automatiserad bokföring</Link>
+              <Link href="/register?intent=auto" className={marketingSecondaryCta}>Automatisera fakturor</Link>
+              <Link href="/register?intent=year_end" className={marketingSecondaryCta}>Gör bokslut</Link>
               <Link href="/register?intent=bankgiro" className={marketingSecondaryCta}>Ansök om Bankgiro</Link>
             </div>
           </div>

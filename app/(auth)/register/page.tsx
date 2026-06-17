@@ -17,7 +17,8 @@ import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
-import { onboardingHrefForIntent } from '@/lib/onboarding/intents'
+import { flowFromIntent, onboardingHrefForIntent } from '@/lib/onboarding/intents'
+import { AuthLegalFooter, LegalInlineLinks } from '@/components/auth/AuthLegalFooter'
 
 const branding = getBranding()
 
@@ -36,7 +37,12 @@ export default function RegisterPage() {
 function RegisterPageContent() {
   const searchParams = useSearchParams()
   const intent = searchParams.get('intent')
+  const selectedFlow = flowFromIntent(intent)
   const postSignupPath = onboardingHrefForIntent(intent)
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [companyName, setCompanyName] = useState('')
+  const [acceptedLegal, setAcceptedLegal] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -98,6 +104,16 @@ function RegisterPageContent() {
 
     const formData = new FormData(e.currentTarget)
     const emailValue = (formData.get('bankid_email') as string) || bankIdEmail
+
+    if (!acceptedLegal) {
+      toast({
+        title: 'Villkor behöver godkännas',
+        description: 'Du behöver godkänna Nordklarts villkor och integritetspolicy innan kontot skapas.',
+        variant: 'destructive',
+      })
+      setIsLoading(false)
+      return
+    }
 
     try {
       const res = await fetch('/api/extensions/ext/tic/bankid/complete', {
@@ -179,9 +195,32 @@ function RegisterPageContent() {
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
-    const emailValue = (formData.get('email') as string) || email
+    const emailValue = ((formData.get('email') as string) || email).trim().toLowerCase()
     const passwordValue = (formData.get('password') as string) || password
     const confirmValue = (formData.get('confirm_password') as string) || confirmPassword
+    const firstNameValue = ((formData.get('first_name') as string) || firstName).trim()
+    const lastNameValue = ((formData.get('last_name') as string) || lastName).trim()
+    const companyNameValue = ((formData.get('company_name') as string) || companyName).trim()
+
+    if (!firstNameValue || !lastNameValue) {
+      toast({
+        title: 'Namn saknas',
+        description: 'Fyll i förnamn och efternamn för att skapa kontot.',
+        variant: 'destructive',
+      })
+      setIsLoading(false)
+      return
+    }
+
+    if (!acceptedLegal) {
+      toast({
+        title: 'Villkor behöver godkännas',
+        description: 'Du behöver godkänna Nordklarts villkor och integritetspolicy innan kontot skapas.',
+        variant: 'destructive',
+      })
+      setIsLoading(false)
+      return
+    }
 
     if (!isStrongPassword(passwordValue)) {
       toast({
@@ -217,6 +256,18 @@ function RegisterPageContent() {
         password: passwordValue,
         options: {
           emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(postSignupPath)}`,
+          data: {
+            first_name: firstNameValue,
+            last_name: lastNameValue,
+            full_name: `${firstNameValue} ${lastNameValue}`.trim(),
+            company_name: companyNameValue || null,
+            onboarding_intent: intent || null,
+            onboarding_flow: selectedFlow || null,
+            accepted_terms: true,
+            accepted_privacy: true,
+            legal_acceptance_source: 'register',
+            legal_acceptance_user_agent: window.navigator.userAgent,
+          },
         },
       })
 
@@ -472,6 +523,16 @@ function RegisterPageContent() {
                   {t('bankid_email_hint')}
                 </p>
               </div>
+              <label className="flex gap-3 rounded-lg border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={acceptedLegal}
+                  onChange={(e) => setAcceptedLegal(e.target.checked)}
+                  required
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                />
+                <span>Jag godkänner Nordklarts <LegalInlineLinks />.</span>
+              </label>
               <Button type="submit" className="w-full h-11" disabled={isLoading}>
                 {isLoading ? (
                   <>
@@ -497,6 +558,63 @@ function RegisterPageContent() {
             </form>
           ) : (
           <form onSubmit={handleRegister} className="space-y-5">
+            {intent && (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
+                Startflöde:{' '}
+                <span className="font-medium text-foreground">
+                  {selectedFlow === 'bank_automation'
+                    ? 'Automatisk bokföring'
+                    : selectedFlow === 'year_end_one_time'
+                      ? 'Bokslut'
+                      : selectedFlow === 'bankgiro_autogiro'
+                        ? 'Bankgiro/Autogiro'
+                        : 'Bokföring'}
+                </span>
+              </div>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="first_name">Förnamn</Label>
+                <Input
+                  id="first_name"
+                  name="first_name"
+                  autoComplete="given-name"
+                  placeholder="Förnamn"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  required
+                  disabled={isLoading}
+                  className="h-11"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="last_name">Efternamn</Label>
+                <Input
+                  id="last_name"
+                  name="last_name"
+                  autoComplete="family-name"
+                  placeholder="Efternamn"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  required
+                  disabled={isLoading}
+                  className="h-11"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="company_name">Företagsnamn</Label>
+              <Input
+                id="company_name"
+                name="company_name"
+                autoComplete="organization"
+                placeholder="Bolag eller enskild firma"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                disabled={isLoading}
+                className="h-11"
+              />
+            </div>
             <div className="space-y-2">
               <Label htmlFor="email">{t('email_label')}</Label>
               <Input
@@ -550,6 +668,16 @@ function RegisterPageContent() {
                 className="h-11"
               />
             </div>
+            <label className="flex gap-3 rounded-lg border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={acceptedLegal}
+                onChange={(e) => setAcceptedLegal(e.target.checked)}
+                required
+                className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+              />
+              <span>Jag godkänner Nordklarts <LegalInlineLinks />.</span>
+            </label>
             <Button type="submit" className="w-full h-11" disabled={isLoading}>
               {isLoading ? (
                 <>
@@ -574,17 +702,7 @@ function RegisterPageContent() {
           </Link>
         </p>
 
-        <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">
-          {t('terms_prefix')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
-            {t('terms_link')}
-          </a>{' '}
-          {t('terms_and')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
-            {t('privacy_link')}
-          </a>
-          .
-        </p>
+        <AuthLegalFooter className="mt-6" />
       </div>
     </div>
   )

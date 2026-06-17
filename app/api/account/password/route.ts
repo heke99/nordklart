@@ -117,6 +117,19 @@ export async function POST(request: Request) {
     // banner will show once more and a retry will succeed.
   }
 
+  try {
+    await service.from('auth_audit_events').insert({
+      user_id: user.id,
+      email: user.email,
+      event_type: isFirstTimeSet ? 'password_created' : 'password_changed',
+      status: 'success',
+      user_agent: request.headers.get('user-agent'),
+      metadata: { flagWriteOk },
+    })
+  } catch {
+    // Password writes must not fail because audit storage is unavailable.
+  }
+
   log.info('password set', { userId: user.id, isFirstTimeSet, flagWriteOk })
 
   return NextResponse.json({ data: { ok: true } })

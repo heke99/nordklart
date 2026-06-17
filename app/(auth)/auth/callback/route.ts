@@ -178,8 +178,20 @@ export async function GET(request: NextRequest) {
         })
       }
 
-      // Always redirect to dashboard — it handles zero-company and incomplete states
-      redirectPath = '/app'
+      // First-time signups keep the selected onboarding flow from
+      // /register?intent=... instead of losing it through /app -> middleware.
+      const { data: membership } = await supabase
+        .from('company_members')
+        .select('company_id')
+        .eq('user_id', user.id)
+        .limit(1)
+        .maybeSingle()
+
+      redirectPath = membership
+        ? '/app'
+        : next.startsWith('/onboarding')
+          ? next
+          : '/onboarding'
     }
 
     // Create redirect and explicitly set auth cookies on the response

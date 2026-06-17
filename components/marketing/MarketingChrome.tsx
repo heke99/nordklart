@@ -26,8 +26,8 @@ const footerGroups = [
   {
     title: 'Kom igång',
     links: [
-      { label: 'Starta automatiserad bokföring', href: '/register?intent=automated-bookkeeping' },
-      { label: 'Gör bokslut', href: '/register?intent=year-end' },
+      { label: 'Starta automatiserad bokföring', href: '/register?intent=auto' },
+      { label: 'Gör bokslut', href: '/register?intent=year_end' },
       { label: 'Ansök om Bankgiro', href: '/register?intent=bankgiro' },
       { label: 'Boka demo', href: '/boka-demo' },
       { label: 'Logga in', href: '/login' },
@@ -39,6 +39,8 @@ const footerGroups = [
       { label: 'Allmänna villkor', href: '/allmanna-villkor' },
       { label: 'Integritetspolicy', href: '/integritetspolicy' },
       { label: 'Personuppgifter', href: '/personuppgifter' },
+      { label: 'Personuppgiftsbiträdesavtal', href: '/personuppgiftsbitradesavtal' },
+      { label: 'Ångerrätt', href: '/angerratt' },
       { label: 'Cookies', href: '/cookies' },
     ],
   },
@@ -88,7 +90,7 @@ export function MarketingHeader() {
           <Link href="/boka-demo" className="hidden rounded-full border border-border bg-card/80 px-4 py-2 text-sm font-semibold text-foreground shadow-sm transition hover:-translate-y-0.5 hover:bg-secondary md:inline-flex">
             Boka demo
           </Link>
-          <Link href="/register?intent=automated-bookkeeping" className="inline-flex items-center rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <Link href="/register?intent=auto" className="inline-flex items-center rounded-full bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
             Starta <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
           </Link>
         </div>

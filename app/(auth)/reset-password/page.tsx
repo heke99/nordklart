@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, KeyRound } from 'lucide-react'
+import { AuthLegalFooter } from '@/components/auth/AuthLegalFooter'
 
 export default function ResetPasswordPage() {
   const t = useTranslations('reset_password')
@@ -40,7 +41,7 @@ export default function ResetPasswordPage() {
     if (password !== confirmPassword) {
       toast({
         title: t('mismatch_title'),
-        description: t('weak_description'),
+        description: 'Kontrollera att båda lösenordsfälten är identiska.',
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -74,7 +75,7 @@ export default function ResetPasswordPage() {
         description: t('saved_description'),
       })
 
-      router.push('/app')
+      router.push('/login')
       router.refresh()
     } catch {
       toast({
@@ -146,6 +147,8 @@ export default function ResetPasswordPage() {
             </Button>
           </form>
         </div>
+
+        <AuthLegalFooter className="mt-6" />
       </div>
     </div>
   )

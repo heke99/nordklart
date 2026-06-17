@@ -16,9 +16,10 @@ import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
+import { AuthLegalFooter } from '@/components/auth/AuthLegalFooter'
+import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
 const branding = getBranding()
-import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
 // Wrapping in Suspense is required because useSearchParams() forces
 // dynamic rendering in Next.js 16; static prerender bails out otherwise.
@@ -390,13 +391,12 @@ function LoginPageContent() {
               </p>
               <p className="mt-1 text-sm text-destructive/90">
                 {tAuth('callback_error_body')}{' '}
-                <button
-                  type="button"
-                  onClick={() => setShowResetPassword(true)}
+                <Link
+                  href="/forgot-password"
                   className="font-medium underline underline-offset-2"
                 >
                   {tAuth('request_new_reset_link')}
-                </button>
+                </Link>
                 .
               </p>
             </div>
@@ -465,13 +465,12 @@ function LoginPageContent() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="password">{tAuth('password_label')}</Label>
-                <button
-                  type="button"
-                  onClick={() => setShowResetPassword(true)}
+                <Link
+                  href="/forgot-password"
                   className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
                 >
                   {tAuth('forgot_password')}
-                </button>
+                </Link>
               </div>
               <Input
                 id="password"
@@ -518,17 +517,7 @@ function LoginPageContent() {
           </Button>
         </div>
 
-        <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">
-          {tAuth('terms_prefix')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
-            {tAuth('terms_link')}
-          </a>{' '}
-          {tAuth('terms_and')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
-            {tAuth('privacy_link')}
-          </a>
-          .
-        </p>
+        <AuthLegalFooter className="mt-6" />
       </div>
     </div>
   )

@@ -8,14 +8,19 @@ const INTENT_TO_FLOW: Record<string, NordklartOnboardingFlow> = {
   'automated-bookkeeping': 'bank_automation',
   'bank-automation': 'bank_automation',
   auto: 'bank_automation',
+  automation: 'bank_automation',
   invoicing: 'bookkeeping_direct',
   bookkeeping: 'bookkeeping_direct',
+  start: 'bookkeeping_direct',
+  direct: 'bookkeeping_direct',
   'year-end': 'year_end_one_time',
+  year_end: 'year_end_one_time',
   bokslut: 'year_end_one_time',
   bankgiro: 'bankgiro_autogiro',
   autogiro: 'bankgiro_autogiro',
   'all-in-one': 'bank_automation',
   agency: 'bookkeeping_direct',
+  byra: 'bookkeeping_direct',
 }
 
 export function flowFromIntent(intent?: string | null): NordklartOnboardingFlow | null {
