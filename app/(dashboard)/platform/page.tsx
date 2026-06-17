@@ -20,6 +20,10 @@ export default async function PlatformPage() {
     { count: onboardingCount },
     { count: reviewQueueCount },
     { count: providerCount },
+    { count: yearEndCount },
+    { count: taxWaitingCount },
+    { count: bankgiroReviewCount },
+    { count: webhookEndpointCount },
   ] = await Promise.all([
     supabase.from('companies').select('*', { count: 'exact', head: true }),
     supabase.from('agencies').select('*', { count: 'exact', head: true }),
@@ -29,6 +33,10 @@ export default async function PlatformPage() {
     supabase.from('onboarding_sessions').select('*', { count: 'exact', head: true }).in('status', ['draft', 'in_progress', 'blocked']),
     supabase.from('review_queue_items').select('*', { count: 'exact', head: true }).in('status', ['open', 'in_review']),
     supabase.from('bank_data_providers').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+    supabase.from('year_end_projects').select('*', { count: 'exact', head: true }),
+    supabase.from('tax_submissions').select('*', { count: 'exact', head: true }).eq('status', 'waiting_for_signature'),
+    supabase.from('bankgiro_applications').select('*', { count: 'exact', head: true }).in('status', ['submitted', 'needs_information', 'under_review']),
+    supabase.from('webhook_endpoints').select('*', { count: 'exact', head: true }).eq('status', 'active'),
   ])
 
   const isPlatform = ownPlatformRole?.role === 'platform_admin'
@@ -37,7 +45,7 @@ export default async function PlatformPage() {
     <NordklartPageShell
       eyebrow="Platform admin"
       title="Nordklart styrs centralt men isolerar varje bolag"
-      description="Batch 1–3 är foundation. Batch 4–7 bygger prisplaner, onboardingvägar, byråläge och bankautomation ovanpå samma tenant-säkra grund utan att röra bokföringsmotorn."
+      description="Batch 1–3 är foundation. Batch 4–11 bygger prisplaner, onboarding, byrå, bankautomation, bokslut, Skatteverket, Bankgiro och API/webhooks ovanpå samma tenant-säkra grund utan att röra bokföringsmotorn."
       actions={<Button variant={isPlatform ? 'default' : 'secondary'}>{isPlatform ? 'Platform admin aktiv' : 'Begär platform access'}</Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
@@ -54,6 +62,13 @@ export default async function PlatformPage() {
         <NordklartStatCard label="Bankproviders" value={providerCount || 0} description="Aktiva provider-adaptrar." />
       </div>
 
+      <div className="grid gap-4 md:grid-cols-4">
+        <NordklartStatCard label="Bokslut" value={yearEndCount || 0} description="Batch 8-projekt." tone="primary" />
+        <NordklartStatCard label="Signering" value={taxWaitingCount || 0} description="Skatteverket väntar." tone={(taxWaitingCount || 0) > 0 ? 'warning' : 'success'} />
+        <NordklartStatCard label="Bankgiro review" value={bankgiroReviewCount || 0} description="Ansökningar att hantera." tone={(bankgiroReviewCount || 0) > 0 ? 'warning' : 'success'} />
+        <NordklartStatCard label="Webhooks" value={webhookEndpointCount || 0} description="Aktiva endpoints." />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-4">
         <NordklartActionCard meta="Batch 4" title="Prisplaner & features" description="Produkter, prisplaner, plan features, subscriptions, entitlements, engångsköp, usage och feature gate-helper.">
           <Button asChild size="sm"><Link href="/platform/price-plans">Öppna</Link></Button>
@@ -68,6 +83,22 @@ export default async function PlatformPage() {
           <Button asChild size="sm"><Link href="/platform/bank-automation">Öppna</Link></Button>
         </NordklartActionCard>
       </div>
+
+      <div className="grid gap-4 lg:grid-cols-4">
+        <NordklartActionCard meta="Batch 8" title="Bokslut som produkt" description="Bokslutsprojekt, readiness, engångsköp, access och exportpaket.">
+          <Button asChild size="sm"><Link href="/platform/year-end">Öppna</Link></Button>
+        </NordklartActionCard>
+        <NordklartActionCard meta="Batch 9" title="Skatteverket" description="Momsdeklarationer, signeringsstatus, kvittenser, deadlines och audit.">
+          <Button asChild size="sm"><Link href="/platform/skatteverket">Öppna</Link></Button>
+        </NordklartActionCard>
+        <NordklartActionCard meta="Batch 10" title="Bankgiro / Autogiro" description="Separat provider-modul för ansökan, review, mandat, collections och avstämning.">
+          <Button asChild size="sm"><Link href="/platform/bankgiro">Öppna</Link></Button>
+        </NordklartActionCard>
+        <NordklartActionCard meta="Batch 11" title="API & Webhooks" description="API-klienter, scopes, OpenAPI, eventkatalog, signering, retries och logs.">
+          <Button asChild size="sm"><Link href="/platform/api-webhooks">Öppna</Link></Button>
+        </NordklartActionCard>
+      </div>
+
     </NordklartPageShell>
   )
 }

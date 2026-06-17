@@ -17,6 +17,7 @@ import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
+import { onboardingHrefForIntent } from '@/lib/onboarding/intents'
 
 const branding = getBranding()
 
@@ -34,6 +35,8 @@ export default function RegisterPage() {
 
 function RegisterPageContent() {
   const searchParams = useSearchParams()
+  const intent = searchParams.get('intent')
+  const postSignupPath = onboardingHrefForIntent(intent)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -149,7 +152,7 @@ function RegisterPageContent() {
         return
       }
 
-      router.push('/select-company')
+      router.push(postSignupPath)
       router.refresh()
     } catch (error) {
       console.error('[register] BankID signup error', error)
@@ -205,7 +208,7 @@ function RegisterPageContent() {
         email: emailValue,
         hasPassword: !!passwordValue,
         passwordLength: passwordValue.length,
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(postSignupPath)}`,
         supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
       })
 
@@ -213,7 +216,7 @@ function RegisterPageContent() {
         email: emailValue,
         password: passwordValue,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(postSignupPath)}`,
         },
       })
 
@@ -261,7 +264,7 @@ function RegisterPageContent() {
             if (res.ok) {
               document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
               console.log('[register] invite accepted after auto-confirm — redirecting')
-              window.location.href = '/'
+              window.location.href = postSignupPath
               return
             }
 
@@ -278,7 +281,7 @@ function RegisterPageContent() {
 
         // Auto-confirmed but no invite or invite failed — go to onboarding
         // (invite cookie is preserved so the onboarding fallback can retry)
-        window.location.href = '/'
+        window.location.href = postSignupPath
         return
       }
 

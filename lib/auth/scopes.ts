@@ -191,6 +191,15 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/webhooks/:id/deliveries': 'webhooks:manage',
   'POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret': 'webhooks:manage',
   'POST /api/v1/webhook-deliveries/:id/retry': 'webhooks:manage',
+
+  // Nordklart Batch 8–11 — year-end, Skatteverket, Bankgiro and webhook catalog.
+  'GET /api/v1/companies/:companyId/year-end/projects': 'year_end:read',
+  'POST /api/v1/companies/:companyId/year-end/projects': 'year_end:write',
+  'GET /api/v1/companies/:companyId/tax-submissions': 'tax:read',
+  'POST /api/v1/companies/:companyId/tax-submissions': 'tax:write',
+  'GET /api/v1/companies/:companyId/bankgiro-applications': 'bankgiro:read',
+  'POST /api/v1/companies/:companyId/bankgiro-applications': 'bankgiro:write',
+  'GET /api/v1/companies/:companyId/webhook-events': 'webhook_events:read',
 }
 
 interface CompiledRoute {

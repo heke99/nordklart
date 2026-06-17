@@ -7,9 +7,11 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   BarChart3,
+  Banknote,
   BookOpen,
   Building2,
   ClipboardCheck,
+  FileCheck2,
   Home,
   Landmark,
   LayoutDashboard,
@@ -18,6 +20,7 @@ import {
   Plug,
   Receipt,
   Scale,
+  Send,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -133,6 +136,8 @@ export default function DashboardNav({
         { href: '/invoices', label: 'Kundfakturor', icon: Receipt, requiresCompany: true },
         { href: '/supplier-invoices', label: 'Leverantörsfakturor', icon: WalletCards, requiresCompany: true },
         { href: '/reports', label: 'Rapporter', icon: BarChart3, requiresCompany: true },
+        { href: '/skatteverket', label: 'Moms & skatt', icon: Send, requiresCompany: true },
+        { href: '/year-end', label: 'Bokslut', icon: FileCheck2, requiresCompany: true },
         { href: '/assets', label: 'Anläggningar', icon: Building2, requiresCompany: true },
       ],
     },
@@ -141,6 +146,7 @@ export default function DashboardNav({
       items: [
         { href: '/agency', label: 'Byrå', icon: Users },
         { href: '/platform', label: 'Plattform', icon: ShieldCheck },
+        { href: '/payments/bankgiro', label: 'Bankgiro', icon: Banknote, requiresCompany: true },
         { href: '/extensions', label: 'Integrationer', icon: Plug, requiresCompany: true },
         { href: '/settings', label: 'Inställningar', icon: Settings },
       ],

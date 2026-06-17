@@ -31,6 +31,13 @@ export const API_KEY_SCOPES = {
   'agent:write':        { label: 'Agent — skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact)' },
   'pending_operations:read':    { label: 'Stagade operationer — läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
   'pending_operations:approve': { label: 'Stagade operationer — godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP — agenten ersätter web-UI:s granskning' },
+  'year_end:read':     { label: 'Bokslut — läs',         description: 'Läsa bokslutsprojekt, kontroller, engångsköpsaccess och exportstatus' },
+  'year_end:write':    { label: 'Bokslut — skriv',       description: 'Starta bokslutsprojekt och skapa bokslutsaccess via API' },
+  'tax:read':          { label: 'Skatteverket — läs',    description: 'Läsa moms-/skatteinlämningar, signeringsstatus, kvittenser och deadlines' },
+  'tax:write':         { label: 'Skatteverket — skriv',  description: 'Förbereda och uppdatera Skatteverket-inlämningar via API' },
+  'bankgiro:read':     { label: 'Bankgiro — läs',        description: 'Läsa Bankgiro/Autogiro-ansökningar, mandat, collections och avstämning' },
+  'bankgiro:write':    { label: 'Bankgiro — skriv',      description: 'Skapa Bankgiro/Autogiro-ansökningar och providerstatus via API' },
+  'webhook_events:read': { label: 'Webhook-events — läs', description: 'Läsa Nordklarts webhook-eventkatalog' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -80,6 +87,10 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
   'compliance:read',
   'payroll:read',
   'pending_operations:read',
+  'year_end:read',
+  'tax:read',
+  'bankgiro:read',
+  'webhook_events:read',
 ]
 
 /**
@@ -113,6 +124,9 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   'bookkeeping:write',
   'payroll:write',
   'documents:write',
+  'year_end:write',
+  'tax:write',
+  'bankgiro:write',
 ]
 
 /**
@@ -142,6 +156,10 @@ export const SCOPE_GROUPS = [
   { domain: 'payroll',             label: 'Löner',                read: 'payroll:read' as const,             write: 'payroll:write' as const },
   { domain: 'pending_operations',  label: 'Stagade operationer',  read: 'pending_operations:read' as const,  write: 'pending_operations:approve' as const },
   { domain: 'agent',               label: 'Agent',                read: 'agent:read' as const,               write: 'agent:write' as const },
+  { domain: 'year_end',            label: 'Bokslut',              read: 'year_end:read' as const,            write: 'year_end:write' as const },
+  { domain: 'tax',                 label: 'Skatteverket',         read: 'tax:read' as const,                 write: 'tax:write' as const },
+  { domain: 'bankgiro',            label: 'Bankgiro',             read: 'bankgiro:read' as const,            write: 'bankgiro:write' as const },
+  { domain: 'webhook_events',      label: 'Webhook-events',       read: 'webhook_events:read' as const,      write: null },
 ] as const
 
 /** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */

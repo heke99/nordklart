@@ -5,6 +5,7 @@ import NordklartOnboardingRouter from '@/components/onboarding/NordklartOnboardi
 import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { mapEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
+import { flowFromIntent } from '@/lib/onboarding/intents'
 
 export const dynamic = 'force-dynamic'
 
@@ -87,7 +88,8 @@ export default async function OnboardingPage({
   // The BankID picker routes here with ?org_number=… for every pick. Strip
   // formatting so whatever Step 2 displays matches what the rest of the flow
   // will store.
-  const { org_number: rawOrgNumber, flow } = await searchParams
+  const { org_number: rawOrgNumber, flow: rawFlow, intent } = await searchParams
+  const flow = rawFlow ?? flowFromIntent(intent) ?? undefined
   const initialOrgNumber = rawOrgNumber ? rawOrgNumber.replace(/[\s-]/g, '') : undefined
 
   // Nordklart onboarding router: users pick the right commercial path first.
