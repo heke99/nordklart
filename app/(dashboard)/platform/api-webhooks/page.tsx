@@ -22,7 +22,7 @@ export default async function PlatformApiWebhooksPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Platform · Batch 11"
+      eyebrow="API och webhooks"
       title="API & Webhooks"
       description="API-klienter, scopes, eventkatalog, signing, retries och leveransloggar kopplas till tenant-scope och v1-dokumentationen."
       actions={<Button asChild variant="secondary"><Link href="/api/v1/openapi.json">OpenAPI</Link></Button>}

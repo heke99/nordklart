@@ -1,15 +1,13 @@
 'use client'
 
-import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { cn, formatCurrency } from '@/lib/utils'
 import { UpcomingDeadlinesWidget } from '@/components/deadlines/UpcomingDeadlinesWidget'
 import { TaxTodoWidget } from '@/components/deadlines/TaxTodoWidget'
-import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
+import QuickStartPanel from '@/components/dashboard/QuickStartPanel'
 import {
   Receipt,
   ArrowLeftRight,
@@ -22,8 +20,6 @@ import {
 import type { Deadline, OnboardingProgress } from '@/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import { getBranding } from '@/lib/branding/service'
-
-const setupFreshStartKey = (companyId: string) => `erp_setup_fresh_start:${companyId}`
 
 interface DashboardContentProps {
   companyId: string
@@ -39,68 +35,22 @@ interface DashboardContentProps {
     deadlines: Deadline[]
     staleUncategorizedCount: number
   }
-  /** Unified pending-work counts from lib/worklist — same source as the sidebar badges. */
   worklist: WorklistCounts
-  /** High-confidence transaction↔invoice matches for inline one-click confirm. */
   suggestedMatches: SuggestedMatch[]
   onboardingProgress?: OnboardingProgress
-  /**
-   * False until the company has a verified agent_profile. When false the hero
-   * slot shows a build-assistant prompt instead of the next-best-action card,
-   * so existing/migrated users are nudged to build the assistant without a
-   * full-screen onboarding takeover.
-   */
   agentBuilt?: boolean
+  isNewWorkspace?: boolean
 }
 
-export default function DashboardContent({ companyId, summary, worklist, suggestedMatches, onboardingProgress, agentBuilt = true }: DashboardContentProps) {
+export default function DashboardContent({
+  companyId,
+  summary,
+  worklist,
+  suggestedMatches,
+  agentBuilt = true,
+  isNewWorkspace = false,
+}: DashboardContentProps) {
   const t = useTranslations('dashboard')
-
-  // The setup gate exists to nudge brand-new users into a data-import step
-  // before they hit the dashboard. Once the assistant is built we treat the
-  // user as past that phase — they've already committed to using the tool —
-  // and let the dashboard render normally. This also keeps the sandbox
-  // (which ships with a pre-built assistant + seeded data but no bank
-  // connection / SIE import) from showing a checklist that re-links to
-  // /onboarding/agent.
-  const needsSetup =
-    !agentBuilt &&
-    onboardingProgress &&
-    !onboardingProgress.hasBankConnected &&
-    !onboardingProgress.hasSIEImport
-  const [setupGateActive, setSetupGateActive] = useState(!!needsSetup)
-
-  useEffect(() => {
-    if (!needsSetup) {
-      setSetupGateActive(false)
-      return
-    }
-    const scopedKey = setupFreshStartKey(companyId)
-    const freshStart = localStorage.getItem(scopedKey) === 'true'
-    const legacyFreshStart = localStorage.getItem('erp_setup_fresh_start') === 'true'
-    const legacyDismissed = localStorage.getItem('erp_checklist_dismissed') === 'true'
-    if (freshStart || legacyFreshStart || legacyDismissed) {
-      if (!freshStart) {
-        localStorage.setItem(scopedKey, 'true')
-      }
-      setSetupGateActive(false)
-    }
-  }, [needsSetup, companyId])
-
-  if (setupGateActive) {
-    return (
-      <NewUserChecklist
-        hasBookkeepingImported={!!onboardingProgress?.hasSIEImport}
-        hasBankConnected={!!onboardingProgress?.hasBankConnected}
-        hasSkatteverketConnected={!!onboardingProgress?.hasSkatteverketConnected}
-        hasAgentBuilt={agentBuilt}
-        onFreshStart={() => {
-          localStorage.setItem(setupFreshStartKey(companyId), 'true')
-          setSetupGateActive(false)
-        }}
-      />
-    )
-  }
 
   const formatLargeNumber = (amount: number) => {
     return new Intl.NumberFormat('sv-SE', {
@@ -174,6 +124,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
 
   return (
     <div className="stagger-enter space-y-8">
+      {isNewWorkspace ? <QuickStartPanel companyId={companyId} /> : null}
       {!agentBuilt ? (
         /* Build-assistant hero — shown until the company has a verified
            agent_profile. Takes the hero slot so existing/migrated users get a
@@ -187,15 +138,14 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="font-display text-xl leading-tight">Bygg din bokföringsassistent</p>
-                    <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
+                    <p className="font-display text-xl leading-tight">Lägg till bokföringsassistent</p>
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.
+                    Det är valfritt. När du vill kan en assistent hjälpa till med förslag och återkommande bokföring.
                   </p>
                 </div>
                 <div className="hidden sm:flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
-                  <span>Kom igång</span>
+                  <span>Valfritt</span>
                   <ArrowRight className="h-4 w-4" />
                 </div>
               </CardContent>

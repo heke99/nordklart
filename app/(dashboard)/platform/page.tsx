@@ -40,15 +40,15 @@ export default async function PlatformPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Platform admin"
+      eyebrow="Nordklart Plattform"
       title="Nordklart styrs centralt men isolerar varje bolag"
-      description="Batch 1–3 är foundation. Batch 4–11 bygger prisplaner, onboarding, byrå, bankautomation, bokslut, Skatteverket, Bankgiro och API/webhooks ovanpå samma tenant-säkra grund utan att röra bokföringsmotorn."
+      description="Hantera bolag, byråer, prisplaner, produktåtkomst och drift från en gemensam plattform utan att blanda kunddata mellan bolag."
       actions={<Button variant={isPlatform ? 'default' : 'secondary'}>{isPlatform ? 'Platform admin aktiv' : 'Begär platform access'}</Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
         <NordklartStatCard label="Bolag" value={companyCount || 0} description="Befintliga tenants i systemet." />
         <NordklartStatCard label="Byråer" value={agencyCount || 0} description="Nya agency-modellen." tone="primary" />
-        <NordklartStatCard label="Prisplaner" value={pricePlanCount || 0} description="Batch 4 produktkatalog." />
+        <NordklartStatCard label="Prisplaner" value={pricePlanCount || 0} description="Produktkatalog för Nordklart." />
         <NordklartStatCard label="Din roll" value={ownPlatformRole?.role || 'standard'} description="Avgör om globala vyer ska öppnas fullt." tone={isPlatform ? 'success' : 'warning'} />
       </div>
 
@@ -60,38 +60,38 @@ export default async function PlatformPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Bokslut" value={yearEndCount || 0} description="Batch 8-projekt." tone="primary" />
+        <NordklartStatCard label="Bokslut" value={yearEndCount || 0} description="Aktiva bokslutsprojekt." tone="primary" />
         <NordklartStatCard label="Signering" value={taxWaitingCount || 0} description="Skatteverket väntar." tone={(taxWaitingCount || 0) > 0 ? 'warning' : 'success'} />
         <NordklartStatCard label="Bankgiro review" value={bankgiroReviewCount || 0} description="Ansökningar att hantera." tone={(bankgiroReviewCount || 0) > 0 ? 'warning' : 'success'} />
         <NordklartStatCard label="Webhooks" value={webhookEndpointCount || 0} description="Aktiva endpoints." />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-4">
-        <NordklartActionCard meta="Batch 4" title="Prisplaner & features" description="Produkter, prisplaner, plan features, subscriptions, entitlements, engångsköp, usage och feature gate-helper.">
+        <NordklartActionCard meta="Prisplaner" title="Prisplaner & features" description="Produkter, prisplaner, plan features, subscriptions, entitlements, engångsköp, usage och feature gate-helper.">
           <Button asChild size="sm"><Link href="/platform/price-plans">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Batch 5" title="Onboardingvägar" description="Bokföring direkt, bankautomation, bokslut engångsköp och Bankgiro/Autogiro hålls som separata flows.">
+        <NordklartActionCard meta="Onboarding" title="Onboardingvägar" description="Bokföring direkt, bankautomation, bokslut engångsköp och Bankgiro/Autogiro hålls som separata flows.">
           <Button asChild size="sm"><Link href="/platform/onboarding">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Batch 6" title="Byråläge" description="Kundstatus, ansvarig konsult, deadlines, moms, bokslut, bankstatus, byråmallar och review queue.">
+        <NordklartActionCard meta="Byrå" title="Byråläge" description="Kundstatus, ansvarig konsult, deadlines, moms, bokslut, bankstatus, byråmallar och review queue.">
           <Button asChild size="sm"><Link href="/agency/clients">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Batch 7" title="Bankautomation" description="Provider abstraction, bank accounts, ingest, dedupe, matching, automation rules, decisions och granskningskö.">
+        <NordklartActionCard meta="Bankautomation" title="Bankautomation" description="Provider abstraction, bank accounts, ingest, dedupe, matching, automation rules, decisions och granskningskö.">
           <Button asChild size="sm"><Link href="/platform/bank-automation">Öppna</Link></Button>
         </NordklartActionCard>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-4">
-        <NordklartActionCard meta="Batch 8" title="Bokslut som produkt" description="Bokslutsprojekt, readiness, engångsköp, access och exportpaket.">
+        <NordklartActionCard meta="Bokslut" title="Bokslut som produkt" description="Bokslutsprojekt, readiness, engångsköp, access och exportpaket.">
           <Button asChild size="sm"><Link href="/platform/year-end">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Batch 9" title="Skatteverket" description="Momsdeklarationer, signeringsstatus, kvittenser, deadlines och audit.">
+        <NordklartActionCard meta="Skatteverket" title="Skatteverket" description="Momsdeklarationer, signeringsstatus, kvittenser, deadlines och audit.">
           <Button asChild size="sm"><Link href="/platform/skatteverket">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Batch 10" title="Bankgiro / Autogiro" description="Separat provider-modul för ansökan, review, mandat, collections och avstämning.">
+        <NordklartActionCard meta="Bankgiro" title="Bankgiro / Autogiro" description="Separat provider-modul för ansökan, review, mandat, collections och avstämning.">
           <Button asChild size="sm"><Link href="/platform/bankgiro">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Batch 11" title="API & Webhooks" description="API-klienter, scopes, OpenAPI, eventkatalog, signering, retries och logs.">
+        <NordklartActionCard meta="API & webhooks" title="API & Webhooks" description="API-klienter, scopes, OpenAPI, eventkatalog, signering, retries och logs.">
           <Button asChild size="sm"><Link href="/platform/api-webhooks">Öppna</Link></Button>
         </NordklartActionCard>
       </div>

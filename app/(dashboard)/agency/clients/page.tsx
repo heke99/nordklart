@@ -25,7 +25,7 @@ export default async function AgencyClientsPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Batch 6"
+      eyebrow="Redovisningsbyrå"
       title="Byråkunder och status"
       description="Byrån ser kundbolag, ansvarig konsult, bankstatus, granskningskö, fakturastatus, bokslut, Bankgiro och nästa deadline utan att klientdata blandas mellan tenants."
       actions={<Button asChild variant="secondary"><Link href="/agency">Byråöversikt</Link></Button>}

@@ -101,7 +101,7 @@ export default function CompanySwitcher() {
     // Hard navigation — tears down React state, router cache, in-flight
     // fetches, blob URLs, etc. This is the whole point: nothing from the
     // previous company can survive the switch.
-    window.location.assign('/')
+    window.location.assign('/app')
   }
 
   // Always allow opening the dropdown (to show "Lägg till företag")

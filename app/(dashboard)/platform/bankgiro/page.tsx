@@ -22,7 +22,7 @@ export default async function PlatformBankgiroPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Platform · Batch 10"
+      eyebrow="Bankgiro och Autogiro"
       title="Bankgiro/Autogiro provider-modul"
       description="Ansökningar, provider setup, dokument, ägarfrågor, mandat, collections och avstämning är separat från bokföringskärnan."
       actions={<Button asChild variant="secondary"><Link href="/platform">Till plattform</Link></Button>}

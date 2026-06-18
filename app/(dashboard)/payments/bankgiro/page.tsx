@@ -90,7 +90,7 @@ export default async function BankgiroPage() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <NordklartActionCard meta="Providers" title="GoCardless, Leslie och filimport" description={`${providersRes.data?.length ?? 0} provider-adaptrar är definierade utan att hårdkoda bokföringskärnan.`}>
-          <Button asChild size="sm" variant="secondary"><Link href="/platform/bankgiro">Platformvy</Link></Button>
+          <Button asChild size="sm" variant="secondary"><Link href="/settings/billing">Hantera plan</Link></Button>
         </NordklartActionCard>
         <NordklartActionCard meta="Avstämning" title="Matcha betalningar mot fakturor" description="payment_reconciliation_items gör betalflödet granskningsbart innan bokföring skapas.">
           <Button asChild size="sm" variant="secondary"><Link href="/transactions">Visa transaktioner</Link></Button>

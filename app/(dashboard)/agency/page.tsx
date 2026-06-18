@@ -35,7 +35,7 @@ export default async function AgencyPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Batch 6"
+      eyebrow="Redovisningsbyrå"
       title="Byråläge för kunder, deadlines och granskning"
       description="Nordklart skiljer tydligt på plattform, redovisningsbyrå och klientbolag. Byrån får översikt över kundstatus utan att klientdata blandas mellan tenants."
       actions={

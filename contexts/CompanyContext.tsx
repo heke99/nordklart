@@ -10,6 +10,10 @@ interface CompanyContextValue {
   isTeamMember: boolean
   team: Team | null
   isSandbox: boolean
+  workspaceType: 'company' | 'agency' | 'platform'
+  agencyId: string | null
+  canManageAgency: boolean
+  canManagePlatform: boolean
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)

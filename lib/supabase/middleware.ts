@@ -275,7 +275,6 @@ async function resolveCompanyForMiddleware(
   userId: string,
   _request: NextRequest
 ): Promise<{ companyId: string | null; locale: string | null }> {
-  // 1. user_preferences (authoritative)
   const { data: prefs } = await supabase
     .from('user_preferences')
     .select('active_company_id, locale')
@@ -284,38 +283,30 @@ async function resolveCompanyForMiddleware(
 
   const locale = (prefs?.locale as string | undefined) ?? null
 
+  // Reuse the database resolver used by server pages and RLS. Direct
+  // company_members checks here previously rejected agency staff and platform
+  // admins before the dashboard could render.
   if (prefs?.active_company_id) {
-    const { data: membership } = await supabase
-      .from('company_members')
-      .select('company_id, companies!inner(archived_at)')
-      .eq('company_id', prefs.active_company_id)
-      .eq('user_id', userId)
-      .is('companies.archived_at', null)
-      .maybeSingle()
-
-    if (membership) return { companyId: membership.company_id, locale }
+    const { data: access } = await supabase.rpc('resolve_company_access', {
+      p_company_id: prefs.active_company_id,
+    })
+    const row = Array.isArray(access) ? access[0] as { can_read?: boolean } | undefined : undefined
+    if (row?.can_read === true) return { companyId: prefs.active_company_id, locale }
   }
 
-  // 2. Fallback: first non-archived membership by created_at
-  const { data: firstCompany } = await supabase
-    .from('company_members')
-    .select('company_id, companies!inner(archived_at)')
-    .eq('user_id', userId)
-    .is('companies.archived_at', null)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
+  const { data: accessible } = await supabase.rpc('list_accessible_companies')
+  const first = Array.isArray(accessible)
+    ? accessible.find((row) => !(row as { archived_at?: string | null }).archived_at) as { company_id?: string } | undefined
+    : undefined
 
-  if (!firstCompany) return { companyId: null, locale }
+  if (!first?.company_id) return { companyId: null, locale }
 
-  // Write the fallback back to user_preferences so future RLS lookups
-  // see the same active company without needing this fallback scan.
   await supabase
     .from('user_preferences')
     .upsert(
-      { user_id: userId, active_company_id: firstCompany.company_id },
-      { onConflict: 'user_id' }
+      { user_id: userId, active_company_id: first.company_id },
+      { onConflict: 'user_id' },
     )
 
-  return { companyId: firstCompany.company_id, locale }
+  return { companyId: first.company_id, locale }
 }

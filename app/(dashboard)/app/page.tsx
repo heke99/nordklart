@@ -1,8 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
-import WelcomeGate from '@/components/onboarding/WelcomeGate'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
@@ -11,10 +9,8 @@ import type { Deadline, OnboardingProgress } from '@/types'
 
 export const dynamic = 'force-dynamic'
 
-// Home route = Översikt (DashboardContent). The agent chat has its own nav
-// entry at /chat, so / no longer forwards there. New users who haven't built
-// their assistant yet get WelcomeGate (the build-agent checklist) instead of
-// the dashboard; once the agent is verified, / renders the normal Översikt.
+// Home route = Översikt. A provisioned company can always reach the dashboard;
+// optional onboarding is shown as inline next steps and never blocks accounting.
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -25,25 +21,10 @@ export default async function DashboardPage() {
     redirect('/login')
   }
 
-  const cookieStore = await cookies()
-  const rawCompanyId = cookieStore.get('nordklart-company-id')?.value
-    ?? await getActiveCompanyId(supabase, user.id)
-
-  // Validate the cookie/preference points to a company the user can access
-  let companyId = rawCompanyId
-  if (companyId) {
-    const { data: membership } = await supabase
-      .from('company_members')
-      .select('company_id')
-      .eq('company_id', companyId)
-      .eq('user_id', user.id)
-      .maybeSingle()
-    if (!membership) companyId = null
-  }
-
-  if (!companyId) {
-    redirect('/onboarding')
-  }
+  // user_preferences + resolveCompanyAccess is the single access source for
+  // direct members, agency staff and platform admins.
+  const companyId = await getActiveCompanyId(supabase, user.id)
+  if (!companyId) redirect('/onboarding')
 
   // Fetch current year date boundaries
   const startOfYearStr = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0]
@@ -100,11 +81,6 @@ export default async function DashboardPage() {
     listSuggestedMatches(supabase, companyId, 5),
   ])
 
-  // If onboarding is not complete, redirect to onboarding
-  if (!settings?.onboarding_complete) {
-    redirect('/onboarding')
-  }
-
   // Sandbox sessions that pre-date the agent_profile seeding step would
   // otherwise still see the "Bygg din bokföringsassistent" hero + the
   // NewUserChecklist's agent step lit up. Backfill here so the next render
@@ -134,19 +110,9 @@ export default async function DashboardPage() {
     (customerCount || 0) > 0 ||
     (postedEntriesCount || 0) > 0
 
-  // Only a genuinely empty company without an assistant sees the full
-  // onboarding checklist (where building the assistant is the last step).
-  // Everyone else falls through to the dashboard below.
-  if (!agentBuilt && !hasData) {
-    return (
-      <WelcomeGate
-        companyId={companyId}
-        hasBookkeepingImported={(sieImportCount || 0) > 0}
-        hasBankConnected={(transactionCount || 0) > 0}
-        hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
-      />
-    )
-  }
+  // The dashboard remains available for a new workspace. Optional setup
+  // actions are rendered inline instead of blocking accounting work.
+
 
   const onboardingProgress: OnboardingProgress = {
     hasCustomers: (customerCount || 0) > 0,
@@ -253,6 +219,7 @@ export default async function DashboardPage() {
       worklist={worklist}
       suggestedMatches={suggestedMatches}
       onboardingProgress={onboardingProgress}
+      isNewWorkspace={!hasData}
     />
   )
 }

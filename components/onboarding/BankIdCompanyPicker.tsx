@@ -93,7 +93,7 @@ export default function BankIdCompanyPicker({
       setSetup({ kind: 'idle' })
       return
     }
-    window.location.assign('/')
+    window.location.assign('/app')
   }
 
   // BankID picker no longer one-click-provisions. Every pick routes to the

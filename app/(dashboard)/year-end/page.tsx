@@ -101,7 +101,7 @@ export default async function YearEndProductPage() {
           <Button asChild size="sm" variant="secondary"><Link href="/reports">Visa rapporter</Link></Button>
         </NordklartActionCard>
         <NordklartActionCard meta="Access" title="Sälj bokslut separat" description="one_time_purchases och year_end_purchase_access gör bokslut säljbart utan månadsabonnemang.">
-          <Button asChild size="sm" variant="secondary"><Link href="/platform/price-plans">Prisplaner</Link></Button>
+          <Button asChild size="sm" variant="secondary"><Link href="/settings/billing">Hantera plan</Link></Button>
         </NordklartActionCard>
       </div>
     </NordklartPageShell>

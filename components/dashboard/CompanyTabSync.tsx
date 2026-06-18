@@ -26,7 +26,7 @@ import { useCompany } from '@/contexts/CompanyContext'
  *      neither BroadcastChannel nor visibilitychange fires. pageshow is the
  *      only reliable signal and is guaranteed to fire on bfcache restore.
  *
- * All three layers converge on the same action: window.location.assign('/')
+ * All three layers converge on the same action: window.location.assign('/app')
  * — a hard navigation that wipes React state, the router cache, in-flight
  * requests, blob URLs, and every other in-tab leak vector.
  *
@@ -39,7 +39,7 @@ export default function CompanyTabSync() {
 
   useEffect(() => {
     const hardReload = () => {
-      window.location.assign('/')
+      window.location.assign('/app')
     }
 
     // Layer 1: BroadcastChannel — live cross-tab sync

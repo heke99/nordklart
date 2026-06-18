@@ -101,7 +101,7 @@ export default async function SkatteverketPage() {
           <Button asChild size="sm" variant="secondary"><Link href="/settings/tax">Inställningar</Link></Button>
         </NordklartActionCard>
         <NordklartActionCard meta="Audit" title="Historik per inlämning" description="tax_submission_events sparar statusbyten, felmeddelanden och kvittensdata.">
-          <Button asChild size="sm" variant="secondary"><Link href="/platform/skatteverket">Platformvy</Link></Button>
+          <Button asChild size="sm" variant="secondary"><Link href="/settings/tax">Inställningar</Link></Button>
         </NordklartActionCard>
       </div>
     </NordklartPageShell>

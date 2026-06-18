@@ -102,6 +102,10 @@ export default async function DashboardLayout({
           isTeamMember,
           team,
           isSandbox: false,
+          workspaceType: 'company',
+          agencyId: null,
+          canManageAgency: false,
+          canManagePlatform: false,
         }}
       >
         <AgentSheetProvider>
@@ -146,8 +150,6 @@ export default async function DashboardLayout({
   ])
 
   if (!companyRow || !activeAccess) {
-    // Stale cookie pointing to a deleted/inaccessible company.
-    // Render the empty-state dashboard so user can switch or create a company.
     const companyContextValue = {
       company: null,
       role: null,
@@ -169,6 +171,10 @@ export default async function DashboardLayout({
       isTeamMember,
       team,
       isSandbox: false,
+      workspaceType: 'company' as const,
+      agencyId: null,
+      canManageAgency: false,
+      canManagePlatform: false,
     }
 
     return (
@@ -185,9 +191,7 @@ export default async function DashboardLayout({
               extensionNavItems={getExtensionNavItems()}
             />
             <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
-              <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
-                {children}
-              </div>
+              <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">{children}</div>
             </main>
             {settingsModal}
             <SettingsHotkey />
@@ -203,6 +207,9 @@ export default async function DashboardLayout({
     pendingOpsCount,
     { data: agentProfileIdentity },
     { data: userProfile },
+    { data: workspacePrefs },
+    { data: platformRole },
+    { data: agencyMembership },
   ] = await Promise.all([
     supabase
       .from('company_settings')
@@ -225,6 +232,9 @@ export default async function DashboardLayout({
     // popover (full_name + initial) so it's clear which user is logged
     // in, distinct from the active company shown at the top.
     supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
+    supabase.from('user_preferences').select('active_workspace_type, active_agency_id').eq('user_id', user.id).maybeSingle(),
+    supabase.from('platform_roles').select('role').eq('user_id', user.id).eq('role', 'platform_admin').is('revoked_at', null).maybeSingle(),
+    supabase.from('agency_members').select('agency_id, role').eq('user_id', user.id).in('role', ['agency_owner', 'agency_admin', 'accountant', 'reviewer']).limit(1).maybeSingle(),
   ])
 
   // If onboarding incomplete, still render the dashboard — the page component
@@ -255,6 +265,17 @@ export default async function DashboardLayout({
     resolvedAgentIdentity = refreshed ?? agentProfileIdentity
   }
 
+  const canManagePlatform = Boolean(platformRole)
+  const canManageAgency = Boolean(agencyMembership)
+  const workspaceType: 'company' | 'agency' | 'platform' =
+    pathname.startsWith('/platform') && canManagePlatform
+      ? 'platform'
+      : pathname.startsWith('/agency') && canManageAgency
+        ? 'agency'
+        : workspacePrefs?.active_workspace_type === 'agency' && canManageAgency
+          ? 'agency'
+          : 'company'
+
   const companyContextValue = {
     company: companyWithName,
     role: legacyRoleFromEffectiveRole(activeAccess.effectiveRole) as CompanyRole,
@@ -276,6 +297,10 @@ export default async function DashboardLayout({
     isTeamMember,
     team,
     isSandbox,
+    workspaceType,
+    agencyId: agencyMembership?.agency_id ?? workspacePrefs?.active_agency_id ?? null,
+    canManageAgency,
+    canManagePlatform,
   }
 
   return (

@@ -21,7 +21,7 @@ export default async function PlatformSkatteverketPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Platform · Batch 9"
+      eyebrow="Skatteverket"
       title="Skatteverket-status över alla tenants"
       description="Koppling, tokenstatus, väntande signering, kvittenser och fel hanteras som separata statusar så inget framstår som inlämnat innan kvittens finns."
       actions={<Button asChild variant="secondary"><Link href="/platform">Till plattform</Link></Button>}

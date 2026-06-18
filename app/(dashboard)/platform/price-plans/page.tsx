@@ -67,7 +67,7 @@ export default async function PlatformPricePlansPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Batch 4"
+      eyebrow="Prisplaner och åtkomst"
       title="Prisplaner och feature gates"
       description="Planer, features, abonnemang, entitlements, engångsköp och usage-grund är separerade så superadmin kan styra access utan att ändra bokföringsmotorn."
       actions={

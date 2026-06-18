@@ -6,21 +6,10 @@ import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { mapEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
 import { flowFromIntent } from '@/lib/onboarding/intents'
+import { getActiveCompanyId } from '@/lib/company/context'
 
 export const dynamic = 'force-dynamic'
 
-// Look up the user's CompanyRoles enrichment (from BankID auth) and find the
-// role whose orgnr matches the incoming `?org_number=`. CompanyRoles lives on
-// the TIC Identity API — separate product, separate quota from the Lens
-// `/lookup` endpoint — so this is free: no Lens calls.
-//
-// Returns enough to pre-fill Step 1's entity-type radio + Step 2's
-// company_name field. The rest (address, F-skatt, VAT) is captured by the
-// user in Steps 2–4. F-skatt/VAT defaults can't be safely guessed without
-// Bolagsverket data (ML 17 kap 24§ violation if we default a momsregistrerat
-// bolag to false), so we make the user confirm in Step 4.
-//
-// Exported for unit testing.
 export async function findCompanyRoleByOrgNumber(
   supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string,
@@ -36,39 +25,28 @@ export async function findCompanyRoleByOrgNumber(
   if (!Array.isArray(roles) || roles.length === 0) return null
 
   const match = roles.find(
-    (r) => r.companyRegistrationNumber.replace(/[\s-]/g, '') === orgNumber,
+    (role) => role.companyRegistrationNumber.replace(/[\s-]/g, '') === orgNumber,
   )
-  if (!match) return null
-
-  return { legalName: match.legalName, legalEntityType: match.legalEntityType }
+  return match ? { legalName: match.legalName, legalEntityType: match.legalEntityType } : null
 }
 
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org_number?: string; flow?: string; intent?: string; workspace?: string }>
+  searchParams: Promise<{ org_number?: string; flow?: string; intent?: string; workspace?: string; add?: string }>
 }) {
   const supabase = await createClient()
-
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    redirect('/login')
-  }
+  if (!user) redirect('/login')
 
-  // Check if user already has companies (adding another vs first-time)
-  const { data: existingMembership } = await supabase
-    .from('company_members')
-    .select('company_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
+  const params = await searchParams
+  const activeCompanyId = await getActiveCompanyId(supabase, user.id)
+  const flow = params.flow ?? flowFromIntent(params.intent) ?? undefined
+  const initialOrgNumber = params.org_number?.replace(/[\s-]/g, '') ?? undefined
 
-  const hasCompanies = !!existingMembership
-
-  // A verified signup whose core workspace is pending or failed must go to the
-  // recovery screen. Do not fall through to the legacy company creator and
-  // risk collecting duplicate data or creating a second company.
-  if (!hasCompanies) {
+  // A claimed signup must always recover through the provisioning flow instead
+  // of reopening the legacy company creator.
+  if (!activeCompanyId) {
     const service = createServiceClient()
     const { data: pendingDraft } = await service
       .from('signup_drafts')
@@ -78,60 +56,49 @@ export default async function OnboardingPage({
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-
     if (pendingDraft) redirect('/onboarding/problem')
   }
 
-  // Fetch profile and team
+  // An existing company uses the flexible start router. It never returns an
+  // authenticated user to /register; product choices become workspace actions.
+  if (activeCompanyId && params.add !== 'company' && !initialOrgNumber) {
+    const [{ data: company }, { data: agencyMembership }, { data: session }] = await Promise.all([
+      supabase.from('companies').select('name').eq('id', activeCompanyId).maybeSingle(),
+      supabase.from('agency_members').select('agency_id').eq('user_id', user.id).limit(1).maybeSingle(),
+      supabase
+        .from('onboarding_sessions')
+        .select('path')
+        .eq('company_id', activeCompanyId)
+        .eq('user_id', user.id)
+        .in('status', ['draft', 'in_progress'])
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
+
+    return (
+      <NordklartOnboardingRouter
+        selectedFlow={flow ?? session?.path ?? null}
+        isAgencyWorkspace={Boolean(agencyMembership)}
+        companyName={company?.name ?? null}
+      />
+    )
+  }
+
+  // Legacy creation remains available only when a signed-in user explicitly
+  // asks to add another accounting company.
   const [{ data: profile }, { data: teamMembership }] = await Promise.all([
     supabase.from('profiles').select('full_name').eq('id', user.id).single(),
     supabase.from('team_members').select('team_id').eq('user_id', user.id).limit(1).maybeSingle(),
   ])
 
   let teamId = teamMembership?.team_id
-
-  // Ensure user has a team (fallback for edge cases)
   if (!teamId) {
     const { data: newTeamId } = await supabase.rpc('ensure_user_team')
     teamId = newTeamId
   }
+  if (!teamId) redirect('/login')
 
-  if (!teamId) {
-    redirect('/login')
-  }
-
-  const firstName = profile?.full_name?.split(' ')[0] || null
-
-  // The BankID picker routes here with ?org_number=… for every pick. Strip
-  // formatting so whatever Step 2 displays matches what the rest of the flow
-  // will store.
-  const { org_number: rawOrgNumber, flow: rawFlow, intent, workspace } = await searchParams
-  const flow = rawFlow ?? flowFromIntent(intent) ?? undefined
-  const initialOrgNumber = rawOrgNumber ? rawOrgNumber.replace(/[\s-]/g, '') : undefined
-
-  if (workspace === 'agency' || flow === 'agency_setup') {
-    redirect('/onboarding/agency')
-  }
-
-  // Nordklart onboarding router: users pick the right commercial path first.
-  // Bankgiro/Autogiro and one-time year-end are deliberately separate from
-  // ordinary bookkeeping setup. When a concrete bookkeeping flow starts (or
-  // BankID sends org_number), we continue into the existing compliant company
-  // setup so the accounting foundation stays unchanged.
-  const shouldShowRouter = !initialOrgNumber && !flow
-  if (shouldShowRouter) {
-    return <NordklartOnboardingRouter />
-  }
-
-  if (flow && !['bookkeeping', 'bookkeeping_direct'].includes(flow) && !initialOrgNumber) {
-    return <NordklartOnboardingRouter selectedFlow={flow} />
-  }
-
-  // BankID prefill: look up the CompanyRoles row (no Lens call) to pre-fill
-  // Step 1's entity_type radio and Step 2's company_name. If no role matches,
-  // the user fills everything manually — same fallback as a non-BankID
-  // signup. `preverifiedOrgNumber` tells Step 2 to skip the client-side
-  // /lookup since CompanyRoles already confirms existence.
   let initialEntityType: EntityType | undefined
   let initialLegalName: string | undefined
   let preverifiedOrgNumber: string | undefined
@@ -146,10 +113,10 @@ export default async function OnboardingPage({
 
   return (
     <WelcomeOnboarding
-      firstName={firstName}
+      firstName={profile?.full_name?.split(' ')[0] || null}
       teamId={teamId}
       skipWelcome
-      hasExistingCompanies={hasCompanies}
+      hasExistingCompanies={Boolean(activeCompanyId)}
       initialOrgNumber={initialOrgNumber}
       initialEntityType={initialEntityType}
       initialLegalName={initialLegalName}

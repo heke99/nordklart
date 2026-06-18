@@ -45,7 +45,7 @@ export default async function PlatformBankAutomationPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Batch 7"
+      eyebrow="Bankautomation"
       title="Provider-oberoende bankautomation"
       description="Bankdata, Bankgiro och vanlig bokföring hålls separerade. Transaktioner importeras via provider-modell, dedupe, matchning, confidence och granskningskö."
       actions={<Button asChild variant="secondary"><Link href="/bank-automation">Bolagets bankautomation</Link></Button>}

@@ -42,7 +42,7 @@ export default async function PlatformOnboardingPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Batch 5"
+      eyebrow="Onboarding"
       title="Onboardingvägar utan Bankgiro-friktion"
       description="Vanlig bokföring, bankautomation, engångsbokslut och Bankgiro/Autogiro har egna flöden, statusar, progress och audit-grund."
       actions={<Button asChild variant="secondary"><Link href="/onboarding">Öppna onboarding</Link></Button>}

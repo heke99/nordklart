@@ -21,7 +21,7 @@ export default async function PlatformYearEndPage() {
 
   return (
     <NordklartPageShell
-      eyebrow="Platform · Batch 8"
+      eyebrow="Bokslut"
       title="Bokslut som produkt"
       description="Överblick över bokslutsprojekt, engångsköp, access och exportpaket utan att röra bokföringsmotorns låsningsregler."
       actions={<Button asChild variant="secondary"><Link href="/platform">Till plattform</Link></Button>}
