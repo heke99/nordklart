@@ -3,6 +3,8 @@ import { NextRequest } from 'next/server'
 
 const verifyOtp = vi.fn()
 const exchangeCodeForSession = vi.fn()
+const markSignupDraftEmailVerified = vi.fn()
+let authUser: { id: string; email?: string; user_metadata?: Record<string, unknown> } | null = { id: 'user-1' }
 
 vi.mock('server-only', () => ({}))
 
@@ -20,7 +22,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 vi.mock('@/lib/signup/provision', () => ({
-  provisionSignupDraft: vi.fn(),
+  markSignupDraftEmailVerified,
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -28,7 +30,7 @@ vi.mock('@supabase/ssr', () => ({
     auth: {
       verifyOtp,
       exchangeCodeForSession,
-      getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
+      getUser: vi.fn().mockImplementation(() => Promise.resolve({ data: { user: authUser } })),
       mfa: {
         getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),
         listFactors: vi.fn().mockResolvedValue({ data: null }),
@@ -48,6 +50,7 @@ import { GET } from '../route'
 describe('GET /auth/callback — recovery flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authUser = { id: 'user-1' }
   })
 
   it('redirects to /reset-password after a successful recovery OTP (token-hash flow)', async () => {
@@ -100,6 +103,29 @@ describe('GET /auth/callback — recovery flow', () => {
     expect(response.status).toBe(307)
     expect(response.headers.get('location')).toBe(
       'http://localhost:3000/login?auth_error=signup_confirmation_failed'
+    )
+  })
+
+  it('verifies a signup draft but redirects only to password creation', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+    markSignupDraftEmailVerified.mockResolvedValue(true)
+    authUser = {
+      id: 'user-1',
+      email: 'owner@example.se',
+      user_metadata: { signup_draft_id: 'draft-1', signup_draft_token: 'secret' },
+    }
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=abc&type=email&flow=signup&next=/onboarding'
+    )
+    const response = await GET(request)
+
+    expect(markSignupDraftEmailVerified).toHaveBeenCalledWith({
+      draftId: 'draft-1', userId: 'user-1', token: 'secret',
+    })
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/account/set-password?mode=signup'
     )
   })
 

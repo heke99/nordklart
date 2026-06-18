@@ -204,6 +204,26 @@ function LoginPageContent() {
         document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
       }
 
+      const activation = await fetch('/api/auth/signup-draft/claim', { method: 'POST' })
+      if (activation.status === 200) {
+        const workspace = await activation.json().catch(() => null) as { onboardingPath?: string } | null
+        if (workspace?.onboardingPath) {
+          router.push(workspace.onboardingPath)
+          router.refresh()
+          return
+        }
+      }
+      if (activation.status !== 204) {
+        const body = await activation.json().catch(() => ({})) as { error?: string }
+        toast({
+          title: 'Kunde inte starta installationen',
+          description: body.error || 'Försök logga in igen om en stund.',
+          variant: 'destructive',
+        })
+        await supabase.auth.signOut({ scope: 'local' })
+        return
+      }
+
       router.push('/app')
       router.refresh()
     } catch (error) {

@@ -40,6 +40,7 @@ function mockService(opts: {
   passwordSetError?: { message: string; status?: number; code?: string } | null
   // Thrown error from admin.updateUserById when called with { app_metadata }
   flagFlipError?: Error | null
+  signupActivationError?: { message: string } | null
 }) {
   const updateUserById = vi
     .fn()
@@ -58,8 +59,14 @@ function mockService(opts: {
     data: { user: { app_metadata: opts.priorAppMetadata ?? {} } },
   })
 
+  const rpc = vi.fn().mockResolvedValue({
+    data: false,
+    error: opts.signupActivationError ?? null,
+  })
+
   mockCreateServiceClient.mockReturnValue({
     auth: { admin: { getUserById, updateUserById } },
+    rpc,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any)
 

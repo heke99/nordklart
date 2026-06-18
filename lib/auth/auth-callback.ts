@@ -33,6 +33,7 @@ const ALLOWED_CALLBACK_PREFIXES = [
   '/reset-password',
   '/select-company',
   '/settings/account',
+  '/account/set-password',
   '/mfa/verify',
 ] as const
 
@@ -60,7 +61,7 @@ export function resolveAuthCallbackFlow(params: {
   if (explicitFlow === 'email_change') return 'email_change'
 
   if (params.next === '/reset-password') return 'recovery'
-  if (params.next?.startsWith('/onboarding')) return 'signup'
+  if (params.next?.startsWith('/onboarding') || params.next?.startsWith('/account/set-password')) return 'signup'
 
   // Supabase's custom confirm-signup template commonly uses type=email.
   if (type === 'signup' || type === 'email') return 'signup'
@@ -71,7 +72,7 @@ export function resolveAuthCallbackFlow(params: {
 export function defaultRedirectForAuthFlow(flow: AuthCallbackFlow): string {
   switch (flow) {
     case 'signup':
-      return '/onboarding'
+      return '/account/set-password?mode=signup'
     case 'recovery':
       return '/reset-password'
     case 'email_change':

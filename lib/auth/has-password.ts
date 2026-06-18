@@ -8,8 +8,9 @@ import type { User } from '@supabase/supabase-js'
  *
  * - BankID signup writes `has_password: false` (they got a random server-side
  *   password they will never see).
- * - Email/password signup doesn't set the flag — we infer `true` because the
- *   user supplied a password to reach signUp at all.
+ * - Email-confirmation signup writes `has_password: false` because Nordklart
+ *   creates only a server-side bootstrap credential before the user chooses
+ *   their own password after verification.
  * - The flag flips to `true` after a successful POST /api/account/password.
  */
 export function userHasPassword(user: Pick<User, 'app_metadata'>): boolean {

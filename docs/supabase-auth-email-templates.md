@@ -45,9 +45,9 @@ Bekräfta din e-postadress
 ```html
 <h2>Bekräfta din e-postadress</h2>
 <p>Välkommen till Nordklart.</p>
-<p>Bekräfta din e-postadress för att aktivera ditt konto och fortsätta.</p>
+<p>Bekräfta din e-postadress för att välja lösenord och aktivera ditt konto.</p>
 <p>
-  <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=email&flow=signup&next=/onboarding">
+  <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=email&flow=signup&next=/account/set-password?mode=signup">
     Bekräfta e-post
   </a>
 </p>
@@ -139,7 +139,9 @@ Bekräfta ny e-postadress
 
 1. Skapa ett nytt konto i en annan browserprofil.
 2. Öppna bekräftelselänken både i samma och annan browser.
-3. Kontrollera att signup går till onboarding, inte reset password.
-4. Testa `/forgot-password` och kontrollera att länken går till `/reset-password`.
-5. Öppna en redan använd länk och kontrollera att rätt feltext visas.
-6. Kontrollera `auth_audit_events` för `auth_callback_completed` och `auth_callback_failed`.
+3. Kontrollera att signup går till sidan Skapa ditt lösenord, inte onboarding eller reset password.
+4. Spara lösenordet på mobilen och kontrollera att kunden blir utloggad lokalt och får en tydlig inloggningslänk.
+5. Logga därefter in på en annan dator och kontrollera att onboarding skapas först då.
+6. Testa `/forgot-password` och kontrollera att länken går till `/reset-password`.
+7. Öppna en redan använd länk och kontrollera att rätt feltext visas.
+8. Kontrollera `auth_audit_events` för `auth_callback_completed` och `auth_callback_failed`.

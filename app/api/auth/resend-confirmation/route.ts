@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     { cookies: { getAll: () => [], setAll: () => {} } },
   )
 
-  const redirectTo = `${new URL(request.url).origin}/auth/callback?flow=signup&next=/onboarding`
+  const redirectTo = `${new URL(request.url).origin}/auth/callback?flow=signup&next=/account/set-password?mode=signup`
   const { error } = await supabase.auth.resend({
     type: 'signup',
     email,

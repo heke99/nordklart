@@ -1,8 +1,8 @@
 'use client'
 
-import { FormEvent, Suspense, useMemo, useState, type ComponentProps, type ReactNode } from 'react'
+import { FormEvent, Suspense, useEffect, useState, type ComponentProps, type ReactNode } from 'react'
 import Link from 'next/link'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import { ArrowLeft, Building2, Loader2, Mail, UsersRound } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { AuthLegalFooter, LegalInlineLinks } from '@/components/auth/AuthLegalFooter'
@@ -10,20 +10,27 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { createClient } from '@/lib/supabase/client'
 import { flowFromIntent } from '@/lib/onboarding/intents'
+import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 
 type WorkspaceType = 'company' | 'agency'
 type LegalForm = 'enskild_firma' | 'aktiebolag'
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-function strongPassword(value: string) {
-  return value.length >= 8
-    && /[a-z]/.test(value)
-    && /[A-Z]/.test(value)
-    && /\d/.test(value)
-    && /[^A-Za-z0-9]/.test(value)
+
+type RegistryLookup = {
+  registryStatus: 'active' | 'ceased' | 'manual_review'
+  companyName: string
+  legalForm: string | null
+  address: { street: string | null; postalCode: string | null; city: string | null } | null
+}
+
+type RegistryLookupResponse = {
+  available: boolean
+  found?: boolean
+  company?: RegistryLookup
+  lookupToken?: string
 }
 
 export default function RegisterPage() {
@@ -32,9 +39,7 @@ export default function RegisterPage() {
 
 function RegisterContent() {
   const searchParams = useSearchParams()
-  const router = useRouter()
   const { toast } = useToast()
-  const supabase = useMemo(() => createClient(), [])
   const intent = searchParams.get('intent') ?? ''
   const initialWorkspace: WorkspaceType = searchParams.get('workspace') === 'agency' || intent === 'agency' || intent === 'byra'
     ? 'agency'
@@ -52,14 +57,53 @@ function RegisterContent() {
   const [addressLine1, setAddressLine1] = useState('')
   const [postalCode, setPostalCode] = useState('')
   const [city, setCity] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [acceptedLegal, setAcceptedLegal] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [confirmationEmail, setConfirmationEmail] = useState<string | null>(null)
+  const [registryLookup, setRegistryLookup] = useState<RegistryLookup | null>(null)
+  const [registryLookupToken, setRegistryLookupToken] = useState<string | null>(null)
 
   const selectedFlow = flowFromIntent(intent)
   const label = workspaceType === 'agency' ? 'redovisningsbyrå' : legalForm === 'aktiebolag' ? 'aktiebolag' : 'enskild firma'
+
+  useEffect(() => {
+    const organizationNumber = normalizeOrgNumber(orgNumber)
+    setRegistryLookup(null)
+    setRegistryLookupToken(null)
+    if (!organizationNumber) return
+
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch('/api/public/company-lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ organizationNumber }),
+        })
+        if (!response.ok || cancelled) return
+        const result = await response.json() as RegistryLookupResponse
+        const company = result.company
+        if (!result.available || !result.found || !company || !result.lookupToken || cancelled) return
+
+        setRegistryLookup(company)
+        setRegistryLookupToken(result.lookupToken)
+        setCompanyName((value) => value || company.companyName)
+        setAddressLine1((value) => value || company.address?.street || '')
+        setPostalCode((value) => value || company.address?.postalCode || '')
+        setCity((value) => value || company.address?.city || '')
+        if (company.legalForm === 'aktiebolag' || company.legalForm === 'enskild_firma') {
+          setLegalForm(company.legalForm)
+        }
+      } catch {
+        // Registry enrichment is optional. Signup remains available with manual data.
+      }
+    }, 500)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [orgNumber])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -71,12 +115,17 @@ function RegisterContent() {
       toast({ title: 'Kontrollera e-postadresserna', description: 'Fyll i en giltig e-postadress för inloggning och kontakt.', variant: 'destructive' })
       return
     }
-    if (!strongPassword(password)) {
-      toast({ title: 'Välj ett starkare lösenord', description: 'Använd minst 8 tecken med stor bokstav, liten bokstav, siffra och specialtecken.', variant: 'destructive' })
+    const normalizedOrgNumber = orgNumber ? normalizeOrgNumber(orgNumber) : null
+    if (legalForm === 'aktiebolag' && !normalizedOrgNumber) {
+      toast({ title: 'Kontrollera organisationsnumret', description: 'Ange ett giltigt organisationsnummer för aktiebolaget.', variant: 'destructive' })
       return
     }
-    if (password !== confirmPassword) {
-      toast({ title: 'Lösenorden matchar inte', description: 'Kontrollera att du har skrivit samma lösenord två gånger.', variant: 'destructive' })
+    if (orgNumber && !normalizedOrgNumber) {
+      toast({ title: 'Kontrollera organisationsnumret', description: 'Ange ett giltigt organisations- eller personnummer.', variant: 'destructive' })
+      return
+    }
+    if (registryLookup?.registryStatus === 'ceased') {
+      toast({ title: 'Bolaget är inte aktivt', description: 'Kontrollera organisationsnumret eller registrera ett aktivt bolag.', variant: 'destructive' })
       return
     }
 
@@ -99,48 +148,14 @@ function RegisterContent() {
           postalCode,
           city,
           onboardingIntent: intent,
+          registryLookupToken: registryLookupToken ?? '',
           acceptedTerms: true,
           acceptedPrivacy: true,
         }),
       })
-      const draft = await draftResponse.json().catch(() => ({})) as { draftId?: string; draftToken?: string; error?: string }
-      if (!draftResponse.ok || !draft.draftId || !draft.draftToken) {
+      const draft = await draftResponse.json().catch(() => ({})) as { ok?: boolean; error?: string }
+      if (!draftResponse.ok || !draft.ok) {
         throw new Error(draft.error || 'Kunde inte förbereda registreringen.')
-      }
-
-      const { data, error } = await supabase.auth.signUp({
-        email: loginEmail.trim().toLowerCase(),
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback?flow=signup&next=/onboarding`,
-          data: {
-            first_name: firstName.trim(),
-            last_name: lastName.trim(),
-            full_name: `${firstName} ${lastName}`.trim(),
-            company_name: companyName.trim(),
-            // The legacy trigger deliberately skips commercial provisioning
-            // when these values are absent. The draft is claimed after auth.
-            onboarding_intent: null,
-            onboarding_flow: null,
-            accepted_terms: false,
-            accepted_privacy: false,
-            signup_draft_id: draft.draftId,
-            signup_draft_token: draft.draftToken,
-          },
-        },
-      })
-      if (error) throw error
-      if (data.user && (data.user.identities?.length ?? 0) === 0 && !data.session) {
-        throw new Error('Det finns redan ett konto med den här e-postadressen. Logga in eller återställ lösenordet.')
-      }
-
-      if (data.session) {
-        const claim = await fetch('/api/auth/signup-draft/claim', { method: 'POST' })
-        const result = await claim.json().catch(() => ({})) as { onboardingPath?: string; error?: string }
-        if (!claim.ok || !result.onboardingPath) throw new Error(result.error || 'Kunde inte aktivera arbetsytan.')
-        router.replace(result.onboardingPath)
-        router.refresh()
-        return
       }
 
       setConfirmationEmail(loginEmail.trim().toLowerCase())
@@ -161,7 +176,7 @@ function RegisterContent() {
         <div className="rounded-xl border bg-card p-6 text-center shadow-sm">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><Mail className="h-6 w-6" /></div>
           <h1 className="mt-5 text-2xl font-semibold">Bekräfta din e-postadress</h1>
-          <p className="mt-3 text-sm leading-6 text-muted-foreground">Vi har skickat en bekräftelselänk till <strong className="text-foreground">{confirmationEmail}</strong>. När länken öppnas skapas din {label}-arbetsyta säkert och du fortsätter till rätt onboarding.</p>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">Vi har skickat en bekräftelselänk till <strong className="text-foreground">{confirmationEmail}</strong>. När du öppnar länken bekräftar du först din e-postadress och väljer sedan ett lösenord. Du kan därefter logga in från den dator där du vill fortsätta med din {label}-arbetsyta.</p>
           <Button className="mt-6 w-full" variant="secondary" asChild><Link href="/login"><ArrowLeft className="mr-2 h-4 w-4" />Till inloggning</Link></Button>
         </div>
       </AuthShell>
@@ -200,6 +215,9 @@ function RegisterContent() {
         <Field label="E-post för inloggning" value={loginEmail} onChange={setLoginEmail} type="email" autoComplete="email" />
         <Field label={workspaceType === 'agency' ? 'Byrånamn' : 'Företagsnamn'} value={companyName} onChange={setCompanyName} autoComplete="organization" />
         <Field label={legalForm === 'aktiebolag' ? 'Organisationsnummer' : 'Person- eller organisationsnummer'} value={orgNumber} onChange={setOrgNumber} inputMode="numeric" required={legalForm === 'aktiebolag'} />
+        {registryLookup?.registryStatus === 'active' ? <p className="-mt-2 text-xs text-muted-foreground">Företagsuppgifter har hämtats från registret. Kontrollera och komplettera uppgifterna nedan.</p> : null}
+        {registryLookup?.registryStatus === 'manual_review' ? <p className="-mt-2 text-xs text-amber-700">Företaget behöver kontrolleras manuellt. Kontrollera uppgifterna innan du fortsätter.</p> : null}
+        {registryLookup?.registryStatus === 'ceased' ? <p className="-mt-2 text-xs text-destructive">Det här bolaget är inte aktivt och kan inte registreras automatiskt.</p> : null}
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Kontakt-e-post för verksamheten" value={contactEmail} onChange={setContactEmail} type="email" />
           <Field label="Telefonnummer" value={phone} onChange={setPhone} type="tel" required={false} />
@@ -209,16 +227,12 @@ function RegisterContent() {
           <Field label="Postnummer" value={postalCode} onChange={setPostalCode} autoComplete="postal-code" required={false} />
           <Field label="Ort" value={city} onChange={setCity} autoComplete="address-level2" required={false} />
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Lösenord" value={password} onChange={setPassword} type="password" autoComplete="new-password" />
-          <Field label="Bekräfta lösenord" value={confirmPassword} onChange={setConfirmPassword} type="password" autoComplete="new-password" />
-        </div>
         <label className="flex gap-3 rounded-lg border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">
           <input type="checkbox" checked={acceptedLegal} onChange={(event) => setAcceptedLegal(event.target.checked)} required className="mt-0.5 h-4 w-4 shrink-0 accent-primary" />
           <span>Jag godkänner Nordklarts <LegalInlineLinks />.</span>
         </label>
         <Button type="submit" className="w-full" disabled={isLoading}>
-          {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Skapar konto</> : 'Skapa konto'}
+          {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Skickar bekräftelse</> : 'Fortsätt'}
         </Button>
       </form>
       <p className="mt-5 text-center text-sm text-muted-foreground">Har du redan konto? <Link href="/login" className="font-medium text-foreground underline underline-offset-2">Logga in</Link></p>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  defaultRedirectForAuthFlow,
   resolveAuthCallbackFlow,
   safeAuthRedirectPath,
 } from '@/lib/auth/auth-callback'
@@ -19,4 +20,9 @@ describe('auth callback helpers', () => {
     expect(safeAuthRedirectPath('//attacker.example', '/app')).toBe('/app')
     expect(safeAuthRedirectPath('/api/private', '/app')).toBe('/app')
   })
+  it('sends confirmed signup users to password creation, never onboarding', () => {
+    expect(defaultRedirectForAuthFlow('signup')).toBe('/account/set-password?mode=signup')
+    expect(safeAuthRedirectPath('/account/set-password?mode=signup', '/app')).toBe('/account/set-password?mode=signup')
+  })
+
 })

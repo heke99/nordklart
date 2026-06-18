@@ -14,23 +14,32 @@ export function hashSignupDraftToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
-/**
- * Claims a pre-registration draft only after Supabase has authenticated the
- * user. The database function validates the email and one-time token and then
- * creates the company/agency atomically.
- */
-export async function provisionSignupDraft(params: {
+/** Marks a verified signup as waiting for its user-chosen password. */
+export async function markSignupDraftEmailVerified(params: {
   draftId: string
   userId: string
   token: string
-}): Promise<ProvisionedSignupWorkspace | null> {
+}): Promise<boolean> {
   const service = createServiceClient()
-  const { data, error } = await service.rpc('provision_signup_draft', {
+  const { data, error } = await service.rpc('verify_signup_draft_email', {
     p_draft_id: params.draftId,
     p_user_id: params.userId,
     p_token_hash: hashSignupDraftToken(params.token),
   })
+  if (error) throw error
+  return data === true
+}
 
+/**
+ * Claims a ready signup only after a successful password login. The database
+ * function locks the draft and creates company/agency data atomically, making
+ * repeated login clicks safe.
+ */
+export async function provisionVerifiedSignupDraft(userId: string): Promise<ProvisionedSignupWorkspace | null> {
+  const service = createServiceClient()
+  const { data, error } = await service.rpc('provision_verified_signup_draft', {
+    p_user_id: userId,
+  })
   if (error) throw error
   const row = Array.isArray(data) ? data[0] : null
   if (!row) return null

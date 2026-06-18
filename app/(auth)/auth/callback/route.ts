@@ -12,7 +12,7 @@ import {
 } from '@/lib/auth/auth-callback'
 import { recordAuthCallbackAudit } from '@/lib/auth/callback-audit'
 import { createLogger } from '@/lib/logger'
-import { provisionSignupDraft } from '@/lib/signup/provision'
+import { markSignupDraftEmailVerified } from '@/lib/signup/provision'
 import { createServiceClient } from '@/lib/supabase/server'
 
 const log = createLogger('auth/callback')
@@ -36,24 +36,20 @@ function callbackFailureResponse(origin: string, errorParam: string, cookies: Pe
   return applyPendingCookies(NextResponse.redirect(url), cookies)
 }
 
-async function clearSignupDraftMetadata(user: {
+async function transitionSignupMetadata(user: {
   id: string
   user_metadata?: Record<string, unknown> | null
-}) {
+}, draftId: string) {
   const metadata = { ...(user.user_metadata ?? {}) }
-  delete metadata.signup_draft_id
+  metadata.signup_draft_id = draftId
+  metadata.signup_state = 'password_required'
   delete metadata.signup_draft_token
 
-  try {
-    await createServiceClient().auth.admin.updateUserById(user.id, {
-      user_metadata: metadata,
-    })
-  } catch {
-    // The database claim is already one-time. A metadata cleanup failure must
-    // never block a verified account from continuing to onboarding.
-    log.warn('signup draft metadata cleanup failed', { userId: user.id })
-  }
+  await createServiceClient().auth.admin.updateUserById(user.id, {
+    user_metadata: metadata,
+  })
 }
+
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
@@ -162,8 +158,8 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // Email verification creates commercial data only after Auth has verified
-  // the person. The RPC validates the one-time draft token and email match.
+  // Confirmation verifies the email only. It must not create a company,
+  // team or onboarding session on the device where the email was opened.
   const signupDraftId = typeof user.user_metadata?.signup_draft_id === 'string'
     ? user.user_metadata.signup_draft_id
     : null
@@ -171,46 +167,42 @@ export async function GET(request: NextRequest) {
     ? user.user_metadata.signup_draft_token
     : null
 
-  if (signupDraftId && signupDraftToken) {
+  if (flow === 'signup' && signupDraftId && signupDraftToken) {
     try {
-      const provisioned = await provisionSignupDraft({
+      const verified = await markSignupDraftEmailVerified({
         draftId: signupDraftId,
         userId: user.id,
         token: signupDraftToken,
       })
+      if (!verified) throw new Error('signup draft could not be verified')
 
-      if (provisioned) {
-        await clearSignupDraftMetadata(user)
-        const response = applyPendingCookies(
-          NextResponse.redirect(new URL(provisioned.onboardingPath, origin)),
-          pendingCookies,
-        )
-        response.cookies.set('nordklart-company-id', provisioned.companyId, {
-          path: '/',
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: 'lax',
-          maxAge: 60 * 60 * 24 * 365,
-        })
-        return response
-      }
+      await transitionSignupMetadata(user, signupDraftId)
+      return applyPendingCookies(
+        NextResponse.redirect(new URL('/account/set-password?mode=signup', origin)),
+        pendingCookies,
+      )
     } catch (error) {
-      log.error('signup draft provisioning failed', error, { userId: user.id })
+      log.error('signup email verification transition failed', error, { userId: user.id })
       await recordAuthCallbackAudit({
         request,
         flow: 'signup',
         method,
         status: 'failed',
-        redirectPath: '/onboarding',
-        reason: 'signup_provisioning_failed',
+        redirectPath: '/account/set-password?mode=signup',
+        reason: 'signup_activation_transition_failed',
         userId: user.id,
         email: user.email,
       })
-      return applyPendingCookies(
-        NextResponse.redirect(new URL('/onboarding?setup=failed', origin)),
-        pendingCookies,
-      )
+      return callbackFailureResponse(origin, 'signup_confirmation_failed', pendingCookies)
     }
+  }
+
+
+  if (flow === 'signup') {
+    return applyPendingCookies(
+      NextResponse.redirect(new URL('/account/set-password?mode=signup', origin)),
+      pendingCookies,
+    )
   }
 
   // Keep the legacy company-invitation handoff during the migration to the
@@ -303,12 +295,10 @@ export async function GET(request: NextRequest) {
     .maybeSingle()
 
   const redirectPath = membership
-    ? '/app'
-    : flow === 'signup'
-      ? safeNext
-      : safeNext === '/app'
-        ? '/onboarding'
-        : safeNext
+  ? '/app'
+  : safeNext === '/app'
+    ? '/onboarding'
+    : safeNext
 
   return applyPendingCookies(
     NextResponse.redirect(new URL(redirectPath, origin)),

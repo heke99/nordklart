@@ -48,6 +48,12 @@ const SetPasswordSchema = z.object({
  * return success: the user has a working password and the banner will show one
  * more time, but a retry will re-flip the flag.
  */
+function requestIp(request: Request): string | null {
+  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    || request.headers.get('x-real-ip')
+    || null
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient()
 
@@ -117,20 +123,35 @@ export async function POST(request: Request) {
     // banner will show once more and a retry will succeed.
   }
 
+  const wasFirstTimeSet = isFirstTimeSet
+  let signupActivationError = false
+  if (wasFirstTimeSet) {
+    const { error } = await service.rpc('mark_signup_draft_password_set', {
+      p_user_id: user.id,
+    })
+    if (error) {
+      signupActivationError = true
+      log.error('signup password activation update failed', error, { userId: user.id })
+    }
+  }
+
   try {
     await service.from('auth_audit_events').insert({
       user_id: user.id,
-      email: user.email,
-      event_type: isFirstTimeSet ? 'password_created' : 'password_changed',
-      status: 'success',
+      email: user.email ?? null,
+      event_type: wasFirstTimeSet ? 'password_set' : 'password_changed',
+      status: signupActivationError ? 'failed' : 'success',
+      ip_address: requestIp(request),
       user_agent: request.headers.get('user-agent'),
-      metadata: { flagWriteOk },
+      metadata: { first_time: wasFirstTimeSet, app_metadata_updated: flagWriteOk },
     })
   } catch {
-    // Password writes must not fail because audit storage is unavailable.
+    // Password writes must not depend on the non-critical audit trail.
   }
 
-  log.info('password set', { userId: user.id, isFirstTimeSet, flagWriteOk })
+  if (signupActivationError) {
+    return NextResponse.json({ error: 'Lösenordet sparades, men kontot kunde inte aktiveras. Försök igen.' }, { status: 503 })
+  }
 
   return NextResponse.json({ data: { ok: true } })
 }

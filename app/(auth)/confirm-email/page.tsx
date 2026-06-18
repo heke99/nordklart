@@ -43,7 +43,7 @@ export default function ConfirmEmailPage() {
         <div className="mb-10 text-center">
           <BrandWordmark size="hero" className="mb-2" />
           <p className="mt-3 text-sm text-muted-foreground">
-            Bekräfta e-postadressen för att aktivera ditt Nordklart-konto.
+            Bekräfta e-postadressen, välj ett lösenord och logga sedan in från den enhet där du vill fortsätta.
           </p>
         </div>
 
