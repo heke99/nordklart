@@ -3,6 +3,7 @@ export type NordklartOnboardingFlow =
   | 'bank_automation'
   | 'year_end_one_time'
   | 'bankgiro_autogiro'
+  | 'agency_setup'
 
 const INTENT_TO_FLOW: Record<string, NordklartOnboardingFlow> = {
   'automated-bookkeeping': 'bank_automation',
@@ -19,8 +20,8 @@ const INTENT_TO_FLOW: Record<string, NordklartOnboardingFlow> = {
   bankgiro: 'bankgiro_autogiro',
   autogiro: 'bankgiro_autogiro',
   'all-in-one': 'bank_automation',
-  agency: 'bookkeeping_direct',
-  byra: 'bookkeeping_direct',
+  agency: 'agency_setup',
+  byra: 'agency_setup',
 }
 
 export function flowFromIntent(intent?: string | null): NordklartOnboardingFlow | null {

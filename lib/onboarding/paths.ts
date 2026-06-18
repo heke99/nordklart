@@ -1,10 +1,11 @@
-import { Landmark, ReceiptText, Route, WalletCards } from 'lucide-react'
+import { Building2, Landmark, ReceiptText, Route, WalletCards } from 'lucide-react'
 
 export type OnboardingPathCode =
   | 'bookkeeping_direct'
   | 'bank_automation'
   | 'year_end_one_time'
   | 'bankgiro_autogiro'
+  | 'agency_setup'
 
 export type OnboardingPath = {
   code: OnboardingPathCode
@@ -47,6 +48,16 @@ export const ONBOARDING_PATHS: OnboardingPath[] = [
     href: '/onboarding?flow=year_end_one_time',
     featureCode: 'year_end.projects',
     icon: Route,
+  },
+  {
+    code: 'agency_setup',
+    title: 'Redovisningsbyrå',
+    shortTitle: 'Byrå',
+    description: 'Skapa byråns egen arbetsyta, bjud in teamet och lägg till kundbolag när du är redo.',
+    steps: ['Byråuppgifter', 'Team', 'Första kundbolaget', 'Byråöversikt'],
+    href: '/register?workspace=agency',
+    featureCode: 'agency.clients',
+    icon: Building2,
   },
   {
     code: 'bankgiro_autogiro',

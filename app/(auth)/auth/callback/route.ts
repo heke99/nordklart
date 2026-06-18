@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { type NextRequest, NextResponse } from 'next/server'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
+import { provisionSignupDraft } from '@/lib/signup/provision'
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
@@ -77,6 +78,48 @@ export async function GET(request: NextRequest) {
           response.cookies.set({ name, value, ...options })
         }
         return response
+      }
+
+      // Claim a signed signup draft only after Supabase has authenticated and
+      // verified the user. The database validates the one-time token and email
+      // before it creates a company, agency or memberships.
+      const signupDraftId = typeof user.user_metadata?.signup_draft_id === 'string'
+        ? user.user_metadata.signup_draft_id
+        : null
+      const signupDraftToken = typeof user.user_metadata?.signup_draft_token === 'string'
+        ? user.user_metadata.signup_draft_token
+        : null
+
+      if (signupDraftId && signupDraftToken) {
+        try {
+          const provisioned = await provisionSignupDraft({
+            draftId: signupDraftId,
+            userId: user.id,
+            token: signupDraftToken,
+          })
+
+          if (provisioned) {
+            const response = NextResponse.redirect(new URL(provisioned.onboardingPath, origin))
+            for (const { name, value, options } of pendingCookies) {
+              response.cookies.set({ name, value, ...options })
+            }
+            response.cookies.set('nordklart-company-id', provisioned.companyId, {
+              path: '/',
+              httpOnly: true,
+              secure: process.env.NODE_ENV === 'production',
+              sameSite: 'lax',
+              maxAge: 60 * 60 * 24 * 365,
+            })
+            return response
+          }
+        } catch (error) {
+          console.error('[auth/callback] signup draft provisioning failed', error)
+          const response = NextResponse.redirect(new URL('/onboarding?setup=failed', origin))
+          for (const { name, value, options } of pendingCookies) {
+            response.cookies.set({ name, value, ...options })
+          }
+          return response
+        }
       }
 
       // Check for pending invite token (set by invite page before redirecting to register)

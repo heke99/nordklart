@@ -1,15 +1,12 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { requirePlatformAdmin } from '@/lib/auth/platform'
 import { NordklartActionCard, NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Button } from '@/components/ui/button'
 
 export const dynamic = 'force-dynamic'
 
 export default async function PlatformPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requirePlatformAdmin()
 
   const [
     { count: companyCount },

@@ -12,7 +12,8 @@ import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId, getUserCompanies } from '@/lib/company/context'
+import { legacyRoleFromEffectiveRole, resolveCompanyAccess } from '@/lib/access/company'
 import { getBranding } from '@/lib/branding/service'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { countPendingOperations, countUnbookedTransactions } from '@/lib/worklist'
@@ -131,26 +132,39 @@ export default async function DashboardLayout({
     )
   }
 
-  // Fetch company + membership for context provider
+  // Resolve company access centrally. Agency staff and platform admins are
+  // legitimate company contexts even when they do not have a direct
+  // company_members row.
   const [
     { data: companyRow },
-    { data: memberRow },
-    { data: allMemberships },
+    activeAccess,
+    accessibleCompanies,
   ] = await Promise.all([
     supabase.from('companies').select('*').eq('id', companyId).single(),
-    supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', user.id).single(),
-    supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
+    resolveCompanyAccess(supabase, companyId),
+    getUserCompanies(supabase, user.id),
   ])
 
-  if (!companyRow || !memberRow) {
+  if (!companyRow || !activeAccess) {
     // Stale cookie pointing to a deleted/inaccessible company.
     // Render the empty-state dashboard so user can switch or create a company.
     const companyContextValue = {
       company: null,
       role: null,
-      companies: (allMemberships || []).filter(m => m.companies).map((m) => ({
-        company: m.companies as unknown as import('@/types').Company,
-        role: m.role as CompanyRole,
+      companies: accessibleCompanies.map((item) => ({
+        company: {
+          id: item.companyId,
+          name: item.name,
+          org_number: item.orgNumber,
+          entity_type: item.entityType,
+          accounting_framework: 'k2',
+          created_by: '',
+          team_id: null,
+          archived_at: item.archivedAt,
+          created_at: '',
+          updated_at: '',
+        } as import('@/types').Company,
+        role: legacyRoleFromEffectiveRole(item.effectiveRole),
       })),
       isTeamMember,
       team,
@@ -243,14 +257,21 @@ export default async function DashboardLayout({
 
   const companyContextValue = {
     company: companyWithName,
-    role: memberRow.role as CompanyRole,
-    companies: (allMemberships || []).map((m) => {
-      const c = m.companies as unknown as import('@/types').Company
-      // Override active company's name with settings name
-      if (c.id === companyId) {
-        return { company: { ...c, name: displayName }, role: m.role as CompanyRole }
-      }
-      return { company: c, role: m.role as CompanyRole }
+    role: legacyRoleFromEffectiveRole(activeAccess.effectiveRole) as CompanyRole,
+    companies: accessibleCompanies.map((item) => {
+      const c = {
+        id: item.companyId,
+        name: item.companyId === companyId ? displayName : item.name,
+        org_number: item.orgNumber,
+        entity_type: item.entityType,
+        accounting_framework: 'k2',
+        created_by: '',
+        team_id: null,
+        archived_at: item.archivedAt,
+        created_at: '',
+        updated_at: '',
+      } as import('@/types').Company
+      return { company: c, role: legacyRoleFromEffectiveRole(item.effectiveRole) as CompanyRole }
     }),
     isTeamMember,
     team,

@@ -9,6 +9,7 @@ export type AccountingFramework = 'k2' | 'k3'
 
 // Company role for multi-tenant access
 export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
+export type WorkspaceType = 'company' | 'agency' | 'platform'
 
 // Team (consulting firm) roles and source tracking
 export type TeamRole = 'owner' | 'admin' | 'member'
@@ -54,6 +55,8 @@ export interface UserPreferences {
   id: string
   user_id: string
   active_company_id: string | null
+  active_workspace_type?: WorkspaceType
+  active_agency_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -81,6 +84,13 @@ export interface Agency {
   contact_email: string | null
   status: AgencyStatus
   linked_team_id: string | null
+  company_id?: string | null
+  legal_form?: EntityType | null
+  phone?: string | null
+  address_line1?: string | null
+  postal_code?: string | null
+  city?: string | null
+  country?: string | null
   created_by: string | null
   created_at: string
   updated_at: string

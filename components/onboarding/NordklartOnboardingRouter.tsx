@@ -25,8 +25,8 @@ export default function NordklartOnboardingRouter({ selectedFlow }: { selectedFl
             </div>
             <div className="mt-8 flex flex-wrap gap-3">
               <Button asChild>
-                <Link href={`/onboarding?flow=bookkeeping_direct&intent=${selected.code}`}>
-                  Skapa bolag först <ArrowRight className="ml-2 h-4 w-4" />
+                <Link href={selected.code === 'agency_setup' ? '/register?workspace=agency' : `/register?intent=${selected.code}`}>
+                  Skapa konto <ArrowRight className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
               <Button asChild variant="secondary">

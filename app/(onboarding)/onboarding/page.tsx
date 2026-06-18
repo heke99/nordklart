@@ -46,7 +46,7 @@ export async function findCompanyRoleByOrgNumber(
 export default async function OnboardingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org_number?: string; flow?: string; intent?: string }>
+  searchParams: Promise<{ org_number?: string; flow?: string; intent?: string; workspace?: string }>
 }) {
   const supabase = await createClient()
 
@@ -88,9 +88,13 @@ export default async function OnboardingPage({
   // The BankID picker routes here with ?org_number=… for every pick. Strip
   // formatting so whatever Step 2 displays matches what the rest of the flow
   // will store.
-  const { org_number: rawOrgNumber, flow: rawFlow, intent } = await searchParams
+  const { org_number: rawOrgNumber, flow: rawFlow, intent, workspace } = await searchParams
   const flow = rawFlow ?? flowFromIntent(intent) ?? undefined
   const initialOrgNumber = rawOrgNumber ? rawOrgNumber.replace(/[\s-]/g, '') : undefined
+
+  if (workspace === 'agency' || flow === 'agency_setup') {
+    redirect('/onboarding/agency')
+  }
 
   // Nordklart onboarding router: users pick the right commercial path first.
   // Bankgiro/Autogiro and one-time year-end are deliberately separate from
