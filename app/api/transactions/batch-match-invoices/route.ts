@@ -1,3 +1,5 @@
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
@@ -22,6 +24,8 @@ export async function POST() {
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGateResponse) return featureGateResponse
 
   // Fetch uncategorized income transactions without a potential match
   const { data: transactions, error: txError } = await supabase

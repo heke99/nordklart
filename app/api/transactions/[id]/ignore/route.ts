@@ -1,3 +1,5 @@
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
@@ -31,6 +33,8 @@ export async function POST(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGateResponse) return featureGateResponse
 
   const { data: transaction, error: fetchError } = await supabase
     .from('transactions')
@@ -90,6 +94,8 @@ export async function DELETE(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGateResponse) return featureGateResponse
 
   const { error: updateError } = await supabase
     .from('transactions')

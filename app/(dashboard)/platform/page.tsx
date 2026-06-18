@@ -94,6 +94,9 @@ export default async function PlatformPage() {
         <NordklartActionCard meta="API & webhooks" title="API & Webhooks" description="API-klienter, scopes, OpenAPI, eventkatalog, signering, retries och logs.">
           <Button asChild size="sm"><Link href="/platform/api-webhooks">Öppna</Link></Button>
         </NordklartActionCard>
+        <NordklartActionCard meta="Behörigheter" title="Plattformsteam" description="Tilldela och återkalla Superadmin, support och granskarroller med audit-logg. Complimentary Full Access ligger alltid på bolaget, aldrig här.">
+          <Button asChild size="sm"><Link href="/platform/access">Öppna</Link></Button>
+        </NordklartActionCard>
       </div>
 
     </NordklartPageShell>

@@ -1,3 +1,5 @@
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { createClient } from '@/lib/supabase/server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { NextResponse } from 'next/server'
@@ -19,6 +21,8 @@ export async function GET() {
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGateResponse) return featureGateResponse
 
   // Fetch user's chart of accounts (paginated to avoid 1000-row limit)
   try {

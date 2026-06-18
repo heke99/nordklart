@@ -1,3 +1,5 @@
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
@@ -14,6 +16,8 @@ export async function GET(request: Request) {
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
+  if (featureGateResponse) return featureGateResponse
 
   const { searchParams } = new URL(request.url)
   const asOfDate = searchParams.get('as_of_date') || undefined

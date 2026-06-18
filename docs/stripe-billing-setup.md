@@ -69,3 +69,19 @@ STRIPE_BILLING_PORTAL_CONFIGURATION_ID=bpc_...
 5. Confirm `company_subscriptions` or `one_time_purchases` is created with the exact plan-version price snapshot.
 6. Confirm the company feature inspector shows the subscription item as the effective source.
 7. For Bankgiro, confirm that application access is available after purchase but operational access remains blocked until provider provisioning is active.
+
+## Tax, subscription changes and role controls
+
+Set these values in every environment where Checkout can run:
+
+```bash
+STRIPE_TAX_ENABLED=true
+STRIPE_TAX_MODE=automatic
+CRON_SECRET=<long-random-secret>
+```
+
+Before publishing a sellable plan, set a Stripe Tax code and tax behaviour for its product in **Planer, priser och åtkomst**. Nordklart sends Checkout the customer address and tax-ID collection requirements, asks Stripe Tax to calculate tax, and stores the tax/subtotal/total evidence from the signed webhook with the resulting Stripe invoice.
+
+Customers can update payment methods and retrieve invoices in Stripe Billing Portal. Plan changes and cancellations are requested from Nordklart and processed by a superadmin. A processed request is scheduled for the next billing period; cancellation schedules dependent add-ons first and then the base subscription.
+
+Manage global roles in **Plattformsteam**. `Complimentary Full Access` remains a company-level commercial grant and must never be used as a platform role.

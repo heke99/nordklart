@@ -1,3 +1,5 @@
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { validateBody } from '@/lib/api/validate'
@@ -14,6 +16,8 @@ export async function GET() {
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGateResponse) return featureGateResponse
 
   const { data, error } = await supabase
     .from('mapping_rules')
@@ -41,6 +45,8 @@ export async function POST(request: Request) {
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGateResponse) return featureGateResponse
 
   const result = await validateBody(request, CreateMappingRuleSchema)
   if (!result.success) return result.response

@@ -1,3 +1,5 @@
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
@@ -24,6 +26,8 @@ export async function GET(request: Request) {
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGateResponse) return featureGateResponse
 
   try {
     const status = await resolvePeriodStatusForDate(supabase, companyId, date)

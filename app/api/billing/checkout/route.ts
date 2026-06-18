@@ -64,10 +64,11 @@ export async function POST(request: Request) {
 
   const { data: product, error: productError } = await service
     .from('platform_products')
-    .select('id, code, product_type, status')
+    .select('id, code, product_type, status, stripe_tax_code')
     .eq('id', plan.product_id)
     .maybeSingle()
   if (productError || !product || product.status !== 'active') return jsonError('Produkten är inte tillgänglig.', 409)
+  if (!product.stripe_tax_code) return jsonError('Produkten saknar momsinställning och kan inte säljas ännu. Kontakta Nordklart.', 409)
 
   const checkoutKind = product.product_type === 'subscription'
     ? 'subscription'

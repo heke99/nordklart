@@ -30,6 +30,8 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger, type Logger } from '@/lib/logger'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { featureForOperation } from '@/lib/platform/feature-policy'
+import { checkFeatureAccess, featureAccessError } from '@/lib/platform/entitlements'
 
 export interface RouteContext {
   /** Stable id for this HTTP request — appears in logs, error envelope, X-Request-Id header. */
@@ -127,6 +129,17 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
 
       if (!companyId) {
         return errorResponseFromCode('COMPANY_CONTEXT_MISSING', userLog, { requestId })
+      }
+
+      const requiredFeature = featureForOperation(operation)
+      if (requiredFeature) {
+        const featureAccess = await checkFeatureAccess(supabase, companyId, requiredFeature)
+        if (!featureAccess.allowed) {
+          userLog.warn('feature access denied', { feature: requiredFeature, reason: featureAccess.reason })
+          const response = featureAccessError(requiredFeature)
+          response.headers.set('X-Request-Id', requestId)
+          return response
+        }
       }
 
       if (requireWrite) {

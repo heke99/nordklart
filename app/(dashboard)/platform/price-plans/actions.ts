@@ -6,6 +6,7 @@ import { requirePlatformAdmin } from '@/lib/auth/platform'
 import {
   createStripePrice,
   createStripeProduct,
+  updateStripeProductTaxCode,
   isStripeConfigured,
 } from '@/lib/billing/stripe'
 
@@ -65,7 +66,7 @@ async function syncPlanVersionToStripe(planVersionId: string) {
   const { supabase } = await requirePlatformAdmin()
   const { data: version, error: versionError } = await supabase
     .from('platform_plan_versions')
-    .select('id, plan_id, status, price_excl_vat, currency, billing_interval, stripe_product_id, stripe_price_id')
+    .select('id, plan_id, status, price_excl_vat, currency, billing_interval, stripe_product_id, stripe_price_id, stripe_tax_behavior')
     .eq('id', planVersionId)
     .maybeSingle()
   assertRpc(versionError, 'Planversionen kunde inte läsas.')
@@ -81,6 +82,16 @@ async function syncPlanVersionToStripe(planVersionId: string) {
   assertRpc(planError, 'Planen kunde inte läsas.')
   if (!plan) redirectWith('error', 'Planen finns inte.')
 
+  const { data: product, error: productError } = await supabase
+    .from('platform_products')
+    .select('id, stripe_tax_code, stripe_tax_behavior')
+    .eq('id', plan.product_id)
+    .maybeSingle()
+  assertRpc(productError, 'Produktens momsinställning kunde inte läsas.')
+  if (!product?.stripe_tax_code) {
+    redirectWith('error', 'Produkten saknar Stripe Tax-kod. Sätt momsinställning innan priset synkas.')
+  }
+
   const { data: existingStripeVersion } = await supabase
     .from('platform_plan_versions')
     .select('stripe_product_id')
@@ -90,22 +101,35 @@ async function syncPlanVersionToStripe(planVersionId: string) {
     .limit(1)
     .maybeSingle()
 
-  const stripeProductId = version.stripe_product_id || existingStripeVersion?.stripe_product_id || (await createStripeProduct({
+  const existingStripeProductId = version.stripe_product_id || existingStripeVersion?.stripe_product_id || null
+  const stripeProductId = existingStripeProductId || (await createStripeProduct({
     name: plan.name,
     description: plan.description,
+    taxCode: product.stripe_tax_code,
     metadata: { nordklart_plan_id: plan.id, nordklart_plan_code: plan.code },
     idempotencyKey: `nordklart-product-${plan.id}`,
   })).id
+  if (existingStripeProductId) {
+    await updateStripeProductTaxCode({
+      productId: existingStripeProductId,
+      taxCode: product.stripe_tax_code,
+      metadata: { nordklart_plan_id: plan.id, nordklart_plan_code: plan.code },
+      idempotencyKey: `nordklart-product-tax-${plan.id}-${product.stripe_tax_code}`,
+    })
+  }
 
+  const taxBehavior = (version.stripe_tax_behavior ?? product.stripe_tax_behavior ?? 'exclusive') as 'exclusive' | 'inclusive'
   const stripePrice = await createStripePrice({
     productId: stripeProductId,
     amountExclVat: Number(version.price_excl_vat),
     currency: version.currency,
     billingInterval: version.billing_interval as 'month' | 'year' | 'one_time',
+    taxBehavior,
     metadata: {
       nordklart_plan_id: plan.id,
       nordklart_plan_version_id: version.id,
       nordklart_plan_code: plan.code,
+      nordklart_tax_behavior: taxBehavior,
     },
     idempotencyKey: `nordklart-price-${version.id}`,
   })
@@ -117,6 +141,22 @@ async function syncPlanVersionToStripe(planVersionId: string) {
   })
   assertRpc(bindError, 'Stripe-priset kunde inte kopplas till planversionen.')
   return true
+}
+
+
+export async function setProductTaxSettingsAction(formData: FormData) {
+  const { supabase } = await requirePlatformAdmin()
+  const productId = text(formData, 'product_id', true)!
+  const taxCode = text(formData, 'stripe_tax_code', true)!
+  const taxBehavior = text(formData, 'stripe_tax_behavior', true)!
+  const { error } = await supabase.rpc('platform_set_product_tax_settings', {
+    p_product_id: productId,
+    p_stripe_tax_code: taxCode,
+    p_stripe_tax_behavior: taxBehavior,
+  })
+  assertRpc(error, 'Produktens momsinställning kunde inte sparas.')
+  revalidatePath(PRICING_PATH)
+  redirectWith('notice', 'Stripe Tax-inställningen är sparad. Skapa en ny prisversion och synka Stripe innan den publiceras.')
 }
 
 export async function createPricePlanAction(formData: FormData) {
@@ -330,4 +370,129 @@ export async function setManualSubscriptionAction(formData: FormData) {
   assertRpc(error, 'Abonnemanget kunde inte uppdateras.')
   revalidatePath(PRICING_PATH)
   redirectWith('notice', 'Bolagets basabonnemang har uppdaterats.')
+}
+
+export async function processSubscriptionChangeRequestAction(formData: FormData) {
+  const { supabase, user } = await requirePlatformAdmin()
+  const requestId = text(formData, 'request_id', true)!
+  const service = (await import('@/lib/supabase/server')).createServiceClient()
+  const stripe = await import('@/lib/billing/stripe')
+
+  const { data: request, error: requestError } = await service
+    .from('company_subscription_change_requests')
+    .select('id,company_id,subscription_id,request_type,target_plan_version_id,status')
+    .eq('id', requestId)
+    .maybeSingle()
+  assertRpc(requestError, 'Ändringsbegäran kunde inte läsas.')
+  if (!request || !['requested', 'approved'].includes(request.status)) redirectWith('error', 'Ändringsbegäran kan inte behandlas i sitt nuvarande läge.')
+
+  const { data: subscription, error: subscriptionError } = await service
+    .from('company_subscriptions')
+    .select('id,external_provider,external_subscription_id,current_period_end,plan_version_id,status')
+    .eq('id', request.subscription_id)
+    .eq('company_id', request.company_id)
+    .maybeSingle()
+  assertRpc(subscriptionError, 'Abonnemanget kunde inte läsas.')
+  if (!subscription?.external_subscription_id || subscription.external_provider !== 'stripe') {
+    redirectWith('error', 'Endast aktiva Stripe-abonnemang kan schemaläggas från den här vyn.')
+  }
+
+  const mark = async (status: string, internalNote?: string | null, failureReason?: string | null, stripeOperationId?: string | null, effectiveAt?: string | null) => {
+    const { error } = await supabase.rpc('platform_mark_subscription_change_request', {
+      p_request_id: request.id,
+      p_status: status,
+      p_internal_note: internalNote || null,
+      p_failure_reason: failureReason || null,
+      p_stripe_operation_id: stripeOperationId || null,
+      p_effective_at: effectiveAt || null,
+    })
+    assertRpc(error, 'Ändringsbegäran kunde inte uppdateras.')
+  }
+
+  try {
+    await mark('processing', `Behandlas av ${user.email ?? user.id}`)
+    const stripeSubscription = await stripe.retrieveStripeSubscription(subscription.external_subscription_id)
+    const periodEnd = stripeSubscription.current_period_end
+    if (!periodEnd) throw new Error('Stripe-abonnemanget saknar periodslut och kan inte schemaläggas säkert.')
+
+    if (request.request_type === 'cancel_subscription') {
+      const { data: dependentItems, error: itemsError } = await service
+        .from('company_subscription_items')
+        .select('id,external_subscription_item_id,status')
+        .eq('subscription_id', subscription.id)
+        .in('status', ['trialing', 'active', 'past_due', 'paused'])
+      if (itemsError) throw itemsError
+      for (const item of dependentItems ?? []) {
+        if (!item.external_subscription_item_id) continue
+        await stripe.scheduleStripeSubscriptionCancellation({
+          subscriptionId: item.external_subscription_item_id,
+          metadata: { nordklart_change_request_id: request.id, nordklart_company_id: request.company_id, nordklart_parent_subscription_id: subscription.id },
+          idempotencyKey: `nordklart-cancel-addon-${request.id}-${item.id}`,
+        })
+      }
+      const cancelled = await stripe.scheduleStripeSubscriptionCancellation({
+        subscriptionId: subscription.external_subscription_id,
+        metadata: { nordklart_change_request_id: request.id, nordklart_company_id: request.company_id },
+        idempotencyKey: `nordklart-cancel-subscription-${request.id}`,
+      })
+      const { error: cancelStateError } = await supabase.rpc('platform_set_subscription_cancellation_state', {
+        p_subscription_id: subscription.id,
+        p_cancel_at_period_end: true,
+        p_effective_at: new Date(periodEnd * 1000).toISOString(),
+      })
+      assertRpc(cancelStateError, 'Uppsägningen kunde inte sparas i Nordklart.')
+      await mark('scheduled', 'Uppsägning är schemalagd i Stripe. Beroende tillägg avslutas samtidigt.', null, cancelled.id, new Date(periodEnd * 1000).toISOString())
+    } else {
+      if (!request.target_plan_version_id) throw new Error('Målplan saknas.')
+      const { data: target, error: targetError } = await service
+        .from('platform_plan_versions')
+        .select('id,stripe_price_id,status')
+        .eq('id', request.target_plan_version_id)
+        .eq('status', 'active')
+        .maybeSingle()
+      if (targetError) throw targetError
+      if (!target?.stripe_price_id) throw new Error('Målplanen saknar publicerat Stripe-pris.')
+      const currentItem = stripeSubscription.items.data[0]
+      const currentPriceId = currentItem?.price?.id
+      const periodStart = stripeSubscription.current_period_start
+      if (!currentPriceId || !periodStart || !periodEnd) throw new Error('Stripe-abonnemanget saknar period- eller prisdata och kan inte bytas säkert.')
+      const schedule = await stripe.createStripeSubscriptionScheduleFromSubscription({ subscriptionId: subscription.external_subscription_id, idempotencyKey: `nordklart-change-schedule-${request.id}` })
+      const updatedSchedule = await stripe.updateStripeSubscriptionSchedule({
+        scheduleId: schedule.id,
+        currentPeriodStart: periodStart,
+        currentPeriodEnd: periodEnd,
+        currentPriceId,
+        targetPriceId: target.stripe_price_id,
+        metadata: { nordklart_change_request_id: request.id, nordklart_company_id: request.company_id, nordklart_target_plan_version_id: target.id },
+        idempotencyKey: `nordklart-change-schedule-update-${request.id}`,
+      })
+      await mark('scheduled', 'Planbyte är schemalagt i Stripe till nästa faktureringsperiod.', null, updatedSchedule.id, new Date(periodEnd * 1000).toISOString())
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Okänt fel när Stripe-begäran skulle behandlas.'
+    await mark('failed', null, message)
+    redirectWith('error', `Ändringsbegäran misslyckades: ${message}`)
+  }
+
+  revalidatePath(PRICING_PATH)
+  revalidatePath('/settings/billing')
+  redirectWith('notice', 'Ändringsbegäran är schemalagd och audit-loggad.')
+}
+
+export async function rejectSubscriptionChangeRequestAction(formData: FormData) {
+  const { supabase } = await requirePlatformAdmin()
+  const requestId = text(formData, 'request_id', true)!
+  const reason = text(formData, 'reason', true)!
+  const { error } = await supabase.rpc('platform_mark_subscription_change_request', {
+    p_request_id: requestId,
+    p_status: 'rejected',
+    p_internal_note: reason,
+    p_failure_reason: null,
+    p_stripe_operation_id: null,
+    p_effective_at: null,
+  })
+  assertRpc(error, 'Ändringsbegäran kunde inte avslås.')
+  revalidatePath(PRICING_PATH)
+  revalidatePath('/settings/billing')
+  redirectWith('notice', 'Ändringsbegäran har avslagits och loggats.')
 }

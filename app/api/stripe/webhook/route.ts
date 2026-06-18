@@ -9,8 +9,11 @@ type StripeObject = {
   id?: string
   customer?: string | null
   subscription?: string | null
+  invoice?: string | null
   payment_status?: string | null
+  amount_subtotal?: number | null
   amount_total?: number | null
+  total_details?: { amount_tax?: number | null } | null
   currency?: string | null
   metadata?: Record<string, string | undefined>
   status?: string | null
@@ -19,6 +22,10 @@ type StripeObject = {
   items?: { data?: Array<{ price?: { id?: string | null } | null }> }
   parent?: { subscription_details?: { subscription?: string | null } | null } | null
   amount_paid?: number | null
+  hosted_invoice_url?: string | null
+  invoice_pdf?: string | null
+  created?: number | null
+  cancel_at_period_end?: boolean | null
 }
 
 type StripeEvent = {
@@ -95,14 +102,17 @@ export async function POST(request: Request) {
   try {
     let ignored = false
     if (event.type === 'checkout.session.completed') {
-      await service.rpc('stripe_finalize_checkout', {
+      await service.rpc('stripe_finalize_checkout_v2', {
         p_stripe_event_id: event.id,
         p_stripe_checkout_session_id: object.id,
         p_stripe_customer_id: object.customer || null,
         p_stripe_subscription_id: subscriptionIdFromObject(object),
         p_payment_status: object.payment_status || null,
+        p_amount_subtotal_minor: object.amount_subtotal ?? null,
+        p_amount_tax_minor: object.total_details?.amount_tax ?? null,
         p_amount_total_minor: object.amount_total ?? null,
         p_currency: object.currency || null,
+        p_stripe_invoice_id: typeof object.invoice === 'string' ? object.invoice : null,
       }).throwOnError()
     } else if (event.type === 'checkout.session.expired') {
       await service.rpc('stripe_mark_checkout_expired', {
@@ -111,7 +121,7 @@ export async function POST(request: Request) {
       }).throwOnError()
     } else if (event.type.startsWith('customer.subscription.')) {
       const priceId = object.items?.data?.[0]?.price?.id || null
-      await service.rpc('stripe_sync_subscription', {
+      await service.rpc('stripe_sync_subscription_v2', {
         p_stripe_event_id: event.id,
         p_stripe_subscription_id: object.id,
         p_stripe_customer_id: object.customer || null,
@@ -119,16 +129,22 @@ export async function POST(request: Request) {
         p_stripe_price_id: priceId,
         p_current_period_start: toIso(object.current_period_start),
         p_current_period_end: toIso(object.current_period_end),
+        p_cancel_at_period_end: object.cancel_at_period_end === true,
       }).throwOnError()
     } else if (event.type.startsWith('invoice.')) {
-      await service.rpc('stripe_record_invoice_event', {
+      await service.rpc('stripe_record_invoice_event_v2', {
         p_stripe_event_id: event.id,
         p_stripe_invoice_id: object.id,
         p_stripe_customer_id: object.customer || null,
         p_stripe_subscription_id: subscriptionIdFromObject(object),
         p_invoice_status: object.status || event.type.replace('invoice.', ''),
-        p_amount_paid_minor: object.amount_paid ?? object.amount_total ?? null,
+        p_amount_subtotal_minor: object.amount_subtotal ?? null,
+        p_amount_tax_minor: object.total_details?.amount_tax ?? null,
+        p_amount_total_minor: object.amount_paid ?? object.amount_total ?? null,
         p_currency: object.currency || null,
+        p_hosted_invoice_url: object.hosted_invoice_url || null,
+        p_invoice_pdf_url: object.invoice_pdf || null,
+        p_invoice_date: toIso(object.created),
       }).throwOnError()
     } else {
       ignored = true

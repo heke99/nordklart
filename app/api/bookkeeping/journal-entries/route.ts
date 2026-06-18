@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { checkFeatureAccess, featureAccessError, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 
 ensureInitialized()
 
@@ -19,6 +20,8 @@ export async function GET(request: Request) {
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const access = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (!access.allowed) return featureAccessError(NORDKLART_FEATURES.bookkeepingCore)
 
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
@@ -154,6 +157,8 @@ export async function POST(request: Request) {
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const access = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (!access.allowed) return featureAccessError(NORDKLART_FEATURES.bookkeepingCore)
 
   const validation = await validateBody(request, CreateJournalEntrySchema)
   if (!validation.success) return validation.response

@@ -61,6 +61,8 @@ import { createLogger, type Logger } from '@/lib/logger'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
 import { WRAPPED_RESPONSE_HEADERS } from './security-headers'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
+import { featureForApiV1Operation } from '@/lib/platform/feature-policy'
+import { checkFeatureAccess } from '@/lib/platform/entitlements'
 
 const IDEMPOTENCY_HEADER = 'Idempotency-Key'
 const DRY_RUN_HEADER = 'X-Dry-Run'
@@ -344,6 +346,18 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           return await v1ErrorResponseFromCode('NOT_FOUND', userLog, {
             requestId,
             details: { companyId },
+          })
+        }
+      }
+
+      const requiredFeature = companyId ? featureForApiV1Operation(operation) : null
+      if (requiredFeature && companyId) {
+        const featureAccess = await checkFeatureAccess(supabase, companyId, requiredFeature)
+        if (!featureAccess.allowed) {
+          userLog.warn('feature access denied', { companyId, feature: requiredFeature, reason: featureAccess.reason })
+          return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
+            requestId,
+            details: { feature: requiredFeature, reason: featureAccess.reason ?? 'missing_entitlement' },
           })
         }
       }

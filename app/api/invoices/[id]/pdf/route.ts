@@ -1,3 +1,5 @@
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
@@ -20,6 +22,8 @@ export async function GET(
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.invoicingCore)
+  if (featureGateResponse) return featureGateResponse
 
   // Fetch invoice with customer and items
   const { data: invoice, error: invoiceError } = await supabase

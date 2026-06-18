@@ -3,16 +3,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('server-only', () => ({}))
 
-import { amountToMinorUnits, verifyStripeWebhookSignature } from '@/lib/billing/stripe'
+import { amountToMinorUnits, getStripeTaxSettings, verifyStripeWebhookSignature } from '@/lib/billing/stripe'
 
 const previousSecret = process.env.STRIPE_WEBHOOK_SECRET
+const previousTaxEnabled = process.env.STRIPE_TAX_ENABLED
+const previousTaxMode = process.env.STRIPE_TAX_MODE
 
 afterEach(() => {
   if (previousSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET
   else process.env.STRIPE_WEBHOOK_SECRET = previousSecret
+  if (previousTaxEnabled === undefined) delete process.env.STRIPE_TAX_ENABLED
+  else process.env.STRIPE_TAX_ENABLED = previousTaxEnabled
+  if (previousTaxMode === undefined) delete process.env.STRIPE_TAX_MODE
+  else process.env.STRIPE_TAX_MODE = previousTaxMode
 })
 
-describe('Stripe signing helpers', () => {
+describe('Stripe signing and tax helpers', () => {
   it('accepts a valid signed raw webhook payload', () => {
     process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_secret'
     const timestamp = String(Math.floor(Date.now() / 1000))
@@ -38,5 +44,19 @@ describe('Stripe signing helpers', () => {
   it('converts Swedish price values to Stripe minor units deterministically', () => {
     expect(amountToMinorUnits(299)).toBe(29900)
     expect(amountToMinorUnits('2495.50')).toBe(249550)
+  })
+
+  it('fails closed until Stripe Tax is explicitly enabled', () => {
+    delete process.env.STRIPE_TAX_ENABLED
+    delete process.env.STRIPE_TAX_MODE
+    expect(() => getStripeTaxSettings()).toThrow(/Moms är inte redo/i)
+
+    process.env.STRIPE_TAX_ENABLED = 'true'
+    process.env.STRIPE_TAX_MODE = 'automatic'
+    expect(getStripeTaxSettings()).toEqual({
+      automaticTax: { enabled: true },
+      taxIdCollection: { enabled: true },
+      customerUpdate: { address: 'auto', name: 'auto' },
+    })
   })
 })
