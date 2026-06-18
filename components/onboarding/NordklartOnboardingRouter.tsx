@@ -120,7 +120,7 @@ export default function NordklartOnboardingRouter({
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)/0.16),transparent_34%),hsl(var(--background))] px-5 py-8 md:px-8 md:py-12">
-      <div className="mx-auto max-w-6xl space-y-7">
+      <div className="mx-auto max-w-7xl space-y-8">
         <section className="rounded-[2rem] border bg-card/90 p-7 shadow-sm md:p-10">
           <Badge>Kom igång</Badge>
           <h1 className="mt-4 max-w-3xl text-3xl font-semibold tracking-tight md:text-5xl">
@@ -131,7 +131,7 @@ export default function NordklartOnboardingRouter({
           </p>
         </section>
 
-        <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
           {visibleOptions.map((option) => {
             const Icon = option.icon
             const active = selected === option.code
@@ -142,22 +142,22 @@ export default function NordklartOnboardingRouter({
                 disabled={pending}
                 onClick={() => choose(option)}
                 className={cn(
-                  'group min-h-[280px] rounded-[1.75rem] border bg-card p-6 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-wait disabled:opacity-60',
+                  'group flex min-h-[21rem] flex-col rounded-[2rem] border bg-card p-7 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:border-primary/50 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-wait disabled:opacity-60 md:min-h-[22.5rem] md:p-8 xl:min-h-[23rem]',
                   active && 'border-primary bg-primary/[0.035] ring-1 ring-primary',
                 )}
               >
-                <span className="flex h-13 w-13 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                  <Icon className="h-6 w-6" />
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary md:h-16 md:w-16">
+                  <Icon className="h-7 w-7" />
                 </span>
-                <h2 className="mt-6 text-2xl font-semibold tracking-tight">{option.title}</h2>
-                <p className="mt-3 text-sm leading-6 text-muted-foreground">{option.description}</p>
-                <div className="mt-6 flex items-start gap-2 text-sm font-medium text-primary">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                <h2 className="mt-7 text-2xl font-semibold tracking-tight md:text-3xl">{option.title}</h2>
+                <p className="mt-4 text-base leading-7 text-muted-foreground md:text-[1.05rem]">{option.description}</p>
+                <div className="mt-7 flex items-start gap-2.5 text-sm font-medium leading-6 text-primary md:text-base">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
                   <span>{option.next}</span>
                 </div>
-                <div className="mt-7 flex items-center text-sm font-semibold text-primary">
+                <div className="mt-auto flex items-center pt-8 text-base font-semibold text-primary">
                   {pending && active ? 'Öppnar…' : 'Välj detta'}
-                  <ArrowRight className="ml-2 h-4 w-4 transition group-hover:translate-x-0.5" />
+                  <ArrowRight className="ml-2 h-5 w-5 transition group-hover:translate-x-1" />
                 </div>
               </button>
             )
