@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import WelcomeOnboarding from '@/components/dashboard/WelcomeOnboarding'
 import NordklartOnboardingRouter from '@/components/onboarding/NordklartOnboardingRouter'
@@ -64,6 +64,23 @@ export default async function OnboardingPage({
     .maybeSingle()
 
   const hasCompanies = !!existingMembership
+
+  // A verified signup whose core workspace is pending or failed must go to the
+  // recovery screen. Do not fall through to the legacy company creator and
+  // risk collecting duplicate data or creating a second company.
+  if (!hasCompanies) {
+    const service = createServiceClient()
+    const { data: pendingDraft } = await service
+      .from('signup_drafts')
+      .select('status')
+      .eq('claimed_by_user_id', user.id)
+      .in('status', ['ready_for_first_login', 'provisioning', 'failed'])
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (pendingDraft) redirect('/onboarding/problem')
+  }
 
   // Fetch profile and team
   const [{ data: profile }, { data: teamMembership }] = await Promise.all([

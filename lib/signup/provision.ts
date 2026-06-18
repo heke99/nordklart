@@ -10,6 +10,12 @@ export type ProvisionedSignupWorkspace = {
   onboardingPath: string
 }
 
+export type SignupProvisioningResult =
+  | { state: 'not_required' }
+  | { state: 'in_progress'; reference: string | null }
+  | { state: 'failed'; reference: string | null }
+  | { state: 'provisioned'; reference: string | null; workspace: ProvisionedSignupWorkspace }
+
 export function hashSignupDraftToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
@@ -31,23 +37,35 @@ export async function markSignupDraftEmailVerified(params: {
 }
 
 /**
- * Claims a ready signup only after a successful password login. The database
- * function locks the draft and creates company/agency data atomically, making
- * repeated login clicks safe.
+ * Creates or resumes the authenticated user's own signup workspace. The
+ * database resolves the draft from the user id, locks it and is idempotent;
+ * the browser never sends a draft id or an activation token.
  */
-export async function provisionVerifiedSignupDraft(userId: string): Promise<ProvisionedSignupWorkspace | null> {
+export async function provisionVerifiedSignupDraft(userId: string): Promise<SignupProvisioningResult> {
   const service = createServiceClient()
-  const { data, error } = await service.rpc('provision_verified_signup_draft', {
+  const { data, error } = await service.rpc('provision_verified_signup_draft_v2', {
     p_user_id: userId,
   })
   if (error) throw error
+
   const row = Array.isArray(data) ? data[0] : null
-  if (!row) return null
+  if (!row) return { state: 'not_required' }
+
+  const reference = typeof row.provision_reference === 'string' ? row.provision_reference : null
+  if (row.provision_state === 'in_progress') return { state: 'in_progress', reference }
+  if (row.provision_state === 'failed') return { state: 'failed', reference }
+  if (row.provision_state !== 'provisioned' || typeof row.company_id !== 'string' || typeof row.onboarding_path !== 'string') {
+    return { state: 'failed', reference }
+  }
 
   return {
-    companyId: String(row.company_id),
-    agencyId: typeof row.agency_id === 'string' ? row.agency_id : null,
-    workspaceType: row.workspace_type === 'agency' ? 'agency' : 'company',
-    onboardingPath: String(row.onboarding_path),
+    state: 'provisioned',
+    reference,
+    workspace: {
+      companyId: row.company_id,
+      agencyId: typeof row.agency_id === 'string' ? row.agency_id : null,
+      workspaceType: row.workspace_type === 'agency' ? 'agency' : 'company',
+      onboardingPath: row.onboarding_path,
+    },
   }
 }

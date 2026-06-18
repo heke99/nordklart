@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const verifyOtp = vi.fn()
-const exchangeCodeForSession = vi.fn()
-const markSignupDraftEmailVerified = vi.fn()
+const mocks = vi.hoisted(() => ({
+  verifyOtp: vi.fn(),
+  exchangeCodeForSession: vi.fn(),
+  markSignupDraftEmailVerified: vi.fn(),
+}))
+
+const { verifyOtp, exchangeCodeForSession, markSignupDraftEmailVerified } = mocks
 let authUser: { id: string; email?: string; user_metadata?: Record<string, unknown> } | null = { id: 'user-1' }
 
 vi.mock('server-only', () => ({}))
@@ -22,14 +26,14 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 vi.mock('@/lib/signup/provision', () => ({
-  markSignupDraftEmailVerified,
+  markSignupDraftEmailVerified: mocks.markSignupDraftEmailVerified,
 }))
 
 vi.mock('@supabase/ssr', () => ({
   createServerClient: vi.fn(() => ({
     auth: {
-      verifyOtp,
-      exchangeCodeForSession,
+      verifyOtp: mocks.verifyOtp,
+      exchangeCodeForSession: mocks.exchangeCodeForSession,
       getUser: vi.fn().mockImplementation(() => Promise.resolve({ data: { user: authUser } })),
       mfa: {
         getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),

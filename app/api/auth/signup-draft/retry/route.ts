@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server'
-import { createServiceClient, createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { provisionVerifiedSignupDraft } from '@/lib/signup/provision'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('api/auth/signup-draft')
 
 /**
- * Activates only the authenticated user's verified signup draft. The database
- * owns draft selection and idempotency; the browser never provides a draft id.
+ * Safe recovery endpoint for a verified account whose workspace setup failed.
+ * It has no browser-controlled draft id and the database returns an existing
+ * workspace instead of ever creating a duplicate.
  */
 export async function POST() {
   const supabase = await createClient()
@@ -17,13 +18,12 @@ export async function POST() {
   try {
     const result = await provisionVerifiedSignupDraft(user.id)
 
-    if (result.state === 'not_required') return new NextResponse(null, { status: 204 })
+    if (result.state === 'not_required') {
+      return NextResponse.json({ state: 'not_required', error: 'Det finns ingen installation att fortsätta.' }, { status: 404 })
+    }
 
     if (result.state === 'in_progress') {
-      return NextResponse.json(
-        { state: result.state, reference: result.reference, error: 'Installationen pågår redan.' },
-        { status: 409 },
-      )
+      return NextResponse.json({ state: result.state, reference: result.reference }, { status: 409 })
     }
 
     if (result.state === 'failed') {
@@ -31,7 +31,7 @@ export async function POST() {
         {
           state: result.state,
           reference: result.reference,
-          error: 'Vi kunde inte skapa arbetsytan just nu. Du kan försöka igen utan att skapa ett nytt konto.',
+          error: 'Installationen kunde inte slutföras ännu. Försök igen om en stund.',
         },
         { status: 422 },
       )
@@ -45,8 +45,7 @@ export async function POST() {
     try {
       await createServiceClient().auth.admin.updateUserById(user.id, { user_metadata: metadata })
     } catch {
-      // Provisioning is already complete and draft selection is server-owned.
-      // Stale metadata cannot create another workspace.
+      // Recovery must not fail because metadata cleanup is unavailable.
     }
 
     return NextResponse.json({ ...result.workspace, reference: result.reference })
@@ -55,9 +54,6 @@ export async function POST() {
       userId: user.id,
       message: error instanceof Error ? error.message : 'unknown',
     })
-    return NextResponse.json(
-      { state: 'failed', error: 'Vi kunde inte starta installationen just nu. Försök igen.' },
-      { status: 503 },
-    )
+    return NextResponse.json({ error: 'Vi kunde inte fortsätta installationen just nu.' }, { status: 503 })
   }
 }

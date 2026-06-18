@@ -17,6 +17,7 @@ import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { AuthLegalFooter } from '@/components/auth/AuthLegalFooter'
+import { isRecoverableSignupProvisioningStatus } from '@/lib/signup/provisioning-status'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
 const branding = getBranding()
@@ -213,14 +214,22 @@ function LoginPageContent() {
           return
         }
       }
+      if (isRecoverableSignupProvisioningStatus(activation.status)) {
+        // The account is valid. Keep the session so setup can be retried
+        // idempotently from the recovery screen instead of forcing another login.
+        router.push('/onboarding/problem')
+        router.refresh()
+        return
+      }
       if (activation.status !== 204) {
         const body = await activation.json().catch(() => ({})) as { error?: string }
         toast({
           title: 'Kunde inte starta installationen',
-          description: body.error || 'Försök logga in igen om en stund.',
+          description: body.error || 'Försök igen om en stund.',
           variant: 'destructive',
         })
-        await supabase.auth.signOut({ scope: 'local' })
+        router.push('/onboarding/problem')
+        router.refresh()
         return
       }
 
