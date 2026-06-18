@@ -21,12 +21,11 @@ export default function CompleteCoreOnboardingButton({
     startTransition(async () => {
       const response = await fetch('/api/onboarding/complete-core', { method: 'POST' })
       const body = await response.json().catch(() => null)
-      if (!response.ok) {
+      if (!response.ok || typeof body?.data?.dashboard_href !== 'string') {
         setError(body?.error || 'Kunde inte öppna arbetsytan just nu.')
         return
       }
-      router.push(href)
-      router.refresh()
+      router.push(body.data.dashboard_href || href)
     })
   }
 

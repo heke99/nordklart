@@ -283,30 +283,62 @@ async function resolveCompanyForMiddleware(
 
   const locale = (prefs?.locale as string | undefined) ?? null
 
-  // Reuse the database resolver used by server pages and RLS. Direct
-  // company_members checks here previously rejected agency staff and platform
-  // admins before the dashboard could render.
+  // Prefer the central resolver because it includes agency and platform access.
+  // The deployment fallback is deliberately scoped to user_id, rather than
+  // relying on RLS alone: a company member can legitimately read fellow
+  // members through RLS, which would otherwise make maybeSingle unsafe.
   if (prefs?.active_company_id) {
-    const { data: access } = await supabase.rpc('resolve_company_access', {
+    const { data: access, error } = await supabase.rpc('resolve_company_access', {
       p_company_id: prefs.active_company_id,
     })
     const row = Array.isArray(access) ? access[0] as { can_read?: boolean } | undefined : undefined
-    if (row?.can_read === true) return { companyId: prefs.active_company_id, locale }
+    if (!error && row?.can_read === true) return { companyId: prefs.active_company_id, locale }
   }
 
-  const { data: accessible } = await supabase.rpc('list_accessible_companies')
+  const { data: accessible, error: accessibleError } = await supabase.rpc('list_accessible_companies')
   const first = Array.isArray(accessible)
     ? accessible.find((row) => !(row as { archived_at?: string | null }).archived_at) as { company_id?: string } | undefined
     : undefined
 
-  if (!first?.company_id) return { companyId: null, locale }
+  let companyId = first?.company_id ?? null
+
+  if (!companyId || accessibleError) {
+    const { data: memberships } = await supabase
+      .from('company_members')
+      .select('company_id')
+      .eq('user_id', userId)
+      .order('joined_at', { ascending: true })
+
+    const memberIds = Array.from(new Set(
+      ((memberships ?? []) as Array<{ company_id: string | null }>)
+        .map((membership) => membership.company_id)
+        .filter((id): id is string => Boolean(id)),
+    ))
+
+    if (memberIds.length > 0) {
+      const { data: companies } = await supabase
+        .from('companies')
+        .select('id')
+        .in('id', memberIds)
+        .is('archived_at', null)
+
+      const availableIds = new Set(
+        ((companies ?? []) as Array<{ id: string }>).map((company) => company.id),
+      )
+      companyId = prefs?.active_company_id && availableIds.has(prefs.active_company_id)
+        ? prefs.active_company_id
+        : memberIds.find((id) => availableIds.has(id)) ?? null
+    }
+  }
+
+  if (!companyId) return { companyId: null, locale }
 
   await supabase
     .from('user_preferences')
     .upsert(
-      { user_id: userId, active_company_id: first.company_id },
+      { user_id: userId, active_company_id: companyId },
       { onConflict: 'user_id' },
     )
 
-  return { companyId: first.company_id, locale }
+  return { companyId, locale }
 }

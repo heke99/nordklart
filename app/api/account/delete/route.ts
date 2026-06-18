@@ -1,4 +1,5 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
@@ -28,12 +29,10 @@ const DeleteAccountSchema = z.object({
  * if the precondition fails — we return 409 in that case.
  */
 export async function POST(request: Request) {
-  const supabase = await createClient()
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const { supabase, user } = auth
 
   const result = await validateBody(request, DeleteAccountSchema)
   if (!result.success) return result.response

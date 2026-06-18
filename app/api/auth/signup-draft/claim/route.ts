@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createServiceClient, createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { provisionVerifiedSignupDraft } from '@/lib/signup/provision'
 import { createLogger } from '@/lib/logger'
 
@@ -10,9 +11,10 @@ const log = createLogger('api/auth/signup-draft')
  * owns draft selection and idempotency; the browser never provides a draft id.
  */
 export async function POST() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+
+  const { user } = auth
 
   try {
     const result = await provisionVerifiedSignupDraft(user.id)

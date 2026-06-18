@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { Building2, ArrowRight, Loader2, Plus, AlertTriangle } from 'lucide-react'
+import { ArrowRight, Loader2, Plus, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { switchCompany } from '@/lib/company/actions'
@@ -69,7 +69,7 @@ function positionLabel(role: EnrichmentCompanyRole): string {
 
 export default function BankIdCompanyPicker({
   firstName,
-  teamId,
+  teamId: _teamId,
   memberCompanies,
   ticCompanies,
   enrichmentStale,

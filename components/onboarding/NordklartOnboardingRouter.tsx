@@ -108,12 +108,11 @@ export default function NordklartOnboardingRouter({
         body: JSON.stringify({ path: option.code }),
       })
       const body = await response.json().catch(() => null)
-      if (!response.ok || !body?.data?.next_href) {
+      if (!response.ok || typeof body?.data?.next_href !== 'string') {
         setError(body?.error || 'Kunde inte spara valet just nu.')
         return
       }
       router.push(body.data.next_href)
-      router.refresh()
     })
   }
 

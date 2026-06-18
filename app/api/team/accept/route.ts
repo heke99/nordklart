@@ -1,6 +1,10 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse, type NextRequest } from 'next/server'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('api/team/accept')
 
 /**
  * GET /api/team/accept?token=xxx
@@ -17,11 +21,16 @@ export async function GET(request: NextRequest) {
   const tokenHash = hashInviteToken(token)
   const serviceClient = createServiceClient()
 
-  const { data: companyInvite } = await serviceClient
+  const { data: companyInvite, error: inviteLookupError } = await serviceClient
     .from('company_invitations')
     .select('id, email, status, expires_at, company_id, companies:company_id(name)')
     .eq('token_hash', tokenHash)
     .single()
+
+  if (inviteLookupError) {
+    log.error('company invitation lookup failed', { code: inviteLookupError.code })
+    return NextResponse.json({ error: 'Kunde inte kontrollera inbjudan just nu.' }, { status: 503 })
+  }
 
   if (!companyInvite) {
     return NextResponse.json({ error: 'Inbjudan hittades inte eller är ogiltig.' }, { status: 404 })
@@ -33,9 +42,15 @@ export async function GET(request: NextRequest) {
 
   const expired = new Date(companyInvite.expires_at) < new Date()
 
-  const { data: alreadyHasAccount } = await serviceClient.rpc('check_email_exists', {
+  const { data: alreadyHasAccount, error: accountLookupError } = await serviceClient.rpc('check_email_exists', {
     email_to_check: companyInvite.email,
   })
+
+  if (accountLookupError) {
+    // This is a presentation hint only. A valid invite must still be usable
+    // while a staged database rollout catches up with the lookup function.
+    log.warn('check_email_exists failed', { code: accountLookupError.code })
+  }
 
   return NextResponse.json({
     data: {
@@ -43,7 +58,7 @@ export async function GET(request: NextRequest) {
       companyName: (companyInvite.companies as unknown as { name: string })?.name || 'Företag',
       email: companyInvite.email,
       expired,
-      alreadyHasAccount,
+      alreadyHasAccount: alreadyHasAccount === true,
     },
   })
 }
@@ -54,11 +69,10 @@ export async function GET(request: NextRequest) {
  * Team invitations are disabled — teams are single-user.
  */
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+
+  const { user } = auth
 
   const body = await request.json()
   const token = body.token as string
@@ -76,7 +90,8 @@ export async function POST(request: NextRequest) {
     .single()
 
   if (companyLookupError) {
-    console.error('[team/accept] company lookup error:', companyLookupError.message)
+    log.error('company invitation lookup failed', { code: companyLookupError.code })
+    return NextResponse.json({ error: 'Kunde inte kontrollera inbjudan just nu.' }, { status: 503 })
   }
 
   if (!companyInvite || companyInvite.status !== 'pending') {
