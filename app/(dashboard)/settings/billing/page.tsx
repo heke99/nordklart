@@ -1,53 +1,135 @@
-import Link from 'next/link'
 import { redirect } from 'next/navigation'
+import { CheckCircle2, CircleAlert, ReceiptText } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { canManageCompanyBilling } from '@/lib/billing/access'
+import { BillingActions } from '@/components/billing/BillingActions'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
-export default async function BillingSettingsPage() {
+type PlanRow = { id: string; product_id: string; code: string; name: string; description: string | null; status: string }
+type ProductRow = { id: string; code: string; product_type: 'subscription' | 'addon' | 'one_time'; status: string }
+type VersionRow = { id: string; plan_id: string; price_excl_vat: number | string; currency: string; billing_interval: string; stripe_price_id: string | null; status: string; effective_from: string; grace_days: number }
+type SubscriptionRow = { id: string; plan_version_id: string | null; status: string; current_period_end: string | null; grace_ends_at: string | null; external_provider: string | null }
+type ItemRow = { id: string; plan_version_id: string; status: string; current_period_end: string | null; grace_ends_at: string | null; quantity: number | string }
+type GrantRow = { id: string; grant_type: string; status: string; starts_at: string; expires_at: string | null }
+type PurchaseRow = { id: string; plan_version_id: string | null; purchase_type: string; status: string; price_excl_vat: number | string; currency: string; fiscal_period_id: string | null; created_at: string }
+type PeriodRow = { id: string; name: string; period_start: string; period_end: string }
+type BillingEventRow = { id: string; event_type: string; amount_excl_vat: number | string | null; currency: string; created_at: string }
+type BankgiroRow = { id: string; status: string; provider_setup_status: string | null; documents_status: string | null; updated_at: string }
+
+const money = (value: number | string, currency = 'SEK') => new Intl.NumberFormat('sv-SE', { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(value))
+const date = (value: string | null) => value ? new Intl.DateTimeFormat('sv-SE', { dateStyle: 'medium' }).format(new Date(value)) : '–'
+
+export default async function BillingSettingsPage({ searchParams }: { searchParams: Promise<{ checkout?: string }> }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
+  const canManageBilling = await canManageCompanyBilling(supabase, user.id, companyId)
+  const query = await searchParams
 
-  const { data: subscription } = await supabase
-    .from('company_subscriptions')
-    .select('status, plan_id')
-    .eq('company_id', companyId)
-    .in('status', ['trialing', 'active'])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  const [
+    subscriptionsRes,
+    itemsRes,
+    grantsRes,
+    purchasesRes,
+    periodsRes,
+    eventsRes,
+    bankgiroRes,
+    profileRes,
+    plansRes,
+    productsRes,
+    versionsRes,
+  ] = await Promise.all([
+    supabase.from('company_subscriptions').select('id,plan_version_id,status,current_period_end,grace_ends_at,external_provider').eq('company_id', companyId).order('created_at', { ascending: false }).limit(10),
+    supabase.from('company_subscription_items').select('id,plan_version_id,status,current_period_end,grace_ends_at,quantity').eq('company_id', companyId).order('created_at', { ascending: false }).limit(20),
+    supabase.from('commercial_access_grants').select('id,grant_type,status,starts_at,expires_at').eq('company_id', companyId).order('created_at', { ascending: false }).limit(20),
+    supabase.from('one_time_purchases').select('id,plan_version_id,purchase_type,status,price_excl_vat,currency,fiscal_period_id,created_at').eq('company_id', companyId).order('created_at', { ascending: false }).limit(20),
+    supabase.from('fiscal_periods').select('id,name,period_start,period_end').eq('company_id', companyId).order('period_end', { ascending: false }).limit(20),
+    supabase.from('billing_events').select('id,event_type,amount_excl_vat,currency,created_at').eq('company_id', companyId).order('created_at', { ascending: false }).limit(12),
+    supabase.from('bankgiro_applications').select('id,status,provider_setup_status,documents_status,updated_at').eq('company_id', companyId).order('updated_at', { ascending: false }).limit(1),
+    supabase.from('company_billing_profiles').select('stripe_customer_id').eq('company_id', companyId).maybeSingle(),
+    supabase.from('platform_price_plans').select('id,product_id,code,name,description,status').eq('status', 'active').order('sort_order', { ascending: true }),
+    supabase.from('platform_products').select('id,code,product_type,status').eq('status', 'active').order('sort_order', { ascending: true }),
+    supabase.from('platform_plan_versions').select('id,plan_id,price_excl_vat,currency,billing_interval,stripe_price_id,status,effective_from,grace_days').in('status', ['active', 'scheduled']).order('effective_from', { ascending: false }),
+  ])
 
-  const { data: plan } = subscription?.plan_id
-    ? await supabase
-        .from('platform_price_plans')
-        .select('name, description')
-        .eq('id', subscription.plan_id)
-        .maybeSingle()
-    : { data: null }
+  const subscriptions = (subscriptionsRes.data ?? []) as SubscriptionRow[]
+  const items = (itemsRes.data ?? []) as ItemRow[]
+  const grants = (grantsRes.data ?? []) as GrantRow[]
+  const purchases = (purchasesRes.data ?? []) as PurchaseRow[]
+  const periods = (periodsRes.data ?? []) as PeriodRow[]
+  const events = (eventsRes.data ?? []) as BillingEventRow[]
+  const bankgiro = ((bankgiroRes.data ?? []) as BankgiroRow[])[0] ?? null
+  const plans = (plansRes.data ?? []) as PlanRow[]
+  const products = (productsRes.data ?? []) as ProductRow[]
+  const versions = (versionsRes.data ?? []) as VersionRow[]
+
+  const planById = new Map(plans.map((plan) => [plan.id, plan]))
+  const productById = new Map(products.map((product) => [product.id, product]))
+  const versionById = new Map(versions.map((version) => [version.id, version]))
+  const periodById = new Map(periods.map((period) => [period.id, period]))
+  const activeSubscription = subscriptions.find((subscription) => ['trialing', 'active', 'past_due', 'paused'].includes(subscription.status)) ?? null
+  const currentVersion = activeSubscription?.plan_version_id ? versionById.get(activeSubscription.plan_version_id) : null
+  const currentPlan = currentVersion ? planById.get(currentVersion.plan_id) : null
+  const activeBase = Boolean(activeSubscription && ['trialing', 'active'].includes(activeSubscription.status))
+  const activeItems = items.filter((item) => ['trialing', 'active', 'past_due'].includes(item.status))
+  const activeGrants = grants.filter((grant) => ['active', 'scheduled'].includes(grant.status))
+  const upcomingVersion = currentVersion
+    ? versions.find((version) => version.plan_id === currentVersion.plan_id && version.status === 'scheduled') ?? null
+    : null
+
+  const purchasablePlans = versions
+    .map((version) => {
+      const plan = planById.get(version.plan_id)
+      const product = plan ? productById.get(plan.product_id) : null
+      if (!plan || !product || version.status !== 'active') return null
+      return {
+        id: version.id,
+        name: plan.name,
+        description: plan.description,
+        productType: product.product_type,
+        productCode: product.code,
+        billingInterval: version.billing_interval,
+        price: Number(version.price_excl_vat),
+        currency: version.currency,
+        stripeReady: Boolean(version.stripe_price_id),
+      }
+    })
+    .filter((plan): plan is NonNullable<typeof plan> => Boolean(plan))
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
+      {query.checkout === 'success' ? <div className="rounded-2xl border border-success/30 bg-success/10 px-5 py-4 text-sm text-success">Tack. Betalningen tas emot och tjänsten aktiveras när Stripe har bekräftat händelsen.</div> : null}
+      {query.checkout === 'cancelled' ? <div className="rounded-2xl border border-warning/30 bg-warning/10 px-5 py-4 text-sm text-warning-foreground">Betalningen avbröts. Ingen ny tjänst har aktiverats.</div> : null}
+
       <section className="rounded-[1.75rem] border bg-card p-6 shadow-sm md:p-8">
         <p className="text-sm font-medium text-primary">Plan och tjänster</p>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">Hantera Nordklart för ditt företag</h1>
-        <p className="mt-3 text-muted-foreground">Lägg till tjänster när verksamheten behöver dem. Bokföringen påverkas inte av att en valfri modul saknas.</p>
-        <div className="mt-6 rounded-2xl border bg-background/70 p-5">
-          <p className="text-sm text-muted-foreground">Aktiv plan</p>
-          <p className="mt-1 text-lg font-semibold">{plan?.name ?? 'Ingen plan vald ännu'}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{plan?.description ?? 'Välj plan eller kontakta administratören för att aktivera fler tjänster.'}</p>
-          <p className="mt-3 text-sm font-medium">Status: {subscription?.status === 'trialing' ? 'Testperiod' : subscription?.status === 'active' ? 'Aktiv' : 'Inte aktiverad'}</p>
-        </div>
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Button asChild><Link href="/payments/bankgiro">Bankgiro och Autogiro</Link></Button>
-          <Button asChild variant="secondary"><Link href="/year-end">Bokslut</Link></Button>
+        <p className="mt-3 max-w-3xl text-muted-foreground">Se aktiv plan, tillägg, bokslutsköp och Bankgiro-status på ett ställe. Tillgång styrs server-side och påverkas aldrig av enbart en knapp i gränssnittet.</p>
+        <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border bg-background/70 p-5"><p className="text-sm text-muted-foreground">Basplan</p><p className="mt-1 text-lg font-semibold">{currentPlan?.name ?? 'Ingen aktiv basplan'}</p><p className="mt-2 text-sm text-muted-foreground">{currentVersion ? `${money(currentVersion.price_excl_vat, currentVersion.currency)} · ${currentVersion.billing_interval === 'year' ? 'årsvis' : 'månadsvis'} · nästa period till ${date(activeSubscription?.current_period_end ?? null)}` : 'Välj en plan för löpande Nordklart-tjänster.'}</p>{activeSubscription?.status === 'past_due' && activeSubscription.grace_ends_at ? <p className="mt-2 text-xs font-medium text-warning-foreground">Betalning saknas. Access gäller till {date(activeSubscription.grace_ends_at)}.</p> : null}{upcomingVersion ? <p className="mt-2 text-xs text-muted-foreground">Kommande pris: {money(upcomingVersion.price_excl_vat, upcomingVersion.currency)} från {date(upcomingVersion.effective_from)}.</p> : null}</div>
+          <div className="rounded-2xl border bg-background/70 p-5"><p className="text-sm text-muted-foreground">Aktiva tillägg</p><p className="mt-1 text-lg font-semibold">{activeItems.length}</p><p className="mt-2 text-sm text-muted-foreground">{activeItems.length ? activeItems.map((item) => planById.get(versionById.get(item.plan_version_id)?.plan_id ?? '')?.name ?? 'Tillägg').join(', ') : 'Exempelvis Bankgiro hanteras separat från bokföringsplanen.'}</p></div>
+          <div className="rounded-2xl border bg-background/70 p-5"><p className="text-sm text-muted-foreground">Kommersiell access</p><p className="mt-1 text-lg font-semibold">{activeGrants.length ? 'Aktiv grant' : 'Ordinarie plan'}</p><p className="mt-2 text-sm text-muted-foreground">{activeGrants.length ? activeGrants.map((grant) => grant.grant_type === 'complimentary_full_access' ? 'Complimentary Full Access' : 'Complimentary Bankgiro').join(', ') : 'Complimentary Full Access inkluderar inte Bankgiro.'}</p></div>
         </div>
       </section>
+
+      {canManageBilling ? <BillingActions plans={purchasablePlans} fiscalPeriods={periods.map((period) => ({ id: period.id, name: period.name, periodStart: period.period_start, periodEnd: period.period_end }))} hasActiveBaseSubscription={activeBase} hasStripeCustomer={Boolean(profileRes.data?.stripe_customer_id)} /> : <section className="rounded-2xl border bg-card p-5 text-sm text-muted-foreground">Endast företagets ägare eller administratör kan ändra abonnemang och betalning.</section>}
+
+      <section className="rounded-3xl border bg-card p-5 shadow-sm"><h2 className="text-xl font-semibold">Aktiva tjänster och åtkomst</h2><div className="mt-4 grid gap-3 lg:grid-cols-2"><div className="rounded-2xl border bg-background/60 p-4"><p className="font-medium">Tillägg</p><div className="mt-3 space-y-2">{activeItems.map((item) => { const version = versionById.get(item.plan_version_id); const plan = version ? planById.get(version.plan_id) : null; return <div key={item.id} className="flex items-center justify-between gap-3 text-sm"><span>{plan?.name ?? 'Tillägg'}</span><span className="text-muted-foreground">{item.status === 'past_due' && item.grace_ends_at ? `Access till ${date(item.grace_ends_at)}` : `Period till ${date(item.current_period_end)}`}</span></div> })}{activeItems.length === 0 ? <p className="text-sm text-muted-foreground">Inga aktiva tillägg.</p> : null}</div></div><div className="rounded-2xl border bg-background/60 p-4"><p className="font-medium">Gratis- och partneråtkomst</p><div className="mt-3 space-y-2">{activeGrants.map((grant) => <div key={grant.id} className="flex items-center justify-between gap-3 text-sm"><span>{grant.grant_type === 'complimentary_full_access' ? 'Complimentary Full Access' : 'Complimentary Bankgiro'}</span><span className="text-muted-foreground">{grant.expires_at ? `Gäller till ${date(grant.expires_at)}` : 'Utan slutdatum'}</span></div>)}{activeGrants.length === 0 ? <p className="text-sm text-muted-foreground">Ingen separat gratis- eller partneråtkomst.</p> : null}</div></div></div></section>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="rounded-3xl border bg-card p-5 shadow-sm"><div className="flex items-center gap-2"><ReceiptText className="h-5 w-5 text-primary" /><h2 className="text-xl font-semibold">Köp och fakturering</h2></div><div className="mt-4 space-y-3">{purchases.map((purchase) => <div key={purchase.id} className="rounded-2xl border bg-background/60 p-4"><div className="flex items-center justify-between gap-3"><span className="font-medium">{purchase.purchase_type === 'year_end' ? 'Bokslut' : 'Engångsköp'}</span><Badge variant={['paid', 'active', 'fulfilled'].includes(purchase.status) ? 'success' : 'secondary'}>{purchase.status}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{money(purchase.price_excl_vat, purchase.currency)} · {purchase.fiscal_period_id ? periodById.get(purchase.fiscal_period_id)?.name ?? 'Räkenskapsår' : '–'} · {date(purchase.created_at)}</p></div>)}{purchases.length === 0 ? <p className="text-sm text-muted-foreground">Inga engångsköp ännu.</p> : null}</div></section>
+        <section className="rounded-3xl border bg-card p-5 shadow-sm"><div className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-primary" /><h2 className="text-xl font-semibold">Bankgiro och Autogiro</h2></div><div className="mt-4 rounded-2xl border bg-background/60 p-4"><p className="font-medium">{bankgiro ? `Ansökan: ${bankgiro.status}` : 'Ingen ansökan ännu'}</p><p className="mt-1 text-sm text-muted-foreground">{bankgiro ? `Underlag: ${bankgiro.documents_status ?? 'saknas'} · Provider: ${bankgiro.provider_setup_status ?? 'saknas'}` : 'Bankgiro är ett separat tillägg. Full access för bokföring aktiverar inte denna tjänst automatiskt.'}</p><Button className="mt-4" asChild variant="secondary"><Link href="/payments/bankgiro">Visa Bankgiro</Link></Button></div></section>
+      </div>
+
+      <section className="rounded-3xl border bg-card p-5 shadow-sm"><div className="flex items-center gap-2"><CircleAlert className="h-5 w-5 text-primary" /><h2 className="text-xl font-semibold">Senaste betalningshändelser</h2></div><div className="mt-4 space-y-3">{events.map((event) => <div key={event.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-background/60 p-4"><div><span className="font-mono text-sm font-medium">{event.event_type}</span><p className="mt-1 text-xs text-muted-foreground">{date(event.created_at)}</p></div><span className="text-sm font-medium">{event.amount_excl_vat === null ? '–' : money(event.amount_excl_vat, event.currency)}</span></div>)}{events.length === 0 ? <p className="text-sm text-muted-foreground">Inga betalningshändelser ännu.</p> : null}</div></section>
     </div>
   )
 }
