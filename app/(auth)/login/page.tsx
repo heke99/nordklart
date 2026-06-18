@@ -43,12 +43,19 @@ function LoginPageContent() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const callbackError = searchParams.get('error')
+  const legacyCallbackError = searchParams.get('error')
+  const callbackError = searchParams.get('auth_error')
+    ?? (legacyCallbackError === 'auth_error' ? 'password_reset_failed' : null)
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
+  const isSignupConfirmationError = callbackError === 'signup_confirmation_failed'
+  const isPasswordResetError = callbackError === 'password_reset_failed'
+  const isInviteError = callbackError === 'invite_failed'
+  const isMagicLinkError = callbackError === 'magic_link_failed'
+  const isEmailChangeError = callbackError === 'email_change_failed'
 
   // Reset cooldown timer
   useEffect(() => {
@@ -384,18 +391,42 @@ function LoginPageContent() {
         </div>
 
         <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-          {callbackError === 'auth_error' && (
-            <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+          {callbackError && (
+            <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4" role="alert">
               <p className="text-sm font-medium text-destructive">
-                {tAuth('callback_error_title')}
+                {isSignupConfirmationError
+                  ? tAuth('signup_confirmation_error_title')
+                  : isPasswordResetError
+                    ? tAuth('password_reset_error_title')
+                    : isInviteError
+                      ? tAuth('invite_error_title')
+                      : isMagicLinkError
+                        ? tAuth('magic_link_error_title')
+                        : isEmailChangeError
+                          ? tAuth('email_change_error_title')
+                          : tAuth('auth_link_error_title')}
               </p>
               <p className="mt-1 text-sm text-destructive/90">
-                {tAuth('callback_error_body')}{' '}
+                {isSignupConfirmationError
+                  ? tAuth('signup_confirmation_error_body')
+                  : isPasswordResetError
+                    ? tAuth('password_reset_error_body')
+                    : isInviteError
+                      ? tAuth('invite_error_body')
+                      : isMagicLinkError
+                        ? tAuth('magic_link_error_body')
+                        : isEmailChangeError
+                          ? tAuth('email_change_error_body')
+                          : tAuth('auth_link_error_body')}{' '}
                 <Link
-                  href="/forgot-password"
+                  href={isSignupConfirmationError ? '/confirm-email' : isPasswordResetError ? '/forgot-password' : '/login'}
                   className="font-medium underline underline-offset-2"
                 >
-                  {tAuth('request_new_reset_link')}
+                  {isSignupConfirmationError
+                    ? tAuth('request_new_confirmation_link')
+                    : isPasswordResetError
+                      ? tAuth('request_new_reset_link')
+                      : tAuth('return_to_login')}
                 </Link>
                 .
               </p>

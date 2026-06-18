@@ -4,6 +4,25 @@ import { NextRequest } from 'next/server'
 const verifyOtp = vi.fn()
 const exchangeCodeForSession = vi.fn()
 
+vi.mock('server-only', () => ({}))
+
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: vi.fn(() => ({
+    from: vi.fn(() => ({
+      insert: vi.fn().mockResolvedValue({ error: null }),
+    })),
+    auth: {
+      admin: {
+        updateUserById: vi.fn().mockResolvedValue({ error: null }),
+      },
+    },
+  })),
+}))
+
+vi.mock('@/lib/signup/provision', () => ({
+  provisionSignupDraft: vi.fn(),
+}))
+
 vi.mock('@supabase/ssr', () => ({
   createServerClient: vi.fn(() => ({
     auth: {
@@ -57,7 +76,7 @@ describe('GET /auth/callback — recovery flow', () => {
     expect(exchangeCodeForSession).toHaveBeenCalledWith('xyz')
   })
 
-  it('redirects to /login?error=auth_error when the recovery OTP is expired or already consumed', async () => {
+  it('redirects to the recovery-specific login error when the recovery OTP is expired or already consumed', async () => {
     verifyOtp.mockResolvedValue({ error: { message: 'Token has expired or is invalid' } })
 
     const request = new NextRequest(
@@ -66,6 +85,22 @@ describe('GET /auth/callback — recovery flow', () => {
     const response = await GET(request)
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost:3000/login?error=auth_error')
+    expect(response.headers.get('location')).toBe('http://localhost:3000/login?auth_error=password_reset_failed')
   })
+
+
+  it('redirects to the signup-specific error when an email confirmation token is invalid', async () => {
+    verifyOtp.mockResolvedValue({ error: { message: 'Token has expired or is invalid' } })
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=expired&type=email&flow=signup&next=/onboarding'
+    )
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/login?auth_error=signup_confirmation_failed'
+    )
+  })
+
 })

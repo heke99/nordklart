@@ -159,7 +159,21 @@
     "terms_prefix": "By signing in you agree to our",
     "terms_link": "terms",
     "terms_and": "and",
-    "privacy_link": "privacy policy"
+    "privacy_link": "privacy policy",
+    "signup_confirmation_error_title": "The confirmation link did not work",
+    "signup_confirmation_error_body": "The link may have expired, already been used, or opened in another browser.",
+    "password_reset_error_title": "The reset link did not work",
+    "password_reset_error_body": "The link may have expired or already been used.",
+    "invite_error_title": "The invitation link did not work",
+    "invite_error_body": "The link may have expired, already been used, or is no longer active.",
+    "magic_link_error_title": "The sign-in link did not work",
+    "magic_link_error_body": "The link may have expired or already been used.",
+    "email_change_error_title": "The email change link did not work",
+    "email_change_error_body": "The link may have expired or already been used.",
+    "auth_link_error_title": "The link did not work",
+    "auth_link_error_body": "The link may have expired, already been used, or is not valid.",
+    "request_new_confirmation_link": "Request a new confirmation link",
+    "return_to_login": "Back to sign in"
   },
   "settings_nav": {
     "aria_label": "Settings",

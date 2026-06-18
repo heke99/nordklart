@@ -112,7 +112,7 @@ function RegisterContent() {
         email: loginEmail.trim().toLowerCase(),
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback?next=/onboarding`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?flow=signup&next=/onboarding`,
           data: {
             first_name: firstName.trim(),
             last_name: lastName.trim(),

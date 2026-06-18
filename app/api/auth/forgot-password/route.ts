@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     { cookies: { getAll: () => [], setAll: () => {} } },
   );
 
-  const redirectTo = `${new URL(request.url).origin}/auth/callback?next=/reset-password`;
+  const redirectTo = `${new URL(request.url).origin}/auth/callback?flow=recovery&next=/reset-password`;
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo,
   });

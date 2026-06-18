@@ -159,7 +159,21 @@
     "terms_prefix": "Genom att logga in godkänner du våra",
     "terms_link": "villkor",
     "terms_and": "och",
-    "privacy_link": "integritetspolicy"
+    "privacy_link": "integritetspolicy",
+    "signup_confirmation_error_title": "Bekräftelselänken fungerade inte",
+    "signup_confirmation_error_body": "Länken kan ha gått ut, redan använts eller öppnats i en annan webbläsare.",
+    "password_reset_error_title": "Återställningslänken fungerade inte",
+    "password_reset_error_body": "Länken kan ha gått ut eller redan använts.",
+    "invite_error_title": "Inbjudningslänken fungerade inte",
+    "invite_error_body": "Länken kan ha gått ut, redan använts eller inte längre vara aktiv.",
+    "magic_link_error_title": "Inloggningslänken fungerade inte",
+    "magic_link_error_body": "Länken kan ha gått ut eller redan använts.",
+    "email_change_error_title": "Länken för e-poständringen fungerade inte",
+    "email_change_error_body": "Länken kan ha gått ut eller redan använts.",
+    "auth_link_error_title": "Länken fungerade inte",
+    "auth_link_error_body": "Länken kan ha gått ut, redan använts eller inte vara giltig.",
+    "request_new_confirmation_link": "Begär en ny bekräftelselänk",
+    "return_to_login": "Tillbaka till login"
   },
   "settings_nav": {
     "aria_label": "Inställningar",
