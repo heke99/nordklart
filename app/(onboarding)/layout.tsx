@@ -33,10 +33,8 @@ export default async function OnboardingLayout({
   }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="w-full max-w-lg px-5">
-        {children}
-      </div>
+    <div className="min-h-screen bg-background">
+      {children}
 
       {/* Escape hatch: a user who archived their last company can still
           reach account settings (and the delete-account flow) from here.

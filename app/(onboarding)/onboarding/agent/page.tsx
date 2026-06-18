@@ -97,15 +97,17 @@ export default async function AgentOnboardingPage() {
   }
 
   return (
-    <AgentOnboarding
-      companyId={companyId}
-      companyName={company.name}
-      firstName={firstName}
-      initialFields={initialFields}
-      atomTitles={atomTitles}
-      alreadyVerified={Boolean(existingProfile?.verified_at)}
-      existingSummary={existingProfile?.profile_summary ?? null}
-    />
+    <main className="mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center px-5 py-8">
+      <AgentOnboarding
+        companyId={companyId}
+        companyName={company.name}
+        firstName={firstName}
+        initialFields={initialFields}
+        atomTitles={atomTitles}
+        alreadyVerified={Boolean(existingProfile?.verified_at)}
+        existingSummary={existingProfile?.profile_summary ?? null}
+      />
+    </main>
   )
 }
 

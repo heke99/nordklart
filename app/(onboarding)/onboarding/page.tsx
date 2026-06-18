@@ -112,15 +112,17 @@ export default async function OnboardingPage({
   }
 
   return (
-    <WelcomeOnboarding
-      firstName={profile?.full_name?.split(' ')[0] || null}
-      teamId={teamId}
-      skipWelcome
-      hasExistingCompanies={Boolean(activeCompanyId)}
-      initialOrgNumber={initialOrgNumber}
-      initialEntityType={initialEntityType}
-      initialLegalName={initialLegalName}
-      preverifiedOrgNumber={preverifiedOrgNumber}
-    />
+    <main className="mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center px-5 py-8">
+      <WelcomeOnboarding
+        firstName={profile?.full_name?.split(' ')[0] || null}
+        teamId={teamId}
+        skipWelcome
+        hasExistingCompanies={Boolean(activeCompanyId)}
+        initialOrgNumber={initialOrgNumber}
+        initialEntityType={initialEntityType}
+        initialLegalName={initialLegalName}
+        preverifiedOrgNumber={preverifiedOrgNumber}
+      />
+    </main>
   )
 }
