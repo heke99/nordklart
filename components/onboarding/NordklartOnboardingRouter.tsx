@@ -13,7 +13,6 @@ import {
   WalletCards,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 
 type PathCode =
@@ -131,7 +130,7 @@ export default function NordklartOnboardingRouter({
           </p>
         </section>
 
-        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {visibleOptions.map((option) => {
             const Icon = option.icon
             const active = selected === option.code
@@ -142,20 +141,20 @@ export default function NordklartOnboardingRouter({
                 disabled={pending}
                 onClick={() => choose(option)}
                 className={cn(
-                  'group flex min-h-[21rem] flex-col rounded-[2rem] border bg-card p-7 text-left shadow-sm transition duration-200 hover:-translate-y-1 hover:border-primary/50 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-wait disabled:opacity-60 md:min-h-[22.5rem] md:p-8 xl:min-h-[23rem]',
+                  'group flex h-full flex-col rounded-[2rem] border border-border bg-card/90 p-6 shadow-sm text-left transition duration-200 hover:-translate-y-1 hover:border-primary/50 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-wait disabled:opacity-60',
                   active && 'border-primary bg-primary/[0.035] ring-1 ring-primary',
                 )}
               >
-                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary md:h-16 md:w-16">
-                  <Icon className="h-7 w-7" />
+                <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                  <Icon className="h-5 w-5" />
                 </span>
-                <h2 className="mt-7 text-2xl font-semibold tracking-tight md:text-3xl">{option.title}</h2>
-                <p className="mt-4 text-base leading-7 text-muted-foreground md:text-[1.05rem]">{option.description}</p>
-                <div className="mt-7 flex items-start gap-2.5 text-sm font-medium leading-6 text-primary md:text-base">
+                <h2 className="mt-5 text-xl font-semibold tracking-tight">{option.title}</h2>
+                <p className="mt-3 flex-1 leading-7 text-muted-foreground">{option.description}</p>
+                <div className="mt-6 flex items-start gap-2 text-sm font-medium leading-6 text-primary">
                   <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
                   <span>{option.next}</span>
                 </div>
-                <div className="mt-auto flex items-center pt-8 text-base font-semibold text-primary">
+                <div className="mt-7 inline-flex items-center text-sm font-semibold text-primary">
                   {pending && active ? 'Öppnar…' : 'Välj detta'}
                   <ArrowRight className="ml-2 h-5 w-5 transition group-hover:translate-x-1" />
                 </div>
