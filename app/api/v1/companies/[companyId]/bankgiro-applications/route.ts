@@ -3,6 +3,7 @@ import { created, paginated } from '@/lib/api/v1/response'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { checkFeatureAccess, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 
 const BankgiroApplication = z.object({
   id: z.string().uuid(),
@@ -74,25 +75,56 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>('bankg
   const parsed = CreateBankgiroApplication.safeParse(await request.json().catch(() => ({})))
   if (!parsed.success) return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId, details: { issues: parsed.error.issues } })
 
-  if (ctx.dryRun) return created({ id: 'dry_run', company_id: ctx.companyId, provider_setup_status: 'not_started', documents_status: 'not_started', ...parsed.data }, { requestId: ctx.requestId, dryRun: true })
+  const featureAccess = await checkFeatureAccess(
+    ctx.supabase,
+    ctx.companyId!,
+    NORDKLART_FEATURES.bankgiroApplication,
+  )
 
-  const { data, error } = await ctx.supabase
-    .from('bankgiro_applications')
-    .insert({
-      company_id: ctx.companyId!,
-      provider_id: parsed.data.provider_id ?? null,
-      status: parsed.data.status,
-      expected_monthly_volume: parsed.data.expected_monthly_volume ?? null,
-      use_case: parsed.data.use_case ?? null,
-      beneficial_owners: parsed.data.beneficial_owners,
-      company_questions: parsed.data.company_questions,
-      volume_answers: parsed.data.volume_answers,
-      documents_status: 'not_started',
-      provider_setup_status: 'not_started',
+  if (!featureAccess.allowed) {
+    return v1ErrorResponseFromCode('FORBIDDEN', ctx.log, {
+      requestId: ctx.requestId,
+      details: {
+        feature: NORDKLART_FEATURES.bankgiroApplication,
+        reason: featureAccess.reason ?? 'missing_entitlement',
+        message: 'Bankgiro-ansökan kräver en aktiv Bankgiro-tjänst eller uttrycklig Complimentary Bankgiro-access.',
+      },
     })
-    .select(COLUMNS)
-    .single()
+  }
 
-  if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-  return created(data, { requestId: ctx.requestId })
+  if (ctx.dryRun) {
+    return created({
+      id: 'dry_run',
+      company_id: ctx.companyId,
+      provider_setup_status: 'not_started',
+      documents_status: 'not_started',
+      ...parsed.data,
+    }, { requestId: ctx.requestId, dryRun: true })
+  }
+
+  const { data, error } = await ctx.supabase.rpc('request_bankgiro_application', {
+    p_company_id: ctx.companyId!,
+    p_provider_id: parsed.data.provider_id ?? null,
+    p_status: parsed.data.status,
+    p_expected_monthly_volume: parsed.data.expected_monthly_volume ?? null,
+    p_use_case: parsed.data.use_case ?? null,
+    p_beneficial_owners: parsed.data.beneficial_owners,
+    p_company_questions: parsed.data.company_questions,
+    p_volume_answers: parsed.data.volume_answers,
+    p_requested_by: ctx.userId,
+  })
+
+  if (error) {
+    return v1ErrorResponse(error, ctx.log, {
+      requestId: ctx.requestId,
+      status: error.code === '23505' ? 409 : error.code === '42501' ? 403 : undefined,
+    })
+  }
+
+  const application = Array.isArray(data) ? data[0] : data
+  if (!application) {
+    return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, { requestId: ctx.requestId })
+  }
+
+  return created(application, { requestId: ctx.requestId })
 })
