@@ -1424,6 +1424,35 @@ const CUSTOMER: Record<string, StructuredErrorEntry> = {
   },
 }
 
+
+const ARTICLE: Record<string, StructuredErrorEntry> = {
+  ARTICLE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Artikeln kunde inte hittas.',
+    message_en: 'Article not found.',
+  },
+  ARTICLE_DUPLICATE_NUMBER: {
+    httpStatus: 409,
+    message_sv: 'En artikel med samma artikelnummer finns redan.',
+    message_en: 'An article with that article number already exists.',
+  },
+  ARTICLE_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Artikeln kunde inte skapas.',
+    message_en: 'Failed to create article.',
+  },
+  ARTICLE_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Artikeln kunde inte uppdateras.',
+    message_en: 'Failed to update article.',
+  },
+  ARTICLE_REVENUE_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Försäljningskontot finns inte eller är inte ett aktivt intäktskonto (klass 3).',
+    message_en: 'The revenue account does not exist or is not an active class-3 income account.',
+  },
+}
+
 const SUPPLIER: Record<string, StructuredErrorEntry> = {
   SUPPLIER_NOT_FOUND: {
     httpStatus: 404,
@@ -2232,6 +2261,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...PROVIDER_MIGRATION,
   ...DOCUMENT,
   ...CUSTOMER,
+  ...ARTICLE,
   ...SUPPLIER,
   ...SUPPLIER_INVOICE_WAVE4,
   ...SALARY,

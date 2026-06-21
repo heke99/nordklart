@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+vi.mock('server-only', () => ({}))
 import {
   createMockRequest,
   parseJsonResponse,
@@ -25,6 +26,20 @@ vi.mock('@/lib/company/context', () => ({
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
+
+vi.mock('@/lib/platform/entitlements', () => ({
+  checkFeatureAccess: vi.fn().mockResolvedValue({ allowed: true }),
+  featureAccessError: vi.fn(() => new Response(JSON.stringify({ error: 'feature denied' }), { status: 403 })),
+  NORDKLART_FEATURES: { invoicingCore: 'invoicing.core' },
+}))
+
+vi.mock('@/lib/platform/feature-policy', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/platform/feature-policy')>('@/lib/platform/feature-policy')
+  return {
+    ...actual,
+    requireCompanyFeatureResponse: vi.fn().mockResolvedValue(null),
+  }
+})
 
 const mockGetVatRules = vi.fn()
 const mockCalculateVat = vi.fn()
@@ -188,6 +203,8 @@ describe('POST /api/invoices (create invoice)', () => {
 
     // Fetch customer
     enqueue({ data: customer, error: null })
+    // company_settings.vat_registered gate (registered → VAT flows as before)
+    enqueue({ data: { vat_registered: true }, error: null })
     // Insert invoice (number is null on insert; allocated immediately after items)
     enqueue({ data: createdInvoice, error: null })
     // Insert items
@@ -239,6 +256,8 @@ describe('POST /api/invoices (create invoice)', () => {
 
     // Fetch customer
     enqueue({ data: customer, error: null })
+    // company_settings.vat_registered gate (registered → VAT flows as before)
+    enqueue({ data: { vat_registered: true }, error: null })
     // Insert invoice (stays unnumbered — the allocation step is skipped)
     enqueue({ data: createdInvoice, error: null })
     // Insert items
@@ -288,6 +307,8 @@ describe('POST /api/invoices (create invoice)', () => {
     ])
 
     enqueue({ data: customer, error: null })
+    // company_settings.vat_registered gate (registered → VAT flows as before)
+    enqueue({ data: { vat_registered: true }, error: null })
     enqueue({ data: createdInvoice, error: null })
     // Items insertion fails
     enqueue({ data: null, error: { message: 'Items insert failed' } })
@@ -330,6 +351,8 @@ describe('POST /api/invoices (create invoice)', () => {
     ])
 
     enqueue({ data: customer, error: null })
+    // company_settings.vat_registered gate (registered → VAT flows as before)
+    enqueue({ data: { vat_registered: true }, error: null })
     enqueue({ data: createdInvoice, error: null })
     // Items insertion succeeds
     enqueue({ data: null, error: null })

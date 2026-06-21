@@ -1,4 +1,5 @@
 import type { IncomeStatementReport, TrialBalanceRow } from '@/types'
+import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 
 /**
  * Calculate gross margin from income statement.
@@ -28,6 +29,42 @@ export function calculateCashPosition(rows: TrialBalanceRow[]): number {
     0
   )
   return Math.round(total * 100) / 100
+}
+
+/**
+ * Calculate net VAT liability (positive = att betala) or receivable
+ * (negative = att återfå) from trial balance rows. Mirrors ruta 49 logic by
+ * using the same VAT accounts as the VAT declaration mapping.
+ */
+export function calculateVatLiability(
+  rows: TrialBalanceRow[],
+  accounts?: string[],
+): number {
+  const vatAccounts =
+    accounts && accounts.length > 0
+      ? accounts
+      : Object.entries(ACCOUNT_RUTA)
+          .filter(([account, mapping]) => account.startsWith('26') && (mapping.side === 'credit' || mapping.box === 'ruta48'))
+          .map(([account]) => account)
+
+  const outputVat = rows
+    .filter(
+      (r) =>
+        vatAccounts.includes(r.account_number) &&
+        r.account_number.startsWith('26') &&
+        !r.account_number.startsWith('264'),
+    )
+    .reduce((sum, r) => sum + (r.closing_credit - r.closing_debit), 0)
+
+  const inputVat = rows
+    .filter(
+      (r) =>
+        vatAccounts.includes(r.account_number) &&
+        r.account_number.startsWith('264'),
+    )
+    .reduce((sum, r) => sum + (r.closing_debit - r.closing_credit), 0)
+
+  return Math.round((outputVat - inputVat) * 100) / 100
 }
 
 /**

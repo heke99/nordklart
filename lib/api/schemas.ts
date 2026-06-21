@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { isSaneDateString } from '@/lib/utils'
+import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 
 // ============================================================
 // Shared primitives
@@ -38,6 +39,53 @@ const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.lit
 
 /** Time string (HH:MM or HH:MM:SS) */
 const timeString = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or HH:MM:SS time format')
+
+
+/** Periodisering: förutbetalda intäkter live on 29xx. */
+const deferredRevenueAccount = z
+  .string()
+  .regex(/^29\d{2}$/, 'Balanskonto för periodiserad intäkt måste vara ett 29xx-konto')
+
+/** Shared periodisering period rules for invoice line items. */
+function validateAccrualPeriod(
+  item: { accrual_period_start?: string | null; accrual_period_end?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  const start = item.accrual_period_start
+  const end = item.accrual_period_end
+  if (!start && !end) return
+  if (!start || !end) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accrual_period_start'],
+      message: 'Ange både periodens start och slut för periodisering',
+    })
+    return
+  }
+  if (end < start) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accrual_period_end'],
+      message: 'Periodens slut måste vara efter dess start',
+    })
+    return
+  }
+  const months = countCalendarMonths(start, end)
+  if (months < 2) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accrual_period_end'],
+      message: 'Periodisering kräver minst 2 kalendermånader',
+    })
+  }
+  if (months > 120) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accrual_period_end'],
+      message: 'Periodisering får vara högst 120 kalendermånader',
+    })
+  }
+}
 
 // ============================================================
 // Enum schemas (matching types/index.ts)
@@ -146,6 +194,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'currency_revaluation',
   'reminder_fee',
   'accrual',
+  'result_appropriation',
 ])
 
 export const AccountTypeSchema = z.enum([
@@ -193,21 +242,67 @@ export const DocumentUploadSourceSchema = z.enum([
 // Invoice schemas
 // ============================================================
 
-export const CreateInvoiceItemSchema = z.object({
-  description: z.string().min(1, 'Item description is required'),
-  quantity: z.number().positive('Quantity must be positive'),
-  unit: z.string().min(1, 'Unit is required'),
-  unit_price: z.number(),
-  vat_rate: z.number().min(0).max(100).optional(),
-  // ROT/RUT-avdrag fields. `deduction_amount` is intentionally omitted from
-  // the client schema — the API computes it from rot-rut-rules.ts so a
-  // tampered client can't expand the 1513 receivable beyond the line total.
-  deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
-  labor_hours: z.number().nonnegative().nullable().optional(),
-  work_type: z.string().max(64).nullable().optional(),
-  housing_designation: z.string().max(128).nullable().optional(),
-  apartment_number: z.string().max(32).nullable().optional(),
-})
+export const CreateInvoiceItemSchema = z
+  .object({
+    // 'text' = free-text or blank spacer row: description only, amounts ignored
+    // and excluded from totals/bookkeeping. Defaults to 'product'.
+    line_type: z.enum(['product', 'text']).optional(),
+    description: z.string().max(2000),
+    quantity: z.number(),
+    unit: z.string(),
+    unit_price: z.number(),
+    vat_rate: z.number().min(0).max(100).optional(),
+    // Artikelregister + optional BAS class-3 revenue override.
+    article_id: uuid.nullable().optional(),
+    revenue_account: revenueAccount.nullable().optional(),
+    // ROT/RUT-avdrag fields. deduction_amount is computed server-side.
+    deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
+    labor_hours: z.number().nonnegative().nullable().optional(),
+    work_type: z.string().max(64).nullable().optional(),
+    housing_designation: z.string().max(128).nullable().optional(),
+    apartment_number: z.string().max(32).nullable().optional(),
+    // Periodisering (förutbetald intäkt).
+    accrual_period_start: isoDate.nullable().optional(),
+    accrual_period_end: isoDate.nullable().optional(),
+    accrual_balance_account: deferredRevenueAccount.nullable().optional(),
+  })
+  .superRefine((item, ctx) => {
+    validateAccrualPeriod(item, ctx)
+    const hasAccrual = Boolean(item.accrual_period_start || item.accrual_period_end)
+    if (hasAccrual) {
+      if (item.line_type === 'text') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accrual_period_start'],
+          message: 'Textrader kan inte periodiseras',
+        })
+      }
+      if (item.deduction_type) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accrual_period_start'],
+          message: 'ROT/RUT-rader kan inte periodiseras',
+        })
+      }
+      if (item.quantity * item.unit_price <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accrual_period_start'],
+          message: 'Endast rader med positivt belopp kan periodiseras',
+        })
+      }
+    }
+    if (item.line_type === 'text') return
+    if (item.description.trim().length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: 'Item description is required' })
+    }
+    if (item.quantity <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quantity'], message: 'Quantity must be positive' })
+    }
+    if (item.unit.length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: 'Unit is required' })
+    }
+  })
 
 const optionalIsoDate = isoDate.or(z.literal('')).transform(v => v || undefined).optional()
 
@@ -233,8 +328,13 @@ export const CreateInvoiceSchema = z.object({
   // ("Granska och skapa"). An unnumbered draft is not yet an issued faktura
   // (ML 17 kap 24§), so it can be hard-deleted with no gap in the number series.
   save_as_draft: z.boolean().optional(),
+  // Per-invoice öresavrundning toggle (display-only). Omitted → inherit company setting.
+  ore_rounding: z.boolean().optional(),
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
+
+// Update an existing DRAFT invoice in place. Same shape as create minus draft creation flag.
+export const UpdateInvoiceSchema = CreateInvoiceSchema.omit({ save_as_draft: true })
 
 export const CreateCreditNoteSchema = z.object({
   credited_invoice_id: uuid,
@@ -265,6 +365,45 @@ export const CreateArticleSchema = z.object({
 
 export const UpdateArticleSchema = CreateArticleSchema.partial().extend({
   active: z.boolean().optional(),
+})
+
+
+const ImportedArticleRowSchema = z.object({
+  row_index: z.number().int(),
+  name: z.string().min(1),
+  name_en: z.string().nullable(),
+  article_number: z.string().nullable(),
+  type: ArticleTypeSchema,
+  unit: z.string(),
+  price_excl_vat: nonNegativeAmount,
+  vat_rate: vatRatePercent,
+  revenue_account: z.string().nullable(),
+  cost_price: nonNegativeAmount.nullable(),
+  ean: z.string().nullable(),
+  housework_type: z.string().nullable(),
+  notes: z.string().nullable(),
+})
+
+export const ArticleImportExecuteSchema = z.object({
+  rows: z.array(ImportedArticleRowSchema).min(1, 'At least one row is required'),
+  update_duplicates: z.boolean(),
+})
+
+const articleColumnIndex = z.number().int().min(0).nullable()
+export const ArticleColumnOverridesSchema = z.object({
+  name_col: z.number().int().min(0),
+  article_number_col: articleColumnIndex,
+  name_en_col: articleColumnIndex,
+  type_col: articleColumnIndex,
+  unit_col: articleColumnIndex,
+  price_col: articleColumnIndex,
+  vat_rate_col: articleColumnIndex,
+  revenue_account_col: articleColumnIndex,
+  cost_price_col: articleColumnIndex,
+  ean_col: articleColumnIndex,
+  housework_type_col: articleColumnIndex,
+  notes_col: articleColumnIndex,
+  confidence: z.number(),
 })
 
 // Self-billing received (mottagen självfaktura, ML 17 kap 15§). The customer

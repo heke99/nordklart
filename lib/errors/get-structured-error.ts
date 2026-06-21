@@ -175,6 +175,10 @@ export interface ErrorEnvelope {
 
 interface ErrorResponseContext {
   requestId?: string
+  /** Optional message override for known route-level failures. */
+  messageSv?: string
+  /** Optional English message override for known route-level failures. */
+  messageEn?: string
   /** Additional details to attach to the response for the user/agent. */
   details?: unknown
   /** When known, override the http status from the registry entry. */
@@ -404,5 +408,15 @@ export function errorResponseFromCode(
   const entry = entryFor(code)
   log.error(code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId })
   const status = ctx.status ?? entry.httpStatus
-  return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details)
+  return buildResponse(
+    code,
+    {
+      ...entry,
+      httpStatus: status,
+      message_sv: ctx.messageSv ?? entry.message_sv,
+      message_en: ctx.messageEn ?? entry.message_en,
+    },
+    ctx.requestId,
+    ctx.details,
+  )
 }

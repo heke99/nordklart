@@ -79,6 +79,48 @@ export class BrioxClient {
     );
   }
 
+
+  async getBytes(accessToken: string, path: string): Promise<ArrayBuffer> {
+    return withRetry(
+      async () => {
+        await this.rateLimiter.acquire();
+        const url = `${this.baseUrl}${path}`;
+        const response = await fetch(url, {
+          headers: {
+            Authorization: accessToken,
+            Accept: 'application/octet-stream, text/vnd.sie-gruppen.si, */*',
+          },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          throw new BrioxApiError(
+            `Briox API error: ${response.status} ${response.statusText}`,
+            response.status,
+            body,
+          );
+        }
+
+        return response.arrayBuffer();
+      },
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1000,
+        shouldRetry: isRetryableError,
+      },
+    );
+  }
+
+  async listFinancialYears(accessToken: string): Promise<Array<{ id: string; fromdate: string; todate: string }>> {
+    const response = await this.get<{
+      data?: { financialyears?: Array<{ id: string; fromdate: string; todate: string }> };
+      financialyears?: Array<{ id: string; fromdate: string; todate: string }>;
+    }>(accessToken, '/financialyear');
+
+    return response.data?.financialyears ?? response.financialyears ?? [];
+  }
+
   async getPage<T>(
     accessToken: string,
     path: string,

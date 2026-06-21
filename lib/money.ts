@@ -45,6 +45,13 @@ export function roundOre(n: number): number {
 export const ORE_TOLERANCE = 0.005
 
 /**
+ * Maximum |payment − invoice remaining| (SEK) treated as öresavrundning
+ * instead of a genuine partial/overpayment. Whole-krona settlements leave a
+ * residual strictly below 1 kr; real shortfalls/overshoots are >= 1 kr.
+ */
+export const ORE_ROUNDING_SETTLEMENT_MAX = 1.0
+
+/**
  * True when two amounts are equal to the öre (within `ORE_TOLERANCE`). Prefer
  * this over `a === b` for money — direct equality on floats fails on drift.
  */

@@ -211,7 +211,8 @@ export function buildMappingResultFromCategory(
   transaction: Transaction,
   isBusiness: boolean,
   entityType: EntityType = 'enskild_firma',
-  vatTreatment?: VatTreatment
+  vatTreatment?: VatTreatment,
+  overrideVatAmount?: number
 ): MappingResult {
   const mapping = getCategoryAccountMapping(category, transaction.amount, isBusiness, entityType, vatTreatment)
 
@@ -235,7 +236,9 @@ export function buildMappingResultFromCategory(
       }
     } else if (vatRate > 0) {
       const grossAmount = Math.abs(transaction.amount)
-      const vatAmount = Math.round((grossAmount * vatRate / (1 + vatRate)) * 100) / 100
+      const vatAmount = typeof overrideVatAmount === 'number' && Number.isFinite(overrideVatAmount)
+        ? Math.round(Math.abs(overrideVatAmount) * 100) / 100
+        : Math.round((grossAmount * vatRate / (1 + vatRate)) * 100) / 100
 
       if (transaction.amount < 0 && mapping.vatDebitAccount) {
         // Expense: Ingående moms (deductible VAT)

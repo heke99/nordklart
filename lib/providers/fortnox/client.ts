@@ -83,6 +83,52 @@ export class FortnoxClient {
     );
   }
 
+
+  async getBytes(accessToken: string, path: string): Promise<ArrayBuffer> {
+    return withRetry(
+      async () => {
+        await this.rateLimiter.acquire();
+        const url = `${this.baseUrl}${path}`;
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/octet-stream, text/vnd.sie-gruppen.si, */*',
+          },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          let retryAfterMs: number | undefined;
+          if (response.status === 429) {
+            const retryAfter = response.headers.get('Retry-After');
+            retryAfterMs = retryAfter ? Math.ceil(parseFloat(retryAfter)) * 1000 : undefined;
+          }
+          throw new FortnoxApiError(
+            `Fortnox API error: ${response.status} ${response.statusText}`,
+            response.status,
+            body,
+            retryAfterMs,
+          );
+        }
+
+        return response.arrayBuffer();
+      },
+      {
+        maxAttempts: 6,
+        initialDelayMs: 2000,
+        maxDelayMs: 60_000,
+        shouldRetry: isRetryableError,
+        getDelayMs: (error) => {
+          if (error instanceof FortnoxApiError && error.retryAfterMs) {
+            return error.retryAfterMs;
+          }
+          return undefined;
+        },
+      },
+    );
+  }
+
   async getText(accessToken: string, path: string): Promise<string> {
     return withRetry(
       async () => {

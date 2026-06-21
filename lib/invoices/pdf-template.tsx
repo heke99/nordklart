@@ -622,6 +622,8 @@ interface InvoicePDFProps {
    * suite and for callers that haven't yet been migrated to forward branding.
    */
   branding?: InvoiceBranding
+  /** Pre-rendered Swish QR. Currently accepted for route compatibility; rendering is disabled. */
+  swishQrDataUrl?: string | null
 }
 
 export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding }: InvoicePDFProps) {

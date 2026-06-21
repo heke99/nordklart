@@ -97,6 +97,8 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // staged.
   create_salary_run: 'medium',
   generate_agi: 'high',
+  submit_vat_declaration: 'high',
+  submit_agi: 'high',
 
   // ── Multi-tx flows (PRs #603/#606/#608/#610) ───────────────────────
   // Allocate 1 bank tx across N customer or supplier invoices into one

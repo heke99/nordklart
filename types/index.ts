@@ -1103,6 +1103,8 @@ export interface CreateSupplierInvoiceInput {
   reverse_charge?: boolean
   payment_reference?: string
   notes?: string
+  /** Per-invoice öresavrundning override. Omitted = inherit current defaults. */
+  ore_rounding?: boolean
   items: CreateSupplierInvoiceItemInput[]
 }
 
@@ -1139,15 +1141,23 @@ export interface CreateInvoiceInput {
   /** Save as an unnumbered draft (no F-number, no invoice.created) until the
    *  user finalizes via "Granska & skapa". Lets the draft be hard-deleted. */
   save_as_draft?: boolean
+  /** Per-invoice öresavrundning override. Omitted = inherit company setting. */
+  ore_rounding?: boolean
   items: CreateInvoiceItemInput[]
 }
 
 export interface CreateInvoiceItemInput {
+  /** 'text' rows carry only a description and are excluded from totals/bookkeeping. */
+  line_type?: 'product' | 'text'
   description: string
   quantity: number
   unit: string
   unit_price: number
   vat_rate?: number
+  /** Source article copied to the invoice row when selected. */
+  article_id?: string | null
+  /** BAS class-3 revenue account override copied from the article. */
+  revenue_account?: string | null
   /** ROT/RUT toggle. null/undefined = no deduction. */
   deduction_type?: 'rot' | 'rut' | null
   labor_hours?: number | null
@@ -1281,6 +1291,7 @@ export type JournalEntrySourceType =
   | 'currency_revaluation'
   | 'reminder_fee'
   | 'accrual'
+  | 'result_appropriation'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -1726,6 +1737,8 @@ export interface CreateFiscalPeriodInput {
 export type PendingOperationType =
   | 'categorize_transaction'
   | 'create_customer'
+  | 'create_article'
+  | 'update_article'
   | 'create_supplier'
   | 'create_invoice'
   | 'mark_invoice_paid'
@@ -1781,9 +1794,11 @@ export type PendingOperationType =
   | 'bulk_book_transactions'
   // PR #614: link a single bank tx to an already-posted verifikat (no new JE)
   | 'link_transaction_journal_entry'
+  | 'submit_vat_declaration'
+  | 'submit_agi'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
-export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'
 
 export interface PendingOperationAgentMetadata {

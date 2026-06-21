@@ -43,7 +43,7 @@ export class BjornLundenClient {
     this.rateLimiter = new TokenBucketRateLimiter(BL_RATE_LIMIT, 'ratelimit:bjornlunden');
   }
 
-  async get<T>(accessToken: string, userKey: string, path: string): Promise<T> {
+  async get<T>(accessToken: string, userKey: string, path: string, options?: { retry?: boolean }): Promise<T> {
     return withRetry(
       async () => {
         await this.rateLimiter.acquire();
@@ -69,11 +69,65 @@ export class BjornLundenClient {
         return response.json() as Promise<T>;
       },
       {
+        maxAttempts: options?.retry === false ? 1 : 3,
+        initialDelayMs: 1000,
+        shouldRetry: isRetryableError,
+      },
+    );
+  }
+
+
+  async getBytes(accessToken: string, userKey: string, path: string): Promise<ArrayBuffer> {
+    return withRetry(
+      async () => {
+        await this.rateLimiter.acquire();
+        const url = `${this.baseUrl}${path}`;
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'User-Key': userKey,
+            Accept: 'application/octet-stream, text/vnd.sie-gruppen.si, */*',
+          },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          throw new BjornLundenApiError(
+            `Björn Lunden API error: ${response.status} ${response.statusText}`,
+            response.status,
+            body,
+          );
+        }
+
+        return response.arrayBuffer();
+      },
+      {
         maxAttempts: 3,
         initialDelayMs: 1000,
         shouldRetry: isRetryableError,
       },
     );
+  }
+
+  async listFinancialYears(
+    accessToken: string,
+    userKey: string,
+  ): Promise<Array<{ id?: string | number; entityId?: string | number; fromDate: string; toDate: string }>> {
+    const response = await this.get<
+      | Array<{ id?: string | number; entityId?: string | number; fromDate?: string; toDate?: string; fromdate?: string; todate?: string }>
+      | { data?: Array<{ id?: string | number; entityId?: string | number; fromDate?: string; toDate?: string; fromdate?: string; todate?: string }> }
+    >(accessToken, userKey, '/financialyears');
+
+    const rows = Array.isArray(response) ? response : (response.data ?? []);
+    return rows
+      .map((year) => ({
+        id: year.id,
+        entityId: year.entityId,
+        fromDate: year.fromDate ?? year.fromdate ?? '',
+        toDate: year.toDate ?? year.todate ?? '',
+      }))
+      .filter((year) => year.fromDate && year.toDate);
   }
 
   async getPage<T>(

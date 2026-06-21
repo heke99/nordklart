@@ -50,6 +50,12 @@ import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport, undoSIEImport } from '@/lib/import/sie-import'
 import type { AccountMapping } from '@/lib/import/types'
 import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
+import { extensionRegistry } from '@/lib/extensions/registry'
+import {
+  SkatteverketRecoverableError,
+  type SkatteverketCommitServices,
+  type SkvSubmitResult,
+} from '@/lib/pending-operations/skatteverket-commit'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -59,11 +65,14 @@ import {
 import { uploadDocument, linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
+import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
+import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
 import type {
   Transaction,
@@ -74,6 +83,7 @@ import type {
   Invoice,
   Customer,
   Supplier,
+  Article,
   SupplierInvoice,
   SupplierInvoiceItem,
   PendingOperation,
@@ -112,7 +122,7 @@ export interface CommitOptions {
    *
    * Web-UI single-approval passes 'user_accept'; bulk-approval passes
    * 'bulk_accept'. MCP approvals pass the relaying credential — 'api_key'
-   * (nordklart-mcp bridge) or 'agent' (OAuth connector) — so the immutable layer
+   * (gnubok-mcp bridge) or 'agent' (OAuth connector) — so the immutable layer
    * records that the acknowledgment was agent-relayed rather than a
    * first-party human session (agent_first_vision.md §8 P0-1). Every path is
    * still human-approval-gated; agent auto-commit was removed in
@@ -246,6 +256,13 @@ async function commitCategorizeTransaction(
     typeof params.notes === 'string' && params.notes.trim().length > 0
       ? (params.notes as string)
       : undefined
+  // The underlag's actual VAT, staged when the document's moms differs from
+  // rate × belopp (e.g. dricks). Threaded into the mapping builder so the
+  // approved posting matches the staged preview exactly.
+  const vatAmount =
+    typeof params.vat_amount === 'number' && Number.isFinite(params.vat_amount)
+      ? params.vat_amount
+      : undefined
 
   const { data: transaction, error: fetchError } = await supabase
     .from('transactions').select('*').eq('id', txId).eq('company_id', companyId).single()
@@ -266,7 +283,7 @@ async function commitCategorizeTransaction(
   const fiscalYearStartMonth = settings?.fiscal_year_start_month ?? 1
 
   const mappingResult = buildMappingResultFromCategory(
-    category, transaction as Transaction, isBusiness, entityType, vatTreatment
+    category, transaction as Transaction, isBusiness, entityType, vatTreatment, vatAmount
   )
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
@@ -421,6 +438,112 @@ async function commitCreateCustomer(
   return { data: { customer_id: data.id } }
 }
 
+async function commitCreateArticle(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Defense in depth: re-validate the staged params at the commit boundary so a
+  // tampered pending_operations row cannot inject unexpected fields (ASVS V4.5).
+  let validated
+  try {
+    validated = CreateArticleParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  if (validated.revenue_account) {
+    const ok = await isValidRevenueAccount(supabase, companyId, validated.revenue_account)
+    if (!ok) return { error: 'Revenue account is not an active class-3 account', status: 400 }
+  }
+
+  const { data, error } = await supabase
+    .from('articles')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      name: validated.name,
+      name_en: validated.name_en ?? null,
+      type: validated.type,
+      unit: validated.unit ?? 'st',
+      price_excl_vat: validated.price_excl_vat,
+      vat_rate: validated.vat_rate,
+      revenue_account: validated.revenue_account ?? null,
+      cost_price: validated.cost_price ?? null,
+      ean: validated.ean ?? null,
+      housework_type: validated.housework_type ?? null,
+      notes: validated.notes ?? null,
+      article_number: validated.article_number ?? null,
+    })
+    .select()
+    .single()
+
+  if (error) return { error: error.message, status: 500 }
+
+  if (!data.article_number) {
+    try {
+      data.article_number = await ensureArticleNumber(supabase, companyId, data.id)
+    } catch (err) {
+      log.warn('article number assignment failed (staged create):', err)
+    }
+  }
+
+  await eventBus.emit({ type: 'article.created', payload: { article: data as Article, userId, companyId } })
+
+  return { data: { article_id: data.id, article_number: data.article_number } }
+}
+
+async function commitUpdateArticle(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = UpdateArticleParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  if (validated.revenue_account) {
+    const ok = await isValidRevenueAccount(supabase, companyId, validated.revenue_account)
+    if (!ok) return { error: 'Revenue account is not an active class-3 account', status: 400 }
+  }
+
+  const { article_id, ...rest } = validated
+  const updateData: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(rest)) {
+    if (value !== undefined) updateData[key] = value
+  }
+
+  const { data, error } = await supabase
+    .from('articles')
+    .update(updateData)
+    .eq('id', article_id)
+    .eq('company_id', companyId)
+    .select()
+    .single()
+
+  if (error) {
+    if (error.code === 'PGRST116') return { error: 'Article not found', status: 404 }
+    return { error: error.message, status: 500 }
+  }
+
+  await eventBus.emit({ type: 'article.updated', payload: { article: data as Article, userId, companyId } })
+
+  return { data: { article_id: data.id } }
+}
+
 async function commitCreateSupplier(
   supabase: SupabaseClient,
   userId: string,
@@ -533,7 +656,15 @@ async function commitCreateInvoice(
   const customerId = params.customer_id as string
   const items = params.items as Array<{
     description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number
+    article_id?: string | null; revenue_account?: string | null
+    line_type?: 'product' | 'text'
   }>
+
+  // Free-text rows carry no amounts and never book. The MCP staging tool does
+  // not accept line_type today, but the totals math must stay identical to
+  // app/api/invoices/route.ts, which excludes text rows from subtotal, VAT,
+  // and the mixed-rate detection.
+  const billableItems = items.filter((item) => item.line_type !== 'text')
 
   const { data: customer, error: customerError } = await supabase
     .from('customers').select('*').eq('id', customerId).eq('company_id', companyId).single()
@@ -546,16 +677,39 @@ async function commitCreateInvoice(
   const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
   const allowedRates = new Set(availableRates.map((r) => r.rate))
 
-  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
+  // VAT registration gate (mirrors app/api/invoices/route.ts). A
+  // non-momsregistrerad company books no output VAT: force every line to 0%
+  // (momsfri → treatment 'exempt'). 0% is allowed for every customer type, so
+  // the allowedRates guard below still passes.
+  const { data: vatSettings } = await supabase
+    .from('company_settings')
+    .select('vat_registered')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const notVatRegistered = vatSettings?.vat_registered === false
+  if (notVatRegistered) for (const item of items) item.vat_rate = 0
+
+  const subtotal = billableItems.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
 
   let vatAmount = 0
-  for (const item of items) {
+  for (const item of billableItems) {
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
     if (!allowedRates.has(itemRate)) {
       return { error: `Momssats ${itemRate}% är inte tillåten för denna kundtyp`, status: 400 }
     }
     const lineTotal = item.quantity * item.unit_price
     vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
+  }
+
+  // Validate any per-line revenue-account override (defense in depth — the field
+  // is frozen onto invoice_items and flows to generatePerRateLines()).
+  const overrideAccounts = Array.from(
+    new Set(billableItems.map((i) => i.revenue_account).filter((a): a is string => !!a)),
+  )
+  for (const acct of overrideAccounts) {
+    if (!(await isValidRevenueAccount(supabase, companyId, acct))) {
+      return { error: `Försäljningskonto ${acct} är inte ett aktivt intäktskonto (klass 3)`, status: 400 }
+    }
   }
 
   const total = subtotal + vatAmount
@@ -578,7 +732,7 @@ async function commitCreateInvoice(
     }
   }
 
-  const uniqueRates = new Set(items.map((item) => item.vat_rate ?? vatRules.rate))
+  const uniqueRates = new Set(billableItems.map((item) => item.vat_rate ?? vatRules.rate))
   const isMixedRate = uniqueRates.size > 1
 
   const { data: invoice, error: invoiceError } = await supabase
@@ -599,10 +753,10 @@ async function commitCreateInvoice(
       vat_amount_sek: vatAmountSek,
       total,
       total_sek: totalSek,
-      vat_treatment: vatRules.treatment,
+      vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
       vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
-      moms_ruta: vatRules.momsRuta,
-      reverse_charge_text: vatRules.reverseChargeText || null,
+      moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
+      reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
       our_reference: (params.our_reference as string) || null,
       your_reference: (params.your_reference as string) || null,
       notes: (params.notes as string) || null,
@@ -613,12 +767,32 @@ async function commitCreateInvoice(
   if (invoiceError) return { error: invoiceError.message, status: 500 }
 
   const invoiceItems = items.map((item, index) => {
+    // Text rows store the description only and zero everything else. Keys must
+    // match the product branch exactly — PostgREST rejects a bulk insert whose
+    // objects have differing key sets.
+    if (item.line_type === 'text') {
+      return {
+        invoice_id: invoice.id,
+        sort_order: index,
+        line_type: 'text',
+        description: item.description ?? '',
+        quantity: 0,
+        unit: '',
+        unit_price: 0,
+        line_total: 0,
+        vat_rate: 0,
+        vat_amount: 0,
+        article_id: null,
+        revenue_account: null,
+      }
+    }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
     const lineTotal = item.quantity * item.unit_price
     const itemVat = Math.round(lineTotal * itemRate / 100 * 100) / 100
     return {
       invoice_id: invoice.id,
       sort_order: index,
+      line_type: 'product',
       description: item.description,
       quantity: item.quantity,
       unit: item.unit,
@@ -626,6 +800,10 @@ async function commitCreateInvoice(
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,
+      // Frozen per-line override so generatePerRateLines() books to the article's
+      // account; null falls back to the VAT-treatment-derived account.
+      article_id: item.article_id ?? null,
+      revenue_account: item.revenue_account ?? null,
     }
   })
 
@@ -818,6 +996,7 @@ async function commitSendInvoice(
   // would stamp the customer's PDF with "UTKAST – inte en giltig faktura".
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
   const { branding } = prepareInvoicePdfRender(company as CompanySettings)
+  const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,
@@ -826,6 +1005,7 @@ async function commitSendInvoice(
       company: company as CompanySettings,
       originalInvoiceNumber,
       branding,
+      swishQrDataUrl,
     })
   )
 
@@ -1282,11 +1462,24 @@ async function commitAttachDocumentToTransaction(
 
   const { data: doc, error: docError } = await supabase
     .from('document_attachments')
-    .select('id')
+    .select('id, journal_entry_id')
     .eq('id', documentId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (docError || !doc) return { error: 'Document not found', status: 404 }
+
+  // A document that already serves as underlag for a DIFFERENT verifikation
+  // cannot be pinned here — propagating would either corrupt that link or be
+  // blocked by the document-metadata immutability trigger. Same verifikation
+  // is fine (idempotent re-attach; propagation below becomes a no-op).
+  // Mirrors the REST route in app/api/transactions/[id]/attach-document.
+  const docJournalEntryId = (doc.journal_entry_id as string | null) ?? null
+  if (docJournalEntryId && docJournalEntryId !== tx.journal_entry_id) {
+    return {
+      error: 'Underlaget är redan kopplat till en annan verifikation.',
+      status: 409,
+    }
+  }
 
   // Race-free read of journal_entry_id: use UPDATE ... RETURNING so the value
   // we propagate against reflects any concurrent categorize that committed
@@ -1340,13 +1533,29 @@ async function commitAttachDocumentToTransaction(
   }
 
   const journalEntryId = postUpdate.journal_entry_id as string | null
-  if (journalEntryId) {
+  // Skip when the doc already points at this verifikation: the period-lock
+  // trigger raises on ANY journal_entry_id write (even a same-value rewrite),
+  // so an unconditional re-run would 500 an otherwise idempotent re-attach
+  // once the period locks.
+  if (journalEntryId && docJournalEntryId !== journalEntryId) {
     const { error: linkErr } = await supabase
       .from('document_attachments')
       .update({ journal_entry_id: journalEntryId })
       .eq('id', documentId)
       .eq('company_id', companyId)
     if (linkErr) {
+      // The enforce_period_lock trigger blocks journal_entry_id writes when
+      // the target entry sits in a closed/locked period. Map to 409 — the
+      // dispatcher auto-rejects it, and a retry could never succeed until the
+      // period is unlocked, so "försök igen" would be a false promise.
+      const linkMsg = (linkErr as { message?: string }).message ?? ''
+      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(linkMsg)) {
+        return {
+          error:
+            'Bilagan kopplades till transaktionen men verifikationens period är låst — den kunde inte länkas till verifikationen.',
+          status: 409,
+        }
+      }
       // Surface the propagation failure rather than logging-and-continuing.
       // BFL 5 kap 6 § requires the verifikation to reference its underlag, so
       // a "succeeded" attach that left document_attachments.journal_entry_id
@@ -1685,6 +1894,7 @@ async function commitCreateSupplierInvoiceFromInbox(
       total_sek: totalSek,
       paid_amount: 0,
       remaining_amount: totalRounded,
+      document_id: documentId,
       notes,
     })
     .select()
@@ -2085,6 +2295,7 @@ async function commitCreditInvoice(
 
   const creditItems = (original.items || []).map((item: {
     sort_order: number
+    line_type?: 'product' | 'text'
     description: string
     quantity: number
     unit: string
@@ -2092,9 +2303,12 @@ async function commitCreditInvoice(
     line_total: number
     vat_rate?: number
     vat_amount?: number
+    revenue_account?: string | null
+    article_id?: string | null
   }) => ({
     invoice_id: creditNote.id,
     sort_order: item.sort_order,
+    line_type: item.line_type ?? 'product',
     description: item.description,
     quantity: -Math.abs(item.quantity),
     unit: item.unit,
@@ -2102,6 +2316,10 @@ async function commitCreditInvoice(
     line_total: -Math.abs(item.line_total),
     vat_rate: item.vat_rate ?? 0,
     vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
+    // Reverse to the SAME account the original credited (e.g. 3041, not the
+    // VAT-derived 3001) so the override account doesn't keep a dangling balance.
+    revenue_account: item.revenue_account ?? null,
+    article_id: item.article_id ?? null,
   }))
 
   const { error: itemsError } = await supabase
@@ -2245,11 +2463,19 @@ async function commitConvertInvoice(
   const items = (proforma.items ?? []).map((item: Record<string, unknown>) => ({
     invoice_id: invoice.id,
     sort_order: item.sort_order,
+    line_type: item.line_type ?? 'product',
     description: item.description,
     quantity: item.quantity,
     unit: item.unit,
     unit_price: item.unit_price,
     line_total: item.line_total,
+    // Preserve per-line VAT and any article/revenue-account override from the
+    // proforma so the converted invoice books exactly as the proforma showed
+    // (mixed rates + per-article accounts both rely on these per-line fields).
+    vat_rate: item.vat_rate ?? 0,
+    vat_amount: item.vat_amount ?? 0,
+    revenue_account: item.revenue_account ?? null,
+    article_id: item.article_id ?? null,
   }))
 
   if (items.length > 0) {
@@ -2326,6 +2552,7 @@ async function commitImportSie(
 
 async function commitUndoSieImport(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>,
 ): Promise<ExecutorResult> {
@@ -2495,7 +2722,7 @@ async function commitCreateVoucher(
       opts.commitMethod ?? 'user_accept'
     )
 
-    // Optional inbox linking — set when nordklart_create_voucher is called with
+    // Optional inbox linking — set when gnubok_create_voucher is called with
     // inbox_item_id (book-direct flow for kvitton). The verifikat is already
     // posted and immutable; failures here are non-fatal and only affect
     // discoverability (inbox row stays in "needs action" with the document
@@ -2832,6 +3059,71 @@ async function commitGenerateAgi(
   }
 }
 
+// ── Skatteverket filing commit handlers (PR5) ─────────────────────
+//
+// Core cannot import @/extensions (CI guard), so these reach the Skatteverket
+// extension only through the registry-resolved `services` channel. The service
+// runs the SKV chain and returns a SkvSubmitResult (shared shape in
+// ./skatteverket-commit). A recoverable failure throws SkatteverketRecoverable-
+// Error, which the dispatcher catch releases back to 'pending'; a non-recoverable
+// failure becomes a plain { error, status } that rejects the op.
+
+function getSkatteverketServices(): SkatteverketCommitServices {
+  const services = extensionRegistry.get('skatteverket')?.services as
+    | Partial<SkatteverketCommitServices>
+    | undefined
+  if (!services?.commitSubmitVatDeclaration || !services?.commitSubmitAgi) {
+    // Extension absent or not wired. Recoverable — leave the op pending so a
+    // re-enable + re-approve works without re-staging.
+    throw new SkatteverketRecoverableError(
+      'Skatteverket-integrationen är inte tillgänglig.',
+      'EXTENSION_DISABLED',
+      503,
+    )
+  }
+  return services as SkatteverketCommitServices
+}
+
+function handleSkvSubmitResult(result: SkvSubmitResult): ExecutorResult {
+  if (!result.ok) {
+    if (result.recoverable) {
+      throw new SkatteverketRecoverableError(result.error, result.code, result.http_status)
+    }
+    return { error: result.error, status: result.http_status }
+  }
+  const data: Record<string, unknown> = { ...result, status: 'awaiting_signature' }
+  delete data.ok
+  return { data }
+}
+
+async function commitSubmitVatDeclaration(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  if (!params.period_type || !params.year || !params.period) {
+    return { error: 'period_type, year och period krävs', status: 400 }
+  }
+  const services = getSkatteverketServices()
+  const result = await services.commitSubmitVatDeclaration(supabase, userId, companyId, params)
+  return handleSkvSubmitResult(result)
+}
+
+async function commitSubmitAgi(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  if (!params.salary_run_id) {
+    return { error: 'salary_run_id krävs', status: 400 }
+  }
+  const services = getSkatteverketServices()
+  const result = await services.commitSubmitAgi(supabase, userId, companyId, params)
+  return handleSkvSubmitResult(result)
+}
+
 // ── Multi-tx commit handlers (PRs #603/#606/#608/#610) ────────────
 //
 // Both wrap their SQL RPC. The RPCs do all the heavy lifting (locking,
@@ -3091,6 +3383,12 @@ async function commitPendingOperationInner(
       case 'create_customer':
         result = await commitCreateCustomer(supabase, userId, companyId, pendingOp.params)
         break
+      case 'create_article':
+        result = await commitCreateArticle(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'update_article':
+        result = await commitUpdateArticle(supabase, userId, companyId, pendingOp.params)
+        break
       case 'create_supplier':
         result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)
         break
@@ -3164,7 +3462,7 @@ async function commitPendingOperationInner(
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
         break
       case 'undo_sie_import':
-        result = await commitUndoSieImport(supabase, companyId, pendingOp.params)
+        result = await commitUndoSieImport(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_voucher':
         result = await commitCreateVoucher(supabase, userId, companyId, pendingOp.params, opts)
@@ -3193,6 +3491,12 @@ async function commitPendingOperationInner(
       case 'link_transaction_journal_entry':
         result = await commitLinkTransactionJournalEntry(supabase, userId, companyId, pendingOp.params)
         break
+      case 'submit_vat_declaration':
+        result = await commitSubmitVatDeclaration(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'submit_agi':
+        result = await commitSubmitAgi(supabase, userId, companyId, pendingOp.params)
+        break
       default:
         return {
           status: 'failed',
@@ -3217,6 +3521,22 @@ async function commitPendingOperationInner(
         http_status: 400,
         code: ACCOUNTS_NOT_IN_CHART,
         account_numbers: err.accountNumbers,
+      }
+    }
+    // Recoverable Skatteverket failure (extension disabled, no connection,
+    // rate-limited, still processing). Same contract as accounts-not-in-chart:
+    // release the claim back to 'pending' so the user can fix the connection/
+    // flag and re-approve the SAME op, and surface the structured code.
+    if (err instanceof SkatteverketRecoverableError) {
+      await supabase
+        .from('pending_operations')
+        .update({ status: 'pending' })
+        .eq('id', pendingOp.id)
+      return {
+        status: 'failed',
+        error: err.message,
+        http_status: err.httpStatus,
+        code: err.code,
       }
     }
     const isBkErr = isBookkeepingError(err)

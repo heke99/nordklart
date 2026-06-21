@@ -72,6 +72,8 @@ const OPERATION_LABEL_KEYS: Record<string, { labelKey: string; icon: typeof Arro
   send_invoice: { labelKey: 'type_send_invoice', icon: Receipt, variant: 'outline' },
   mark_invoice_sent: { labelKey: 'type_mark_invoice_sent', icon: Receipt, variant: 'outline' },
   match_transaction_invoice: { labelKey: 'type_match_transaction_invoice', icon: ArrowLeftRight, variant: 'secondary' },
+  submit_vat_declaration: { labelKey: 'type_submit_vat_declaration', icon: Receipt, variant: 'outline' },
+  submit_agi: { labelKey: 'type_submit_agi', icon: Receipt, variant: 'outline' },
 }
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
@@ -116,6 +118,8 @@ const singleActionWarnings: Record<string, string> = {
   send_invoice: 'Genom att klicka godkänn så skickas fakturan till kunden.',
   mark_invoice_paid: 'Genom att klicka godkänn så bokförs en betalning på fakturan.',
   mark_invoice_sent: 'Genom att klicka godkänn så märks fakturan som skickad och en verifikation skapas.',
+  submit_vat_declaration: 'Genom att klicka godkänn så skickas momsdeklarationen till Skatteverket för BankID-signering.',
+  submit_agi: 'Genom att klicka godkänn så skickas AGI-underlaget till Skatteverket för BankID-signering.',
   // High risk — period/year-end/voucher edits. These are the ones the reviewer
   // really needs the warning for, so we keep them concrete: name the
   // irreversibility or compliance consequence, not the generic risk-level.
@@ -521,7 +525,10 @@ export default function PendingOperationsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<PendingOperationStatus>('pending')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
-  const [conversationFilter, setConversationFilter] = useState<string | null>(null)
+  const [conversationFilter, setConversationFilter] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return new URL(window.location.href).searchParams.get('conversation')
+  })
   const [counts, setCounts] = useState<StatusCounts>({
     pending: null,
     committed: null,
@@ -541,15 +548,6 @@ export default function PendingOperationsPage() {
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
   const { toast } = useToast()
-
-  // Read ?conversation= once on mount so deep-links from the agent context
-  // strip filter the list automatically.
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const url = new URL(window.location.href)
-    const conv = url.searchParams.get('conversation')
-    if (conv) setConversationFilter(conv)
-  }, [])
 
   const fetchOperations = useCallback(async () => {
     setIsLoading(true)
@@ -583,11 +581,11 @@ export default function PendingOperationsPage() {
   }, [])
 
   useEffect(() => {
-    fetchOperations()
+    void Promise.resolve().then(fetchOperations)
   }, [fetchOperations])
 
   useEffect(() => {
-    fetchAllCounts()
+    void Promise.resolve().then(fetchAllCounts)
   }, [fetchAllCounts])
 
   // Realtime subscription: refetch when ANY pending_operations row changes for
@@ -616,7 +614,7 @@ export default function PendingOperationsPage() {
 
   // Clear selection when filters/tab change
   useEffect(() => {
-    setSelectedIds(new Set())
+    queueMicrotask(() => setSelectedIds(new Set()))
   }, [activeTab, sourceFilter, conversationFilter])
 
   async function handleCommit() {
