@@ -123,10 +123,10 @@ export function evaluateDeductibility(input: PurchaseRuleInput, context: EntityC
 
 function defaultExpenseAccount(text: string): string {
   if (/programvara|software|licens|saas|abonnemang/.test(text)) return '5420'
-  if (/dator|laptop|telefon|iphone|ipad|utrustning|inventarie|verktyg|möbel/.test(text)) return '5410'
-  if (/bankavgift|kortavgift|valuta|fx/.test(text)) return '6570'
-  if (/försäkring|insurance/.test(text)) return '6310'
-  if (/hyra|kontor|lokal/.test(text)) return '5010'
+  if (
+  /dator|laptop|telefon|iphone|ipad|utrustning|inventarie|verktyg|möbel|möbler|stol|bord|skärm|monitor|tangentbord|mus|kontorsutrustning|kontorsinventarie/.test(text)
+) return '5410'
+  if (/lokalhyra|kontorshyra|hyra lokal|hyra för lokal|office rent|rent premises/.test(text)) return '5010'
   if (/marknadsföring|annons|ads|google|meta|facebook/.test(text)) return '5910'
   if (/resa|hotell|taxi|uber|tåg|flyg/.test(text)) return '5800'
   return '6991'
