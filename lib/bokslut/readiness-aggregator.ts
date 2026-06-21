@@ -66,6 +66,50 @@ export interface BokslutReadinessReport {
  * Phase 2 will replace each reminder with a concrete proposal once the
  * relevant calculator ships.
  */
+
+async function buildAssetReadinessBlockers(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  periodEnd: string,
+): Promise<string[]> {
+  const blockers: string[] = []
+  const [{ data: company }, { data: assets }, { data: schedules }] = await Promise.all([
+    supabase.from('companies').select('accounting_framework').eq('id', companyId).maybeSingle(),
+    supabase
+      .from('assets')
+      .select('id, name, category, acquisition_date, disposed_at, land_value, building_value, k3_components')
+      .eq('company_id', companyId)
+      .lte('acquisition_date', periodEnd),
+    supabase
+      .from('depreciation_schedules')
+      .select('asset_id, journal_entry_id')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId),
+  ])
+
+  const scheduledAssetIds = new Set((schedules ?? []).map((row: { asset_id: string }) => row.asset_id))
+  const isK3 = company?.accounting_framework === 'k3'
+
+  for (const asset of assets ?? []) {
+    if (asset.disposed_at && asset.disposed_at < periodEnd) continue
+    if (asset.category === 'building') {
+      const hasSplit = Number(asset.land_value ?? 0) > 0 || Number(asset.building_value ?? 0) > 0
+      if (!hasSplit) {
+        blockers.push(`Tillgången "${asset.name}" är byggnad/fastighet men saknar fördelning mellan mark och byggnad.`)
+      }
+      if (isK3 && (!Array.isArray(asset.k3_components) || asset.k3_components.length === 0)) {
+        blockers.push(`Tillgången "${asset.name}" är K3-byggnad men saknar komponentanalys.`)
+      }
+    }
+    if (!scheduledAssetIds.has(asset.id)) {
+      blockers.push(`Tillgången "${asset.name}" saknar avskrivningsförslag/bokning för perioden.`)
+    }
+  }
+
+  return blockers
+}
+
 export async function buildBokslutReadinessReport(
   supabase: SupabaseClient,
   companyId: string,
@@ -173,9 +217,12 @@ export async function buildBokslutReadinessReport(
     }
   }
 
+  const assetBlockers = await buildAssetReadinessBlockers(supabase, companyId, fiscalPeriodId, period.period_end)
+  const blockers = [...validation.errors, ...assetBlockers]
+
   return {
-    ready: validation.ready,
-    blockers: validation.errors,
+    ready: blockers.length === 0,
+    blockers,
     warnings: validation.warnings,
     reminders,
     draftCount: validation.draftCount,

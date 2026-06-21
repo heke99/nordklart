@@ -6,7 +6,33 @@ import { validateBody } from '@/lib/api/validate'
 import { K3ComponentSchema } from '@/lib/api/schemas'
 import { getAsset, updateAsset } from '@/lib/bokslut/assets/asset-service'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
-import type { DepreciationMethod } from '@/types'
+import { componentValidationBase, validateAssetPropertyRules } from '@/lib/bokslut/assets/property-rules'
+import type { AccountingDepreciationModel, AssetSubtype, DepreciationMethod, PropertyKind } from '@/types'
+
+
+const ASSET_SUBTYPES: readonly AssetSubtype[] = [
+  'standard',
+  'building',
+  'land',
+  'land_improvement',
+  'property_component',
+  'low_value_inventory',
+  'short_life_inventory',
+] as const
+
+const PROPERTY_KINDS: readonly PropertyKind[] = [
+  'hyreshus',
+  'industribyggnad',
+  'ekonomibyggnad',
+  'ovrig',
+  'mixed',
+] as const
+
+const ACCOUNTING_DEPRECIATION_MODELS: readonly AccountingDepreciationModel[] = [
+  'k2_single_unit',
+  'k3_components',
+  'tax_plan',
+] as const
 
 const DEPRECIATION_METHODS: readonly DepreciationMethod[] = [
   'linear',
@@ -19,6 +45,18 @@ const UpdateAssetSchema = z
   .object({
     name: z.string().min(1).optional(),
     notes: z.string().nullable().optional(),
+    asset_subtype: z.enum(ASSET_SUBTYPES as unknown as [AssetSubtype, ...AssetSubtype[]]).nullable().optional(),
+    property_kind: z.enum(PROPERTY_KINDS as unknown as [PropertyKind, ...PropertyKind[]]).nullable().optional(),
+    land_value: z.number().nonnegative().nullable().optional(),
+    building_value: z.number().nonnegative().nullable().optional(),
+    tax_depreciation_rate: z.number().min(0).max(100).nullable().optional(),
+    accounting_depreciation_rate: z.number().min(0).max(100).nullable().optional(),
+    accounting_depreciation_model: z.enum(ACCOUNTING_DEPRECIATION_MODELS as unknown as [AccountingDepreciationModel, ...AccountingDepreciationModel[]]).nullable().optional(),
+    acquisition_source_document_id: z.string().uuid().nullable().optional(),
+    supplier_invoice_id: z.string().uuid().nullable().optional(),
+    bank_transaction_id: z.string().uuid().nullable().optional(),
+    private_use_percentage: z.number().min(0).max(100).optional(),
+    business_use_percentage: z.number().min(0).max(100).optional(),
     salvage_value: z.number().nonnegative().optional(),
     useful_life_months: z.number().int().positive().optional(),
     depreciation_method: z
@@ -116,8 +154,9 @@ export const PATCH = withRouteContext(
       if (!existing) {
         return NextResponse.json({ error: { code: 'ASSET_NOT_FOUND' } }, { status: 404 })
       }
+      const mergedForComponents = { ...existing, ...validation.data, acquisition_cost: Number(existing.acquisition_cost) }
       const { errors } = validateComponents({
-        acquisition_cost: Number(existing.acquisition_cost),
+        acquisition_cost: componentValidationBase(mergedForComponents),
         k3_components: validation.data.k3_components,
       })
       if (errors.length > 0) {
@@ -129,6 +168,36 @@ export const PATCH = withRouteContext(
             },
           },
           { status: 400 },
+        )
+      }
+    }
+
+    if (
+      validation.data.asset_subtype !== undefined ||
+      validation.data.property_kind !== undefined ||
+      validation.data.land_value !== undefined ||
+      validation.data.building_value !== undefined ||
+      validation.data.private_use_percentage !== undefined ||
+      validation.data.business_use_percentage !== undefined ||
+      validation.data.useful_life_months !== undefined ||
+      validation.data.k3_components !== undefined
+    ) {
+      const [{ data: company }, existing] = await Promise.all([
+        supabase.from('companies').select('accounting_framework').eq('id', companyId).single(),
+        getAsset(supabase, companyId, id),
+      ])
+      if (!existing) {
+        return NextResponse.json({ error: { code: 'ASSET_NOT_FOUND' } }, { status: 404 })
+      }
+      const merged = { ...existing, ...validation.data, acquisition_cost: Number(existing.acquisition_cost) }
+      const propertyValidation = validateAssetPropertyRules(
+        merged,
+        company?.accounting_framework === 'k3' ? 'k3' : 'k2',
+      )
+      if (propertyValidation.errors.length > 0) {
+        return NextResponse.json(
+          { error: { code: 'INVALID_ASSET_PROPERTY_RULES', message: propertyValidation.errors.join(' ') } },
+          { status: 422 },
         )
       }
     }

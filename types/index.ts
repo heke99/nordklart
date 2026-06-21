@@ -505,7 +505,7 @@ export interface Transaction {
   invoice_id: string | null
 
   // Linked supplier invoice (for matching)
-  supplier_invoice_id: string | null
+  supplier_invoice_id?: string | null
 
   // Potential invoice match (suggested, not confirmed)
   potential_invoice_id: string | null
@@ -1667,7 +1667,7 @@ export interface AccrualSchedule {
   user_id: string
   company_id: string
   direction: AccrualDirection
-  supplier_invoice_id: string | null
+  supplier_invoice_id?: string | null
   supplier_invoice_item_id: string | null
   invoice_id: string | null
   invoice_item_id: string | null
@@ -2792,14 +2792,39 @@ export interface K3Component {
   salvage_value?: number
 }
 
+export type AssetSubtype =
+  | 'standard'
+  | 'building'
+  | 'land'
+  | 'land_improvement'
+  | 'property_component'
+  | 'low_value_inventory'
+  | 'short_life_inventory'
+
+export type PropertyKind = 'hyreshus' | 'industribyggnad' | 'ekonomibyggnad' | 'ovrig' | 'mixed'
+
+export type AccountingDepreciationModel = 'k2_single_unit' | 'k3_components' | 'tax_plan'
+
 export interface Asset {
   id: string
   user_id: string
   company_id: string
   name: string
   category: AssetCategory
+  asset_subtype?: AssetSubtype | null
+  property_kind?: PropertyKind | null
   acquisition_date: string
   acquisition_cost: number
+  land_value?: number | null
+  building_value?: number | null
+  tax_depreciation_rate?: number | null
+  accounting_depreciation_rate?: number | null
+  accounting_depreciation_model?: AccountingDepreciationModel | null
+  acquisition_source_document_id?: string | null
+  supplier_invoice_id?: string | null
+  bank_transaction_id?: string | null
+  private_use_percentage?: number
+  business_use_percentage?: number
   salvage_value: number
   useful_life_months: number
   depreciation_method: DepreciationMethod

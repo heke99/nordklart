@@ -32,7 +32,7 @@ export function featureForOperation(operation: string): FeatureCode | null {
 
   const bookkeepingPrefixes = [
     'bookkeeping.', 'journal.', 'journals.', 'account.', 'accounts.', 'fiscal_period.', 'fiscal_periods.', 'transaction.', 'transactions.',
-    'supplier_invoice.', 'supplier.', 'receipt.', 'cash_account.', 'vat.',
+    'supplier_invoice.', 'supplier.', 'receipt.', 'cash_account.', 'vat.', 'asset.', 'assets.', 'accounting_rule.', 'accounting_rules.',
   ]
   if (bookkeepingPrefixes.some((prefix) => normalized.startsWith(prefix))) return NORDKLART_FEATURES.bookkeepingCore
 

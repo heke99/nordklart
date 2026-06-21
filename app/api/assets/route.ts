@@ -6,7 +6,33 @@ import { validateBody } from '@/lib/api/validate'
 import { K3ComponentSchema } from '@/lib/api/schemas'
 import { createAsset, listAssets } from '@/lib/bokslut/assets/asset-service'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
-import type { AssetCategory, DepreciationMethod } from '@/types'
+import { componentValidationBase, validateAssetPropertyRules } from '@/lib/bokslut/assets/property-rules'
+import type { AccountingDepreciationModel, AssetCategory, AssetSubtype, DepreciationMethod, PropertyKind } from '@/types'
+
+
+const ASSET_SUBTYPES: readonly AssetSubtype[] = [
+  'standard',
+  'building',
+  'land',
+  'land_improvement',
+  'property_component',
+  'low_value_inventory',
+  'short_life_inventory',
+] as const
+
+const PROPERTY_KINDS: readonly PropertyKind[] = [
+  'hyreshus',
+  'industribyggnad',
+  'ekonomibyggnad',
+  'ovrig',
+  'mixed',
+] as const
+
+const ACCOUNTING_DEPRECIATION_MODELS: readonly AccountingDepreciationModel[] = [
+  'k2_single_unit',
+  'k3_components',
+  'tax_plan',
+] as const
 
 const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'immaterial',
@@ -37,6 +63,18 @@ const CreateAssetSchema = z
     // Positive — a zero-value asset would dodge the depreciation engine and
     // create a no-op row that confuses the balance sheet.
     acquisition_cost: z.number().positive(),
+    asset_subtype: z.enum(ASSET_SUBTYPES as unknown as [AssetSubtype, ...AssetSubtype[]]).nullable().optional(),
+    property_kind: z.enum(PROPERTY_KINDS as unknown as [PropertyKind, ...PropertyKind[]]).nullable().optional(),
+    land_value: z.number().nonnegative().nullable().optional(),
+    building_value: z.number().nonnegative().nullable().optional(),
+    tax_depreciation_rate: z.number().min(0).max(100).nullable().optional(),
+    accounting_depreciation_rate: z.number().min(0).max(100).nullable().optional(),
+    accounting_depreciation_model: z.enum(ACCOUNTING_DEPRECIATION_MODELS as unknown as [AccountingDepreciationModel, ...AccountingDepreciationModel[]]).nullable().optional(),
+    acquisition_source_document_id: z.string().uuid().nullable().optional(),
+    supplier_invoice_id: z.string().uuid().nullable().optional(),
+    bank_transaction_id: z.string().uuid().nullable().optional(),
+    private_use_percentage: z.number().min(0).max(100).optional(),
+    business_use_percentage: z.number().min(0).max(100).optional(),
     salvage_value: z.number().nonnegative().optional(),
     useful_life_months: z.number().int().positive(),
     depreciation_method: z
@@ -64,19 +102,50 @@ const CreateAssetSchema = z
     // BAS-aligned and INK2R mappings continue to work.
     validateBasOverrides(value, ctx)
     validateRestvardeTarget(value, ctx)
+    validatePropertyMetadata(value, ctx)
     validateK3Components(value, ctx)
   })
 
+function validatePropertyMetadata(
+  value: {
+    category: AssetCategory
+    acquisition_cost: number
+    useful_life_months: number
+    asset_subtype?: AssetSubtype | null
+    property_kind?: PropertyKind | null
+    land_value?: number | null
+    building_value?: number | null
+    tax_depreciation_rate?: number | null
+    accounting_depreciation_rate?: number | null
+    accounting_depreciation_model?: AccountingDepreciationModel | null
+    private_use_percentage?: number
+    business_use_percentage?: number
+    k3_components?: { name: string; cost: number; useful_life_months: number; salvage_value?: number }[] | null
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const { errors } = validateAssetPropertyRules(value)
+  for (const message of errors) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['category'],
+      message,
+    })
+  }
+}
+
 function validateK3Components(
   value: {
+    category: AssetCategory
     acquisition_cost: number
+    building_value?: number | null
     k3_components?: { name: string; cost: number; useful_life_months: number; salvage_value?: number }[] | null
   },
   ctx: z.RefinementCtx,
 ): void {
   if (value.k3_components === undefined || value.k3_components === null) return
   const { errors } = validateComponents({
-    acquisition_cost: value.acquisition_cost,
+    acquisition_cost: componentValidationBase(value),
     k3_components: value.k3_components,
   })
   for (const message of errors) {
@@ -237,6 +306,22 @@ export const POST = withRouteContext(
           { status: 422 },
         )
       }
+    }
+
+    const { data: companyForProperty } = await supabase
+      .from('companies')
+      .select('accounting_framework')
+      .eq('id', companyId)
+      .single()
+    const propertyValidation = validateAssetPropertyRules(
+      validation.data,
+      companyForProperty?.accounting_framework === 'k3' ? 'k3' : 'k2',
+    )
+    if (propertyValidation.errors.length > 0) {
+      return NextResponse.json(
+        { error: { code: 'INVALID_ASSET_PROPERTY_RULES', message: propertyValidation.errors.join(' ') } },
+        { status: 422 },
+      )
     }
     try {
       const asset = await createAsset(supabase, companyId, user.id, validation.data)

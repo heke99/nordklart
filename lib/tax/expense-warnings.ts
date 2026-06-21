@@ -1,6 +1,9 @@
+import { createDefaultEntityContext, evaluatePurchaseForAccounting } from '@/lib/accounting-rules'
+
 /**
- * Expense warnings for non-deductible or partially deductible items
- * Based on Swedish tax law and Kammarrätten rulings
+ * Expense warnings for non-deductible or partially deductible items.
+ * The old regex layer remains as a compatibility facade, but the actual
+ * severity now comes from the structured accounting-rules engine.
  */
 
 export interface ExpenseWarning {
@@ -105,7 +108,43 @@ export function checkExpenseWarnings(description: string): ExpenseWarning[] {
     }
   }
 
-  return warnings
+  const decision = evaluatePurchaseForAccounting(
+    {
+      description,
+      amountExVat: 0,
+      category: suggestCategory(description),
+    },
+    createDefaultEntityContext(),
+  )
+
+  if (decision.reviewSeverity === 'warning' || decision.reviewSeverity === 'danger' || decision.reviewSeverity === 'blocking') {
+    warnings.push({
+      category: 'Regelkontroll',
+      warningLevel: decision.reviewSeverity === 'blocking' || decision.reviewSeverity === 'danger' ? 'danger' : 'warning',
+      message: decision.explanationSv,
+      legalBasis: decision.reasonCode,
+    })
+  }
+
+  for (const message of decision.warnings) {
+    warnings.push({
+      category: 'Moms/avdrag',
+      warningLevel: 'warning',
+      message,
+    })
+  }
+
+  return dedupeWarnings(warnings)
+}
+
+function dedupeWarnings(warnings: ExpenseWarning[]): ExpenseWarning[] {
+  const seen = new Set<string>()
+  return warnings.filter((warning) => {
+    const key = `${warning.category}:${warning.message}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 /**

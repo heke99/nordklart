@@ -1,10 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { validateAssetPropertyRules } from './property-rules'
 import type {
   Asset,
   AssetCategory,
   DepreciationMethod,
   K3Component,
+  AssetSubtype,
+  PropertyKind,
+  AccountingDepreciationModel,
   CreateJournalEntryLineInput,
   JournalEntry,
   VatTreatment,
@@ -34,6 +38,18 @@ export interface CreateAssetInput {
   category: AssetCategory
   acquisition_date: string
   acquisition_cost: number
+  asset_subtype?: AssetSubtype | null
+  property_kind?: PropertyKind | null
+  land_value?: number | null
+  building_value?: number | null
+  tax_depreciation_rate?: number | null
+  accounting_depreciation_rate?: number | null
+  accounting_depreciation_model?: AccountingDepreciationModel | null
+  acquisition_source_document_id?: string | null
+  supplier_invoice_id?: string | null
+  bank_transaction_id?: string | null
+  private_use_percentage?: number
+  business_use_percentage?: number
   salvage_value?: number
   useful_life_months: number
   depreciation_method?: DepreciationMethod
@@ -70,13 +86,30 @@ export async function createAsset(
   // value never leaks through.
   const restvarde =
     method === 'restvardesavskrivning_25' ? input.restvarde_target ?? null : null
+  const propertyValidation = validateAssetPropertyRules(input)
+  if (propertyValidation.errors.length > 0) {
+    throw new Error(propertyValidation.errors.join(' '))
+  }
+
   const row = {
     user_id: userId,
     company_id: companyId,
     name: input.name,
     category: input.category,
+    asset_subtype: input.asset_subtype ?? (input.category === 'building' ? 'building' : 'standard'),
+    property_kind: input.property_kind ?? null,
     acquisition_date: input.acquisition_date,
     acquisition_cost: input.acquisition_cost,
+    land_value: input.land_value ?? null,
+    building_value: input.building_value ?? null,
+    tax_depreciation_rate: input.tax_depreciation_rate ?? null,
+    accounting_depreciation_rate: input.accounting_depreciation_rate ?? null,
+    accounting_depreciation_model: input.accounting_depreciation_model ?? null,
+    acquisition_source_document_id: input.acquisition_source_document_id ?? null,
+    supplier_invoice_id: input.supplier_invoice_id ?? null,
+    bank_transaction_id: input.bank_transaction_id ?? null,
+    private_use_percentage: input.private_use_percentage ?? 0,
+    business_use_percentage: input.business_use_percentage ?? 100,
     salvage_value: input.salvage_value ?? 0,
     useful_life_months: input.useful_life_months,
     depreciation_method: method,
@@ -143,6 +176,18 @@ export interface UpdateAssetInput {
   notes?: string | null
   /** Salvage value, useful life, method, accounts — editable as long as the
    *  asset isn't disposed yet (DB trigger enforces this beyond the API). */
+  asset_subtype?: AssetSubtype | null
+  property_kind?: PropertyKind | null
+  land_value?: number | null
+  building_value?: number | null
+  tax_depreciation_rate?: number | null
+  accounting_depreciation_rate?: number | null
+  accounting_depreciation_model?: AccountingDepreciationModel | null
+  acquisition_source_document_id?: string | null
+  supplier_invoice_id?: string | null
+  bank_transaction_id?: string | null
+  private_use_percentage?: number
+  business_use_percentage?: number
   salvage_value?: number
   useful_life_months?: number
   depreciation_method?: DepreciationMethod
@@ -166,6 +211,26 @@ export async function updateAsset(
 ): Promise<Asset> {
   // Copy so we can adjust restvarde_target without mutating the caller's object.
   let input: UpdateAssetInput = { ...inputParam }
+
+  if (
+    input.asset_subtype !== undefined ||
+    input.property_kind !== undefined ||
+    input.land_value !== undefined ||
+    input.building_value !== undefined ||
+    input.private_use_percentage !== undefined ||
+    input.business_use_percentage !== undefined ||
+    input.useful_life_months !== undefined ||
+    input.k3_components !== undefined
+  ) {
+    const existing = await getAsset(supabase, companyId, assetId)
+    if (!existing) throw new Error('Asset not found')
+    const merged = { ...existing, ...input, acquisition_cost: Number(existing.acquisition_cost) }
+    const propertyValidation = validateAssetPropertyRules(merged)
+    if (propertyValidation.errors.length > 0) {
+      throw new Error(propertyValidation.errors.join(' '))
+    }
+  }
+
   // Defense-in-depth: when callers remap BAS accounts, refuse anything
   // outside the legitimate range for the existing asset's category — keeps
   // INK2R mappings + the depreciation engine's category-driven defaults in

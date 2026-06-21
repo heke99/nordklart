@@ -21,7 +21,8 @@
     "db:migrate:status": "node scripts/supabase-migrate.cjs status supabase/migrations",
     "db:migrate:list": "node scripts/supabase-migrate.cjs list supabase/migrations",
     "db:migrate:plan-after": "node scripts/supabase-migrate.cjs plan-after supabase/migrations",
-    "db:migrate:mark-through": "node scripts/supabase-migrate.cjs mark-through supabase/migrations"
+    "db:migrate:mark-through": "node scripts/supabase-migrate.cjs mark-through supabase/migrations",
+    "check:feature-policy": "npx tsx scripts/check-feature-policy-coverage.ts"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.1",

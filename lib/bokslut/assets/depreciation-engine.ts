@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { listAssets } from './asset-service'
+import { depreciableBaseForAsset } from './property-rules'
 import type {
   Asset,
   FiscalPeriod,
@@ -86,7 +87,7 @@ export function computeAnnualDepreciation(
     return { amount: result.amount, proRated: result.proRated }
   }
 
-  const acquisitionCost = Number(asset.acquisition_cost)
+  const acquisitionCost = depreciableBaseForAsset(asset)
   const method = asset.depreciation_method
 
   if (method === 'linear') {
@@ -134,7 +135,7 @@ function computeLinearAnnual(
   asset: Asset,
   fiscalPeriod: Pick<FiscalPeriod, 'period_start' | 'period_end'>,
 ): { amount: number; proRated: boolean } {
-  const acquisitionCost = Number(asset.acquisition_cost)
+  const acquisitionCost = depreciableBaseForAsset(asset)
   const salvageValue = Number(asset.salvage_value)
   const depreciableBase = acquisitionCost - salvageValue
   if (depreciableBase <= 0) return { amount: 0, proRated: false }
