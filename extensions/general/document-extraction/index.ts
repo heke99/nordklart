@@ -7,7 +7,7 @@ import type { DocumentAttachment } from '@/types'
 
 const log = createLogger('document-extraction')
 
-// Mime types we know Claude can read directly via Bedrock. Anything else
+// Mime types accepted by the OpenDataLoader OCR worker. Anything else
 // (HEIC, ZIP, TXT, …) is skipped — extracted_at still gets stamped so the
 // row is marked as "attempted, not eligible".
 const SUPPORTED_MIME_TYPES = new Set([
@@ -18,28 +18,19 @@ const SUPPORTED_MIME_TYPES = new Set([
   'image/gif',
 ])
 
-// AI-extraction extension — paid AI tier only.
+// OCR extraction extension.
 //
-// Subscribes to the existing document.uploaded event bus topic and runs
-// Sonnet 4.6 (via Bedrock, reusing invoice-inbox's extractInvoiceFields) on
-// every uploaded receipt or invoice. Writes the result to
-// document_attachments.extracted_data so the agent intent capture can use
-// it without re-asking the user.
+// Subscribes to document.uploaded and runs the same OpenDataLoader OCR +
+// deterministic parser path as invoice-inbox. No Claude/Bedrock call is made.
+// Writes interpreted invoice/receipt fields to document_attachments.extracted_data
+// so downstream bookkeeping flows can reuse what was read from the document.
 //
-// Idempotency: skips when extracted_at is already set on the row. Also
-// dedupes against invoice_inbox_items.extracted_data — when the inbox
-// extension already extracted the same file, we copy its result instead
-// of paying for a second Sonnet call.
-//
-// Free tier: disable this extension in extensions.config.json. Uploads
-// still work; the agent intent will see null extracted_data and either
-// ask the user or call nordklart_get_document_content at chat-time.
-//
-// See dev_docs/specialized-agent-plan.md (§ paid/free tier note) — to be
-// authored.
+// Idempotency: skips when extracted_at is already set on the row. Also dedupes
+// against invoice_inbox_items.extracted_data — when the inbox extension already
+// extracted the same file, we copy its result instead of running OCR twice.
 export const documentExtractionExtension: Extension = {
   id: 'document-extraction',
-  name: 'AI document extraction',
+  name: 'OCR document extraction',
   version: '1.0.0',
 
   eventHandlers: [
@@ -147,6 +138,8 @@ async function extractAndPersist(
         buffer,
         mimeType,
         fileName: (document.file_name as string) || 'document',
+        documentId: document.id,
+        companyId,
       })
       // extractInvoiceFields returns an "empty" result on failure rather
       // than throwing — distinguish by checking rawText. When rawText is
@@ -157,13 +150,13 @@ async function extractAndPersist(
           .from('document_attachments')
           .update({
             extracted_at: new Date().toISOString(),
-            extraction_model: 'failed:no_raw_text',
+            extraction_model: 'failed:ocr_no_raw_text',
           })
           .eq('id', document.id)
         return
       }
       extractedData = data as unknown as Record<string, unknown>
-      model = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
+      model = 'opendataloader_pdf:v1'
     } catch (err) {
       log.warn('extraction threw', {
         doc: document.id,

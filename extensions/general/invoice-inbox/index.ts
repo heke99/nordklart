@@ -51,10 +51,9 @@ import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, Suppli
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 
-// AI extraction is tuned for single-page receipts/invoices. Documents above
-// this page count tend to be sales reports, bank statements, or contracts —
-// Bedrock churns for minutes and still extracts nothing useful (issue #553).
-// Above the limit we skip extraction entirely; the document still lands in
+// OCR extraction is tuned for short receipts/invoices. Documents above
+// this page count tend to be sales reports, bank statements, or contracts.
+// Above the limit we skip automatic OCR; the document still lands in
 // the inbox and can be attached to a transaction or converted manually.
 const MAX_PAGES_FOR_AUTO_EXTRACT = 3
 
@@ -70,10 +69,10 @@ async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
   }
 }
 
-// Sandbox companies (24h anonymous demo accounts) skip the Bedrock extraction
+// Sandbox companies (24h anonymous demo accounts) skip the OCR extraction
 // pipeline entirely. The document still uploads, the inbox row still lands,
-// and the user can fill the fields in by hand — but no Claude tokens are
-// spent on a throwaway account. See migration 20260311120000 for the column.
+// and the user can fill the fields in by hand. See migration 20260311120000
+// for the column.
 async function isSandboxCompany(
   supabase: import('@supabase/supabase-js').SupabaseClient,
   companyId: string,
@@ -204,8 +203,8 @@ async function uploadAndExtract(
   }
 
   // Page-count gate (issue #553): PDFs above MAX_PAGES_FOR_AUTO_EXTRACT
-  // skip extraction. Bedrock would otherwise block the upload response for
-  // minutes on a 6-page sales report and return nothing useful. Images and
+  // skip extraction. OCR should not block the upload response for
+  // long documents that are not normal receipts/invoices. Images and
   // non-PDFs are never gated (single-page by definition). countPdfPages
   // returns null on malformed PDFs — we treat null as "not gated" and fall
   // through to the existing extraction path so today's behavior is preserved.
@@ -225,7 +224,7 @@ async function uploadAndExtract(
         : null
   const skipExtraction = skipReason !== null
 
-  // Bring-your-own-extraction: skip the Bedrock call entirely and seed an
+  // Bring-your-own-extraction: skip the OCR call entirely and seed an
   // empty extraction skeleton. The caller is expected to PUT the parsed
   // fields via /items/:id/extracted-data before converting to a supplier
   // invoice. extracted_data is never null in the DB; an empty skeleton
@@ -236,9 +235,11 @@ async function uploadAndExtract(
         buffer: Buffer.from(file.buffer),
         mimeType: file.type,
         fileName: file.name,
+        documentId: doc.id,
+        companyId,
       })
 
-  // Supplier match by org-nr, then case-insensitive name (no AI fuzz).
+  // Supplier match by org-nr, then case-insensitive name (no fuzzy matching).
   let matchedSupplierId: string | null = null
   if (extracted.supplier.orgNumber) {
     const { data: s } = await supabase
@@ -382,7 +383,7 @@ export const invoiceInboxExtension: Extension = {
           typeof matchedTransactionIdRaw === 'string' && matchedTransactionIdRaw.length > 0
             ? matchedTransactionIdRaw
             : null
-        // Opt-out of the built-in Claude/Bedrock OCR. Agents with their own
+        // Opt-out of the built-in OpenDataLoader OCR. Integrations with their own
         // extraction pipeline upload the document, get the inbox row, then
         // PUT /items/:id/extracted-data with their parsed fields.
         const skipExtraction =
@@ -401,7 +402,7 @@ export const invoiceInboxExtension: Extension = {
         }
 
         // Validate matched_transaction_id belongs to this company before we
-        // spend the AI extraction budget. RLS would also catch a mismatch on
+        // validate before doing OCR work. RLS would also catch a mismatch on
         // the insert, but failing fast gives a clearer error and lets the
         // caller distinguish "your context_ref pointed at a tx you don't own"
         // from a generic upload failure.
@@ -612,7 +613,7 @@ export const invoiceInboxExtension: Extension = {
     // ── Replace extracted_data wholesale (BYO extraction) ────
     // Used by agents that ran their own OCR/extraction pipeline. Validates
     // the full InvoiceExtractionResult shape via the same Zod schema that
-    // gates Bedrock output, so downstream consumers (UI, supplier-invoice
+    // gates OCR/parser output, so downstream consumers (UI, supplier-invoice
     // creation) cannot tell apart agent-supplied from AI-extracted data.
     {
       method: 'PUT',
@@ -794,8 +795,8 @@ export const invoiceInboxExtension: Extension = {
           })
 
           // Same page-count gate as /upload (issue #553) — attaching a 6-page
-          // sales report to an existing inbox row should not block on Bedrock.
-          // Sandbox companies skip Bedrock unconditionally.
+          // sales report to an existing inbox row should not block on OCR.
+          // Sandbox companies skip OCR unconditionally.
           const pageCount =
             file.type === 'application/pdf' ? await countPdfPages(buffer) : null
           const gatedByPageCount =
@@ -814,6 +815,8 @@ export const invoiceInboxExtension: Extension = {
                 buffer: Buffer.from(buffer),
                 mimeType: file.type,
                 fileName: file.name,
+                documentId: doc.id,
+                companyId: ctx.companyId,
               })
 
           const { error: linkError } = await ctx.supabase
@@ -1106,7 +1109,7 @@ export const invoiceInboxExtension: Extension = {
 
         if (await isSandboxCompany(ctx.supabase, ctx.companyId)) {
           return NextResponse.json(
-            { error: 'AI-tolkning är inte tillgänglig i sandlådan.' },
+            { error: 'Automatisk OCR-tolkning är inte tillgänglig i sandlådan.' },
             { status: 409 },
           )
         }
@@ -1140,6 +1143,8 @@ export const invoiceInboxExtension: Extension = {
             buffer,
             mimeType: doc.mime_type,
             fileName: doc.file_name,
+            documentId: item.document_id,
+            companyId: ctx.companyId,
           })
 
           const { error: updateError } = await ctx.supabase

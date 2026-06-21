@@ -110,17 +110,18 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
       {
           "slug": "document-extraction",
           "sector": "general",
-          "name": "AI-extrahering av underlag",
+          "name": "OCR-extrahering av underlag",
           "category": "accounting",
-          "icon": "MessageCircle",
+          "icon": "ScanText",
           "dataPattern": "both",
           "hasOwnData": false,
           "readsCoreTables": [
               "document_attachments",
-              "invoice_inbox_items"
+              "invoice_inbox_items",
+              "document_ocr_runs"
           ],
-          "description": "Läser kvitton och fakturor med AI och fyller i leverantör, belopp, moms och datum automatiskt",
-          "longDescription": "Lyssnar på document.uploaded-händelser och kör Sonnet 4.6 via AWS Bedrock på varje uppladdat kvitto eller faktura (PDF eller bild). De extraherade fälten skrivs till document_attachments.extracted_data så att den specialiserade bokföringsassistenten kan föreslå rätt BAS-konto utan att fråga användaren om sådant som redan står på underlaget. Hoppar över dokument som redan extraherats av andra extensions (t.ex. invoice-inbox) för att undvika dubbla AI-anrop."
+          "description": "Läser kvitton och fakturor med OpenDataLoader OCR och fyller i leverantör, belopp, moms och datum automatiskt",
+          "longDescription": "Lyssnar på document.uploaded-händelser och kör Nordklarts OpenDataLoader OCR-worker på uppladdade kvitton och fakturor. De extraherade fälten skrivs till document_attachments.extracted_data så bokföringsflödet kan föreslå nästa steg utan Claude, Anthropic eller AWS Bedrock i OCR-kedjan. Hoppar över dokument som redan extraherats av andra extensions (t.ex. invoice-inbox) för att undvika dubbla OCR-körningar."
       }
   ],
 }

@@ -10,10 +10,10 @@ interface Props {
   className?: string
 }
 
-// Inline status indicator for an AI extraction in flight. Sits next to a
+// Inline status indicator for an OCR extraction in flight. Sits next to a
 // freshly-attached document in upload flows. Five visual states map to the
 // useDocumentExtraction hook output. "disabled" renders nothing — the free
-// tier has no AI extraction and shouldn't see scary UI.
+// tier has no OCR extraction and shouldn't see scary UI.
 //
 // Copy is intentionally short and Swedish. The status changes inline; the
 // layout doesn't shift between states (icon + single line).
@@ -45,7 +45,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
         )}
       >
         <Check className="h-3.5 w-3.5" />
-        Inläst av AI
+        OCR-läst
       </span>
     )
   }
