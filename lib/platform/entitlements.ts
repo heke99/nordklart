@@ -25,6 +25,15 @@ export const NORDKLART_FEATURES = {
   apiAccess: 'api.access',
   apiWebhooks: 'api.webhooks',
   webhookDelivery: 'webhooks.delivery',
+  companyUsers: 'company.users',
+  externalAdvisors: 'external.advisors',
+  payrollEmployees: 'payroll.employees',
+  salaryRuns: 'salary.runs',
+  vatReports: 'vat.reports',
+  agencyStaff: 'agency.staff',
+  agencyClientPortal: 'agency.client_portal',
+  bookkeepingAutomation: 'bookkeeping.automation',
+  aiAssistant: 'ai.assistant',
 } as const
 
 export type NordklartFeatureCode = (typeof NORDKLART_FEATURES)[keyof typeof NORDKLART_FEATURES]

@@ -36,7 +36,7 @@ export type AccessibleCompany = CompanyAccess & {
 
 const log = createLogger('company-access')
 
-type DirectMembershipRole = 'owner' | 'admin' | 'member' | 'viewer' | string | null
+type DirectMembershipRole = 'owner' | 'admin' | 'member' | 'viewer' | 'accountant' | 'auditor' | string | null
 
 type DirectMembershipRow = {
   company_id: string
@@ -76,9 +76,13 @@ function directAccess(companyId: string, role: DirectMembershipRole, status: str
     ? 'company_owner'
     : role === 'admin'
       ? 'company_admin'
-      : role === 'member'
-        ? 'client_user'
-        : 'read_only'
+      : role === 'accountant'
+        ? 'accountant'
+        : role === 'auditor'
+          ? 'auditor'
+          : role === 'member'
+            ? 'client_user'
+            : 'read_only'
 
   const isFullyActive = status !== 'active_limited'
 
@@ -88,8 +92,8 @@ function directAccess(companyId: string, role: DirectMembershipRole, status: str
     agencyId: null,
     effectiveRole,
     canRead: true,
-    canWrite: isFullyActive && effectiveRole !== 'read_only',
-    canReview: isFullyActive && effectiveRole !== 'read_only' && effectiveRole !== 'client_user',
+    canWrite: isFullyActive && ['company_owner', 'company_admin', 'accountant', 'client_user'].includes(effectiveRole),
+    canReview: isFullyActive && ['company_owner', 'company_admin', 'accountant', 'reviewer', 'auditor'].includes(effectiveRole),
     canManageCompany: isFullyActive && (effectiveRole === 'company_owner' || effectiveRole === 'company_admin'),
     canManageAgency: false,
     canManagePlatform: false,

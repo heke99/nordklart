@@ -17,6 +17,7 @@ export default async function AgencyOnboardingPage() {
     .select('agency_id, agencies:agency_id(name, company_id)')
     .eq('user_id', user.id)
     .eq('role', 'agency_owner')
+    .eq('status', 'active')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()

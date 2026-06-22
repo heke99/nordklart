@@ -64,7 +64,7 @@ export default async function OnboardingPage({
   if (activeCompanyId && params.add !== 'company' && !initialOrgNumber) {
     const [{ data: company }, { data: agencyMembership }, { data: session }] = await Promise.all([
       supabase.from('companies').select('name').eq('id', activeCompanyId).maybeSingle(),
-      supabase.from('agency_members').select('agency_id').eq('user_id', user.id).limit(1).maybeSingle(),
+      supabase.from('agency_members').select('agency_id').eq('user_id', user.id).eq('status', 'active').limit(1).maybeSingle(),
       supabase
         .from('onboarding_sessions')
         .select('path')

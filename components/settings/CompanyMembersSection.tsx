@@ -52,6 +52,8 @@ export function CompanyMembersSection() {
     admin: t('members_role_admin'),
     member: t('members_role_member'),
     viewer: t('members_role_viewer'),
+    accountant: 'Redovisningskonsult',
+    auditor: 'Revisor',
   }
   const [isLoading, setIsLoading] = useState(true)
   const [members, setMembers] = useState<CompanyMemberItem[]>([])
@@ -226,6 +228,8 @@ export function CompanyMembersSection() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="viewer">{t('members_role_viewer')}</SelectItem>
+                  <SelectItem value="auditor">Revisor</SelectItem>
+                  <SelectItem value="accountant">Redovisningskonsult</SelectItem>
                   <SelectItem value="member">{t('members_role_member')}</SelectItem>
                   <SelectItem value="admin">{t('members_role_admin')}</SelectItem>
                 </SelectContent>
@@ -283,6 +287,22 @@ export function CompanyMembersSection() {
                       onClick={() => handleReviewAccessRequest(request.id, 'approve', 'member')}
                     >
                       Medlem
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reviewingRequestId === request.id}
+                      onClick={() => handleReviewAccessRequest(request.id, 'approve', 'auditor')}
+                    >
+                      Revisor
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reviewingRequestId === request.id}
+                      onClick={() => handleReviewAccessRequest(request.id, 'approve', 'accountant')}
+                    >
+                      Konsult
                     </Button>
                     <Button
                       size="sm"

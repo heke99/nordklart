@@ -5,6 +5,7 @@ import { CreateSalaryRunSchema } from '@/lib/api/schemas'
 import { eventBus } from '@/lib/events'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { checkFeatureAccess, featureAccessError, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 
 ensureInitialized()
 
@@ -42,6 +43,11 @@ export const POST = withRouteContext(
   'salary_run.create',
   async (request, ctx) => {
     const { user, supabase, companyId, log, requestId } = ctx
+
+    const salaryAccess = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+    if (!salaryAccess.allowed) {
+      return featureAccessError(NORDKLART_FEATURES.salaryRuns)
+    }
 
     const validation = await validateBody(request, CreateSalaryRunSchema, {
       log,

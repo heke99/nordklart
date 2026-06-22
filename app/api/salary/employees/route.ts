@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { assertCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 
 ensureInitialized()
@@ -52,6 +53,14 @@ export async function POST(request: Request) {
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const limitCheck = await assertCommercialLimit(
+    supabase,
+    companyId,
+    COMMERCIAL_LIMITS.payrollEmployees,
+    'Din plan tillåter inte fler löneanställda',
+  )
+  if (!limitCheck.ok) return limitCheck.response
 
   const validation = await validateBody(request, CreateEmployeeSchema)
   if (!validation.success) return validation.response

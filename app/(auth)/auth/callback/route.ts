@@ -215,7 +215,7 @@ export async function GET(request: NextRequest) {
 
       const { data: invite } = await serviceClient
         .from('company_invitations')
-        .select('id, company_id, email, role, status, expires_at, invited_by')
+        .select('id, company_id, email, role, status, expires_at, invited_by, membership_kind')
         .eq('token_hash', tokenHash)
         .single()
 
@@ -232,6 +232,7 @@ export async function GET(request: NextRequest) {
           source: 'direct',
           status: 'active',
           access_source: 'invite',
+          membership_kind: invite.membership_kind ?? 'internal',
           invited_by: invite.invited_by ?? null,
           approved_by: invite.invited_by ?? null,
           approved_at: new Date().toISOString(),

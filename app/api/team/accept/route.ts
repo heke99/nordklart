@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
 
   const { data: companyInvite, error: companyLookupError } = await serviceClient
     .from('company_invitations')
-    .select('id, company_id, email, role, status, expires_at, invited_by')
+    .select('id, company_id, email, role, status, expires_at, invited_by, membership_kind')
     .eq('token_hash', tokenHash)
     .single()
 
@@ -120,6 +120,7 @@ export async function POST(request: NextRequest) {
       source: 'direct',
       status: 'active',
       access_source: 'invite',
+      membership_kind: companyInvite.membership_kind ?? 'internal',
       invited_by: companyInvite.invited_by ?? null,
       approved_by: companyInvite.invited_by ?? null,
       approved_at: new Date().toISOString(),

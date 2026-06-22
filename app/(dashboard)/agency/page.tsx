@@ -13,8 +13,9 @@ export default async function AgencyPage() {
 
   const { data: memberships } = await supabase
     .from('agency_members')
-    .select('agency_id, role, agencies:agency_id(id, name, status)')
+    .select('agency_id, role, status, agencies:agency_id(id, name, status)')
     .eq('user_id', user.id)
+    .eq('status', 'active')
 
   const agencyIds = (memberships || []).map((m) => m.agency_id)
   const [

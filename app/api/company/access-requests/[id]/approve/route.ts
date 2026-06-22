@@ -2,8 +2,9 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
 import { resolveCompanyAccess } from '@/lib/access/company'
+import { assertCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 
-const allowedRoles = new Set(['admin', 'member', 'viewer'])
+const allowedRoles = new Set(['admin', 'member', 'viewer', 'accountant', 'auditor'])
 
 export async function POST(
   request: Request,
@@ -20,6 +21,17 @@ export async function POST(
   const { id } = await params
   const body = await request.json().catch(() => ({})) as { role?: string }
   const role = allowedRoles.has(body.role || '') ? body.role! : 'member'
+  const membershipKind = ['viewer', 'auditor', 'accountant'].includes(role) ? 'external' : 'internal'
+  const capacity = await assertCommercialLimit(
+    supabase,
+    companyId,
+    membershipKind === 'external' ? COMMERCIAL_LIMITS.externalAdvisors : COMMERCIAL_LIMITS.companyUsers,
+    membershipKind === 'external'
+      ? 'Din plan tillåter inte fler externa rådgivare eller revisorer.'
+      : 'Din plan tillåter inte fler användare.',
+  )
+  if (!capacity.ok) return capacity.response
+
   const service = createServiceClient()
 
   const { data: accessRequest, error: readError } = await service
@@ -42,6 +54,7 @@ export async function POST(
       source: 'direct',
       status: 'active',
       access_source: 'access_request',
+      membership_kind: membershipKind,
       approved_by: user.id,
       approved_at: now,
       revoked_by: null,
@@ -75,6 +88,7 @@ export async function POST(
       access_request_id: accessRequest.id,
       approved_user_id: accessRequest.requester_user_id,
       role,
+      membership_kind: membershipKind,
     },
   }).then(() => undefined, () => undefined)
 

@@ -5,6 +5,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { resolveCompanyAccess } from '@/lib/access/company'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getEmailService } from '@/lib/email/service'
+import { assertCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 import {
   generateInviteEmailSubject,
   generateInviteEmailHtml,
@@ -43,9 +44,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Ogiltig e-postadress.' }, { status: 400 })
   }
 
-  if (!['admin', 'member', 'viewer'].includes(role)) {
+  if (!['admin', 'member', 'viewer', 'accountant', 'auditor'].includes(role)) {
     return NextResponse.json({ error: 'Ogiltig roll.' }, { status: 400 })
   }
+
+  const membershipKind = ['viewer', 'accountant', 'auditor'].includes(role) ? 'external' : 'internal'
+  const limitCheck = await assertCommercialLimit(
+    supabase,
+    companyId,
+    membershipKind === 'external' ? COMMERCIAL_LIMITS.externalAdvisors : COMMERCIAL_LIMITS.companyUsers,
+    membershipKind === 'external'
+      ? 'Din plan tillåter inte fler externa rådgivare eller revisorer'
+      : 'Din plan tillåter inte fler interna användare',
+  )
+  if (!limitCheck.ok) return limitCheck.response
 
   // Check if email is already a member of this company
   const { data: existingMembers } = await serviceClient
@@ -104,6 +116,7 @@ export async function POST(request: Request) {
         status: 'pending',
         expires_at: expiresAt.toISOString(),
         role,
+        membership_kind: membershipKind,
       })
       .eq('id', existingInvite.id)
 
@@ -117,6 +130,7 @@ export async function POST(request: Request) {
         company_id: companyId,
         email,
         role,
+        membership_kind: membershipKind,
         token_hash: hash,
         invited_by: user.id,
         revoked_by: null,

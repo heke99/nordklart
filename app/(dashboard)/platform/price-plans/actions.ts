@@ -60,6 +60,26 @@ function assertRpc(error: SupabaseError, fallback: string) {
   if (error) redirectWith('error', error.message || fallback)
 }
 
+async function saveCommercialProfile(supabase: Awaited<ReturnType<typeof requirePlatformAdmin>>['supabase'], planId: string, formData: FormData) {
+  const audienceType = text(formData, 'audience_type') || 'company'
+  const companyFormScope = text(formData, 'company_form_scope') || (audienceType === 'agency' ? 'agency' : 'company_all')
+  const isPublic = (text(formData, 'is_public') || 'false') === 'true'
+  const { error } = await supabase.rpc('platform_set_price_plan_commercial_profile', {
+    p_plan_id: planId,
+    p_audience_type: audienceType,
+    p_company_form_scope: companyFormScope,
+    p_is_public: isPublic,
+    p_public_name: text(formData, 'public_name'),
+    p_public_summary: text(formData, 'public_summary'),
+    p_public_badge: text(formData, 'public_badge'),
+    p_public_sort_order: Math.round(numberValue(formData, 'public_sort_order', 100) ?? 100),
+    p_cta_label: text(formData, 'cta_label') || 'Kom igång',
+    p_cta_href: text(formData, 'cta_href') || '/register',
+    p_marketing_metadata: {},
+  })
+  assertRpc(error, 'Planens publika och kommersiella profil kunde inte sparas.')
+}
+
 async function syncPlanVersionToStripe(planVersionId: string) {
   if (!isStripeConfigured()) return false
 
@@ -187,6 +207,7 @@ export async function createPricePlanAction(formData: FormData) {
     p_sort_order: 100,
   })
   assertRpc(planError, 'Planen kunde inte skapas.')
+  await saveCommercialProfile(supabase, String(planId), formData)
 
   const { data: planVersionId, error: versionError } = await supabase.rpc('platform_create_price_plan_version', {
     p_plan_id: planId,
@@ -312,6 +333,7 @@ export async function updatePlanStatusAction(formData: FormData) {
     p_sort_order: numberValue(formData, 'sort_order'),
   })
   assertRpc(error, 'Planen kunde inte uppdateras.')
+  await saveCommercialProfile(supabase, planId, formData)
   revalidatePath(PRICING_PATH)
   redirectWith('notice', 'Planens katalogstatus har uppdaterats.')
 }

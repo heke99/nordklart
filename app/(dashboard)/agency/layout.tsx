@@ -10,6 +10,7 @@ export default async function AgencyLayout({ children }: { children: React.React
     .from('agency_members')
     .select('agency_id')
     .eq('user_id', user.id)
+    .eq('status', 'active')
     .limit(1)
     .maybeSingle()
 

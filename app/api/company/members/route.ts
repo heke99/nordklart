@@ -21,7 +21,7 @@ export async function GET() {
 
   const { data: members, error: membersError } = await serviceClient
     .from('company_members')
-    .select('id, user_id, role, source, status, access_source, joined_at, approved_at')
+    .select('id, user_id, role, source, status, access_source, membership_kind, joined_at, approved_at')
     .eq('company_id', companyId)
     .in('status', ['active', 'active_limited'])
     .order('joined_at', { ascending: true })
@@ -43,7 +43,7 @@ export async function GET() {
   const { data: invitations } = canManage
     ? await serviceClient
         .from('company_invitations')
-        .select('id, email, role, status, expires_at, created_at')
+        .select('id, email, role, status, membership_kind, expires_at, created_at')
         .eq('company_id', companyId)
         .eq('status', 'pending')
         .order('created_at', { ascending: false })
@@ -68,6 +68,7 @@ export async function GET() {
         source: m.source,
         status: m.status,
         access_source: m.access_source,
+        membership_kind: m.membership_kind,
         joined_at: m.joined_at,
         approved_at: m.approved_at,
         is_current_user: m.user_id === user.id,
