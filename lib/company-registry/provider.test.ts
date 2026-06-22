@@ -31,6 +31,8 @@ describe('Bolagsverket company registry boundary', () => {
     delete process.env.BOLAGSVERKET_CLIENT_SECRET
     delete process.env.BOLAGSVERKET_TOKEN_URL
     delete process.env.BOLAGSVERKET_API_BASE_URL
+    delete process.env.BOLAGSVERKET_AUTH_METHOD
+    delete process.env.BOLAGSVERKET_SCOPES
   })
 
   afterEach(() => {
@@ -43,7 +45,7 @@ describe('Bolagsverket company registry boundary', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(lookupCompanyAtBolagsverket('5560125790')).resolves.toEqual({ available: false })
+    await expect(lookupCompanyAtBolagsverket('5560125790')).resolves.toEqual({ available: false, reason: 'not_configured' })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -51,7 +53,16 @@ describe('Bolagsverket company registry boundary', () => {
     configureEnv()
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === 'https://portal.api.bolagsverket.se/oauth2/token') return tokenResponse()
+      if (url === 'https://portal.api.bolagsverket.se/oauth2/token') {
+        expect(init?.method).toBe('POST')
+        expect((init?.headers as Record<string, string>).Authorization).toBeUndefined()
+        const tokenBodyParams = new URLSearchParams(String(init?.body))
+        expect(tokenBodyParams.get('grant_type')).toBe('client_credentials')
+        expect(tokenBodyParams.get('client_id')).toBe('client-id')
+        expect(tokenBodyParams.get('client_secret')).toBe('client-secret')
+        expect(tokenBodyParams.get('scope')).toBe('vardefulla-datamangder:read vardefulla-datamangder:ping')
+        return tokenResponse()
+      }
       if (url === 'https://gw.api.bolagsverket.se/vardefulla-datamangder/v1/organisationer') {
         expect(init?.method).toBe('POST')
         expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer access-token')

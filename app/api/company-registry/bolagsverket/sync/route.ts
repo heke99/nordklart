@@ -17,6 +17,40 @@ const bodySchema = z.object({
   applySafeFields: z.boolean().optional().default(false),
 })
 
+type SyncStatus = 'success' | 'failed' | 'unavailable' | 'not_found'
+
+async function logSyncEvent(
+  service: ReturnType<typeof createServiceClient>,
+  input: {
+    companyId: string
+    userId: string
+    organizationNumber?: string | null
+    status: SyncStatus
+    diff?: unknown[]
+    appliedSafeFields: boolean
+    errorMessage?: string | null
+  },
+) {
+  const { error } = await service.from('company_registry_sync_events').insert({
+    company_id: input.companyId,
+    provider: 'bolagsverket',
+    status: input.status,
+    requested_by_user_id: input.userId,
+    organization_number: input.organizationNumber ?? null,
+    diff: input.diff ?? [],
+    applied_safe_fields: input.appliedSafeFields,
+    error_message: input.errorMessage ?? null,
+  })
+
+  if (error) {
+    console.error('[company-registry] failed to write Bolagsverket sync event', {
+      companyId: input.companyId,
+      status: input.status,
+      message: error.message,
+    })
+  }
+}
+
 export async function POST(request: Request) {
   const { user, supabase, error: authError } = await requireAuth()
   if (authError) return authError
@@ -51,15 +85,45 @@ export async function POST(request: Request) {
   const organizationNumber = normalizeOrgNumber(rawOrgNumber)
 
   if (!organizationNumber) {
-    return NextResponse.json({ error: 'Företaget saknar giltigt organisationsnummer.' }, { status: 400 })
+    await logSyncEvent(service, {
+      companyId,
+      userId: user.id,
+      status: 'failed',
+      appliedSafeFields: parsed.data.applySafeFields,
+      errorMessage: 'Företaget saknar giltigt organisationsnummer.',
+    })
+    return NextResponse.json({ error: 'Företaget saknar giltigt organisationsnummer.', code: 'invalid_organization_number' }, { status: 400 })
   }
 
   const result = await lookupCompanyAtBolagsverket(organizationNumber)
   if (!result.available) {
-    return NextResponse.json({ error: 'Bolagsverket kunde inte nås just nu.' }, { status: 503 })
+    const errorMessage = `Bolagsverket kunde inte nås just nu. Orsak: ${result.reason}${result.status ? ` (${result.status})` : ''}`
+    await logSyncEvent(service, {
+      companyId,
+      userId: user.id,
+      organizationNumber,
+      status: 'unavailable',
+      appliedSafeFields: parsed.data.applySafeFields,
+      errorMessage,
+    })
+    return NextResponse.json({
+      error: 'Bolagsverket kunde inte nås just nu.',
+      code: result.reason,
+      status: result.status ?? null,
+      requestId: result.requestId ?? null,
+    }, { status: 503 })
   }
+
   if (!result.found || result.company.organizationNumber !== organizationNumber) {
-    return NextResponse.json({ error: 'Företaget hittades inte hos Bolagsverket.' }, { status: 404 })
+    await logSyncEvent(service, {
+      companyId,
+      userId: user.id,
+      organizationNumber,
+      status: 'not_found',
+      appliedSafeFields: parsed.data.applySafeFields,
+      errorMessage: 'Företaget hittades inte hos Bolagsverket.',
+    })
+    return NextResponse.json({ error: 'Företaget hittades inte hos Bolagsverket.', code: 'not_found' }, { status: 404 })
   }
 
   const snapshot = await upsertCompanyRegistrySnapshot(service, {
@@ -81,20 +145,28 @@ export async function POST(request: Request) {
         .maybeSingle()
       if (error) {
         console.error('[company-registry] settings update from Bolagsverket failed', { companyId, message: error.message })
-        return NextResponse.json({ error: 'Uppgifterna hämtades men kunde inte uppdateras i företagsinställningar.' }, { status: 500 })
+        await logSyncEvent(service, {
+          companyId,
+          userId: user.id,
+          organizationNumber,
+          status: 'failed',
+          diff,
+          appliedSafeFields: parsed.data.applySafeFields,
+          errorMessage: error.message,
+        })
+        return NextResponse.json({ error: 'Uppgifterna hämtades men kunde inte uppdateras i företagsinställningar.', code: 'settings_update_failed' }, { status: 500 })
       }
       updatedSettings = data as Record<string, unknown> | null
     }
   }
 
-  await service.from('company_registry_sync_events').insert({
-    company_id: companyId,
-    provider: 'bolagsverket',
+  await logSyncEvent(service, {
+    companyId,
+    userId: user.id,
+    organizationNumber,
     status: 'success',
-    requested_by_user_id: user.id,
-    organization_number: organizationNumber,
     diff,
-    applied_safe_fields: parsed.data.applySafeFields,
+    appliedSafeFields: parsed.data.applySafeFields,
   })
 
   return NextResponse.json({ snapshot, normalized, diff, updatedSettings })

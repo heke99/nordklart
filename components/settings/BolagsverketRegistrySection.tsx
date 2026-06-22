@@ -12,6 +12,9 @@ type SyncResponse = {
   diff: BolagsverketDiffRow[]
   updatedSettings?: Partial<CompanySettings> | null
   error?: string
+  code?: string
+  status?: number | null
+  requestId?: string | null
 }
 
 export function BolagsverketRegistrySection({
@@ -53,7 +56,13 @@ export function BolagsverketRegistrySection({
         body: JSON.stringify({ applySafeFields }),
       })
       const payload = await response.json().catch(() => ({})) as SyncResponse
-      if (!response.ok) throw new Error(payload.error || 'Kunde inte hämta registeruppgifter.')
+      if (!response.ok) {
+        const details = [payload.error || 'Kunde inte hämta registeruppgifter.']
+        if (payload.code) details.push(`Kod: ${payload.code}`)
+        if (payload.status) details.push(`Status: ${payload.status}`)
+        if (payload.requestId) details.push(`Request-ID: ${payload.requestId}`)
+        throw new Error(details.join(' · '))
+      }
 
       setSnapshot(payload.snapshot ?? null)
       setDiff(payload.updatedSettings ? [] : payload.diff ?? [])

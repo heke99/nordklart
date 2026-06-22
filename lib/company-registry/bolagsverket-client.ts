@@ -1,7 +1,13 @@
 import 'server-only'
 
 import { randomUUID } from 'crypto'
-import { getBolagsverketConfig, type BolagsverketConfig } from './bolagsverket-config'
+import {
+  getBolagsverketConfig,
+  getBolagsverketConfigSummary,
+  type BolagsverketAuthMethod,
+  type BolagsverketConfig,
+  type BolagsverketConfigSummary,
+} from './bolagsverket-config'
 
 export type BolagsverketApiError = {
   type?: string
@@ -11,6 +17,8 @@ export type BolagsverketApiError = {
   requestId?: string | null
   title?: string
   detail?: string
+  error?: string
+  error_description?: string
 }
 
 export type BolagsverketOrganizationRequest = {
@@ -103,24 +111,59 @@ type TokenResponse = {
   scope?: string
 }
 
+type TokenAuthAttemptMethod = Exclude<BolagsverketAuthMethod, 'auto'>
+
 type CachedToken = {
   accessToken: string
   expiresAt: number
+  method: TokenAuthAttemptMethod
 }
 
-let cachedToken: CachedToken | null = null
+export type BolagsverketTokenDiagnostic = {
+  ok: boolean
+  method: TokenAuthAttemptMethod
+  status: number | null
+  requestId: string
+  error: string | null
+  details: BolagsverketApiError | string | null
+  expiresIn: number | null
+  scope: string | null
+}
+
+export type BolagsverketResourceDiagnostic = {
+  ok: boolean
+  status: number | null
+  requestId: string | null
+  error: string | null
+  details: BolagsverketApiError | string | null
+}
+
+export type BolagsverketConnectionDiagnostics = BolagsverketConfigSummary & {
+  token: BolagsverketTokenDiagnostic | null
+  isAlive: BolagsverketResourceDiagnostic | null
+}
+
+const tokenCache = new Map<string, CachedToken>()
 
 export class BolagsverketClientError extends Error {
   readonly status: number
   readonly requestId: string
   readonly details: BolagsverketApiError | string | null
+  readonly code: string
 
-  constructor(message: string, status: number, requestId: string, details: BolagsverketApiError | string | null = null) {
+  constructor(
+    message: string,
+    status: number,
+    requestId: string,
+    details: BolagsverketApiError | string | null = null,
+    code = 'bolagsverket_request_failed',
+  ) {
     super(message)
     this.name = 'BolagsverketClientError'
     this.status = status
     this.requestId = requestId
     this.details = details
+    this.code = code
   }
 }
 
@@ -140,50 +183,190 @@ async function readResponse(response: Response): Promise<unknown> {
   return response.text().catch(() => null)
 }
 
-function tokenHeaders(config: BolagsverketConfig): HeadersInit {
-  if (config.authMethod === 'post') return { 'Content-Type': 'application/x-www-form-urlencoded' }
+function safeDetails(details: unknown): BolagsverketApiError | string | null {
+  if (details == null) return null
+  if (typeof details === 'string') return details.slice(0, 600)
+  if (typeof details !== 'object') return String(details).slice(0, 600)
+
+  const value = details as Record<string, unknown>
   return {
-    'Content-Type': 'application/x-www-form-urlencoded',
-    Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')}`,
+    type: typeof value.type === 'string' ? value.type : undefined,
+    instance: typeof value.instance === 'string' ? value.instance : undefined,
+    status: typeof value.status === 'number' ? value.status : undefined,
+    timestamp: typeof value.timestamp === 'string' ? value.timestamp : null,
+    requestId: typeof value.requestId === 'string' ? value.requestId : null,
+    title: typeof value.title === 'string' ? value.title : undefined,
+    detail: typeof value.detail === 'string' ? value.detail : undefined,
+    error: typeof value.error === 'string' ? value.error : undefined,
+    error_description: typeof value.error_description === 'string' ? value.error_description : undefined,
   }
 }
 
-function tokenBody(config: BolagsverketConfig): URLSearchParams {
+function cacheKey(config: BolagsverketConfig): string {
+  return [config.environment, config.tokenUrl, config.clientId, config.scopes, config.authMethod].join('|')
+}
+
+function tokenHeaders(config: BolagsverketConfig, method: TokenAuthAttemptMethod): HeadersInit {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/x-www-form-urlencoded',
+  }
+
+  if (method === 'basic') {
+    headers.Authorization = `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')}`
+  }
+
+  return headers
+}
+
+function tokenBody(config: BolagsverketConfig, method: TokenAuthAttemptMethod): URLSearchParams {
   const body = new URLSearchParams({ grant_type: 'client_credentials', scope: config.scopes })
-  if (config.authMethod === 'post') {
+
+  // Bolagsverkets connection guide documents client_id/client_secret in the
+  // form body. Basic auth remains opt-in/diagnostic fallback only.
+  if (method === 'post') {
     body.set('client_id', config.clientId)
     body.set('client_secret', config.clientSecret)
   }
+
   return body
 }
 
-async function getAccessToken(config: BolagsverketConfig): Promise<string> {
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 30_000) return cachedToken.accessToken
+function methodsFor(config: BolagsverketConfig): TokenAuthAttemptMethod[] {
+  if (config.authMethod === 'auto') return ['post', 'basic']
+  return [config.authMethod]
+}
 
+async function fetchAccessTokenWithMethod(
+  config: BolagsverketConfig,
+  method: TokenAuthAttemptMethod,
+): Promise<{ token: TokenResponse; diagnostic: BolagsverketTokenDiagnostic }> {
   const requestId = randomUUID()
   const response = await fetch(config.tokenUrl, {
     method: 'POST',
-    headers: tokenHeaders(config),
-    body: tokenBody(config),
+    headers: tokenHeaders(config, method),
+    body: tokenBody(config, method),
     signal: withTimeout(config.timeoutMs),
   })
 
   const payload = await readResponse(response)
   if (!response.ok) {
-    throw new BolagsverketClientError('Kunde inte hämta access token från Bolagsverket.', response.status, requestId, payload as BolagsverketApiError | string | null)
+    const details = safeDetails(payload)
+    throw new BolagsverketClientError(
+      'Kunde inte hämta access token från Bolagsverket.',
+      response.status,
+      requestId,
+      details,
+      response.status === 401 || response.status === 403 ? 'token_rejected' : 'token_failed',
+    )
   }
 
   const token = payload as TokenResponse | null
   if (!token?.access_token) {
-    throw new BolagsverketClientError('Bolagsverket returnerade inget access token.', response.status, requestId, payload as BolagsverketApiError | string | null)
+    throw new BolagsverketClientError(
+      'Bolagsverket returnerade inget access token.',
+      response.status,
+      requestId,
+      safeDetails(payload),
+      'token_missing',
+    )
   }
 
-  const expiresIn = Number.isFinite(token.expires_in) ? Number(token.expires_in) : 300
-  cachedToken = {
-    accessToken: token.access_token,
-    expiresAt: Date.now() + Math.max(60, expiresIn - 30) * 1000,
+  return {
+    token,
+    diagnostic: {
+      ok: true,
+      method,
+      status: response.status,
+      requestId,
+      error: null,
+      details: null,
+      expiresIn: Number.isFinite(token.expires_in) ? Number(token.expires_in) : null,
+      scope: token.scope ?? null,
+    },
   }
-  return cachedToken.accessToken
+}
+
+async function getAccessTokenRecord(config: BolagsverketConfig): Promise<CachedToken> {
+  const key = cacheKey(config)
+  const cachedToken = tokenCache.get(key)
+  if (cachedToken && cachedToken.expiresAt > Date.now() + 30_000) return cachedToken
+
+  let lastError: BolagsverketClientError | null = null
+  for (const method of methodsFor(config)) {
+    try {
+      const { token } = await fetchAccessTokenWithMethod(config, method)
+      const expiresIn = Number.isFinite(token.expires_in) ? Number(token.expires_in) : 300
+      const nextToken = {
+        accessToken: token.access_token!,
+        expiresAt: Date.now() + Math.max(60, expiresIn - 30) * 1000,
+        method,
+      }
+      tokenCache.set(key, nextToken)
+      return nextToken
+    } catch (error) {
+      if (error instanceof BolagsverketClientError) {
+        lastError = error
+        if (config.authMethod === 'auto' && (error.status === 401 || error.status === 403)) continue
+      }
+      throw error
+    }
+  }
+
+  throw lastError ?? new BolagsverketClientError('Bolagsverket-token kunde inte hämtas.', 0, randomUUID(), null, 'token_failed')
+}
+
+async function getAccessToken(config: BolagsverketConfig): Promise<string> {
+  return (await getAccessTokenRecord(config)).accessToken
+}
+
+async function diagnoseToken(config: BolagsverketConfig): Promise<BolagsverketTokenDiagnostic> {
+  let lastDiagnostic: BolagsverketTokenDiagnostic | null = null
+
+  for (const method of methodsFor(config)) {
+    try {
+      const { diagnostic } = await fetchAccessTokenWithMethod(config, method)
+      return diagnostic
+    } catch (error) {
+      if (error instanceof BolagsverketClientError) {
+        lastDiagnostic = {
+          ok: false,
+          method,
+          status: error.status || null,
+          requestId: error.requestId,
+          error: error.code,
+          details: error.details,
+          expiresIn: null,
+          scope: null,
+        }
+        if (config.authMethod === 'auto' && (error.status === 401 || error.status === 403)) continue
+      }
+      if (error instanceof Error) {
+        return {
+          ok: false,
+          method,
+          status: null,
+          requestId: randomUUID(),
+          error: error.message,
+          details: null,
+          expiresIn: null,
+          scope: null,
+        }
+      }
+      throw error
+    }
+  }
+
+  return lastDiagnostic ?? {
+    ok: false,
+    method: 'post',
+    status: null,
+    requestId: randomUUID(),
+    error: 'token_failed',
+    details: null,
+    expiresIn: null,
+    scope: null,
+  }
 }
 
 export class BolagsverketVardefullaDatamangderClient {
@@ -201,6 +384,50 @@ export class BolagsverketVardefullaDatamangderClient {
   async isAlive(): Promise<boolean> {
     const response = await this.request('/isalive', { method: 'GET', scope: 'ping' })
     return typeof response === 'string' ? response.trim().toUpperCase() === 'OK' : true
+  }
+
+  async diagnoseConnection(): Promise<BolagsverketConnectionDiagnostics> {
+    const summary = getBolagsverketConfigSummary()
+    const token = await diagnoseToken(this.config)
+    if (!token.ok) return { ...summary, token, isAlive: null }
+
+    const requestId = randomUUID()
+    try {
+      const accessToken = (await getAccessTokenRecord(this.config)).accessToken
+      const response = await fetch(`${this.config.apiBaseUrl}/isalive`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: '*/*',
+          'X-Request-Id': requestId,
+        },
+        signal: withTimeout(this.config.timeoutMs),
+      })
+      const payload = await readResponse(response)
+      return {
+        ...summary,
+        token,
+        isAlive: {
+          ok: response.ok,
+          status: response.status,
+          requestId,
+          error: response.ok ? null : 'isalive_failed',
+          details: response.ok ? null : safeDetails(payload),
+        },
+      }
+    } catch (error) {
+      return {
+        ...summary,
+        token,
+        isAlive: {
+          ok: false,
+          status: null,
+          requestId,
+          error: error instanceof Error ? error.message : 'isalive_failed',
+          details: null,
+        },
+      }
+    }
   }
 
   async lookupOrganization(identitetsbeteckning: string): Promise<BolagsverketOrganizationsResponse> {
@@ -226,13 +453,20 @@ export class BolagsverketVardefullaDatamangderClient {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
+        Accept: 'application/zip, application/octet-stream, */*',
         'X-Request-Id': requestId,
       },
       signal: withTimeout(this.config.timeoutMs),
     })
     if (!response.ok) {
       const payload = await readResponse(response)
-      throw new BolagsverketClientError('Kunde inte hämta dokument från Bolagsverket.', response.status, requestId, payload as BolagsverketApiError | string | null)
+      throw new BolagsverketClientError(
+        'Kunde inte hämta dokument från Bolagsverket.',
+        response.status,
+        requestId,
+        safeDetails(payload),
+        response.status === 401 || response.status === 403 ? 'api_forbidden' : 'api_failed',
+      )
     }
     return response.arrayBuffer()
   }
@@ -244,6 +478,7 @@ export class BolagsverketVardefullaDatamangderClient {
       method: options.method,
       headers: {
         Authorization: `Bearer ${token}`,
+        Accept: options.body ? 'application/json' : '*/*',
         'X-Request-Id': requestId,
         ...(options.body ? { 'Content-Type': 'application/json' } : {}),
       },
@@ -252,12 +487,18 @@ export class BolagsverketVardefullaDatamangderClient {
     })
     const payload = await readResponse(response)
     if (!response.ok) {
-      throw new BolagsverketClientError('Bolagsverket-anropet misslyckades.', response.status, requestId, payload as BolagsverketApiError | string | null)
+      throw new BolagsverketClientError(
+        'Bolagsverket-anropet misslyckades.',
+        response.status,
+        requestId,
+        safeDetails(payload),
+        response.status === 401 || response.status === 403 ? 'api_forbidden' : 'api_failed',
+      )
     }
     return payload
   }
 }
 
 export function resetBolagsverketTokenCacheForTests() {
-  cachedToken = null
+  tokenCache.clear()
 }

@@ -1,9 +1,25 @@
 import 'server-only'
 
-import { BolagsverketClientError, BolagsverketVardefullaDatamangderClient } from './bolagsverket-client'
+import {
+  BolagsverketClientError,
+  BolagsverketVardefullaDatamangderClient,
+  type BolagsverketApiError,
+  type BolagsverketConnectionDiagnostics,
+} from './bolagsverket-client'
+import { getBolagsverketConfigSummary } from './bolagsverket-config'
 import { normalizeBolagsverketOrganization } from './normalize-vardefulla'
 
 export type CompanyRegistryProviderId = 'bolagsverket'
+
+export type CompanyRegistryUnavailableReason =
+  | 'not_configured'
+  | 'token_failed'
+  | 'token_rejected'
+  | 'token_missing'
+  | 'api_forbidden'
+  | 'api_failed'
+  | 'network_error'
+  | 'unknown_error'
 
 export type CompanyRegistryLookup = {
   organizationNumber: string
@@ -20,10 +36,57 @@ export type CompanyRegistryLookup = {
   retrievedAt: string
 }
 
+export type CompanyRegistryUnavailable = {
+  available: false
+  reason: CompanyRegistryUnavailableReason
+  status?: number | null
+  requestId?: string | null
+  details?: BolagsverketApiError | string | null
+}
+
 export type CompanyRegistryLookupResult =
-  | { available: false }
+  | CompanyRegistryUnavailable
   | { available: true; found: false }
   | { available: true; found: true; company: CompanyRegistryLookup }
+
+function unavailableFromError(error: unknown): CompanyRegistryUnavailable {
+  if (error instanceof BolagsverketClientError) {
+    return {
+      available: false,
+      reason: (error.code as CompanyRegistryUnavailableReason) ?? 'api_failed',
+      status: error.status || null,
+      requestId: error.requestId,
+      details: error.details,
+    }
+  }
+
+  return {
+    available: false,
+    reason: error instanceof Error ? 'network_error' : 'unknown_error',
+    status: null,
+    requestId: null,
+    details: error instanceof Error ? error.message : null,
+  }
+}
+
+function logBolagsverketError(event: string, client: BolagsverketVardefullaDatamangderClient, error: unknown) {
+  if (error instanceof BolagsverketClientError) {
+    console.error(event, {
+      status: error.status,
+      code: error.code,
+      requestId: error.requestId,
+      environment: client.environment,
+      message: error.message,
+      details: error.details,
+    })
+    return
+  }
+
+  console.error(event, {
+    environment: client.environment,
+    message: error instanceof Error ? error.message : 'unknown error',
+  })
+}
 
 /**
  * Production-safe Bolagsverket Värdefulla datamängder boundary.
@@ -39,7 +102,7 @@ export async function lookupCompanyAtBolagsverket(
   organizationNumber: string,
 ): Promise<CompanyRegistryLookupResult> {
   const client = BolagsverketVardefullaDatamangderClient.fromEnv()
-  if (!client) return { available: false }
+  if (!client) return { available: false, reason: 'not_configured' }
 
   try {
     const response = await client.lookupOrganization(organizationNumber)
@@ -54,28 +117,18 @@ export async function lookupCompanyAtBolagsverket(
     if (!normalized) return { available: true, found: false }
     return { available: true, found: true, company: normalized }
   } catch (error) {
-    if (error instanceof BolagsverketClientError) {
-      if (error.status === 400 || error.status === 404) return { available: true, found: false }
-      console.error('[bolagsverket] lookup failed', {
-        status: error.status,
-        requestId: error.requestId,
-        environment: client.environment,
-        message: error.message,
-      })
-      return { available: false }
+    if (error instanceof BolagsverketClientError && (error.status === 400 || error.status === 404)) {
+      return { available: true, found: false }
     }
 
-    console.error('[bolagsverket] unexpected lookup failure', {
-      environment: client.environment,
-      message: error instanceof Error ? error.message : 'unknown error',
-    })
-    return { available: false }
+    logBolagsverketError('[bolagsverket] lookup failed', client, error)
+    return unavailableFromError(error)
   }
 }
 
 export async function listAnnualReportsAtBolagsverket(organizationNumber: string) {
   const client = BolagsverketVardefullaDatamangderClient.fromEnv()
-  if (!client) return { available: false as const }
+  if (!client) return { available: false as const, reason: 'not_configured' as const }
 
   try {
     const response = await client.listDocuments(organizationNumber)
@@ -84,18 +137,14 @@ export async function listAnnualReportsAtBolagsverket(organizationNumber: string
     if (error instanceof BolagsverketClientError && (error.status === 400 || error.status === 404)) {
       return { available: true as const, documents: [] }
     }
-    console.error('[bolagsverket] document list failed', {
-      environment: client.environment,
-      message: error instanceof Error ? error.message : 'unknown error',
-    })
-    return { available: false as const }
+    logBolagsverketError('[bolagsverket] document list failed', client, error)
+    return unavailableFromError(error)
   }
 }
 
-
 export async function getAnnualReportZipAtBolagsverket(documentId: string) {
   const client = BolagsverketVardefullaDatamangderClient.fromEnv()
-  if (!client) return { available: false as const }
+  if (!client) return { available: false as const, reason: 'not_configured' as const }
 
   try {
     const document = await client.getDocumentZip(documentId)
@@ -104,25 +153,43 @@ export async function getAnnualReportZipAtBolagsverket(documentId: string) {
     if (error instanceof BolagsverketClientError && error.status === 404) {
       return { available: true as const, document: null }
     }
-    console.error('[bolagsverket] document download failed', {
-      environment: client.environment,
-      message: error instanceof Error ? error.message : 'unknown error',
-    })
-    return { available: false as const }
+    logBolagsverketError('[bolagsverket] document download failed', client, error)
+    return unavailableFromError(error)
   }
 }
 
 export async function isBolagsverketRegistryAvailable() {
   const client = BolagsverketVardefullaDatamangderClient.fromEnv()
-  if (!client) return { available: false as const, configured: false as const }
+  if (!client) {
+    const { configured: _configured, ...summary } = getBolagsverketConfigSummary()
+    return {
+      available: false as const,
+      configured: false as const,
+      ...summary,
+    }
+  }
 
   try {
     return { available: await client.isAlive(), configured: true as const, environment: client.environment }
   } catch (error) {
-    console.error('[bolagsverket] health check failed', {
+    logBolagsverketError('[bolagsverket] health check failed', client, error)
+    return {
+      ...unavailableFromError(error),
+      configured: true as const,
       environment: client.environment,
-      message: error instanceof Error ? error.message : 'unknown error',
-    })
-    return { available: false as const, configured: true as const, environment: client.environment }
+    }
   }
+}
+
+export async function diagnoseBolagsverketRegistry(): Promise<BolagsverketConnectionDiagnostics> {
+  const client = BolagsverketVardefullaDatamangderClient.fromEnv()
+  if (!client) {
+    return {
+      ...getBolagsverketConfigSummary(),
+      token: null,
+      isAlive: null,
+    }
+  }
+
+  return client.diagnoseConnection()
 }
