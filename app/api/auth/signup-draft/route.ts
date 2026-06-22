@@ -22,7 +22,7 @@ const signupDraftSchema = z.object({
   postalCode: z.string().trim().max(20).optional().or(z.literal('')),
   city: z.string().trim().max(100).optional().or(z.literal('')),
   onboardingIntent: z.string().trim().max(64).optional().or(z.literal('')),
-  registryLookupToken: z.string().trim().max(12_000).optional().or(z.literal('')),
+  registryLookupToken: z.string().trim().max(8_000).optional().or(z.literal('')),
   acceptedTerms: z.literal(true),
   acceptedPrivacy: z.literal(true),
 })
@@ -124,6 +124,7 @@ export async function POST(request: NextRequest) {
             registry_status: registryLookup.company.registryStatus,
             address: registryLookup.company.address,
             sni_codes: registryLookup.company.sniCodes,
+            retrieved_at: registryLookup.company.retrievedAt,
           }
         : {},
       accepted_terms_at: new Date().toISOString(),

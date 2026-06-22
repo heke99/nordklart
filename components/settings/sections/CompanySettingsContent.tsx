@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
 import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
 import { CompanyMembersSection } from '@/components/settings/CompanyMembersSection'
-import { CompanyProfileSection } from '@/components/settings/CompanyProfileSection'
+import { BolagsverketRegistrySection } from '@/components/settings/BolagsverketRegistrySection'
 import { FiscalPeriodEditor } from '@/components/settings/FiscalPeriodEditor'
 import { LogoUpload } from '@/components/settings/LogoUpload'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
@@ -61,7 +61,7 @@ export function CompanySettingsContent() {
 
       <FiscalPeriodEditor />
 
-      <CompanyProfileSection />
+      <BolagsverketRegistrySection onSettingsUpdated={(data) => updateSettings(data as Partial<CompanySettings>)} />
 
       <CompanyDangerZone />
     </div>

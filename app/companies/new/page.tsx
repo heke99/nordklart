@@ -10,7 +10,6 @@ import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ArrowLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import type { CompanySettings, EntityType, MomsPeriod } from '@/types'
 import { getBranding } from '@/lib/branding/service'
@@ -75,7 +74,7 @@ function NewCompanyContent() {
   const [isSaving, setIsSaving] = useState(false)
   const [currentStep, setCurrentStep] = useState(1)
   const [settings, setSettings] = useState<Partial<CompanySettings>>({})
-  const ticEnabled = ENABLED_EXTENSION_IDS.has('tic')
+  const companyRegistryLookupEnabled = true
   const [ticLookup, setTicLookup] = useState<CompanyLookupResult | null>(null)
 
   const totalSteps = 4
@@ -296,7 +295,7 @@ function NewCompanyContent() {
                   city: settings.city ?? undefined,
                 }}
                 entityType={settings.entity_type as EntityType}
-                ticEnabled={ticEnabled}
+                ticEnabled={companyRegistryLookupEnabled}
                 onTicLookup={setTicLookup}
                 onNext={(data) => handleNext(data)}
                 onBack={handleBack}

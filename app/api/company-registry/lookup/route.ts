@@ -1,36 +1,26 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { lookupCompanyAtBolagsverket } from '@/lib/company-registry/provider'
-import { signCompanyLookup } from '@/lib/company-registry/lookup-attestation'
 import { publicLookupPayload } from '@/lib/company-registry/registry-service'
 
 const bodySchema = z.object({
   organizationNumber: z.string().trim().min(1).max(32),
 })
 
-function clientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown'
-}
-
-/**
- * Public and deliberately narrow: it accepts only a validated Swedish
- * organisation number and never returns contact persons, payment data or raw
- * registry payloads. Bolagsverket enrichment is optional; signup still works
- * with manual data if the provider is temporarily unavailable.
- */
 export async function POST(request: NextRequest) {
+  const { user, error: authError } = await requireAuth()
+  if (authError) return authError
+
   const body = await request.json().catch(() => null)
   const parsed = bodySchema.safeParse(body)
-  const ip = clientIp(request)
 
   const limit = await checkRateLimit({
-    prefix: 'public:company-lookup',
-    identifier: `${ip}:${parsed.success ? parsed.data.organizationNumber.replace(/\D/g, '') : 'invalid'}`,
-    maxRequests: 12,
+    prefix: 'company-registry:lookup',
+    identifier: `${user.id}:${parsed.success ? parsed.data.organizationNumber.replace(/\D/g, '') : 'invalid'}`,
+    maxRequests: 20,
     windowMs: 15 * 60 * 1000,
   })
   if (!limit.ok) return limit.response!
@@ -53,7 +43,7 @@ export async function POST(request: NextRequest) {
       message: 'Bolagsverket kunde inte nås just nu. Du kan fylla i uppgifterna manuellt.',
     })
   }
-  if (!result.found) {
+  if (!result.found || result.company.organizationNumber !== organizationNumber) {
     return NextResponse.json({
       available: true,
       found: false,
@@ -62,22 +52,10 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  // Exact identifier equality is mandatory. Registry search must never fill a
-  // signup from a "first matching" company result.
-  if (result.company.organizationNumber !== organizationNumber) {
-    return NextResponse.json({
-      available: true,
-      found: false,
-      status: 'identifier_mismatch',
-      message: 'Registersvaret matchade inte organisationsnumret.',
-    })
-  }
-
   return NextResponse.json({
     available: true,
     found: true,
     status: result.company.registryStatus,
     company: publicLookupPayload(result.company),
-    lookupToken: signCompanyLookup(result.company),
   })
 }

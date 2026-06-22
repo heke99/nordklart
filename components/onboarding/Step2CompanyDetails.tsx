@@ -9,10 +9,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Loader2, ArrowRight, ArrowLeft, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { ArrowRight, ArrowLeft, AlertTriangle, Loader2 } from 'lucide-react'
 import type { EntityType } from '@/types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { CompanyRegistryLookupStatusLine } from '@/components/company-registry/CompanyRegistryLookupStatus'
+import { CompanyRegistryResultCard } from '@/components/company-registry/CompanyRegistryResultCard'
+import { useCompanyRegistryLookup } from '@/components/company-registry/useCompanyRegistryLookup'
 
 const schema = z.object({
   company_name: z.string().min(1, 'Företagsnamn krävs'),
@@ -76,11 +79,8 @@ export default function Step2CompanyDetails({
     },
   })
 
-  const [isLooking, setIsLooking] = useState(false)
-  const [lookupError, setLookupError] = useState<string | null>(null)
-  const [lookupDone, setLookupDone] = useState<CompanyLookupResult | null>(null)
+  const registry = useCompanyRegistryLookup({ endpoint: '/api/company-registry/lookup', enabled: ticEnabled !== false })
   const [existingOwn, setExistingOwn] = useState<{ id: string; name: string } | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
   const dupAbortRef = useRef<AbortController | null>(null)
   // Tracks an orgnr that's been pre-verified (BankID CompanyRoles match) so
   // the client-side Lens lookup is skipped for that exact value. Cleared
@@ -126,83 +126,30 @@ export default function Step2CompanyDetails({
   }, [orgNumber])
 
   useEffect(() => {
-    if (!ticEnabled || !orgNumber || normalizeOrgNumber(orgNumber) === null) {
+    if (!orgNumber || normalizeOrgNumber(orgNumber) === null) {
+      registry.reset()
       return
     }
 
-    // Server already fetched this orgnr (BankID deep-link). Don't burn a
-    // second TIC call to re-confirm what we already have in `initialLookup`.
-    // Once the user edits the field, normalizeOrgNumber(orgNumber) will
-    // diverge from the prefetched value and the lookup re-arms.
     const normalized = normalizeOrgNumber(orgNumber)
     if (prefetchedForOrgRef.current && normalized === prefetchedForOrgRef.current) {
       return
     }
-    // Any subsequent edit invalidates the prefetched-match guard for good.
     prefetchedForOrgRef.current = null
-
-    setLookupError(null)
-    setLookupDone(null)
-
-    const timer = setTimeout(() => {
-      // Abort any in-flight request
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-
-      setIsLooking(true)
-
-      fetch(`/api/extensions/ext/tic/lookup?org_number=${encodeURIComponent(orgNumber)}`, {
-        signal: controller.signal,
-      })
-        .then(async (res) => {
-          if (controller.signal.aborted) return
-
-          if (res.status === 403) {
-            // Extension disabled — silently ignore
-            return
-          }
-          if (res.status === 404) {
-            setLookupError(t('step2_lookup_not_found'))
-            onTicLookup?.(null)
-            return
-          }
-          if (!res.ok) {
-            setLookupError(t('step2_lookup_failed'))
-            onTicLookup?.(null)
-            return
-          }
-
-          const { data } = (await res.json()) as { data: CompanyLookupResult }
-
-          // Guard: only apply if org_number still matches (user may have changed it)
-          if (controller.signal.aborted) return
-
-          setLookupDone(data)
-          onTicLookup?.(data)
-
-          // Auto-fill from TIC — overwrite since user just entered a new org number
-          if (data.companyName) setValue('company_name', data.companyName)
-          if (data.address?.street) setValue('address_line1', data.address.street)
-          if (data.address?.postalCode) setValue('postal_code', data.address.postalCode)
-          if (data.address?.city) setValue('city', data.address.city)
-        })
-        .catch((err) => {
-          if ((err as Error).name === 'AbortError') return
-          setLookupError(t('step2_lookup_failed'))
-          onTicLookup?.(null)
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setIsLooking(false)
-        })
-    }, 500)
-
-    return () => {
-      clearTimeout(timer)
-      abortRef.current?.abort()
-    }
+    registry.lookup(orgNumber)
+    onTicLookup?.(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ticEnabled, orgNumber])
+  }, [orgNumber, registry.lookup, registry.reset])
+
+  useEffect(() => {
+    const company = registry.company
+    if (!company) return
+
+    if (company.companyName) setValue('company_name', company.companyName)
+    if (company.address?.street) setValue('address_line1', company.address.street)
+    if (company.address?.postalCode) setValue('postal_code', company.address.postalCode)
+    if (company.address?.city) setValue('city', company.address.city)
+  }, [registry.company, setValue])
 
   const isAB = entityType === 'aktiebolag'
 
@@ -212,11 +159,7 @@ export default function Step2CompanyDetails({
         <CardHeader>
           <CardTitle>{t('step2_card_title')}</CardTitle>
           <CardDescription>
-            {ticEnabled
-              ? t('step2_card_desc_tic')
-              : isAB
-                ? t('step2_card_desc_ab')
-                : t('step2_card_desc_ef')}
+            {isAB ? t('step2_card_desc_ab') : t('step2_card_desc_ef')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -244,26 +187,13 @@ export default function Step2CompanyDetails({
                   ? t('step2_org_help_ab')
                   : t('step2_org_help_ef')}
               </p>
-              {ticEnabled && isLooking && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  {t('step2_fetching_details')}
-                </div>
-              )}
-              {ticEnabled && lookupDone && !lookupDone.isCeased && (
-                <div className="flex items-center gap-2 text-sm text-primary">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  {lookupDone.companyName}
-                </div>
-              )}
-              {ticEnabled && lookupDone?.isCeased && (
+              <CompanyRegistryLookupStatusLine status={registry.status} message={registry.message} />
+              <CompanyRegistryResultCard company={registry.company} />
+              {registry.company?.registryStatus === 'ceased' && (
                 <div className="flex items-center gap-2 text-sm text-destructive">
                   <AlertTriangle className="h-3.5 w-3.5" />
-                  {t('step2_ceased_inline', { companyName: lookupDone.companyName })}
+                  Det här företaget är avregistrerat enligt registret.
                 </div>
-              )}
-              {ticEnabled && lookupError && (
-                <p className="text-xs text-muted-foreground">{lookupError}</p>
               )}
               {existingOwn && (
                 <div className="flex items-start gap-2 rounded-md bg-warning/15 px-3 py-2 text-sm text-warning-foreground">

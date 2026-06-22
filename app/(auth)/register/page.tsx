@@ -12,6 +12,9 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { flowFromIntent } from '@/lib/onboarding/intents'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { CompanyRegistryLookupStatusLine } from '@/components/company-registry/CompanyRegistryLookupStatus'
+import { CompanyRegistryResultCard } from '@/components/company-registry/CompanyRegistryResultCard'
+import { useCompanyRegistryLookup } from '@/components/company-registry/useCompanyRegistryLookup'
 
 type WorkspaceType = 'company' | 'agency'
 type LegalForm = 'enskild_firma' | 'aktiebolag'
@@ -19,19 +22,6 @@ type LegalForm = 'enskild_firma' | 'aktiebolag'
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 
-type RegistryLookup = {
-  registryStatus: 'active' | 'ceased' | 'manual_review'
-  companyName: string
-  legalForm: string | null
-  address: { street: string | null; postalCode: string | null; city: string | null } | null
-}
-
-type RegistryLookupResponse = {
-  available: boolean
-  found?: boolean
-  company?: RegistryLookup
-  lookupToken?: string
-}
 
 export default function RegisterPage() {
   return <Suspense fallback={<div className="min-h-screen" />}><RegisterContent /></Suspense>
@@ -60,50 +50,29 @@ function RegisterContent() {
   const [acceptedLegal, setAcceptedLegal] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [confirmationEmail, setConfirmationEmail] = useState<string | null>(null)
-  const [registryLookup, setRegistryLookup] = useState<RegistryLookup | null>(null)
-  const [registryLookupToken, setRegistryLookupToken] = useState<string | null>(null)
+  const registry = useCompanyRegistryLookup({ endpoint: '/api/public/company-lookup' })
+  const registryLookup = registry.company
+  const registryLookupToken = registry.lookupToken
 
   const selectedFlow = flowFromIntent(intent)
   const label = workspaceType === 'agency' ? 'redovisningsbyrå' : legalForm === 'aktiebolag' ? 'aktiebolag' : 'enskild firma'
 
   useEffect(() => {
-    const organizationNumber = normalizeOrgNumber(orgNumber)
-    setRegistryLookup(null)
-    setRegistryLookupToken(null)
-    if (!organizationNumber) return
+    registry.lookup(orgNumber)
+  }, [orgNumber, registry.lookup])
 
-    let cancelled = false
-    const timer = window.setTimeout(async () => {
-      try {
-        const response = await fetch('/api/public/company-lookup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ organizationNumber }),
-        })
-        if (!response.ok || cancelled) return
-        const result = await response.json() as RegistryLookupResponse
-        const company = result.company
-        if (!result.available || !result.found || !company || !result.lookupToken || cancelled) return
+  useEffect(() => {
+    const company = registry.company
+    if (!company) return
 
-        setRegistryLookup(company)
-        setRegistryLookupToken(result.lookupToken)
-        setCompanyName((value) => value || company.companyName)
-        setAddressLine1((value) => value || company.address?.street || '')
-        setPostalCode((value) => value || company.address?.postalCode || '')
-        setCity((value) => value || company.address?.city || '')
-        if (company.legalForm === 'aktiebolag' || company.legalForm === 'enskild_firma') {
-          setLegalForm(company.legalForm)
-        }
-      } catch {
-        // Registry enrichment is optional. Signup remains available with manual data.
-      }
-    }, 500)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
+    setCompanyName(company.companyName)
+    setAddressLine1(company.address?.street || '')
+    setPostalCode(company.address?.postalCode || '')
+    setCity(company.address?.city || '')
+    if (company.legalForm === 'aktiebolag' || company.legalForm === 'enskild_firma') {
+      setLegalForm(company.legalForm)
     }
-  }, [orgNumber])
+  }, [registry.company])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -213,19 +182,26 @@ function RegisterContent() {
           <Field label="Efternamn" value={lastName} onChange={setLastName} autoComplete="family-name" />
         </div>
         <Field label="E-post för inloggning" value={loginEmail} onChange={setLoginEmail} type="email" autoComplete="email" />
-        <Field label={workspaceType === 'agency' ? 'Byrånamn' : 'Företagsnamn'} value={companyName} onChange={setCompanyName} autoComplete="organization" />
-        <Field label={legalForm === 'aktiebolag' ? 'Organisationsnummer' : 'Person- eller organisationsnummer'} value={orgNumber} onChange={setOrgNumber} inputMode="numeric" required={legalForm === 'aktiebolag'} />
-        {registryLookup?.registryStatus === 'active' ? <p className="-mt-2 text-xs text-muted-foreground">Företagsuppgifter har hämtats från registret. Kontrollera och komplettera uppgifterna nedan.</p> : null}
-        {registryLookup?.registryStatus === 'manual_review' ? <p className="-mt-2 text-xs text-amber-700">Företaget behöver kontrolleras manuellt. Kontrollera uppgifterna innan du fortsätter.</p> : null}
-        {registryLookup?.registryStatus === 'ceased' ? <p className="-mt-2 text-xs text-destructive">Det här bolaget är inte aktivt och kan inte registreras automatiskt.</p> : null}
+
+        <section className="space-y-3 rounded-lg border bg-muted/10 p-4">
+          <div className="space-y-1">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">Företagsuppgifter</h2>
+            <p className="text-xs text-muted-foreground">Skriv organisationsnumret först. Nordklart hämtar bolagsnamn, adress och SNI från Bolagsverket när uppgifter finns.</p>
+          </div>
+          <Field label={legalForm === 'aktiebolag' ? 'Organisationsnummer' : 'Person- eller organisationsnummer'} value={orgNumber} onChange={setOrgNumber} inputMode="numeric" required={legalForm === 'aktiebolag'} />
+          <CompanyRegistryLookupStatusLine status={registry.status} message={registry.message} />
+          <CompanyRegistryResultCard company={registryLookup} />
+          <Field label={workspaceType === 'agency' ? 'Byrånamn' : 'Företagsnamn'} value={companyName} onChange={setCompanyName} autoComplete="organization" />
+          <Field label="Adress" value={addressLine1} onChange={setAddressLine1} autoComplete="street-address" required={false} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Postnummer" value={postalCode} onChange={setPostalCode} autoComplete="postal-code" required={false} />
+            <Field label="Ort" value={city} onChange={setCity} autoComplete="address-level2" required={false} />
+          </div>
+        </section>
+
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Kontakt-e-post för verksamheten" value={contactEmail} onChange={setContactEmail} type="email" />
           <Field label="Telefonnummer" value={phone} onChange={setPhone} type="tel" required={false} />
-        </div>
-        <Field label="Adress" value={addressLine1} onChange={setAddressLine1} autoComplete="street-address" required={false} />
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Postnummer" value={postalCode} onChange={setPostalCode} autoComplete="postal-code" required={false} />
-          <Field label="Ort" value={city} onChange={setCity} autoComplete="address-level2" required={false} />
         </div>
         <label className="flex gap-3 rounded-lg border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">
           <input type="checkbox" checked={acceptedLegal} onChange={(event) => setAcceptedLegal(event.target.checked)} required className="mt-0.5 h-4 w-4 shrink-0 accent-primary" />

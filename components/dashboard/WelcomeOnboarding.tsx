@@ -8,7 +8,6 @@ import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
 import { useToast } from '@/components/ui/use-toast'
 import { Building2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getBranding } from '@/lib/branding/service'
 
 const branding = getBranding()
@@ -133,7 +132,7 @@ export default function WelcomeOnboarding({
     if (initialLegalName) seed.company_name = initialLegalName
     return seed
   })
-  const ticEnabled = ENABLED_EXTENSION_IDS.has('tic')
+  const companyRegistryLookupEnabled = true
   const [ticLookup, setTicLookup] = useState<CompanyLookupResult | null>(null)
 
   const totalSteps = 4
@@ -350,7 +349,7 @@ export default function WelcomeOnboarding({
                     city: settings.city ?? undefined,
                   }}
                   entityType={settings.entity_type as EntityType}
-                  ticEnabled={ticEnabled}
+                  ticEnabled={companyRegistryLookupEnabled}
                   onTicLookup={setTicLookup}
                   preverifiedOrgNumber={preverifiedOrgNumber}
                   onNext={(data) => handleNext(data)}
