@@ -18,8 +18,8 @@ function clientIp(request: NextRequest): string {
 /**
  * Public and deliberately narrow: it accepts only a validated Swedish
  * organisation number and never returns contact persons, payment data or raw
- * registry payloads. The provider remains unavailable until Bolagsverket has
- * supplied Nordklart's approved API connection details.
+ * registry payloads. Bolagsverket enrichment is optional; signup still works
+ * with manual data if the provider is temporarily unavailable.
  */
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null)
