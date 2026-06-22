@@ -19,6 +19,11 @@ export type BolagsverketApiError = {
   detail?: string
   error?: string
   error_description?: string
+  cause?: string
+  causeCode?: string
+  causeName?: string
+  url?: string
+  host?: string
 }
 
 export type BolagsverketOrganizationRequest = {
@@ -199,6 +204,82 @@ function safeDetails(details: unknown): BolagsverketApiError | string | null {
     detail: typeof value.detail === 'string' ? value.detail : undefined,
     error: typeof value.error === 'string' ? value.error : undefined,
     error_description: typeof value.error_description === 'string' ? value.error_description : undefined,
+    cause: typeof value.cause === 'string' ? value.cause : undefined,
+    causeCode: typeof value.causeCode === 'string' ? value.causeCode : undefined,
+    causeName: typeof value.causeName === 'string' ? value.causeName : undefined,
+    url: typeof value.url === 'string' ? value.url : undefined,
+    host: typeof value.host === 'string' ? value.host : undefined,
+  }
+}
+
+
+function safeErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return 'unknown error'
+}
+
+function describeFetchFailure(error: unknown, url: string): BolagsverketApiError {
+  const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : null
+  const causeRecord = cause && typeof cause === 'object' ? cause as Record<string, unknown> : null
+  let parsedHost: string | undefined
+
+  try {
+    parsedHost = new URL(url).host
+  } catch {
+    parsedHost = undefined
+  }
+
+  const causeCode = typeof causeRecord?.code === 'string'
+    ? causeRecord.code
+    : typeof causeRecord?.errno === 'string'
+      ? causeRecord.errno
+      : undefined
+  const causeMessage = cause instanceof Error
+    ? cause.message
+    : typeof cause === 'string'
+      ? cause
+      : undefined
+  const causeName = cause instanceof Error
+    ? cause.name
+    : typeof causeRecord?.name === 'string'
+      ? causeRecord.name
+      : undefined
+
+  return {
+    title: 'Network request failed before an HTTP response was received.',
+    detail: safeErrorMessage(error),
+    error: 'fetch_failed',
+    error_description: causeMessage,
+    cause: causeMessage,
+    causeCode,
+    causeName,
+    url,
+    host: parsedHost,
+  }
+}
+
+function networkCodeFrom(error: unknown): string {
+  const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : null
+  const causeRecord = cause && typeof cause === 'object' ? cause as Record<string, unknown> : null
+  if (error instanceof DOMException && error.name === 'AbortError') return 'network_timeout'
+  if (error instanceof Error && error.name === 'AbortError') return 'network_timeout'
+  if (typeof causeRecord?.code === 'string') return causeRecord.code
+  if (typeof causeRecord?.errno === 'string') return causeRecord.errno
+  return 'network_error'
+}
+
+async function fetchWithBolagsverketDiagnostics(url: string, init: RequestInit, requestId: string, message: string): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (error) {
+    throw new BolagsverketClientError(
+      message,
+      0,
+      requestId,
+      describeFetchFailure(error, url),
+      networkCodeFrom(error),
+    )
   }
 }
 
@@ -242,12 +323,12 @@ async function fetchAccessTokenWithMethod(
   method: TokenAuthAttemptMethod,
 ): Promise<{ token: TokenResponse; diagnostic: BolagsverketTokenDiagnostic }> {
   const requestId = randomUUID()
-  const response = await fetch(config.tokenUrl, {
+  const response = await fetchWithBolagsverketDiagnostics(config.tokenUrl, {
     method: 'POST',
     headers: tokenHeaders(config, method),
     body: tokenBody(config, method),
     signal: withTimeout(config.timeoutMs),
-  })
+  }, requestId, 'Nätverksfel vid tokenanrop till Bolagsverket.')
 
   const payload = await readResponse(response)
   if (!response.ok) {
@@ -348,7 +429,7 @@ async function diagnoseToken(config: BolagsverketConfig): Promise<BolagsverketTo
           status: null,
           requestId: randomUUID(),
           error: error.message,
-          details: null,
+          details: describeFetchFailure(error, config.tokenUrl),
           expiresIn: null,
           scope: null,
         }
@@ -394,7 +475,8 @@ export class BolagsverketVardefullaDatamangderClient {
     const requestId = randomUUID()
     try {
       const accessToken = (await getAccessTokenRecord(this.config)).accessToken
-      const response = await fetch(`${this.config.apiBaseUrl}/isalive`, {
+      const isAliveUrl = `${this.config.apiBaseUrl}/isalive`
+      const response = await fetchWithBolagsverketDiagnostics(isAliveUrl, {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -402,7 +484,7 @@ export class BolagsverketVardefullaDatamangderClient {
           'X-Request-Id': requestId,
         },
         signal: withTimeout(this.config.timeoutMs),
-      })
+      }, requestId, 'Nätverksfel vid Bolagsverket /isalive.')
       const payload = await readResponse(response)
       return {
         ...summary,
@@ -421,10 +503,10 @@ export class BolagsverketVardefullaDatamangderClient {
         token,
         isAlive: {
           ok: false,
-          status: null,
-          requestId,
-          error: error instanceof Error ? error.message : 'isalive_failed',
-          details: null,
+          status: error instanceof BolagsverketClientError ? error.status || null : null,
+          requestId: error instanceof BolagsverketClientError ? error.requestId : requestId,
+          error: error instanceof BolagsverketClientError ? error.code : error instanceof Error ? error.message : 'isalive_failed',
+          details: error instanceof BolagsverketClientError ? error.details : describeFetchFailure(error, `${this.config.apiBaseUrl}/isalive`),
         },
       }
     }
@@ -449,7 +531,8 @@ export class BolagsverketVardefullaDatamangderClient {
   async getDocumentZip(dokumentId: string): Promise<ArrayBuffer> {
     const token = await getAccessToken(this.config)
     const requestId = randomUUID()
-    const response = await fetch(`${this.config.apiBaseUrl}/dokument/${encodeURIComponent(dokumentId)}`, {
+    const documentUrl = `${this.config.apiBaseUrl}/dokument/${encodeURIComponent(dokumentId)}`
+    const response = await fetchWithBolagsverketDiagnostics(documentUrl, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -457,7 +540,7 @@ export class BolagsverketVardefullaDatamangderClient {
         'X-Request-Id': requestId,
       },
       signal: withTimeout(this.config.timeoutMs),
-    })
+    }, requestId, 'Nätverksfel vid dokumenthämtning från Bolagsverket.')
     if (!response.ok) {
       const payload = await readResponse(response)
       throw new BolagsverketClientError(
@@ -474,7 +557,8 @@ export class BolagsverketVardefullaDatamangderClient {
   private async request(path: string, options: { method: 'GET' | 'POST'; scope: 'read' | 'ping'; body?: unknown }): Promise<unknown> {
     const token = await getAccessToken(this.config)
     const requestId = randomUUID()
-    const response = await fetch(`${this.config.apiBaseUrl}${path}`, {
+    const requestUrl = `${this.config.apiBaseUrl}${path}`
+    const response = await fetchWithBolagsverketDiagnostics(requestUrl, {
       method: options.method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -484,7 +568,7 @@ export class BolagsverketVardefullaDatamangderClient {
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: withTimeout(this.config.timeoutMs),
-    })
+    }, requestId, `Nätverksfel vid Bolagsverket ${path}.`)
     const payload = await readResponse(response)
     if (!response.ok) {
       throw new BolagsverketClientError(
