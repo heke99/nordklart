@@ -250,8 +250,8 @@ export default async function DashboardLayout({
 
   // Backfill a verified agent_profile for sandbox sessions that pre-date the
   // seed change. Without this an old anonymous session shows the "Bygg din
-  // bokföringsassistent" CTA in three places (dashboard hero, NewUserChecklist
-  // step 4, /chat layout redirect) and the user can still kick off a build
+  // bokföringsassistent" CTA in multiple places (dashboard hero and /chat
+  // layout redirect) and the user can still kick off a build
   // flow that the server now 403s. Best-effort; doesn't block the layout
   // even if the insert fails.
   let resolvedAgentIdentity = agentProfileIdentity

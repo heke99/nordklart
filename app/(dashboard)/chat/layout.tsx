@@ -19,9 +19,9 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
 
   // Block the chat surface until the agent is built. Without this a user
   // who deep-links to /chat (bookmark, ⌘K, "+ Ny" elsewhere) lands on an
-  // empty conversations list with no Anna to talk to. The home route at /
-  // renders NewUserChecklist for the same state, so we forward there
-  // instead of duplicating the welcome screen here.
+  // empty conversations list with no Anna to talk to. The dashboard at /app
+  // stays available and shows assistant setup as an optional action, so we
+  // forward there instead of duplicating setup UI here.
   let { data: agent } = await supabase
     .from('agent_profiles')
     .select('verified_at')

@@ -1,7 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
-import NewUserChecklist from './NewUserChecklist'
+import QuickStartPanel from '@/components/dashboard/QuickStartPanel'
 
 interface Props {
   companyId: string
@@ -10,25 +9,14 @@ interface Props {
   hasSkatteverketConnected: boolean
 }
 
-// Thin client wrapper around NewUserChecklist, shown only to a genuinely empty
-// company (no data, no assistant). The data-import steps lead and building the
-// assistant is the last step; the "I'm starting fresh" escape hatch forwards
-// straight to /onboarding/agent for users with no books to bring in.
+// Legacy wrapper kept for older imports. It must never block /app: a company
+// with no bank connection, SIE import or Skatteverket token should still see
+// the normal dashboard and choose these setup steps when it fits.
 export default function WelcomeGate({
-  companyId: _companyId,
-  hasBookkeepingImported,
-  hasBankConnected,
-  hasSkatteverketConnected,
+  companyId,
+  hasBookkeepingImported: _hasBookkeepingImported,
+  hasBankConnected: _hasBankConnected,
+  hasSkatteverketConnected: _hasSkatteverketConnected,
 }: Props) {
-  const router = useRouter()
-
-  return (
-    <NewUserChecklist
-      hasBookkeepingImported={hasBookkeepingImported}
-      hasBankConnected={hasBankConnected}
-      hasSkatteverketConnected={hasSkatteverketConnected}
-      hasAgentBuilt={false}
-      onFreshStart={() => router.push('/onboarding/agent')}
-    />
-  )
+  return <QuickStartPanel companyId={companyId} />
 }

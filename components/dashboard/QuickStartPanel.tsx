@@ -1,22 +1,23 @@
 import Link from 'next/link'
-import { ArrowRight, Landmark, Receipt, ReceiptText, Upload, Wand2 } from 'lucide-react'
+import { ArrowRight, FileText, Landmark, Receipt, ReceiptText, Upload, Wand2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 
 const actions = [
-  { href: '/invoices/new', title: 'Skapa första fakturan', description: 'Skicka en faktura direkt från Nordklart.', icon: Receipt },
-  { href: '/bookkeeping', title: 'Bokför en verifikation', description: 'Börja manuellt med en säker verifikation.', icon: ReceiptText },
-  { href: '/import?mode=sie', title: 'Importera SIE', description: 'Flytta in befintlig bokföring när det passar.', icon: Upload },
-  { href: '/bank-automation', title: 'Koppla bank', description: 'Automatisera stegvis med banktransaktioner.', icon: Landmark },
-  { href: '/onboarding/agent', title: 'Lägg till assistent', description: 'Valfritt stöd för bokföringsförslag.', icon: Wand2 },
+  { href: '/invoices/new', title: 'Skapa första fakturan', description: 'Börja sälja direkt. Bank och SIE kan kopplas senare.', icon: Receipt },
+  { href: '/bookkeeping', title: 'Bokför en verifikation', description: 'Skapa en manuell verifikation utan att importera något först.', icon: ReceiptText },
+  { href: '/import?mode=sie', title: 'Importera SIE', description: 'Flytta in historik från ett annat system när du vill.', icon: Upload },
+  { href: '/import', title: 'Importera underlag', description: 'Ladda upp kvitton, filer eller bankunderlag manuellt.', icon: FileText },
+  { href: '/bank-automation', title: 'Koppla bank', description: 'Valfritt steg för automatisk import av transaktioner.', icon: Landmark },
+  { href: '/onboarding/agent', title: 'Lägg till assistent', description: 'Valfritt stöd för förslag, regler och återkommande bokföring.', icon: Wand2 },
 ]
 
 export default function QuickStartPanel({ companyId: _companyId }: { companyId: string }) {
   return (
     <section className="rounded-[1.75rem] border bg-card p-5 shadow-sm md:p-7">
-      <p className="text-sm font-medium text-primary">Kom igång</p>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight">Välj nästa steg när det passar dig</h1>
+      <p className="text-sm font-medium text-primary">Översikt</p>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight">Din dashboard är klar</h1>
       <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-        Din arbetsyta är klar. Du behöver inte koppla bank eller aktivera fler tjänster för att börja bokföra.
+        Du kan börja använda Nordklart direkt. Bankkoppling, SIE-import, Skatteverket och assistent är valfria steg som kan göras från dashboarden när det passar.
       </p>
       <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {actions.map((action) => {

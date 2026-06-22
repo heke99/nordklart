@@ -5,7 +5,8 @@ import { getActiveCompanyId } from '@/lib/company/context'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { getWorklistCounts, listSuggestedMatches } from '@/lib/worklist'
-import type { Deadline, OnboardingProgress } from '@/types'
+import { resolveDashboardWorkspaceState } from '@/lib/dashboard/workspace-state'
+import type { Deadline } from '@/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -73,7 +74,7 @@ export default async function DashboardPage() {
     // because that's what the token-store reads/writes against.
     supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
     supabase.from('agent_profiles').select('verified_at').eq('company_id', companyId).maybeSingle(),
-    // Any posted entry counts as "company has been used" for the hasData gate.
+    // Any posted entry counts as real dashboard activity for workspace state.
     supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'posted'),
     // Pending-work counts + suggested matches come from lib/worklist — the
     // same source as the sidebar badges, so the numbers can never diverge.
@@ -82,9 +83,9 @@ export default async function DashboardPage() {
   ])
 
   // Sandbox sessions that pre-date the agent_profile seeding step would
-  // otherwise still see the "Bygg din bokföringsassistent" hero + the
-  // NewUserChecklist's agent step lit up. Backfill here so the next render
-  // sees a verified profile and treats the sandbox as fully set up.
+  // otherwise still see the optional "Bygg din bokföringsassistent" hero.
+  // Backfill here so the next render sees a verified profile and treats the
+  // sandbox as fully set up.
   let effectiveAgentVerified = agentProfile?.verified_at ?? null
   if (settings?.is_sandbox === true && !effectiveAgentVerified) {
     await ensureSandboxAgentProfile(supabase, companyId)
@@ -98,29 +99,20 @@ export default async function DashboardPage() {
 
   const agentBuilt = Boolean(effectiveAgentVerified)
 
-  // "Has the company already been used?" Any real business data means we must
-  // NOT hijack the dashboard with the full-screen onboarding gate — existing
-  // and migrated users get the normal Översikt with a build-assistant prompt
-  // in the hero slot (see DashboardContent's agentBuilt branch) instead.
-  const hasData =
-    (transactionCount || 0) > 0 ||
-    (sieImportCount || 0) > 0 ||
-    (invoiceCount || 0) > 0 ||
-    (receiptCount || 0) > 0 ||
-    (customerCount || 0) > 0 ||
-    (postedEntriesCount || 0) > 0
-
-  // The dashboard remains available for a new workspace. Optional setup
-  // actions are rendered inline instead of blocking accounting work.
-
-
-  const onboardingProgress: OnboardingProgress = {
-    hasCustomers: (customerCount || 0) > 0,
-    hasInvoices: (invoiceCount || 0) > 0,
-    hasBankConnected: (transactionCount || 0) > 0,
-    hasSIEImport: (sieImportCount || 0) > 0,
-    hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0,
-  }
+  // A provisioned company should always land on /app. Bank, SIE,
+  // Skatteverket and assistant setup are optional dashboard actions, not
+  // routing gates. Keep the state in one helper so UI and progress cards do
+  // not drift apart.
+  const workspaceState = resolveDashboardWorkspaceState({
+    customerCount,
+    invoiceCount,
+    receiptCount,
+    transactionCount,
+    postedEntriesCount,
+    sieImportCount,
+    bankConnectionCount: bankConnections?.length ?? 0,
+    skatteverketTokenCount,
+  })
 
   // Calculate totals from journal entry lines using account classes
   const calculateTotals = (lines: typeof journalLines, fromDate: string) => {
@@ -218,8 +210,8 @@ export default async function DashboardPage() {
       }}
       worklist={worklist}
       suggestedMatches={suggestedMatches}
-      onboardingProgress={onboardingProgress}
-      isNewWorkspace={!hasData}
+      onboardingProgress={workspaceState.onboardingProgress}
+      isEmptyWorkspace={workspaceState.isEmptyWorkspace}
     />
   )
 }

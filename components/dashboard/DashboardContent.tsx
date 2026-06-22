@@ -39,6 +39,8 @@ interface DashboardContentProps {
   suggestedMatches: SuggestedMatch[]
   onboardingProgress?: OnboardingProgress
   agentBuilt?: boolean
+  isEmptyWorkspace?: boolean
+  /** @deprecated use isEmptyWorkspace. Kept so older callers do not become a hidden gate. */
   isNewWorkspace?: boolean
 }
 
@@ -48,6 +50,7 @@ export default function DashboardContent({
   worklist,
   suggestedMatches,
   agentBuilt = true,
+  isEmptyWorkspace = false,
   isNewWorkspace = false,
 }: DashboardContentProps) {
   const t = useTranslations('dashboard')
@@ -66,6 +69,7 @@ export default function DashboardContent({
   const todoCount = worklist.total + (summary.expiringBankConnections?.length ?? 0)
 
   const slim = getBranding().navDensity === 'slim'
+  const showEmptyWorkspacePanel = isEmptyWorkspace || isNewWorkspace
 
   // Pick the single most-urgent next action so the launchpad surfaces one
   // unambiguous CTA. Order matches the friction we actually want to remove
@@ -124,8 +128,8 @@ export default function DashboardContent({
 
   return (
     <div className="stagger-enter space-y-8">
-      {isNewWorkspace ? <QuickStartPanel companyId={companyId} /> : null}
-      {!agentBuilt ? (
+      {showEmptyWorkspacePanel ? <QuickStartPanel companyId={companyId} /> : null}
+      {showEmptyWorkspacePanel ? null : !agentBuilt ? (
         /* Build-assistant hero — shown until the company has a verified
            agent_profile. Takes the hero slot so existing/migrated users get a
            clear prompt instead of a full-screen onboarding takeover. */
@@ -233,14 +237,14 @@ export default function DashboardContent({
               </CardContent>
             </Card>
           ) : (
-            <Link href="/import">
+            <Link href="/bank-automation">
               <Card className="h-full hover:border-primary/50 transition-colors cursor-pointer">
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between">
                     <p className="text-xs text-muted-foreground mb-2">{t('bank_balance')}</p>
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
                   </div>
-                  <p className="text-sm font-medium text-primary">{t('connect_bank')}</p>
+                  <p className="text-sm font-medium text-primary">Valfritt: koppla bank</p>
                 </CardContent>
               </Card>
             </Link>
