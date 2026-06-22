@@ -41,6 +41,7 @@ type DirectMembershipRole = 'owner' | 'admin' | 'member' | 'viewer' | string | n
 type DirectMembershipRow = {
   company_id: string
   role: DirectMembershipRole
+  status?: string | null
 }
 
 type DirectCompanyRow = {
@@ -70,7 +71,7 @@ function normalizeAccess(row: Record<string, unknown>): CompanyAccess {
   }
 }
 
-function directAccess(companyId: string, role: DirectMembershipRole): CompanyAccess {
+function directAccess(companyId: string, role: DirectMembershipRole, status: string | null = 'active'): CompanyAccess {
   const effectiveRole: EffectiveCompanyRole = role === 'owner'
     ? 'company_owner'
     : role === 'admin'
@@ -79,15 +80,17 @@ function directAccess(companyId: string, role: DirectMembershipRole): CompanyAcc
         ? 'client_user'
         : 'read_only'
 
+  const isFullyActive = status !== 'active_limited'
+
   return {
     companyId,
     accessSource: 'direct',
     agencyId: null,
     effectiveRole,
     canRead: true,
-    canWrite: effectiveRole !== 'read_only',
-    canReview: effectiveRole !== 'read_only' && effectiveRole !== 'client_user',
-    canManageCompany: effectiveRole === 'company_owner' || effectiveRole === 'company_admin',
+    canWrite: isFullyActive && effectiveRole !== 'read_only',
+    canReview: isFullyActive && effectiveRole !== 'read_only' && effectiveRole !== 'client_user',
+    canManageCompany: isFullyActive && (effectiveRole === 'company_owner' || effectiveRole === 'company_admin'),
     canManageAgency: false,
     canManagePlatform: false,
   }
@@ -114,14 +117,15 @@ async function resolveDirectMembershipAccess(
 
   const { data, error } = await supabase
     .from('company_members')
-    .select('company_id, role')
+    .select('company_id, role, status')
     .eq('company_id', companyId)
     .eq('user_id', userId)
+    .in('status', ['active', 'active_limited'])
     .maybeSingle()
 
   if (error || !data) return null
   const membership = data as DirectMembershipRow
-  return directAccess(membership.company_id, membership.role)
+  return directAccess(membership.company_id, membership.role, membership.status ?? 'active')
 }
 
 async function listDirectAccessibleCompanies(
@@ -132,8 +136,9 @@ async function listDirectAccessibleCompanies(
 
   const { data: membershipRows, error: membershipError } = await supabase
     .from('company_members')
-    .select('company_id, role')
+    .select('company_id, role, status')
     .eq('user_id', userId)
+    .in('status', ['active', 'active_limited'])
 
   if (membershipError || !membershipRows?.length) return []
 
@@ -156,7 +161,7 @@ async function listDirectAccessibleCompanies(
     if (!company) return []
 
     return [{
-      ...directAccess(membership.company_id, membership.role),
+      ...directAccess(membership.company_id, membership.role, membership.status ?? 'active'),
       name: company.name || 'Företag',
       orgNumber: company.org_number,
       entityType: company.entity_type === 'aktiebolag' ? 'aktiebolag' : 'enskild_firma',

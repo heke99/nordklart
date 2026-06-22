@@ -101,6 +101,7 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
       .select('company_id')
       .eq('user_id', ctx.userId)
       .eq('company_id', o.company_id)
+      .in('status', ['active', 'active_limited'])
       .maybeSingle()
 
     if (membershipErr) return v1ErrorResponse(membershipErr, ctx.log, { requestId: ctx.requestId })

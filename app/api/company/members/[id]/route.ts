@@ -1,13 +1,11 @@
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { resolveCompanyAccess } from '@/lib/access/company'
 
 /**
  * DELETE /api/company/members/[id]
- * Remove a member from the current company.
- * Only company owners and admins can remove members.
- * Cannot remove team-sourced members (they must be removed from the team).
+ * Revokes a member from the current company without deleting audit-relevant rows.
  */
 export async function DELETE(
   _request: Request,
@@ -17,46 +15,21 @@ export async function DELETE(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
   const companyId = await requireCompanyId(supabase, user.id)
-  const { id: memberId } = await params
-  const serviceClient = await createServiceClient()
-
-  // Check caller has permission
-  const { data: callerMembership } = await serviceClient
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .single()
-
-  if (!callerMembership || !['owner', 'admin'].includes(callerMembership.role)) {
+  const access = await resolveCompanyAccess(supabase, companyId)
+  if (!access?.canManageCompany) {
     return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
   }
 
-  // Look up the member (source column may not exist if migration not yet applied)
-  let member: { id: string; user_id: string; role: string; source?: string } | null = null
+  const { id: memberId } = await params
+  const serviceClient = createServiceClient()
 
-  const { data: memberWithSource } = await serviceClient
+  const { data: member } = await serviceClient
     .from('company_members')
-    .select('id, user_id, role, source')
+    .select('id, user_id, role, source, status')
     .eq('id', memberId)
     .eq('company_id', companyId)
     .single()
-
-  if (memberWithSource) {
-    member = memberWithSource
-  } else {
-    const { data: memberFallback } = await serviceClient
-      .from('company_members')
-      .select('id, user_id, role')
-      .eq('id', memberId)
-      .eq('company_id', companyId)
-      .single()
-    member = memberFallback ? { ...memberFallback, source: 'direct' } : null
-  }
 
   if (!member) {
     return NextResponse.json({ error: 'Medlem hittades inte.' }, { status: 404 })
@@ -78,7 +51,7 @@ export async function DELETE(
 
   const { error } = await serviceClient
     .from('company_members')
-    .delete()
+    .update({ status: 'revoked', revoked_by: user.id, revoked_at: new Date().toISOString() })
     .eq('id', memberId)
     .eq('company_id', companyId)
 

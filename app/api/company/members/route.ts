@@ -1,10 +1,11 @@
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
+import { resolveCompanyAccess } from '@/lib/access/company'
 
 /**
  * GET /api/company/members
- * Returns members and pending invitations for the current company.
+ * Returns active/limited members, pending invitations and pending access requests for the current company.
  */
 export async function GET() {
   const supabase = await createClient()
@@ -12,34 +13,23 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const companyId = await requireCompanyId(supabase, user.id)
-  const serviceClient = await createServiceClient()
+  const access = await resolveCompanyAccess(supabase, companyId)
+  if (!access?.canRead) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
 
-  // Fetch members (source column may not exist if migration not yet applied)
-  let members: { id: string; user_id: string; role: string; source?: string; joined_at: string }[] | null = null
+  const serviceClient = createServiceClient()
+  const canManage = access.canManageCompany
 
-  const { data: membersWithSource, error: membersError } = await serviceClient
+  const { data: members, error: membersError } = await serviceClient
     .from('company_members')
-    .select('id, user_id, role, source, joined_at')
+    .select('id, user_id, role, source, status, access_source, joined_at, approved_at')
     .eq('company_id', companyId)
+    .in('status', ['active', 'active_limited'])
     .order('joined_at', { ascending: true })
 
   if (membersError) {
-    // Fallback: query without source column
-    const { data: membersFallback, error: fallbackError } = await serviceClient
-      .from('company_members')
-      .select('id, user_id, role, joined_at')
-      .eq('company_id', companyId)
-      .order('joined_at', { ascending: true })
-
-    if (fallbackError) {
-      return NextResponse.json({ error: 'Kunde inte hämta medlemmar.' }, { status: 500 })
-    }
-    members = (membersFallback || []).map((m) => ({ ...m, source: 'direct' as const }))
-  } else {
-    members = membersWithSource
+    return NextResponse.json({ error: 'Kunde inte hämta medlemmar.' }, { status: 500 })
   }
 
-  // Fetch emails from profiles
   const userIds = (members || []).map((m) => m.user_id)
   const { data: profiles } = userIds.length > 0
     ? await serviceClient
@@ -50,17 +40,23 @@ export async function GET() {
 
   const emailMap = new Map((profiles || []).map((p) => [p.id, p.email]))
 
-  // Fetch pending company invitations
-  const { data: invitations } = await serviceClient
-    .from('company_invitations')
-    .select('id, email, role, status, expires_at, created_at')
-    .eq('company_id', companyId)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false })
+  const { data: invitations } = canManage
+    ? await serviceClient
+        .from('company_invitations')
+        .select('id, email, role, status, expires_at, created_at')
+        .eq('company_id', companyId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+    : { data: [] }
 
-  // Get current user's role
-  const currentMember = members?.find((m) => m.user_id === user.id)
-  const canInvite = currentMember?.role === 'owner' || currentMember?.role === 'admin'
+  const { data: accessRequests } = canManage
+    ? await serviceClient
+        .from('company_access_requests')
+        .select('id, requester_user_id, requester_email, requested_role, status, message, created_at')
+        .eq('company_id', companyId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true })
+    : { data: [] }
 
   return NextResponse.json({
     data: {
@@ -70,11 +66,16 @@ export async function GET() {
         email: emailMap.get(m.user_id) || '',
         role: m.role,
         source: m.source,
+        status: m.status,
+        access_source: m.access_source,
         joined_at: m.joined_at,
+        approved_at: m.approved_at,
         is_current_user: m.user_id === user.id,
       })),
       invitations: invitations || [],
-      canInvite,
+      accessRequests: accessRequests || [],
+      canInvite: canManage,
+      canManage,
     },
   })
 }

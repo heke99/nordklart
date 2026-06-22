@@ -38,6 +38,7 @@ export async function POST(request: Request) {
     .select('role')
     .eq('company_id', companyId)
     .eq('user_id', user.id)
+    .eq('status', 'active')
     .maybeSingle()
   if (!membership || membership.role === 'viewer') {
     return NextResponse.json(

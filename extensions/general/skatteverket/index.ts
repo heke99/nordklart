@@ -123,6 +123,7 @@ async function requireAgiWriteRole(ctx: ExtensionContext): Promise<NextResponse 
     .select('role')
     .eq('company_id', ctx.companyId)
     .eq('user_id', ctx.userId)
+    .eq('status', 'active')
     .maybeSingle()
 
   if (error) {

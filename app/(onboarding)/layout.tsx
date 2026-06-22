@@ -27,6 +27,7 @@ export default async function OnboardingLayout({
       .from('company_members')
       .select('company_id')
       .eq('user_id', user.id)
+      .in('status', ['active', 'active_limited'])
       .limit(1)
       .maybeSingle()
     hasCompletedOnboarding = !!data

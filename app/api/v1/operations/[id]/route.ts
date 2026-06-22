@@ -121,6 +121,7 @@ export const GET = withApiV1<{ params: Promise<{ id: string }> }>(
       .select('company_id')
       .eq('user_id', ctx.userId)
       .eq('company_id', opCompanyId)
+      .in('status', ['active', 'active_limited'])
       .maybeSingle()
 
     if (!membership) {

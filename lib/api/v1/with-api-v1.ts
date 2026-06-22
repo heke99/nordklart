@@ -330,9 +330,10 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       if (companyId !== undefined) {
         const { data: membership, error: membershipErr } = await supabase
           .from('company_members')
-          .select('company_id, role')
+          .select('company_id, role, status')
           .eq('user_id', auth.userId)
           .eq('company_id', companyId)
+          .in('status', ['active', 'active_limited'])
           .maybeSingle()
 
         if (membershipErr) {

@@ -14,6 +14,8 @@ export type WorkspaceType = 'company' | 'agency' | 'platform'
 // Team (consulting firm) roles and source tracking
 export type TeamRole = 'owner' | 'admin' | 'member'
 export type MemberSource = 'direct' | 'team'
+export type CompanyMemberStatus = 'pending' | 'active' | 'active_limited' | 'suspended' | 'revoked'
+export type CompanyMemberAccessSource = 'direct' | 'founder_signup' | 'invite' | 'access_request' | 'agency' | 'platform_admin'
 
 // Team (consulting firm grouping)
 export interface Team {
@@ -44,7 +46,14 @@ export interface CompanyMember {
   company_id: string
   user_id: string
   role: CompanyRole
+  status?: CompanyMemberStatus
+  source?: MemberSource
+  access_source?: CompanyMemberAccessSource
   invited_by: string | null
+  approved_by?: string | null
+  approved_at?: string | null
+  revoked_by?: string | null
+  revoked_at?: string | null
   joined_at: string
   created_at: string
   updated_at: string

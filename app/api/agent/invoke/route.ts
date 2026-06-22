@@ -103,6 +103,7 @@ export async function POST(request: Request) {
     .select('role')
     .eq('company_id', companyId)
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 

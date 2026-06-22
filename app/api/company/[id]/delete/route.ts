@@ -74,6 +74,7 @@ export async function POST(
     .select('role')
     .eq('company_id', companyId)
     .eq('user_id', user.id)
+    .eq('status', 'active')
     .maybeSingle()
 
   if (membershipError) {

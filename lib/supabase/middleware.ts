@@ -307,6 +307,7 @@ async function resolveCompanyForMiddleware(
       .from('company_members')
       .select('company_id')
       .eq('user_id', userId)
+      .in('status', ['active', 'active_limited'])
       .order('joined_at', { ascending: true })
 
     const memberIds = Array.from(new Set(

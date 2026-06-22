@@ -215,7 +215,7 @@ export async function GET(request: NextRequest) {
 
       const { data: invite } = await serviceClient
         .from('company_invitations')
-        .select('id, company_id, email, role, status, expires_at')
+        .select('id, company_id, email, role, status, expires_at, invited_by')
         .eq('token_hash', tokenHash)
         .single()
 
@@ -225,12 +225,17 @@ export async function GET(request: NextRequest) {
         new Date(invite.expires_at) > new Date() &&
         user.email?.toLowerCase() === invite.email.toLowerCase()
       ) {
-        await serviceClient.from('company_members').insert({
+        await serviceClient.from('company_members').upsert({
           company_id: invite.company_id,
           user_id: user.id,
           role: invite.role,
           source: 'direct',
-        })
+          status: 'active',
+          access_source: 'invite',
+          invited_by: invite.invited_by ?? null,
+          approved_by: invite.invited_by ?? null,
+          approved_at: new Date().toISOString(),
+        }, { onConflict: 'company_id,user_id' })
 
         await serviceClient.from('user_preferences').upsert({
           user_id: user.id,
@@ -239,7 +244,7 @@ export async function GET(request: NextRequest) {
 
         await serviceClient
           .from('company_invitations')
-          .update({ status: 'accepted' })
+          .update({ status: 'accepted', accepted_by: user.id, accepted_at: new Date().toISOString() })
           .eq('id', invite.id)
 
         const response = applyPendingCookies(
@@ -291,6 +296,7 @@ export async function GET(request: NextRequest) {
     .from('company_members')
     .select('company_id')
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
     .limit(1)
     .maybeSingle()
 

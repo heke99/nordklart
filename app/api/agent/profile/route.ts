@@ -47,6 +47,7 @@ export async function GET(request: Request) {
     .select('role')
     .eq('company_id', companyId)
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
@@ -81,12 +82,13 @@ export async function PATCH(request: Request) {
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
-  // RLS guards reads/updates by company_id; defense in depth — confirm membership.
+  // RLS guards reads/updates by company_id; defense in depth — updates require an active membership.
   const { data: membership } = await supabase
     .from('company_members')
     .select('role')
     .eq('company_id', companyId)
     .eq('user_id', user.id)
+    .eq('status', 'active')
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 

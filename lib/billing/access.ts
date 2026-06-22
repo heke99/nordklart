@@ -15,6 +15,7 @@ export async function canManageCompanyBilling(
       .eq('company_id', companyId)
       .eq('user_id', userId)
       .in('role', ['owner', 'admin'])
+      .eq('status', 'active')
       .maybeSingle(),
     supabase
       .from('platform_roles')

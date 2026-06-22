@@ -24,6 +24,7 @@ export async function GET(request: Request) {
     .from('company_members')
     .select('role, companies!inner(id, name, archived_at)')
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
 
   if (ownedOnly) query = query.eq('role', 'owner')
   if (!includeArchived) query = query.is('companies.archived_at', null)

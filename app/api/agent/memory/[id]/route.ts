@@ -71,6 +71,7 @@ export async function PATCH(
     .select('role')
     .eq('company_id', existing.company_id)
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
 

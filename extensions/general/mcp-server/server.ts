@@ -8824,6 +8824,7 @@ export const tools: McpTool[] = [
         .select('role')
         .eq('company_id', companyId)
         .eq('user_id', userId)
+        .eq('status', 'active')
         .maybeSingle()
       if (!membership || membership.role === 'viewer') {
         throw new Error('Write permission required')

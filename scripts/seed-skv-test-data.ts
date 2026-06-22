@@ -209,6 +209,7 @@ async function ensureFiscalPeriod(): Promise<{ id: string; userId: string }> {
     .select('user_id')
     .eq('company_id', companyId)
     .eq('role', 'owner')
+    .eq('status', 'active')
     .limit(1)
     .single()
   if (ownerErr || !ownerRow) {

@@ -62,6 +62,7 @@ export async function POST(request: Request) {
         .select('company_id, companies!inner(id, name, archived_at)')
         .eq('user_id', user.id)
         .eq('role', 'owner')
+        .eq('status', 'active')
         .is('companies.archived_at', null)
 
       const list = (blockers ?? []).map((b) => {

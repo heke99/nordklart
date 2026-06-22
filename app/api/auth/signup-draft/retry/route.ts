@@ -28,6 +28,21 @@ export async function POST() {
       return NextResponse.json({ state: result.state, reference: result.reference }, { status: 409 })
     }
 
+
+    if (result.state === 'access_request_pending') {
+      return NextResponse.json(
+        {
+          state: result.state,
+          reference: result.reference,
+          companyId: result.request.companyId,
+          companyName: result.request.companyName,
+          accessRequestId: result.request.accessRequestId,
+          onboardingPath: '/access-pending',
+        },
+        { status: 202 },
+      )
+    }
+
     if (result.state === 'failed') {
       return NextResponse.json(
         {

@@ -68,6 +68,7 @@ async function main() {
     .from('user_preferences')
     .select('active_company_id')
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
     .maybeSingle()
   console.log(`  active_company_id = ${prefs?.active_company_id ?? '(none)'}`)
 
@@ -76,6 +77,7 @@ async function main() {
     .from('company_members')
     .select('company_id, role, companies(id, name, org_number, entity_type, archived_at)')
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
   if (memErr) throw new Error(`memberships: ${memErr.message}`)
   if (!memberships?.length) {
     console.error('User has no company memberships. Sign up flow may be incomplete.')
@@ -148,6 +150,7 @@ async function main() {
     .from('skatteverket_tokens')
     .select('user_id, expires_at, refresh_count, scope, created_at')
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
   if (tokens?.length) {
     console.log(`\n⚠ Existing skatteverket_tokens row(s):`)
     for (const t of tokens) {

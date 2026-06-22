@@ -10,10 +10,18 @@ export type ProvisionedSignupWorkspace = {
   onboardingPath: string
 }
 
+export type SignupAccessRequest = {
+  companyId: string | null
+  companyName: string | null
+  accessRequestId: string | null
+  workspaceType: 'company' | 'agency'
+}
+
 export type SignupProvisioningResult =
   | { state: 'not_required' }
   | { state: 'in_progress'; reference: string | null }
   | { state: 'failed'; reference: string | null }
+  | { state: 'access_request_pending'; reference: string | null; request: SignupAccessRequest }
   | { state: 'provisioned'; reference: string | null; workspace: ProvisionedSignupWorkspace }
 
 export function hashSignupDraftToken(token: string): string {
@@ -37,13 +45,13 @@ export async function markSignupDraftEmailVerified(params: {
 }
 
 /**
- * Creates or resumes the authenticated user's own signup workspace. The
- * database resolves the draft from the user id, locks it and is idempotent;
- * the browser never sends a draft id or an activation token.
+ * Creates, resumes or converts the authenticated user's verified signup draft.
+ * If the requested org number already exists in Nordklart, this returns an
+ * access-request state instead of creating another company or owner membership.
  */
 export async function provisionVerifiedSignupDraft(userId: string): Promise<SignupProvisioningResult> {
   const service = createServiceClient()
-  const { data, error } = await service.rpc('provision_verified_signup_draft_v2', {
+  const { data, error } = await service.rpc('provision_authorized_signup_draft_v4', {
     p_user_id: userId,
   })
   if (error) throw error
@@ -54,6 +62,19 @@ export async function provisionVerifiedSignupDraft(userId: string): Promise<Sign
   const reference = typeof row.provision_reference === 'string' ? row.provision_reference : null
   if (row.provision_state === 'in_progress') return { state: 'in_progress', reference }
   if (row.provision_state === 'failed') return { state: 'failed', reference }
+  if (row.provision_state === 'access_request_pending') {
+    return {
+      state: 'access_request_pending',
+      reference,
+      request: {
+        companyId: typeof row.company_id === 'string' ? row.company_id : null,
+        companyName: typeof row.existing_company_name === 'string' ? row.existing_company_name : null,
+        accessRequestId: typeof row.access_request_id === 'string' ? row.access_request_id : null,
+        workspaceType: row.workspace_type === 'agency' ? 'agency' : 'company',
+      },
+    }
+  }
+
   if (row.provision_state !== 'provisioned' || typeof row.company_id !== 'string' || typeof row.onboarding_path !== 'string') {
     return { state: 'failed', reference }
   }

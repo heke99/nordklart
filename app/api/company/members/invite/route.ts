@@ -2,7 +2,7 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { resolveCompanyAccess } from '@/lib/access/company'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getEmailService } from '@/lib/email/service'
 import {
@@ -27,23 +27,13 @@ export async function POST(request: Request) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
   const companyId = await requireCompanyId(supabase, user.id)
-  const serviceClient = await createServiceClient()
-
-  // Check caller has permission
-  const { data: callerMembership } = await serviceClient
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .single()
-
-  if (!callerMembership || !['owner', 'admin'].includes(callerMembership.role)) {
+  const access = await resolveCompanyAccess(supabase, companyId)
+  if (!access?.canManageCompany) {
     return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
   }
+
+  const serviceClient = createServiceClient()
 
   const body = await request.json()
   const email = (body.email as string || '').trim().toLowerCase()
@@ -62,6 +52,7 @@ export async function POST(request: Request) {
     .from('company_members')
     .select('id, user_id')
     .eq('company_id', companyId)
+    .in('status', ['active', 'active_limited'])
 
   if (existingMembers && existingMembers.length > 0) {
     const memberUserIds = existingMembers.map((m) => m.user_id)
@@ -108,6 +99,8 @@ export async function POST(request: Request) {
       .update({
         token_hash: hash,
         invited_by: user.id,
+        revoked_by: null,
+        revoked_at: null,
         status: 'pending',
         expires_at: expiresAt.toISOString(),
         role,
@@ -126,6 +119,8 @@ export async function POST(request: Request) {
         role,
         token_hash: hash,
         invited_by: user.id,
+        revoked_by: null,
+        revoked_at: null,
         status: 'pending',
         expires_at: expiresAt.toISOString(),
       })

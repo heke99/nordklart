@@ -340,6 +340,7 @@ async function isCompanyAdmin(
     .select('role')
     .eq('company_id', companyId)
     .eq('user_id', userId)
+    .eq('status', 'active')
     .maybeSingle()
   return !!data && ['owner', 'admin'].includes(data.role)
 }

@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatDateLong } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Mail, Clock, Users } from 'lucide-react'
+import { Loader2, Plus, Trash2, Mail, Clock, Users, UserCheck, X } from 'lucide-react'
 
 interface CompanyMemberItem {
   id: string
@@ -32,6 +32,16 @@ interface CompanyInvitation {
   created_at: string
 }
 
+interface CompanyAccessRequest {
+  id: string
+  requester_user_id: string
+  requester_email: string
+  requested_role: string
+  status: string
+  message: string | null
+  created_at: string
+}
+
 export function CompanyMembersSection() {
   const t = useTranslations('settings_company')
   const { toast } = useToast()
@@ -46,11 +56,13 @@ export function CompanyMembersSection() {
   const [isLoading, setIsLoading] = useState(true)
   const [members, setMembers] = useState<CompanyMemberItem[]>([])
   const [invitations, setInvitations] = useState<CompanyInvitation[]>([])
+  const [accessRequests, setAccessRequests] = useState<CompanyAccessRequest[]>([])
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<string>('viewer')
   const [isSending, setIsSending] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null)
   const [canInvite, setCanInvite] = useState(false)
 
   const fetchMembers = useCallback(async () => {
@@ -60,6 +72,7 @@ export function CompanyMembersSection() {
       if (res.ok) {
         setMembers(data.data.members)
         setInvitations(data.data.invitations)
+        setAccessRequests(data.data.accessRequests || [])
         setCanInvite(data.data.canInvite)
       }
     } catch {
@@ -151,6 +164,29 @@ export function CompanyMembersSection() {
     }
   }
 
+
+  const handleReviewAccessRequest = async (requestId: string, action: 'approve' | 'reject', role = 'member') => {
+    setReviewingRequestId(requestId)
+    try {
+      const res = await fetch(`/api/company/access-requests/${requestId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: action === 'approve' ? JSON.stringify({ role }) : undefined,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({ title: data.error || 'Kunde inte uppdatera förfrågan.', variant: 'destructive' })
+        return
+      }
+      toast({ title: action === 'approve' ? 'Åtkomst godkänd' : 'Åtkomst nekad' })
+      fetchMembers()
+    } catch {
+      toast({ title: 'Kunde inte uppdatera förfrågan.', variant: 'destructive' })
+    } finally {
+      setReviewingRequestId(null)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -205,6 +241,71 @@ export function CompanyMembersSection() {
                 )}
               </Button>
             </form>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Pending access requests */}
+      {canInvite && accessRequests.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <UserCheck className="h-4 w-4" />
+              Åtkomstförfrågningar
+            </CardTitle>
+            <CardDescription>
+              Personer som har försökt registrera ett bolag som redan finns i Nordklart måste godkännas av en behörig administratör.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="divide-y divide-border/40">
+              {accessRequests.map((request) => (
+                <div key={request.id} className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{request.requester_email}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Begärd roll: {roleLabels[request.requested_role] || request.requested_role} · {formatDateLong(request.created_at)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reviewingRequestId === request.id}
+                      onClick={() => handleReviewAccessRequest(request.id, 'approve', 'viewer')}
+                    >
+                      Läsbehörig
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reviewingRequestId === request.id}
+                      onClick={() => handleReviewAccessRequest(request.id, 'approve', 'member')}
+                    >
+                      Medlem
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={reviewingRequestId === request.id}
+                      onClick={() => handleReviewAccessRequest(request.id, 'approve', 'admin')}
+                    >
+                      {reviewingRequestId === request.id ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <UserCheck className="mr-1.5 h-3.5 w-3.5" />}
+                      Admin
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-muted-foreground hover:text-destructive"
+                      disabled={reviewingRequestId === request.id}
+                      onClick={() => handleReviewAccessRequest(request.id, 'reject')}
+                    >
+                      <X className="mr-1.5 h-3.5 w-3.5" />
+                      Neka
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
       )}

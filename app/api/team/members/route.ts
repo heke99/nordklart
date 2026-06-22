@@ -27,6 +27,7 @@ export async function GET() {
       .select('id')
       .eq('user_id', user.id)
       .eq('role', 'owner')
+      .eq('status', 'active')
       .limit(1)
       .maybeSingle()
 

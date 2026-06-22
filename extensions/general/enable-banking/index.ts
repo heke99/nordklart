@@ -319,6 +319,7 @@ export const enableBankingExtension: Extension = {
             .select('role')
             .eq('company_id', companyId)
             .eq('user_id', user.id)
+            .in('status', ['active', 'active_limited'])
             .maybeSingle()
           const isViewer = membership?.role === 'viewer'
 

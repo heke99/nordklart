@@ -32,6 +32,7 @@ export default async function SelectCompanyPage() {
       )
     `)
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
     .order('joined_at', { ascending: true })
 
   type CompanyRow = {

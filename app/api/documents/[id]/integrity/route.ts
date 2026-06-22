@@ -64,6 +64,7 @@ export async function GET(
     .select('company_id')
     .eq('company_id', doc.company_id)
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
     .maybeSingle()
 
   if (!membership) {

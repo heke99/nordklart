@@ -124,6 +124,7 @@ async function resolveAuthorisedRecipient(
     .from('company_members')
     .select('user_id, profiles!inner(email)')
     .eq('company_id', ctx.companyId)
+    .in('status', ['active', 'active_limited'])
 
   type MemberRow = { user_id: string; profiles: { email?: string | null } | { email?: string | null }[] | null }
   const allowedEmails = new Set<string>()
@@ -139,6 +140,7 @@ async function resolveAuthorisedRecipient(
     .from('company_settings')
     .select('contact_email')
     .eq('company_id', ctx.companyId)
+    .in('status', ['active', 'active_limited'])
     .maybeSingle()
 
   const contactEmail = (settings as { contact_email?: string | null } | null)?.contact_email

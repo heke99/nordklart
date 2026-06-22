@@ -83,7 +83,16 @@ async function main() {
   // 2. Owner membership.
   const { error: memberErr } = await supabase
     .from('company_members')
-    .insert({ company_id: companyId, user_id: userId, role: 'owner' })
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      role: 'owner',
+      status: 'active',
+      access_source: 'platform_admin',
+      verification_status: 'verified',
+      approved_by: userId,
+      approved_at: new Date().toISOString(),
+    })
   if (memberErr) throw new Error(`company_members insert: ${memberErr.message}`)
   console.log(`  ✓ owner membership created`)
 

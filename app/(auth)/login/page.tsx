@@ -206,8 +206,13 @@ function LoginPageContent() {
       }
 
       const activation = await fetch('/api/auth/signup-draft/claim', { method: 'POST' })
-      if (activation.status === 200) {
-        const workspace = await activation.json().catch(() => null) as { onboardingPath?: string } | null
+      if (activation.status === 200 || activation.status === 202) {
+        const workspace = await activation.json().catch(() => null) as { onboardingPath?: string; state?: string } | null
+        if (activation.status === 202 || workspace?.state === 'access_request_pending') {
+          router.push('/access-pending')
+          router.refresh()
+          return
+        }
         if (workspace?.onboardingPath) {
           router.push(workspace.onboardingPath)
           router.refresh()

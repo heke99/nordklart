@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
 
   const { data: companyInvite, error: companyLookupError } = await serviceClient
     .from('company_invitations')
-    .select('id, company_id, email, role, status, expires_at')
+    .select('id, company_id, email, role, status, expires_at, invited_by')
     .eq('token_hash', tokenHash)
     .single()
 
@@ -113,12 +113,17 @@ export async function POST(request: NextRequest) {
   // Add user to company
   const { error: memberError } = await serviceClient
     .from('company_members')
-    .insert({
+    .upsert({
       company_id: companyInvite.company_id,
       user_id: user.id,
       role: companyInvite.role,
       source: 'direct',
-    })
+      status: 'active',
+      access_source: 'invite',
+      invited_by: companyInvite.invited_by ?? null,
+      approved_by: companyInvite.invited_by ?? null,
+      approved_at: new Date().toISOString(),
+    }, { onConflict: 'company_id,user_id' })
 
   if (memberError) {
     if (memberError.code === '23505') {
@@ -138,7 +143,7 @@ export async function POST(request: NextRequest) {
   // Mark invite as accepted
   await serviceClient
     .from('company_invitations')
-    .update({ status: 'accepted' })
+    .update({ status: 'accepted', accepted_by: user.id, accepted_at: new Date().toISOString() })
     .eq('id', companyInvite.id)
 
   return NextResponse.json({

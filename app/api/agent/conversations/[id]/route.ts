@@ -49,6 +49,7 @@ export async function GET(
     .select('role')
     .eq('company_id', conv.company_id)
     .eq('user_id', user.id)
+    .in('status', ['active', 'active_limited'])
     .maybeSingle()
   if (!membership) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })

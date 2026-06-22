@@ -106,6 +106,7 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
       `,
     )
     .eq('user_id', ctx.userId)
+    .in('status', ['active', 'active_limited'])
     .is('companies.archived_at', null)
     .order('joined_at', { ascending: true })
     .order('id', { ascending: true })

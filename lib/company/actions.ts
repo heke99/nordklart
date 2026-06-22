@@ -1,6 +1,6 @@
 'use server'
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { setActiveCompany } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
@@ -49,7 +49,7 @@ export async function createCompanyFromOnboarding(params: {
   // (specialized accountant agent composer, MCP briefing) can read the same
   // Bolagsverket-sourced data the form used. Empty for manual entry paths.
   ticLookup?: CompanyLookupResult | null
-}): Promise<{ companyId?: string; error?: string }> {
+}): Promise<{ companyId?: string; error?: string; accessRequestPending?: boolean }> {
   try {
     return await createCompanyFromOnboardingImpl(params)
   } catch (err) {
@@ -68,7 +68,7 @@ async function createCompanyFromOnboardingImpl(params: {
   settings: Record<string, unknown>
   fiscalPeriod: { startDate: string; endDate: string; name: string }
   ticLookup?: CompanyLookupResult | null
-}): Promise<{ companyId?: string; error?: string }> {
+}): Promise<{ companyId?: string; error?: string; accessRequestPending?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -97,6 +97,47 @@ async function createCompanyFromOnboardingImpl(params: {
     return { error: 'org_number_invalid' }
   }
 
+  if (cleanedOrgNumber) {
+    const service = createServiceClient()
+    const { data: existingCompany } = await service
+      .from('companies')
+      .select('id, name')
+      .eq('org_number', cleanedOrgNumber)
+      .is('archived_at', null)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (existingCompany?.id) {
+      const { data: existingMembership } = await service
+        .from('company_members')
+        .select('id, status')
+        .eq('company_id', existingCompany.id)
+        .eq('user_id', user.id)
+        .in('status', ['active', 'active_limited'])
+        .maybeSingle()
+
+      if (existingMembership) {
+        await setActiveCompany(supabase, user.id, existingCompany.id)
+        return { companyId: existingCompany.id }
+      }
+
+      await service.from('company_access_requests').upsert({
+        company_id: existingCompany.id,
+        requester_user_id: user.id,
+        requester_email: user.email?.toLowerCase() ?? '',
+        requested_role: 'admin',
+        status: 'pending',
+        message: 'Begäran skapad från inloggad onboarding när orgnumret redan fanns i Nordklart.',
+      }, { onConflict: 'company_id,requester_user_id' })
+
+      return {
+        accessRequestPending: true,
+        error: `Bolaget ${existingCompany.name ?? ''} finns redan i Nordklart. En ägare eller administratör behöver godkänna din åtkomst.`,
+      }
+    }
+  }
+
   // 1. Create company + owner membership atomically via RPC
   const { data: newCompanyId, error: companyError } = await supabase.rpc('create_company_with_owner', {
     p_name: companyName,
@@ -108,6 +149,18 @@ async function createCompanyFromOnboardingImpl(params: {
     console.error('[createCompanyFromOnboarding] company creation failed', companyError)
     return { error: 'Kunde inte skapa företag. Försök igen.' }
   }
+
+  await supabase
+    .from('company_members')
+    .update({
+      status: 'active',
+      access_source: 'founder_signup',
+      approved_by: user.id,
+      approved_at: new Date().toISOString(),
+      verification_status: 'self_attested',
+    })
+    .eq('company_id', newCompanyId)
+    .eq('user_id', user.id)
 
   // Helper: roll back the company if a subsequent step fails. Deletes in FK order.
   const rollback = async (reason: string, err: unknown) => {

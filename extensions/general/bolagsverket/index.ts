@@ -144,6 +144,7 @@ async function requireWriteRole(ctx: ExtensionContext): Promise<NextResponse | n
     .select('role')
     .eq('company_id', ctx.companyId)
     .eq('user_id', ctx.userId)
+    .eq('status', 'active')
     .maybeSingle()
   if (error) {
     return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
