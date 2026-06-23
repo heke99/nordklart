@@ -1,31 +1,183 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { checkFeatureAccess } from '@/lib/platform/entitlements'
+import { checkFeatureAccess, featureAccessError } from '@/lib/platform/entitlements'
 
+export type YearEndAccessSource =
+  | 'feature_entitlement'
+  | 'ixbrl_feature_entitlement'
+  | 'one_time_purchase'
+  | 'platform_admin_bypass'
+
+export interface YearEndAccessDecision {
+  allowed: boolean
+  source?: YearEndAccessSource
+  sourceId?: string | null
+  reason?: 'missing_entitlement' | 'expired' | 'unauthorized'
+}
+
+type OneTimePurchaseRow = {
+  id: string
+  permanent_access?: boolean | null
+  access_expires_at?: string | null
+}
+
+type RequireYearEndAccessOptions = {
+  /** Use year_end.ixbrl as the entitlement feature, but still allow a year-end one-time purchase. */
+  allowIxbrlFeature?: boolean
+  /** Write an audit security event when a platform admin bypasses billing. Defaults to true. */
+  auditPlatformBypass?: boolean
+  operation?: string
+  requestId?: string
+}
+
+async function isPlatformAdmin(supabase: SupabaseClient, userId?: string | null): Promise<boolean> {
+  if (!userId) return false
+  const { data } = await supabase
+    .from('platform_roles')
+    .select('role')
+    .eq('user_id', userId)
+    .eq('role', 'platform_admin')
+    .is('revoked_at', null)
+    .maybeSingle()
+  return Boolean(data)
+}
+
+async function auditPlatformBypass(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  fiscalPeriodId: string,
+  operation?: string,
+  requestId?: string,
+) {
+  // The legacy audit_log is intentionally append-only and may reject direct
+  // inserts under RLS in some deployments. This audit is best-effort here;
+  // the dedicated tax_declaration_audit_events table added by the completion
+  // migration records the durable export/project history.
+  await supabase.from('audit_log').insert({
+    user_id: userId,
+    actor_id: userId,
+    action: 'SECURITY_EVENT',
+    table_name: 'fiscal_periods',
+    record_id: fiscalPeriodId,
+    description: 'Platform admin used year-end/declaration access without payment.',
+    new_state: {
+      company_id: companyId,
+      fiscal_period_id: fiscalPeriodId,
+      operation: operation ?? null,
+      request_id: requestId ?? null,
+      access_source: 'platform_admin_bypass',
+    },
+  })
+}
+
+/**
+ * Returns true when the company may use the year-end product for the period.
+ * Kept for existing callers; new routes should use requireYearEndAccess().
+ */
 export async function canUseYearEnd(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId?: string | null,
 ): Promise<boolean> {
-  const entitlement = await checkFeatureAccess(supabase, companyId, 'year_end.projects')
-  if (entitlement.allowed) return true
+  const decision = await resolveYearEndAccess(supabase, companyId, fiscalPeriodId)
+  return decision.allowed
+}
 
-  if (!fiscalPeriodId) return false
+/**
+ * Resolves the product/payment source for a specific fiscal period.
+ *
+ * Access order is deliberately explicit:
+ *   1. subscription/manual/commercial grant for year_end.projects
+ *   2. optional subscription/manual/commercial grant for year_end.ixbrl
+ *   3. active/paid one-time purchase for the exact fiscal period
+ *   4. platform_admin bypass, audited by callers through requireYearEndAccess
+ */
+export async function resolveYearEndAccess(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId?: string | null,
+  userId?: string | null,
+  options: RequireYearEndAccessOptions = {},
+): Promise<YearEndAccessDecision> {
+  const projectEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.projects')
+  if (projectEntitlement.allowed) {
+    return { allowed: true, source: 'feature_entitlement', sourceId: projectEntitlement.sourceId ?? null }
+  }
 
-  const { data } = await supabase
-    .from('one_time_purchases')
-    .select('id, status, access_expires_at, permanent_access')
-    .eq('company_id', companyId)
-    .eq('purchase_type', 'year_end')
-    .eq('fiscal_period_id', fiscalPeriodId)
-    .in('status', ['paid', 'active', 'fulfilled'])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  if (options.allowIxbrlFeature) {
+    const ixbrlEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.ixbrl')
+    if (ixbrlEntitlement.allowed) {
+      return { allowed: true, source: 'ixbrl_feature_entitlement', sourceId: ixbrlEntitlement.sourceId ?? null }
+    }
+  }
 
-  const row = data as { permanent_access?: boolean; access_expires_at?: string | null } | null
-  if (!row) return false
-  if (row.permanent_access) return true
-  if (!row.access_expires_at) return true
-  return new Date(row.access_expires_at).getTime() >= Date.now()
+  if (fiscalPeriodId) {
+    const { data } = await supabase
+      .from('one_time_purchases')
+      .select('id, status, access_expires_at, permanent_access')
+      .eq('company_id', companyId)
+      .eq('purchase_type', 'year_end')
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .in('status', ['paid', 'active', 'fulfilled'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const row = data as OneTimePurchaseRow | null
+    if (row) {
+      const hasAccess = Boolean(row.permanent_access)
+        || !row.access_expires_at
+        || new Date(row.access_expires_at).getTime() >= Date.now()
+      if (hasAccess) {
+        return { allowed: true, source: 'one_time_purchase', sourceId: row.id }
+      }
+      return { allowed: false, reason: 'expired', sourceId: row.id }
+    }
+  }
+
+  if (await isPlatformAdmin(supabase, userId)) {
+    return { allowed: true, source: 'platform_admin_bypass' }
+  }
+
+  return { allowed: false, reason: 'missing_entitlement' }
+}
+
+/**
+ * Route-level guard for all fiscal-period-bound year-end/declaration actions.
+ * This is intentionally NOT handled in featureForOperation because one-time
+ * purchases are period-specific and the wrapper does not know period_id yet.
+ */
+export async function requireYearEndAccess(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  fiscalPeriodId: string,
+  options: RequireYearEndAccessOptions = {},
+): Promise<YearEndAccessDecision> {
+  const decision = await resolveYearEndAccess(supabase, companyId, fiscalPeriodId, userId, options)
+  if (
+    decision.allowed
+    && decision.source === 'platform_admin_bypass'
+    && options.auditPlatformBypass !== false
+  ) {
+    try {
+      await auditPlatformBypass(
+        supabase,
+        userId,
+        companyId,
+        fiscalPeriodId,
+        options.operation,
+        options.requestId,
+      )
+    } catch {
+      // Never block a legitimate platform admin because an optional audit sink
+      // is unavailable; request logs still carry requestId and operation.
+    }
+  }
+  return decision
+}
+
+export function yearEndAccessDeniedResponse(featureCode = 'year_end.projects'): Response {
+  return featureAccessError(featureCode)
 }

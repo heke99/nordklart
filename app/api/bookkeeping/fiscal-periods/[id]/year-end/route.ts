@@ -6,6 +6,7 @@ import {
 } from '@/lib/core/bookkeeping/year-end-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 /** GET: validate readiness + preview the year-end entries. */
 export const GET = withRouteContext(
@@ -16,6 +17,12 @@ export const GET = withRouteContext(
     const opLog = log.child({ periodId: id })
 
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.year_end_preview',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       const [validation, preview] = await Promise.all([
         validateYearEndReadiness(supabase, companyId!, user.id, id),
         previewYearEndClosing(supabase, companyId!, user.id, id),
@@ -41,6 +48,12 @@ export const POST = withRouteContext(
     const opLog = log.child({ periodId: id })
 
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.year_end',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       const result = await executeYearEndClosing(supabase, companyId!, user.id, id)
       return NextResponse.json({ data: result })
     } catch (err) {

@@ -7,6 +7,7 @@ import {
   createSignatureRequest,
   listSignatureRequests,
 } from '@/lib/bokslut/arsredovisning/signature-service'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 // Roles are constrained to the underskrifter set ÅRL allows — keeps the API
 // from accepting arbitrary "Administrator" / "CEO" strings that the UI
@@ -21,8 +22,14 @@ export const GET = withRouteContext(
   'period.arsredovisning_signatures_list',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.arsredovisning_signatures_list',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       const data = await listSignatureRequests(supabase, companyId, id)
       return NextResponse.json({ data })
     } catch (err) {
@@ -39,6 +46,12 @@ export const POST = withRouteContext(
     const validation = await validateBody(request, CreateSchema)
     if (!validation.success) return validation.response
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.arsredovisning_signatures_create',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       // Defense-in-depth: confirm the fiscal period belongs to the
       // authenticated company before writing. RLS would catch a cross-tenant
       // insert anyway, but rejecting at the route layer gives a cleaner

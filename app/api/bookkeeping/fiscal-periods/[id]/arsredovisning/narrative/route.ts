@@ -7,6 +7,7 @@ import {
   getNarrative,
   upsertNarrative,
 } from '@/lib/bokslut/arsredovisning/narrative-service'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 // Strip non-printable control characters that would corrupt PDF output or
 // mislead a human reader of the årsredovisning. Whitelist printable ASCII
@@ -81,8 +82,14 @@ export const GET = withRouteContext(
   'period.arsredovisning_narrative_get',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.arsredovisning_narrative_get',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       // Mirror the POST handler's period-ownership pre-check so a valid
       // JWT for company A can't probe / enumerate company B's period IDs
       // through this endpoint.
@@ -111,6 +118,12 @@ export const POST = withRouteContext(
     const validation = await validateBody(request, PostSchema)
     if (!validation.success) return validation.response
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.arsredovisning_narrative_post',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       // Verify the fiscal period belongs to the authenticated company before
       // writing — defense-in-depth alongside RLS, gives a cleaner 404 than
       // the RLS rejection envelope. Also refuse mutations on locked/closed

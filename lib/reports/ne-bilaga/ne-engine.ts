@@ -5,6 +5,7 @@ import type {
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
+import { buildDeclarationReadiness, issue } from '@/lib/tax-declaration/readiness'
 import type {
   NEDeclaration,
   NEDeclarationRutor,
@@ -320,6 +321,18 @@ export async function generateNEDeclaration(
     warnings.push('Inga bokförda intäkter eller kostnader hittades för perioden.')
   }
 
+  const readinessIssues = [
+    issue('ne_r1_r11_calculated', 'ok', 'NE R1–R11 har beräknats från bokföringen.', 'ne-engine'),
+    issue('ne_r12_r48_requires_questionnaire', 'blocker', 'NE R12–R48 kräver komplett EF-frågeflöde för egenavgifter, räntefördelning, expansionsfond, periodiseringsfond, underskott och privata poster innan export kan markeras som färdig.', 'ne-engine'),
+  ]
+  if (!period.is_closed) {
+    readinessIssues.push(issue('fiscal_period_open', 'blocker', 'Räkenskapsåret är inte stängt.', 'fiscal_periods'))
+  }
+  for (const message of warnings) {
+    readinessIssues.push(issue('ne_warning', 'warning', message, 'ne-engine'))
+  }
+  const readiness = buildDeclarationReadiness(readinessIssues)
+
   return {
     fiscalYear: {
       id: period.id,
@@ -335,6 +348,12 @@ export async function generateNEDeclaration(
       orgNumber: settings?.org_number || null,
     },
     warnings,
+    taxAnalysis: {
+      readinessScore: readiness.score,
+      status: readiness.status,
+      blockerCount: readiness.blockers.length,
+      issues: [...readiness.completed, ...readiness.warnings, ...readiness.blockers],
+    },
   }
 }
 

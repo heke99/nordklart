@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildBokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 /**
  * GET: aggregated bokslut readiness report — combines validateYearEndReadiness
@@ -17,6 +18,12 @@ export const GET = withRouteContext(
     const opLog = log.child({ periodId: id })
 
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.bokslut_readiness',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       const report = await buildBokslutReadinessReport(supabase, companyId, user.id, id)
       return NextResponse.json({ data: report })
     } catch (err) {

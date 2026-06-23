@@ -17,6 +17,12 @@ import {
   INK2R_ASSET_CODES,
   INK2R_EQUITY_LIABILITY_CODES,
 } from './types'
+import {
+  approvedAdjustmentAmount,
+  listTaxDeclarationAdjustments,
+  pendingAdjustmentWarnings,
+} from '@/lib/tax-declaration/adjustments'
+import { buildDeclarationReadiness, issue } from '@/lib/tax-declaration/readiness'
 
 /**
  * INK2 Declaration Engine
@@ -643,6 +649,21 @@ function truncateToKrona(value: number): number {
   return value >= 0 ? Math.floor(value) : Math.ceil(value)
 }
 
+function sumAccountRange(accountBalances: Map<string, number>, start: string, end: string): number {
+  let total = 0
+  for (const [account, balance] of accountBalances) {
+    if (account >= start && account <= end) total += balance
+  }
+  return truncateToKrona(Math.abs(total))
+}
+
+function sumInk2SFields(ink2s: INK2SRutor, codes: (keyof INK2SRutor)[]): number {
+  return codes.reduce((sum, code) => {
+    const value = ink2s[code]
+    return typeof value === 'number' ? sum + value : sum
+  }, 0)
+}
+
 /**
  * Check if the balance sheet totals differ beyond the expected rounding tolerance.
  */
@@ -885,43 +906,106 @@ export async function generateINK2Declaration(
   const fyStart = (period.period_start as string).replace(/-/g, '')
   const fyEnd = (period.period_end as string).replace(/-/g, '')
 
-  // Build INK2 (huvudblankett)
-  // Auto-derive from INK2S result (simplified: result + non-deductible tax)
-  // 7528 is already positive per Skatteverket convention
+  const adjustments = await listTaxDeclarationAdjustments(supabase, companyId, fiscalPeriodId, 'INK2')
+  const pendingAdjustmentMessages = pendingAdjustmentWarnings(adjustments)
+
+  // Build INK2S from the posted result, booked tax, and approved tax adjustments.
+  // SIE/bookkeeping can derive the accounting result; tax-specific fields that
+  // cannot be safely inferred are persisted as tax_declaration_adjustments and
+  // only included when approved or explicitly marked as not requiring review.
   const taxAmount = ink2r['7528']
-  const taxableResult = resultAfterFinancial + taxAmount
-
-  const ink2: INK2Rutor = {
-    '7011': fyStart,
-    '7012': fyEnd,
-    '7113': taxableResult >= 0 ? taxableResult : 0,
-    '7114': taxableResult < 0 ? Math.abs(taxableResult) : 0,
-  }
-
-  // Build INK2S (skattemässiga justeringar — auto-derived basics only)
   const ink2s: INK2SRutor = {
     '7011': fyStart,
     '7012': fyEnd,
     '7650': resultAfterFinancial >= 0 ? resultAfterFinancial : 0,
     '7750': resultAfterFinancial < 0 ? Math.abs(resultAfterFinancial) : 0,
-    '7651': taxAmount, // Skatt (ej avdragsgill)
-    '8020': taxableResult >= 0 ? taxableResult : 0,
-    '8021': taxableResult < 0 ? Math.abs(taxableResult) : 0,
+    '7651': taxAmount,
+    '7652': approvedAdjustmentAmount(adjustments, '7652'),
+    '7653': approvedAdjustmentAmount(adjustments, '7653'),
+    '7654': approvedAdjustmentAmount(adjustments, '7654'),
+    '7655': approvedAdjustmentAmount(adjustments, '7655'),
+    '7656': approvedAdjustmentAmount(adjustments, '7656'),
+    '7751': approvedAdjustmentAmount(adjustments, '7751'),
+    '7752': approvedAdjustmentAmount(adjustments, '7752'),
+    '7753': approvedAdjustmentAmount(adjustments, '7753'),
+    '7754': approvedAdjustmentAmount(adjustments, '7754'),
+    '7763': approvedAdjustmentAmount(adjustments, '7763'),
+    '7664': approvedAdjustmentAmount(adjustments, '7664'),
+    '7670': approvedAdjustmentAmount(adjustments, '7670'),
+    '8020': 0,
+    '8021': 0,
   }
 
-  // Add warnings
+  const additions = sumInk2SFields(ink2s, ['7651', '7652', '7653', '7654', '7655', '7656', '7664', '7670'])
+  const deductions = sumInk2SFields(ink2s, ['7751', '7752', '7753', '7754', '7763'])
+  const taxableResult = resultAfterFinancial + additions - deductions
+  ink2s['8020'] = taxableResult >= 0 ? truncateToKrona(taxableResult) : 0
+  ink2s['8021'] = taxableResult < 0 ? truncateToKrona(Math.abs(taxableResult)) : 0
+
+  const ink2: INK2Rutor = {
+    '7011': fyStart,
+    '7012': fyEnd,
+    '7113': ink2s['8020'],
+    '7114': ink2s['8021'],
+  }
+
+  const readinessIssues = [
+    issue('ink2r_mapped', 'ok', 'INK2R har beräknats från bokförda konton.', 'ink2-engine'),
+    issue('ink2s_calculated', 'ok', 'INK2S har beräknats från resultat, skatt och godkända skattemässiga justeringar.', 'ink2-engine'),
+  ]
+
   if (!(period as FiscalPeriod).is_closed) {
-    warnings.push('Räkenskapsåret är inte stängt — deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
+    const message = 'Räkenskapsåret är inte stängt. Stäng bokslutet innan deklarationspaketet markeras som färdigt.'
+    warnings.push(message)
+    readinessIssues.push(issue('fiscal_period_open', 'blocker', message, 'fiscal_periods'))
   }
 
   if (totalAssets === 0 && totalEquityLiabilities === 0 && ink2r['7410'] === 0) {
-    warnings.push('Inga bokförda transaktioner hittades för perioden.')
+    const message = 'Inga bokförda transaktioner hittades för perioden.'
+    warnings.push(message)
+    readinessIssues.push(issue('no_bookkeeping_data', 'blocker', message, 'journal_entries'))
   }
 
   const balanceWarning = checkBalanceWarning(totalAssets, adjustedEquityLiabilities)
   if (balanceWarning) {
     warnings.push(balanceWarning)
+    readinessIssues.push(issue('balance_sheet_unbalanced', 'blocker', balanceWarning, 'ink2r'))
   }
+
+  for (const message of pendingAdjustmentMessages) {
+    warnings.push(message)
+    readinessIssues.push(issue('tax_adjustment_needs_review', 'warning', message, 'tax_declaration_adjustments'))
+  }
+
+  const possibleNonDeductible =
+    sumAccountRange(accountBalances, '6072', '6073')
+    + sumAccountRange(accountBalances, '6342', '6342')
+    + sumAccountRange(accountBalances, '6992', '6993')
+  if (possibleNonDeductible > 0 && ink2s['7653'] === 0) {
+    const message = `Möjliga ej avdragsgilla kostnader på ${possibleNonDeductible} kr hittades. Bekräfta eller justera ruta 7653.`
+    warnings.push(message)
+    readinessIssues.push(issue('possible_non_deductible_expenses', 'warning', message, 'account_rules'))
+  }
+
+  if (ink2r['7321'] > 0 && ink2s['7654'] === 0) {
+    const message = 'Periodiseringsfond finns i balansräkningen men schablonintäkt på periodiseringsfond saknar godkänd justering.'
+    warnings.push(message)
+    readinessIssues.push(issue('periodiseringsfond_schablon_missing', 'warning', message, 'ink2s'))
+  }
+
+  if (ink2r['7522'] >= 5_000_000) {
+    const message = 'Räntekostnader är höga. Kontrollera om ränteavdragsbegränsning/N9 behövs innan export markeras som färdig.'
+    warnings.push(message)
+    readinessIssues.push(issue('n9_detector_interest_limit', 'blocker', message, 'appendix_detector'))
+  }
+
+  if (sumAccountRange(accountBalances, '1310', '1379') > 0) {
+    const message = 'Andelar/finansiella innehav finns i bokföringen. Kontrollera skattefri utdelning, kapitalvinst/förlust och eventuell extra bilaga.'
+    warnings.push(message)
+    readinessIssues.push(issue('financial_holdings_review', 'warning', message, 'appendix_detector'))
+  }
+
+  const readiness = buildDeclarationReadiness(readinessIssues)
 
   return {
     fiscalYear: {
@@ -950,5 +1034,15 @@ export async function generateINK2Declaration(
       email: settings?.email || null,
     },
     warnings,
+    taxAnalysis: {
+      taxableResult: truncateToKrona(taxableResult),
+      additions: truncateToKrona(additions),
+      deductions: truncateToKrona(deductions),
+      pendingAdjustmentCount: pendingAdjustmentMessages.length,
+      blockerCount: readiness.blockers.length,
+      readinessScore: readiness.score,
+      status: readiness.status,
+      issues: [...readiness.completed, ...readiness.warnings, ...readiness.blockers],
+    },
   }
 }

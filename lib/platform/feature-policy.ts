@@ -15,7 +15,22 @@ export function featureForOperation(operation: string): FeatureCode | null {
     if (normalized.includes('onboarding') || normalized.includes('application')) return NORDKLART_FEATURES.bankgiroApplication
     return NORDKLART_FEATURES.bankgiroOperations
   }
-  if (normalized.startsWith('year_end.') || normalized.includes('arsredovisning') || normalized.includes('ixbrl')) {
+  // Fiscal-period-bound year-end/declaration operations are gated inside
+  // their route handlers with requireYearEndAccess(), because a one-time
+  // purchase is tied to a specific fiscal_period_id that this generic wrapper
+  // cannot see yet. Generic year_end.* operations without a period id still
+  // use the commercial feature resolver.
+  if (
+    normalized.startsWith('period.year_end')
+    || normalized.startsWith('period.bokslut')
+    || normalized.startsWith('period.arsredovisning')
+    || normalized === 'report.ink2'
+    || normalized === 'report.ne_bilaga'
+    || normalized.startsWith('tax_declaration.')
+  ) {
+    return null
+  }
+  if (normalized.startsWith('year_end.') || normalized.includes('ixbrl')) {
     return normalized.includes('ixbrl') ? NORDKLART_FEATURES.yearEndIxbrl : NORDKLART_FEATURES.yearEndProjects
   }
   if (normalized.startsWith('invoice.') || normalized.startsWith('invoices.') || normalized.startsWith('customer_invoice.') || normalized.startsWith('customer_invoices.')) return NORDKLART_FEATURES.invoicingCore

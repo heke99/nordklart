@@ -3,9 +3,12 @@ import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
 import {
   generateSRUSubmission,
   getZipFilename,
+  validateSRUSubmission,
 } from '@/lib/reports/ink2/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+import { recordTaxDeclarationExport, upsertTaxDeclarationProject } from '@/lib/tax-declaration/adjustments'
 import JSZip from 'jszip'
 
 /**
@@ -18,7 +21,7 @@ import JSZip from 'jszip'
 export const GET = withRouteContext(
   'report.ink2',
   async (request, ctx) => {
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
 
     const { searchParams } = new URL(request.url)
     const periodId = searchParams.get('period_id')
@@ -31,10 +34,46 @@ export const GET = withRouteContext(
     const opLog = log.child({ periodId, format })
 
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, periodId, {
+        operation: 'report.ink2',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       const declaration = await generateINK2Declaration(supabase, companyId!, periodId)
+      const readiness = declaration.taxAnalysis
+      if (readiness) {
+        await upsertTaxDeclarationProject(
+          supabase,
+          companyId,
+          periodId,
+          'INK2',
+          user.id,
+          readiness.status,
+          readiness.readinessScore,
+          readiness.issues.filter((item) => item.severity === 'blocker'),
+          readiness.issues.filter((item) => item.severity === 'warning'),
+        )
+      }
 
       if (format === 'sru') {
+        if (readiness?.blockerCount && new URL(request.url).searchParams.get('allow_draft') !== '1') {
+          return NextResponse.json({
+            error: 'TAX_DECLARATION_NOT_READY',
+            message: 'Deklarationen har blockerande kontroller. Åtgärda dem eller exportera uttryckligen som utkast med allow_draft=1.',
+            blockers: readiness.issues.filter((item) => item.severity === 'blocker'),
+          }, { status: 409 })
+        }
+
         const submission = generateSRUSubmission(declaration)
+        const validation = validateSRUSubmission(submission)
+        if (!validation.isValid) {
+          return NextResponse.json({
+            error: 'SRU_VALIDATION_FAILED',
+            message: 'SRU-paketet klarade inte lokal strukturvalidering.',
+            validation,
+          }, { status: 422 })
+        }
 
         // Skatteverket requires ISO 8859-1 (Latin-1)
         const infoBytes = encodeISO88591(submission.infoSru)
@@ -46,6 +85,14 @@ export const GET = withRouteContext(
 
         const zipArrayBuffer = await zip.generateAsync({ type: 'arraybuffer' })
         const filename = getZipFilename(declaration)
+        await recordTaxDeclarationExport(supabase, companyId, periodId, 'INK2', user.id, {
+          format: 'sru_zip',
+          filename,
+          readinessScore: readiness?.readinessScore ?? 0,
+          blockerCount: readiness?.blockerCount ?? 0,
+          warningCount: validation.warnings.length + (readiness?.issues.filter((item) => item.severity === 'warning').length ?? 0),
+          validation,
+        })
 
         return new NextResponse(zipArrayBuffer, {
           status: 200,

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 // PATCH transitions: pending → signed (manual entry for the paper / outside-
 // BankID flow) or pending → declined. Real BankID wiring lands in a future
@@ -26,7 +27,7 @@ export const PATCH = withRouteContext(
     { params }: { params: Promise<{ id: string; signatureId: string }> },
   ) => {
     const { id: fiscalPeriodId, signatureId } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     const validation = await validateBody(request, PatchSchema)
     if (!validation.success) return validation.response
 
@@ -36,6 +37,12 @@ export const PATCH = withRouteContext(
         : { status: 'declined' as const }
 
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, fiscalPeriodId, {
+        operation: 'period.arsredovisning_signature_patch',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       const { data, error } = await supabase
         .from('arsredovisning_signature_requests')
         .update(update)

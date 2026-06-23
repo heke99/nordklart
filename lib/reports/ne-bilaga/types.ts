@@ -51,6 +51,12 @@ export interface NEDeclaration {
   }
   // Warnings
   warnings: string[]
+  taxAnalysis?: {
+    readinessScore: number
+    status: 'draft' | 'needs_input' | 'needs_review' | 'blocked' | 'ready_to_export'
+    blockerCount: number
+    issues: Array<{ code: string; severity: 'ok' | 'warning' | 'blocker'; message: string; source?: string }>
+  }
 }
 
 // SRU file format types

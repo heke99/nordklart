@@ -19,6 +19,7 @@ import {
 } from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
 import type { JournalEntry } from '@/types'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 /**
  * Default schablonintäkt rate on periodiseringsfond (IL 30 kap 6a §).
@@ -60,10 +61,16 @@ export const GET = withRouteContext(
   'period.bokslutsdispositioner_preview',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
 
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.bokslutsdispositioner_preview',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       const data = await buildDispositionsProposal(supabase, companyId, id)
       return NextResponse.json({ data })
     } catch (err) {
@@ -140,6 +147,12 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
 
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.bokslutsdispositioner_post',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
         .select('id, name, period_end, is_closed, locked_at, closing_entry_id')

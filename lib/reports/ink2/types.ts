@@ -106,12 +106,31 @@ export interface INK2Rutor {
 export interface INK2SRutor {
   '7011': string  // Räkenskapsår fr.o.m. (YYYYMMDD)
   '7012': string  // Räkenskapsår t.o.m. (YYYYMMDD)
-  '7650': number  // 4.1  Årets resultat, vinst
-  '7750': number  // 4.2  Årets resultat, förlust
-  '7651': number  // 4.3a Skatt på årets resultat (ej avdragsgill)
-  '8020': number  // 4.15 Överskott → punkt 1.1
-  '8021': number  // 4.16 Underskott → punkt 1.2
+  '7650': number  // Årets resultat, vinst
+  '7750': number  // Årets resultat, förlust
+  '7651': number  // Skatt på årets resultat (ej avdragsgill)
+  '7652': number  // Nedskrivning finansiella tillgångar (skattemässig justering)
+  '7653': number  // Andra ej avdragsgilla kostnader
+  '7654': number  // Schablonintäkt på periodiseringsfond
+  '7655': number  // Mottagna koncernbidrag / skattepliktiga ej bokförda intäkter
+  '7656': number  // Uppräknat belopp vid återföring periodiseringsfond
+  '7751': number  // Avdragsgilla men ej bokförda kostnader / lämnade koncernbidrag
+  '7752': number  // Skattefria ackordsvinster
+  '7753': number  // Skattefri utdelning
+  '7754': number  // Andra ej skattepliktiga intäkter
+  '7763': number  // Outnyttjat underskott från tidigare år
+  '7664': number  // Reduktion av underskott
+  '7670': number  // Spärrat underskott / annan spärrad underskottsjustering
+  '8020': number  // Överskott → punkt 1.1
+  '8021': number  // Underskott → punkt 1.2
 }
+
+export const INK2S_NUMERIC_CODES = [
+  '7650', '7750', '7651', '7652', '7653', '7654', '7655', '7656',
+  '7751', '7752', '7753', '7754', '7763', '7664', '7670', '8020', '8021',
+] as const satisfies readonly (keyof INK2SRutor)[]
+
+export type INK2SSRUCode = (typeof INK2S_NUMERIC_CODES)[number]
 
 // Account mapping configuration for INK2R
 export interface INK2AccountMapping {
@@ -164,6 +183,16 @@ export interface INK2Declaration {
   }
   companyInfo: INK2CompanyInfo
   warnings: string[]
+  taxAnalysis?: {
+    taxableResult: number
+    additions: number
+    deductions: number
+    pendingAdjustmentCount: number
+    blockerCount: number
+    readinessScore: number
+    status: 'draft' | 'needs_input' | 'needs_review' | 'blocked' | 'ready_to_export'
+    issues: Array<{ code: string; severity: 'ok' | 'warning' | 'blocker'; message: string; source?: string }>
+  }
 }
 
 // SRU file types — no longer shared with NE-bilaga since the structure

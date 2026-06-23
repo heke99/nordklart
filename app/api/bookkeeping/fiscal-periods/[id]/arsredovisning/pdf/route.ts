@@ -2,6 +2,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildArsredovisningData } from '@/lib/bokslut/arsredovisning/build-data'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { ArsredovisningPDF } from '@/lib/bokslut/arsredovisning/arsredovisning-pdf'
 import { ArsredovisningK3PDF } from '@/lib/bokslut/arsredovisning/arsredovisning-k3-pdf'
 
@@ -9,8 +10,14 @@ export const GET = withRouteContext(
   'period.arsredovisning_pdf',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     try {
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        operation: 'period.arsredovisning_pdf',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse()
+
       // Narrative edits come from arsredovisning_narratives now, loaded
       // inside buildArsredovisningData. The URL stays clean — no narrative
       // text in query params, access logs, or browser history.

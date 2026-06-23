@@ -2,8 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildIxbrlInput } from '@/lib/bokslut/ixbrl/build-input'
 import { generateK2IxbrlDocument } from '@/lib/bokslut/ixbrl/document/k2-document'
-import { checkFeatureAccess, featureAccessError } from '@/lib/platform/entitlements'
-import { canUseYearEnd } from '@/lib/year-end/access'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 /**
  * GET /api/bookkeeping/fiscal-periods/:id/arsredovisning/ixbrl
@@ -21,11 +20,14 @@ export const GET = withRouteContext(
   'period.arsredovisning_ixbrl',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     try {
-      const ixbrlAccess = await checkFeatureAccess(supabase, companyId, 'year_end.ixbrl')
-      const yearEndAccess = ixbrlAccess.allowed || await canUseYearEnd(supabase, companyId, id)
-      if (!yearEndAccess) return featureAccessError('year_end.ixbrl')
+      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+        allowIxbrlFeature: true,
+        operation: 'period.arsredovisning_ixbrl',
+        requestId,
+      })
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.ixbrl')
 
       const url = new URL(request.url)
       const download = url.searchParams.get('download') === '1'

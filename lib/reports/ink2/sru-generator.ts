@@ -2,13 +2,13 @@ import { getBranding } from '@/lib/branding/service'
 import type {
   INK2Declaration,
   INK2RSRUCode,
-  INK2SRutor,
   SRUSubmission,
 } from './types'
 import {
   INK2R_ASSET_CODES,
   INK2R_EQUITY_LIABILITY_CODES,
   INK2R_INCOME_CODES,
+  INK2S_NUMERIC_CODES,
 } from './types'
 
 /**
@@ -200,8 +200,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   lines.push(`#UPPGIFT 7012 ${declaration.ink2s['7012']}`)
 
   // INK2S numeric fields — emit non-zero values only
-  const ink2sNumericFields: (keyof INK2SRutor)[] = ['7650', '7750', '7651', '8020', '8021']
-  for (const code of ink2sNumericFields) {
+  for (const code of INK2S_NUMERIC_CODES) {
     const value = declaration.ink2s[code]
     if (typeof value === 'number' && value !== 0) {
       lines.push(`#UPPGIFT ${code} ${formatAmount(value)}`)
@@ -242,43 +241,98 @@ export function generateSRUSubmission(declaration: INK2Declaration): SRUSubmissi
 export function validateBlanketterSru(content: string): {
   isValid: boolean
   errors: string[]
+  warnings: string[]
 } {
   const errors: string[] = []
+  const warnings: string[] = []
 
-  // Check for required blankett blocks
-  const hasINK2 = /^#BLANKETT INK2-/m.test(content)
-  const hasINK2R = /^#BLANKETT INK2R-/m.test(content)
-  const hasINK2S = /^#BLANKETT INK2S-/m.test(content)
-  const hasFilSlut = /^#FIL_SLUT/m.test(content)
+  const byteLength = new TextEncoder().encode(content).byteLength
+  if (byteLength > 5 * 1024 * 1024) {
+    errors.push('BLANKETTER.SRU överstiger Skatteverkets gräns 5 MB.')
+  }
 
-  if (!hasINK2) errors.push('Missing INK2 blankett block')
-  if (!hasINK2R) errors.push('Missing INK2R blankett block')
-  if (!hasINK2S) errors.push('Missing INK2S blankett block')
-  if (!hasFilSlut) errors.push('Missing #FIL_SLUT terminator')
+  if (!content.endsWith(CRLF)) errors.push('BLANKETTER.SRU måste avslutas med CRLF.')
+  if (!/^#FIL_SLUT\r?$/m.test(content)) errors.push('Missing #FIL_SLUT terminator')
+  if ((content.match(/^#FIL_SLUT/gm) || []).length !== 1) errors.push('BLANKETTER.SRU ska innehålla exakt en #FIL_SLUT.')
 
-  // Count BLANKETTSLUT — should be exactly 3
+  const requiredBlocks = ['INK2', 'INK2R', 'INK2S']
+  for (const block of requiredBlocks) {
+    if (!new RegExp(`^#BLANKETT ${block}-`, 'm').test(content)) {
+      errors.push(`Missing ${block} blankett block`)
+    }
+  }
+
   const blankettslutCount = (content.match(/^#BLANKETTSLUT/gm) || []).length
   if (blankettslutCount !== 3) {
     errors.push(`Expected 3 BLANKETTSLUT, found ${blankettslutCount}`)
   }
 
-  // Check that each blankett has #IDENTITET
+  const validFieldCodes = new Set<string>([
+    '7011', '7012', '7113', '7114',
+    ...INK2R_ASSET_CODES,
+    ...INK2R_EQUITY_LIABILITY_CODES,
+    ...INK2R_INCOME_CODES,
+    ...INK2S_NUMERIC_CODES,
+  ])
+
+  const identityRegex = /^#IDENTITET (\d{10}|\d{12}) \d{8} \d{6}\r?$/m
   const blankettBlocks = content.split(/^#BLANKETT /m).slice(1)
   for (const block of blankettBlocks) {
-    if (!block.includes('#IDENTITET')) {
-      const type = block.split('\n')[0]?.split('\r')[0] || 'unknown'
-      errors.push(`Blankett ${type} missing #IDENTITET`)
+    const type = block.split('\n')[0]?.split('\r')[0] || 'unknown'
+    if (!identityRegex.test(block)) errors.push(`Blankett ${type} missing or malformed #IDENTITET`)
+    if (!/^#NAMN .+/m.test(block)) errors.push(`Blankett ${type} missing #NAMN`)
+    if (!/^#BLANKETTSLUT\r?$/m.test(block)) errors.push(`Blankett ${type} missing #BLANKETTSLUT`)
+
+    const seen = new Set<string>()
+    for (const line of block.split(/\r?\n/)) {
+      if (!line.startsWith('#UPPGIFT ')) continue
+      const match = line.match(/^#UPPGIFT\s+(\d{4})\s+(.+)$/)
+      if (!match) {
+        errors.push(`Malformed #UPPGIFT in ${type}: ${line}`)
+        continue
+      }
+      const [, code, value] = match
+      if (!validFieldCodes.has(code)) errors.push(`Unknown SRU field code ${code} in ${type}`)
+      if (seen.has(code)) errors.push(`Duplicate SRU field code ${code} in ${type}`)
+      seen.add(code)
+      if (!/^701[12]$/.test(code) && !/^-?\d+$/.test(value.trim())) {
+        errors.push(`Field ${code} in ${type} must be an integer amount.`)
+      }
     }
-    if (!block.includes('#NAMN')) {
-      const type = block.split('\n')[0]?.split('\r')[0] || 'unknown'
-      errors.push(`Blankett ${type} missing #NAMN`)
-    }
+
+    if (!seen.has('7011')) errors.push(`Blankett ${type} missing fiscal year start 7011`)
+    if (!seen.has('7012')) errors.push(`Blankett ${type} missing fiscal year end 7012`)
+  }
+
+  if (!/#UPPGIFT\s+7113\s+\d+/.test(content) && !/#UPPGIFT\s+7114\s+\d+/.test(content)) {
+    warnings.push('INK2 saknar både överskott 7113 och underskott 7114. Kontrollera nollresultat eller ofullständig INK2S.')
   }
 
   return {
     isValid: errors.length === 0,
     errors,
+    warnings,
   }
+}
+
+export function validateSRUSubmission(submission: SRUSubmission): {
+  isValid: boolean
+  errors: string[]
+  warnings: string[]
+} {
+  const errors: string[] = []
+  const warnings: string[] = []
+
+  if (!submission.infoSru.includes('#DATABESKRIVNING_START')) errors.push('INFO.SRU missing #DATABESKRIVNING_START')
+  if (!submission.infoSru.includes('#FILNAMN BLANKETTER.SRU')) errors.push('INFO.SRU must reference BLANKETTER.SRU')
+  if (!submission.infoSru.includes('#MEDIELEV_START')) errors.push('INFO.SRU missing #MEDIELEV_START')
+  if (!submission.infoSru.endsWith(CRLF)) errors.push('INFO.SRU must end with CRLF')
+
+  const blanketter = validateBlanketterSru(submission.blanketterSru)
+  errors.push(...blanketter.errors)
+  warnings.push(...blanketter.warnings)
+
+  return { isValid: errors.length === 0, errors, warnings }
 }
 
 /**
