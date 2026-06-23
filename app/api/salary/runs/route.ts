@@ -6,6 +6,7 @@ import { eventBus } from '@/lib/events'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { checkFeatureAccess, featureAccessError, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
+import { assertCurrentUsageWithinCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 
 ensureInitialized()
 
@@ -48,6 +49,14 @@ export const POST = withRouteContext(
     if (!salaryAccess.allowed) {
       return featureAccessError(NORDKLART_FEATURES.salaryRuns)
     }
+
+    const payrollLimit = await assertCurrentUsageWithinCommercialLimit(
+      supabase,
+      companyId,
+      COMMERCIAL_LIMITS.payrollEmployees,
+      'Din plan tillåter inte lönekörningar för nuvarande antal löneanställda',
+    )
+    if (!payrollLimit.ok) return payrollLimit.response
 
     const validation = await validateBody(request, CreateSalaryRunSchema, {
       log,

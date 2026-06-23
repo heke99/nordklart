@@ -272,9 +272,7 @@ export default async function DashboardLayout({
       ? 'platform'
       : pathname.startsWith('/agency') && canManageAgency
         ? 'agency'
-        : workspacePrefs?.active_workspace_type === 'agency' && canManageAgency
-          ? 'agency'
-          : 'company'
+        : 'company'
 
   const companyContextValue = {
     company: companyWithName,

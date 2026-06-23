@@ -132,8 +132,8 @@ export default async function PlatformPricePlansPage({
       <Tabs defaultValue="overview">
         <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">
           <TabsTrigger value="overview">Översikt</TabsTrigger>
-          <TabsTrigger value="plans">Planer och priser</TabsTrigger>
-          <TabsTrigger value="access">Åtkomst och kunder</TabsTrigger>
+          <TabsTrigger value="plans">Planer, tillägg och publicering</TabsTrigger>
+          <TabsTrigger value="access">Limits, åtkomst och kunder</TabsTrigger>
           <TabsTrigger value="stripe">Stripe och händelser</TabsTrigger>
         </TabsList>
 

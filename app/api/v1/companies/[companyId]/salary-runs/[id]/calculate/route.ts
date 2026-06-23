@@ -29,6 +29,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
+import { assertCurrentUsageWithinCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 
 const SalaryRunCalculated = z.object({
   id: z.string().uuid(),
@@ -100,6 +101,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const salaryRunId = idParse.data
+
+    const payrollLimit = await assertCurrentUsageWithinCommercialLimit(
+      ctx.supabase,
+      ctx.companyId!,
+      COMMERCIAL_LIMITS.payrollEmployees,
+      'Din plan tillåter inte att lönekörningen körs för nuvarande antal löneanställda',
+    )
+    if (!payrollLimit.ok) return payrollLimit.response
 
     // Pre-flight status check so a dry-run can preview the would-be outcome
     // without committing any of the calculation's many side effects.

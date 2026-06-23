@@ -124,6 +124,42 @@ export async function assertCommercialLimit(
   }
 }
 
+export async function assertCurrentUsageWithinCommercialLimit(
+  supabase: SupabaseClient,
+  companyId: string,
+  featureCode: CommercialLimitCode | string,
+  fallbackMessage: string,
+): Promise<{ ok: true } | { ok: false; response: Response; result: CommercialLimitResult }> {
+  const result = await getCommercialLimit(supabase, companyId, featureCode)
+
+  const hasPositiveLimit = result.limitValue === null || result.limitValue > 0
+  const isWithinExistingUsage =
+    result.limitValue === null ||
+    result.usageValue === null ||
+    result.usageValue <= result.limitValue
+
+  if (result.allowed || (result.reason === 'limit_reached' && hasPositiveLimit && isWithinExistingUsage)) {
+    return { ok: true }
+  }
+
+  return {
+    ok: false,
+    result,
+    response: Response.json(
+      {
+        error: 'PLAN_LIMIT_REACHED',
+        message: commercialLimitErrorMessage(result, fallbackMessage),
+        featureCode: result.featureCode,
+        reason: result.reason,
+        limitValue: result.limitValue,
+        usageValue: result.usageValue,
+        remainingValue: result.remainingValue,
+      },
+      { status: result.reason === 'unauthorized' ? 403 : 402 },
+    ),
+  }
+}
+
 export async function canInviteCompanyUser(supabase: SupabaseClient, companyId: string) {
   return getCommercialLimit(supabase, companyId, COMMERCIAL_LIMITS.companyUsers)
 }

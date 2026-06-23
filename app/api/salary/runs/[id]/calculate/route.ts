@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { assertCurrentUsageWithinCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 
 ensureInitialized()
 
@@ -26,6 +27,14 @@ export const POST = withRouteContext(
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
     const { supabase, companyId, log, requestId } = ctx
+
+    const payrollLimit = await assertCurrentUsageWithinCommercialLimit(
+      supabase,
+      companyId!,
+      COMMERCIAL_LIMITS.payrollEmployees,
+      'Din plan tillåter inte att lönekörningen körs för nuvarande antal löneanställda',
+    )
+    if (!payrollLimit.ok) return payrollLimit.response
 
     const result = await runSalaryCalculation({
       supabase,

@@ -25,6 +25,8 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateSalaryRunSchema } from '@/lib/api/schemas'
 import { eventBus } from '@/lib/events'
+import { checkFeatureAccess, featureAccessError, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
+import { assertCurrentUsageWithinCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 
 const SalaryRunStatus = z.enum(['draft', 'review', 'approved', 'paid', 'booked', 'corrected'])
 
@@ -258,6 +260,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const body = parsed.data
+
+    const salaryAccess = await checkFeatureAccess(ctx.supabase, ctx.companyId!, NORDKLART_FEATURES.salaryRuns)
+    if (!salaryAccess.allowed) {
+      return featureAccessError(NORDKLART_FEATURES.salaryRuns)
+    }
+
+    const payrollLimit = await assertCurrentUsageWithinCommercialLimit(
+      ctx.supabase,
+      ctx.companyId!,
+      COMMERCIAL_LIMITS.payrollEmployees,
+      'Din plan tillåter inte lönekörningar för nuvarande antal löneanställda',
+    )
+    if (!payrollLimit.ok) return payrollLimit.response
 
     if (ctx.dryRun) {
       return dryRunPreview(

@@ -31,7 +31,9 @@ function RegisterContent() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const intent = searchParams.get('intent') ?? ''
-  const initialWorkspace: WorkspaceType = searchParams.get('workspace') === 'agency' || intent === 'agency' || intent === 'byra'
+  const planCode = searchParams.get('plan') ?? ''
+  const resolvedIntent = intent || (planCode.startsWith('agency_') ? 'agency' : planCode.startsWith('company_') ? 'company' : '')
+  const initialWorkspace: WorkspaceType = searchParams.get('workspace') === 'agency' || resolvedIntent === 'agency' || resolvedIntent === 'byra'
     ? 'agency'
     : 'company'
   const legalFromQuery = searchParams.get('legal_form')
@@ -51,28 +53,32 @@ function RegisterContent() {
   const [isLoading, setIsLoading] = useState(false)
   const [confirmationEmail, setConfirmationEmail] = useState<string | null>(null)
   const registry = useCompanyRegistryLookup({ endpoint: '/api/public/company-lookup' })
-  const registryLookup = registry.company
+  const registryLookupFn = registry.lookup
+  const registryCompany = registry.company
+  const registryLookup = registryCompany
   const registryLookupToken = registry.lookupToken
 
-  const selectedFlow = flowFromIntent(intent)
+  const selectedFlow = flowFromIntent(resolvedIntent || planCode)
   const label = workspaceType === 'agency' ? 'redovisningsbyrå' : legalForm === 'aktiebolag' ? 'aktiebolag' : 'enskild firma'
 
   useEffect(() => {
-    registry.lookup(orgNumber)
-  }, [orgNumber, registry.lookup])
+    registryLookupFn(orgNumber)
+  }, [orgNumber, registryLookupFn])
 
   useEffect(() => {
-    const company = registry.company
+    const company = registryCompany
     if (!company) return
 
-    setCompanyName(company.companyName)
-    setAddressLine1(company.address?.street || '')
-    setPostalCode(company.address?.postalCode || '')
-    setCity(company.address?.city || '')
-    if (company.legalForm === 'aktiebolag' || company.legalForm === 'enskild_firma') {
-      setLegalForm(company.legalForm)
-    }
-  }, [registry.company])
+    queueMicrotask(() => {
+      setCompanyName(company.companyName)
+      setAddressLine1(company.address?.street || '')
+      setPostalCode(company.address?.postalCode || '')
+      setCity(company.address?.city || '')
+      if (company.legalForm === 'aktiebolag' || company.legalForm === 'enskild_firma') {
+        setLegalForm(company.legalForm)
+      }
+    })
+  }, [registryCompany])
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -116,7 +122,7 @@ function RegisterContent() {
           addressLine1,
           postalCode,
           city,
-          onboardingIntent: intent,
+          onboardingIntent: resolvedIntent || planCode,
           registryLookupToken: registryLookupToken ?? '',
           acceptedTerms: true,
           acceptedPrivacy: true,

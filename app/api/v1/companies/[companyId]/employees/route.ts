@@ -29,6 +29,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
 import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
+import { assertCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 
 const EmploymentType = z.enum(['employee', 'company_owner', 'board_member'])
 const SalaryType = z.enum(['monthly', 'hourly'])
@@ -348,6 +349,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const body = parsed.data
+
+    const limitCheck = await assertCommercialLimit(
+      ctx.supabase,
+      ctx.companyId!,
+      COMMERCIAL_LIMITS.payrollEmployees,
+      'Din plan tillåter inte fler löneanställda',
+    )
+    if (!limitCheck.ok) return limitCheck.response
 
     if (ctx.dryRun) {
       return dryRunPreview(
