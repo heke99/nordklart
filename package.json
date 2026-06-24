@@ -22,7 +22,8 @@
     "db:migrate:list": "node scripts/supabase-migrate.cjs list supabase/migrations",
     "db:migrate:plan-after": "node scripts/supabase-migrate.cjs plan-after supabase/migrations",
     "db:migrate:mark-through": "node scripts/supabase-migrate.cjs mark-through supabase/migrations",
-    "check:feature-policy": "npx tsx scripts/check-feature-policy-coverage.ts"
+    "check:feature-policy": "npx tsx scripts/check-feature-policy-coverage.ts",
+    "nordklart:platform-accounting-regression": "node scripts/nordklart-platform-accounting-regression.cjs"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.1",

@@ -10,6 +10,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { linkSourceDocumentToJournalEntry } from '@/lib/bookkeeping/source-integrity'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 ensureInitialized()
@@ -201,6 +202,7 @@ export const POST = withRouteContext(
         paid_amount: paidPrivately ? totalRounded : 0,
         remaining_amount: paidPrivately ? 0 : totalRounded,
         paid_at: paidPrivately ? new Date().toISOString() : null,
+        document_id: body.document_id || null,
         notes: body.notes || null,
       })
       .select()
@@ -410,6 +412,21 @@ export const POST = withRouteContext(
       }
     }
 
+    const documentLinkWarnings: Array<{ code: string; message: string }> = []
+    const sourceDocumentId = body.document_id || null
+    const generatedJournalEntryId = paymentJournalEntryId || registrationJournalEntryId
+    if (sourceDocumentId && generatedJournalEntryId) {
+      const linkResult = await linkSourceDocumentToJournalEntry({
+        supabase,
+        companyId: companyId!,
+        documentId: sourceDocumentId,
+        journalEntryId: generatedJournalEntryId,
+        sourceType: paidPrivately ? 'supplier_invoice_privately_paid' : 'supplier_invoice',
+        sourceId: invoice.id,
+      })
+      if (linkResult.warning) documentLinkWarnings.push(linkResult.warning)
+    }
+
     try {
       await eventBus.emit({
         type: 'supplier_invoice.registered',
@@ -437,7 +454,7 @@ export const POST = withRouteContext(
         registration_journal_entry_id: registrationJournalEntryId,
         payment_journal_entry_id: paymentJournalEntryId,
       },
-      ...(warnings.length > 0 ? { warnings } : {}),
+      ...([ ...warnings, ...documentLinkWarnings ].length > 0 ? { warnings: [ ...warnings, ...documentLinkWarnings ] } : {}),
     })
   },
   { requireWrite: true },

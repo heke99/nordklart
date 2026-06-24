@@ -46,55 +46,58 @@ export default async function PlatformPage() {
       actions={<Button variant={isPlatform ? 'default' : 'secondary'}>{isPlatform ? 'Platform admin aktiv' : 'Begär platform access'}</Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Bolag" value={companyCount || 0} description="Befintliga tenants i systemet." />
-        <NordklartStatCard label="Byråer" value={agencyCount || 0} description="Nya agency-modellen." tone="primary" />
+        <NordklartStatCard label="Bolag" value={companyCount || 0} description="Alla bolag i plattformen." />
+        <NordklartStatCard label="Byråer" value={agencyCount || 0} description="Redovisningsbyråer." tone="primary" />
         <NordklartStatCard label="Prisplaner" value={pricePlanCount || 0} description="Produktkatalog för Nordklart." />
         <NordklartStatCard label="Din roll" value={ownPlatformRole?.role || 'standard'} description="Avgör om globala vyer ska öppnas fullt." tone={isPlatform ? 'success' : 'warning'} />
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Aktiva abonnemang" value={activeSubscriptionCount || 0} description="Trialing eller active." tone="success" />
-        <NordklartStatCard label="Onboarding" value={onboardingCount || 0} description="Draft/in progress/blocked." />
-        <NordklartStatCard label="Review queue" value={reviewQueueCount || 0} description="Öppna automation-/byråärenden." tone="warning" />
-        <NordklartStatCard label="Bankproviders" value={providerCount || 0} description="Aktiva provider-adaptrar." />
+        <NordklartStatCard label="Aktiva abonnemang" value={activeSubscriptionCount || 0} description="Provperiod eller aktiv." tone="success" />
+        <NordklartStatCard label="Onboarding" value={onboardingCount || 0} description="Påbörjad eller blockerad." />
+        <NordklartStatCard label="Granskningskö" value={reviewQueueCount || 0} description="Öppna ärenden." tone="warning" />
+        <NordklartStatCard label="Bankkopplingar" value={providerCount || 0} description="Aktiva betal- och bankkopplingar." />
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
         <NordklartStatCard label="Bokslut" value={yearEndCount || 0} description="Aktiva bokslutsprojekt." tone="primary" />
         <NordklartStatCard label="Signering" value={taxWaitingCount || 0} description="Skatteverket väntar." tone={(taxWaitingCount || 0) > 0 ? 'warning' : 'success'} />
-        <NordklartStatCard label="Bankgiro review" value={bankgiroReviewCount || 0} description="Ansökningar att hantera." tone={(bankgiroReviewCount || 0) > 0 ? 'warning' : 'success'} />
+        <NordklartStatCard label="Bankgiro" value={bankgiroReviewCount || 0} description="Ansökningar att granska." tone={(bankgiroReviewCount || 0) > 0 ? 'warning' : 'success'} />
         <NordklartStatCard label="Webhooks" value={webhookEndpointCount || 0} description="Aktiva endpoints." />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-4">
-        <NordklartActionCard meta="Prisplaner" title="Prisplaner & features" description="Produkter, prisplaner, plan features, subscriptions, entitlements, engångsköp, usage och feature gate-helper.">
+        <NordklartActionCard meta="Bolag" title="Bolag och byråer" description="Sök, filtrera och öppna bolagskort för användare, abonnemang, Bankgiro, bokslut och bokföringskontroller.">
+          <Button asChild size="sm"><Link href="/platform/companies">Öppna</Link></Button>
+        </NordklartActionCard>
+        <NordklartActionCard meta="Prisplaner" title="Prisplaner och funktioner" description="Produkter, prisplaner, abonnemang, tillägg, engångsköp och åtkomststyrning.">
           <Button asChild size="sm"><Link href="/platform/price-plans">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Onboarding" title="Onboardingvägar" description="Bokföring direkt, bankautomation, bokslut engångsköp och Bankgiro/Autogiro hålls som separata flows.">
+        <NordklartActionCard meta="Onboarding" title="Onboardingvägar" description="Bokföring, bankkoppling, bokslutsköp och Bankgiro/Autogiro hålls som tydliga flöden.">
           <Button asChild size="sm"><Link href="/platform/onboarding">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Byrå" title="Byråläge" description="Kundstatus, ansvarig konsult, deadlines, moms, bokslut, bankstatus, byråmallar och review queue.">
+        <NordklartActionCard meta="Byrå" title="Byråläge" description="Kundstatus, ansvarig konsult, deadlines, moms, bokslut, bankstatus, byråmallar och granskningskö.">
           <Button asChild size="sm"><Link href="/agency/clients">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Bankautomation" title="Bankautomation" description="Provider abstraction, bank accounts, ingest, dedupe, matching, automation rules, decisions och granskningskö.">
+        <NordklartActionCard meta="Bankautomation" title="Bankautomation" description="Bankkonton, import, dubblettskydd, matchning, automationsregler och granskningskö.">
           <Button asChild size="sm"><Link href="/platform/bank-automation">Öppna</Link></Button>
         </NordklartActionCard>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-4">
-        <NordklartActionCard meta="Bokslut" title="Bokslut som produkt" description="Bokslutsprojekt, readiness, engångsköp, access och exportpaket.">
+        <NordklartActionCard meta="Bokslut" title="Bokslut som produkt" description="Bokslutsprojekt, kontrollstatus, engångsköp, åtkomst och exportpaket.">
           <Button asChild size="sm"><Link href="/platform/year-end">Öppna</Link></Button>
         </NordklartActionCard>
         <NordklartActionCard meta="Skatteverket" title="Skatteverket" description="Momsdeklarationer, signeringsstatus, kvittenser, deadlines och audit.">
           <Button asChild size="sm"><Link href="/platform/skatteverket">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Bankgiro" title="Bankgiro / Autogiro" description="Separat provider-modul för ansökan, review, mandat, collections och avstämning.">
+        <NordklartActionCard meta="Bankgiro" title="Bankgiro / Autogiro" description="Ansökan, granskning, medgivanden, betalningar och avstämning.">
           <Button asChild size="sm"><Link href="/platform/bankgiro">Öppna</Link></Button>
         </NordklartActionCard>
         <NordklartActionCard meta="API & webhooks" title="API & Webhooks" description="API-klienter, scopes, OpenAPI, eventkatalog, signering, retries och logs.">
           <Button asChild size="sm"><Link href="/platform/api-webhooks">Öppna</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Behörigheter" title="Plattformsteam" description="Tilldela och återkalla Superadmin, support och granskarroller med audit-logg. Complimentary Full Access ligger alltid på bolaget, aldrig här.">
+        <NordklartActionCard meta="Behörigheter" title="Plattformsteam" description="Tilldela och återkalla plattformsroller med audit-logg. Kostnadsfri bolagsåtkomst hanteras på bolagskortet.">
           <Button asChild size="sm"><Link href="/platform/access">Öppna</Link></Button>
         </NordklartActionCard>
       </div>

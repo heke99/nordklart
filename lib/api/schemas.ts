@@ -617,6 +617,9 @@ export const CreateSupplierInvoiceSchema = z.object({
   reverse_charge: z.boolean().optional(),
   payment_reference: z.string().optional(),
   notes: z.string().optional(),
+  // Optional source document from the WORM document archive. When present, the
+  // create route links it to the generated supplier-invoice/expense voucher.
+  document_id: uuid.optional(),
   paid_with_private_funds: z.boolean().optional(),
   // For paid_with_private_funds: the date the owner paid out-of-pocket.
   // Defaults to invoice_date (common for kvitto where the two coincide).
