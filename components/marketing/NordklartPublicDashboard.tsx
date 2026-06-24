@@ -70,7 +70,7 @@ const automationSteps = [
   },
   {
     title: 'Verifikation föreslås',
-    body: 'Regler och tidigare mönster skapar bokföringsförslag med tydlig confidence och audit.',
+    body: 'Regler och tidigare mönster skapar bokföringsförslag med tydlig säkerhetsnivå och spårbar historik.',
   },
   {
     title: 'Du godkänner eller låter reglerna arbeta',
@@ -89,7 +89,7 @@ const bankgiroStatuses = ['Utkast', 'Inskickad', 'Behöver komplettering', 'Unde
 
 const allInOneFeatures = [
   'Banktransaktioner matchas mot fakturor och verifikationer',
-  'Automatiska förslag skapas med regler, confidence och audit',
+  'Automatiska förslag skapas med regler, tydlig säkerhetsnivå och spårbar historik',
   'Moms, rapporter och bokslut bygger på samma bokföringsdata',
   'Bankgiro kopplas till betalningar, avstämning och bokföring',
 ]
@@ -126,7 +126,7 @@ export function NordklartPublicDashboard() {
               </div>
 
               <div className="grid gap-3 text-sm text-muted-foreground sm:grid-cols-2 lg:max-w-2xl">
-                {['Automatiserad bokföring', 'Verifikationer med audit', 'Fakturor och betalstatus', 'Moms, rapporter och bokslut'].map((item) => (
+                {['Automatiserad bokföring', 'Verifikationer med spårbarhet', 'Fakturor och betalstatus', 'Moms, rapporter och bokslut'].map((item) => (
                   <div key={item} className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
                     {item}
@@ -142,7 +142,7 @@ export function NordklartPublicDashboard() {
         <section className="px-5 py-12 md:px-8" aria-labelledby="automation-flow">
           <div className="mx-auto max-w-7xl space-y-8">
             <div className="max-w-3xl space-y-3">
-              <p className={marketingSectionLabel}>Det vi säljer in</p>
+              <p className={marketingSectionLabel}>Så fungerar det</p>
               <h2 id="automation-flow" className="text-balance text-3xl font-semibold md:text-5xl">
                 Mindre manuell bokföring. Mer kontroll på det som faktiskt behöver granskas.
               </h2>

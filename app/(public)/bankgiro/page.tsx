@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { ArrowRight, Banknote, CheckCircle2, ShieldCheck } from 'lucide-react'
 import { MarketingChrome, marketingPrimaryCta, marketingSecondaryCta, marketingSectionLabel } from '@/components/marketing/MarketingChrome'
 
-const steps = ['Bolagsuppgifter', 'Ägare och användning', 'Dokument', 'Superadmin review', 'Provider setup', 'Aktiv betalmodul']
+const steps = ['Bolagsuppgifter', 'Ägare och användning', 'Dokument', 'Granskning', 'Aktivering', 'Aktivt betalflöde']
 
 export default function BankgiroMarketingPage() {
   return (
@@ -43,9 +43,9 @@ export default function BankgiroMarketingPage() {
 
         <section className="mx-auto mt-16 grid max-w-7xl gap-4 md:grid-cols-3">
           {[
-            ['Separat onboarding', 'Bankgiro är ett tillägg och blockerar inte vanlig bokföring.'],
-            ['Provider-modell', 'GoCardless, Leslie, filimport eller framtida partner kan kopplas utan att kärnan hårdkodas.'],
-            ['Avstämning', 'Mandat, collections och betalningar kan matchas mot fakturor och bokföringsunderlag.'],
+            ['Separat ansökan', 'Bankgiro är ett tillägg och blockerar inte vanlig bokföring.'],
+            ['Flexibelt betalflöde', 'Betalpartner, filimport eller framtida betalvägar kan kopplas utan att störa bokföringen.'],
+            ['Avstämning', 'Medgivanden och betalningar kan matchas mot fakturor och bokföringsunderlag.'],
           ].map(([title, body]) => (
             <article key={title} className="rounded-[2rem] border bg-card/90 p-6 shadow-sm">
               <ShieldCheck className="mb-5 h-6 w-6 text-primary" />
@@ -58,7 +58,7 @@ export default function BankgiroMarketingPage() {
         <section className="mx-auto mt-16 max-w-7xl rounded-[2.5rem] bg-primary p-6 text-primary-foreground shadow-lg md:p-10">
           <h2 className="text-balance text-3xl font-semibold md:text-5xl">Bokföring först. Bankgiro när bolaget behöver det.</h2>
           <div className="mt-6 grid gap-3 md:grid-cols-2">
-            {['Bokföring direkt kräver inte Bankgiro', 'Ansökan kan granskas av superadmin', 'Dokument och ägarfrågor sparas separat', 'Aktiva betalningar kan stämmas av mot fakturor'].map((item) => (
+            {['Bokföring direkt kräver inte Bankgiro', 'Ansökan granskas innan aktivering', 'Dokument och ägarfrågor sparas separat', 'Aktiva betalningar kan stämmas av mot fakturor'].map((item) => (
               <div key={item} className="flex items-center gap-3 rounded-2xl bg-primary-foreground/10 p-4 font-semibold">
                 <CheckCircle2 className="h-5 w-5" />
                 {item}

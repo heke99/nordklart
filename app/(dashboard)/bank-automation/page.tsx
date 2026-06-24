@@ -3,12 +3,45 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { listCompanyFeatureAccess } from '@/lib/platform/entitlements'
-import { evaluateBankAutomationDecision } from '@/lib/bank-automation/decision-engine'
 import { NordklartActionCard, NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
 export const dynamic = 'force-dynamic'
+
+
+const statusLabel = (status?: string | null) => {
+  const labels: Record<string, string> = {
+    active: 'Aktiv',
+    draft: 'Utkast',
+    open: 'Öppen',
+    in_review: 'Under granskning',
+    paused: 'Pausad',
+    disabled: 'Avstängd',
+  }
+  return labels[status ?? ''] ?? status ?? '–'
+}
+
+const priorityLabel = (priority?: string | null) => {
+  const labels: Record<string, string> = {
+    urgent: 'Brådskande',
+    high: 'Hög',
+    normal: 'Normal',
+    low: 'Låg',
+  }
+  return labels[priority ?? ''] ?? priority ?? '–'
+}
+
+const ruleTypeLabel = (ruleType?: string | null) => {
+  const labels: Record<string, string> = {
+    bank_fee: 'Bankavgift',
+    supplier_invoice: 'Leverantörsfaktura',
+    customer_payment: 'Kundbetalning',
+    transfer: 'Överföring',
+    recurring: 'Återkommande händelse',
+  }
+  return labels[ruleType ?? ''] ?? (ruleType ? ruleType.replaceAll('_', ' ') : 'Regel')
+}
 
 type ReviewItem = {
   id: string
@@ -59,30 +92,24 @@ export default async function BankAutomationPage() {
   ])
 
   const hasBankAutomation = features.some((feature) => feature.feature_code === 'bank.automation' && feature.enabled)
-  const demoDecision = evaluateBankAutomationDecision({
-    amount: -39,
-    description: 'Bankavgift månad',
-    candidates: [{ type: 'bank_fee', score: 96, reasonCodes: ['known_bank_fee_text'], ruleAllowsAutobook: true, proposedAccount: '6570' }],
-  })
-
   return (
     <NordklartPageShell
       eyebrow="Bankautomation"
       title="Automatiserad bokföring med granskning först"
-      description="Transaktioner importeras, matchas mot regler/fakturor och får confidence. Bara låg risk med tillåten regel får autobokföras; resten blir förslag eller granskningsärende."
+      description="Transaktioner importeras, matchas mot regler och fakturor och får en tydlig säkerhetsnivå. Säkra händelser kan bokföras automatiskt, medan osäkra händelser hamnar i granskning."
       actions={<Button asChild variant="secondary"><Link href="/transactions">Visa transaktioner</Link></Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Feature" value={hasBankAutomation ? 'Aktiv' : 'Ej aktiv'} description="Styrs via plan/entitlement." tone={hasBankAutomation ? 'success' : 'warning'} />
-        <NordklartStatCard label="Bankkopplingar" value={bankConnections ?? 0} description="Aktiva consent." />
+        <NordklartStatCard label="Tjänst" value={hasBankAutomation ? 'Aktiv' : 'Ej aktiv'} description="Ingår i din aktiva plan." tone={hasBankAutomation ? 'success' : 'warning'} />
+        <NordklartStatCard label="Bankkopplingar" value={bankConnections ?? 0} description="Aktiva bankkopplingar." />
         <NordklartStatCard label="Bankkonton" value={bankAccounts ?? 0} description="Normaliserade bankkonton." />
-        <NordklartStatCard label="Granska" value={transactionsToReview ?? 0} description="<70% eller hög risk." tone="warning" />
+        <NordklartStatCard label="Granska" value={transactionsToReview ?? 0} description="Osäkra händelser eller hög risk." tone="warning" />
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <NordklartStatCard label="Förslag" value={suggestedTransactions ?? 0} description="70–94% confidence." tone="primary" />
-        <NordklartStatCard label="Autobokförda" value={autoBookedTransactions ?? 0} description=">=95% + auto-regel." tone="success" />
-        <NordklartStatCard label="Exempelbeslut" value={`${demoDecision.confidence}%`} description={`${demoDecision.decision} · ${demoDecision.riskLevel}`} />
+        <NordklartStatCard label="Förslag" value={suggestedTransactions ?? 0} description="Behöver kontroll innan bokföring." tone="primary" />
+        <NordklartStatCard label="Autobokförda" value={autoBookedTransactions ?? 0} description="Säkra träffar med aktiv regel." tone="success" />
+        <NordklartStatCard label="Automatiseringsgrad" value={autoBookedTransactions ?? 0} description="Bokförda via säkra regler." />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -93,10 +120,10 @@ export default async function BankAutomationPage() {
               <div key={item.id} className="rounded-2xl border bg-background/70 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="font-medium">{item.title}</div>
-                  <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'secondary'}>{item.priority}</Badge>
+                  <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'secondary'}>{priorityLabel(item.priority)}</Badge>
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">{item.description ?? 'Ingen beskrivning'}</p>
-                <div className="mt-2 text-xs text-muted-foreground">Confidence: {item.confidence ?? 'saknas'} · {item.status}</div>
+                <div className="mt-2 text-xs text-muted-foreground">Säkerhet: {item.confidence ?? 'saknas'} · Status: {statusLabel(item.status)}</div>
               </div>
             ))}
             {(!reviewItems || reviewItems.length === 0) ? <p className="text-sm text-muted-foreground">Inga öppna ärenden.</p> : null}
@@ -110,10 +137,10 @@ export default async function BankAutomationPage() {
               <div key={rule.id} className="rounded-2xl border bg-background/70 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="font-medium">{rule.name}</div>
-                  <Badge variant={rule.status === 'active' ? 'success' : 'secondary'}>{rule.status}</Badge>
+                  <Badge variant={rule.status === 'active' ? 'success' : 'secondary'}>{statusLabel(rule.status)}</Badge>
                 </div>
-                <div className="mt-2 text-sm text-muted-foreground">{rule.rule_type} · min {rule.min_confidence}%</div>
-                <div className="mt-1 text-xs text-muted-foreground">Autobokför: {rule.auto_book_allowed ? 'Ja' : 'Nej'} · Review: {rule.requires_review ? 'Ja' : 'Nej'}</div>
+                <div className="mt-2 text-sm text-muted-foreground">{ruleTypeLabel(rule.rule_type)} · minsta säkerhet {rule.min_confidence}%</div>
+                <div className="mt-1 text-xs text-muted-foreground">Autobokför: {rule.auto_book_allowed ? 'Ja' : 'Nej'} · Kräver granskning: {rule.requires_review ? 'Ja' : 'Nej'}</div>
               </div>
             ))}
             {(!rules || rules.length === 0) ? <p className="text-sm text-muted-foreground">Inga automationsregler ännu.</p> : null}
@@ -122,9 +149,9 @@ export default async function BankAutomationPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <NordklartActionCard meta="Skydd" title="Autobokföring kräver regel" description="En hög confidence räcker inte ensam. Regeln måste uttryckligen tillåta autobokföring och risknivån får inte vara hög." />
-        <NordklartActionCard meta="Review" title="Osäkra transaktioner blir arbete" description="Okänd leverantör, flera möjliga matchningar eller momsosäkerhet hamnar i review_queue_items." />
-        <NordklartActionCard meta="Audit" title="Beslut kan förklaras" description="Reason codes, selected candidate, confidence och föreslaget konto sparas för spårbarhet." />
+        <NordklartActionCard meta="Skydd" title="Autobokföring kräver regel" description="En hög säkerhetsnivå räcker inte ensam. Regeln måste uttryckligen tillåta autobokföring och risknivån får inte vara hög." />
+        <NordklartActionCard meta="Granskning" title="Osäkra transaktioner blir arbete" description="Okänd leverantör, flera möjliga matchningar eller momsosäkerhet hamnar i granskningskön." />
+        <NordklartActionCard meta="Spårbarhet" title="Beslut kan förklaras" description="Beslutsorsaker, vald matchning, säkerhetsnivå och föreslaget konto sparas för spårbarhet." />
       </div>
     </NordklartPageShell>
   )

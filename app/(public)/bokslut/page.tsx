@@ -23,7 +23,7 @@ export default function BokslutPage() {
         },
         {
           title: 'När bokslut är del av allt',
-          body: 'Om du använder hela Nordklart kan bokslutet bygga direkt på samma bokföringsdata, audit-spår, periodiseringar och rapporter.',
+          body: 'Om du använder hela Nordklart kan bokslutet bygga direkt på samma bokföringsdata, spårbar historik, periodiseringar och rapporter.',
           points: ['Samma data från bokföringen', 'Mindre dubbelarbete', 'Tydlig status för byrå och kund'],
         },
       ]}

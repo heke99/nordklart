@@ -32,7 +32,7 @@ export default function SandboxPage() {
       const { error } = await supabase.auth.signInAnonymously()
       if (error) {
         toast({
-          title: 'Kunde inte starta sandlådan',
+          title: 'Kunde inte starta exempelbolaget',
           description: error.message,
           variant: 'destructive',
         })
@@ -46,7 +46,7 @@ export default function SandboxPage() {
         // Clean up the orphaned anonymous session so the user can retry cleanly
         await supabase.auth.signOut()
         toast({
-          title: 'Kunde inte skapa demodata',
+          title: 'Kunde inte skapa exempeldata',
           description: 'Försök igen om en stund.',
           variant: 'destructive',
         })
@@ -89,14 +89,14 @@ export default function SandboxPage() {
               Du är redan inloggad
             </h1>
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
-              Sandlådan kräver att du inte är inloggad. Öppna ett inkognitofönster
+              Exempelbolaget kräver att du inte är inloggad. Öppna ett inkognitofönster
               eller logga ut först.
             </p>
           </div>
 
           <div className="mt-6 flex flex-col items-center gap-3">
             <Button asChild className="w-full h-11">
-              <Link href="/app">Gå till dashboard</Link>
+              <Link href="/app">Gå till översikten</Link>
             </Button>
           </div>
         </div>
@@ -111,17 +111,17 @@ export default function SandboxPage() {
         <div className="text-center mb-10">
           <BrandWordmark size="hero" className="mb-2" />
           <h1 className="text-xl font-medium tracking-tight mt-3">
-            Testa {branding.appName.toLowerCase()} utan att registrera dig
+            Prova {branding.appName.toLowerCase()} utan att registrera dig
           </h1>
           <p className="text-muted-foreground text-sm mt-2 leading-relaxed">
-            Utforska ett fullt demoföretag med riktig data — helt gratis.
+            Utforska ett exempelbolag med realistisk bokföringsdata — helt gratis.
           </p>
         </div>
 
         <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
           <p className="mb-6 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
             AI-assistenten och externa tjänster (e-post, bankuppkoppling,
-            valutakurser, Skatteverket) är avstängda i sandlådan — de
+            valutakurser, Skatteverket) är avstängda i exempelbolaget — de
             kräver ett riktigt konto.
           </p>
 
@@ -136,7 +136,7 @@ export default function SandboxPage() {
                 Startar...
               </>
             ) : (
-              'Starta sandbox'
+              'Starta exempelbolag'
             )}
           </Button>
 

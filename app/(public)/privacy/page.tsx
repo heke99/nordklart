@@ -152,7 +152,7 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2 pr-4 font-medium">Recapt</td>
                     <td className="py-2 pr-4">
                       Produktanalys och användarfeedback. Laddas endast för
-                      inloggade användare (ej sandbox/demo). Överförda
+                      inloggade användare (ej testmiljöer). Överförda
                       uppgifter: användar-ID, e-postadress och företagsnamn.
                     </td>
                     <td className="py-2 pr-4">EU</td>

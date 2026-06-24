@@ -4,7 +4,7 @@ export const BANKGIRO_APPLICATION_STEPS = [
   'Behöver komplettering',
   'Under granskning',
   'Godkänd',
-  'Provider setup',
+  'Aktivering',
   'Aktiv',
 ] as const
 
@@ -16,7 +16,7 @@ export function bankgiroStatusLabel(status?: string | null) {
     needs_information: 'Behöver komplettering',
     under_review: 'Under granskning',
     approved: 'Godkänd',
-    provider_setup: 'Provider setup',
+    provider_setup: 'Aktivering',
     active: 'Aktiv',
     rejected: 'Avslagen',
     suspended: 'Pausad',
@@ -27,7 +27,7 @@ export function bankgiroStatusLabel(status?: string | null) {
 export function providerSetupLabel(status?: string | null) {
   const labels: Record<string, string> = {
     not_started: 'Ej startad',
-    waiting_provider: 'Väntar provider',
+    waiting_provider: 'Väntar på betalpartner',
     active: 'Aktiv',
     failed: 'Fel',
     paused: 'Pausad',

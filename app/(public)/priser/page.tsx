@@ -48,7 +48,7 @@ function PlanCard({ plan }: { plan: PublicPricePlan }) {
       <div className="mt-6">
         <div className="text-sm text-muted-foreground">Pris från</div>
         <div className="mt-1 text-3xl font-semibold">{money(plan.monthly_price_ex_vat, plan.currency)}<span className="text-base font-normal text-muted-foreground">/mån</span></div>
-        <p className="mt-1 text-xs text-muted-foreground">Priser visas exklusive moms. Superadmin styr prisversioner och innehåll.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Priser visas exklusive moms. Innehåll och villkor kan variera beroende på vald plan.</p>
       </div>
 
       <div className="mt-5 grid gap-2 rounded-2xl bg-muted/40 p-4 text-sm">

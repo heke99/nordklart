@@ -26,13 +26,13 @@ export default async function AgencyClientsPage() {
   return (
     <NordklartPageShell
       eyebrow="Redovisningsbyrå"
-      title="Byråkunder och status"
-      description="Byrån ser kundbolag, ansvarig konsult, bankstatus, granskningskö, fakturastatus, bokslut, Bankgiro och nästa deadline utan att klientdata blandas mellan tenants."
+      title="Kundbolag och status"
+      description="Byrån ser kundbolag, ansvarig konsult, bankstatus, granskningskö, fakturastatus, bokslut, Bankgiro och nästa deadline på ett ställe."
       actions={<Button asChild variant="secondary"><Link href="/agency">Byråöversikt</Link></Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Klienter" value={clients.length} description="Kopplade byråkunder." tone="primary" />
-        <NordklartStatCard label="Behöver granskning" value={needsReview} description="Klienter med öppna review items." tone="warning" />
+        <NordklartStatCard label="Kunder" value={clients.length} description="Kopplade kundbolag." tone="primary" />
+        <NordklartStatCard label="Behöver granskning" value={needsReview} description="Kunder med öppna granskningspunkter." tone="warning" />
         <NordklartStatCard label="Bank åtgärd" value={bankNeedsAttention} description="Saknad/avvikande bankkoppling." />
         <NordklartStatCard label="Försenat" value={overdue} description="Kund- eller leverantörsfakturor." tone={overdue > 0 ? 'warning' : 'success'} />
       </div>

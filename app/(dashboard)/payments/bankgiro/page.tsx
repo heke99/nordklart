@@ -47,15 +47,15 @@ export default async function BankgiroPage() {
   return (
     <NordklartPageShell
       eyebrow="Bankgiro / Autogiro"
-      title="Betalprovider som tillägg — inte krav för bokföring"
-      description="Bankgiro/Autogiro har egen onboarding, review och providerstatus. Vanlig bokföring ska kunna starta utan Bankgiro-friktion."
+      title="Bankgiro och Autogiro som tillägg"
+      description="Bankgiro och Autogiro har en separat ansökan och aktivering. Vanlig bokföring kan starta utan att Bankgiro behöver vara klart."
       actions={<Button asChild><Link href="/onboarding?flow=bankgiro_autogiro">Påbörja ansökan</Link></Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Ansökan" value={bankgiroStatusLabel(latest?.status)} description={providerName(latest?.payment_providers) ?? 'Ingen provider vald'} tone={latest?.status === 'active' ? 'success' : 'warning'} />
-        <NordklartStatCard label="Mandat" value={mandatesRes.count ?? 0} description="Aktiva eller pending." />
-        <NordklartStatCard label="Collections" value={collectionsRes.count ?? 0} description="Pågående inbetalningsflöden." tone="primary" />
-        <NordklartStatCard label="Avstämning" value={reconciliationRes.count ?? 0} description="Unmatched/needs review." tone={(reconciliationRes.count ?? 0) > 0 ? 'warning' : 'success'} />
+        <NordklartStatCard label="Ansökan" value={bankgiroStatusLabel(latest?.status)} description={providerName(latest?.payment_providers) ?? 'Ingen betalpartner vald'} tone={latest?.status === 'active' ? 'success' : 'warning'} />
+        <NordklartStatCard label="Mandat" value={mandatesRes.count ?? 0} description="Aktiva eller väntande." />
+        <NordklartStatCard label="Inbetalningar" value={collectionsRes.count ?? 0} description="Pågående betalningar." tone="primary" />
+        <NordklartStatCard label="Avstämning" value={reconciliationRes.count ?? 0} description="Behöver matchas eller granskas." tone={(reconciliationRes.count ?? 0) > 0 ? 'warning' : 'success'} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
@@ -68,7 +68,7 @@ export default async function BankgiroPage() {
                   <div className="font-medium">{bankgiroStatusLabel(application.status)}</div>
                   <Badge variant={application.status === 'active' ? 'success' : application.status === 'rejected' ? 'destructive' : 'secondary'}>{providerSetupLabel(application.provider_setup_status)}</Badge>
                 </div>
-                <div className="mt-2 text-sm text-muted-foreground">Dokument: {application.documents_status ?? 'not_started'} · Risk: {application.risk_score ?? 'saknas'} · Volym: {application.expected_monthly_volume ?? 'saknas'}</div>
+                <div className="mt-2 text-sm text-muted-foreground">Underlag: {application.documents_status ?? 'ej startat'} · Risknivå: {application.risk_score ?? 'saknas'} · Förväntad månadsvolym: {application.expected_monthly_volume ?? 'saknas'}</div>
               </div>
             ))}
             {applications.length === 0 ? <p className="text-sm text-muted-foreground">Ingen ansökan ännu. Starta bara om bolaget faktiskt behöver Bankgiro/Autogiro.</p> : null}
@@ -76,7 +76,7 @@ export default async function BankgiroPage() {
         </section>
 
         <section className="rounded-3xl border bg-card p-5 shadow-sm">
-          <h2 className="text-xl font-semibold">Providerflöde</h2>
+          <h2 className="text-xl font-semibold">Ansökningsflöde</h2>
           <ol className="mt-4 space-y-3">
             {BANKGIRO_APPLICATION_STEPS.map((step, index) => (
               <li key={step} className="flex items-center gap-3 rounded-2xl border bg-background/70 p-3">
@@ -89,13 +89,13 @@ export default async function BankgiroPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <NordklartActionCard meta="Providers" title="GoCardless, Leslie och filimport" description={`${providersRes.data?.length ?? 0} provider-adaptrar är definierade utan att hårdkoda bokföringskärnan.`}>
+        <NordklartActionCard meta="Betalpartner" title="Betalpartner och filimport" description={`${providersRes.data?.length ?? 0} betalvägar är förberedda för Bankgiro, Autogiro eller filbaserad hantering.`}>
           <Button asChild size="sm" variant="secondary"><Link href="/settings/billing">Hantera plan</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Avstämning" title="Matcha betalningar mot fakturor" description="payment_reconciliation_items gör betalflödet granskningsbart innan bokföring skapas.">
+        <NordklartActionCard meta="Avstämning" title="Matcha betalningar mot fakturor" description="Betalningar kan granskas och matchas innan bokföring skapas.">
           <Button asChild size="sm" variant="secondary"><Link href="/transactions">Visa transaktioner</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Säker gräns" title="Bankgiro är separat onboarding" description="Bokföring direkt och bankautomation ska kunna användas utan att Bankgiro-ansökan krävs." />
+        <NordklartActionCard meta="Tydlig gräns" title="Bankgiro är ett separat tillägg" description="Bokföring och bankautomation kan användas även om Bankgiro-ansökan inte är klar." />
       </div>
     </NordklartPageShell>
   )

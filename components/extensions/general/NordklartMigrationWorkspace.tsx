@@ -378,7 +378,7 @@ function ProviderStep({
                         <p className="font-medium">{provider.name}</p>
                         {comingSoon && (
                           <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            Kommer snart
+                            Planeras
                           </span>
                         )}
                         {alreadyConnected && (

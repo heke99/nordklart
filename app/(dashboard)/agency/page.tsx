@@ -38,7 +38,7 @@ export default async function AgencyPage() {
     <NordklartPageShell
       eyebrow="Redovisningsbyrå"
       title="Byråläge för kunder, deadlines och granskning"
-      description="Nordklart skiljer tydligt på plattform, redovisningsbyrå och klientbolag. Byrån får översikt över kundstatus utan att klientdata blandas mellan tenants."
+      description="Nordklart ger byrån översikt över kundstatus, ansvariga konsulter, deadlines och granskning utan att kundernas data blandas."
       actions={
         <Button asChild>
           <Link href="/agency/clients">Visa kundstatus</Link>
@@ -46,23 +46,23 @@ export default async function AgencyPage() {
       }
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Byråer" value={memberships?.length || 0} description="Byråkopplingar där du har behörighet." tone="primary" />
-        <NordklartStatCard label="Klientbolag" value={clientCount || 0} description="Alla klienter kopplade till dina byråer." />
-        <NordklartStatCard label="Aktiva klienter" value={activeClientCount || 0} description="Klienter med aktiv byrårelation." tone="success" />
+        <NordklartStatCard label="Byråkopplingar" value={memberships?.length || 0} description="Byråkopplingar där du har behörighet." tone="primary" />
+        <NordklartStatCard label="Kundbolag" value={clientCount || 0} description="Alla kunder kopplade till dina byråer." />
+        <NordklartStatCard label="Aktiva kunder" value={activeClientCount || 0} description="Kunder med aktiv byrårelation." tone="success" />
         <NordklartStatCard label="Att granska" value={reviewCount || 0} description="Öppna ärenden i gemensam kö." tone="warning" />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <NordklartActionCard meta="Kundstatus" title="En vy per byråkund" description="agency_client_overview_v samlar bankstatus, granskningskö, moms, bokslut, Bankgiro och nästa deadline.">
+        <NordklartActionCard meta="Kundstatus" title="En vy per byråkund" description="Kundöversikten samlar bankstatus, granskning, moms, bokslut, Bankgiro och nästa deadline.">
           <Button asChild variant="secondary" size="sm"><Link href="/agency/clients">Öppna kundlistan</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Team" title="Ansvarig konsult" description="agency_clients har primary_accountant_id så varje kund kan tilldelas ansvarig konsult utan att ge bredare access än nödvändigt." />
-        <NordklartActionCard meta="Mallar" title={`${templateCount || 0} aktiva byråmallar`} description="agency_templates ger grund för återanvändbara onboarding-, deadline-, review- och rapportpaket per byrå." />
+        <NordklartActionCard meta="Team" title="Ansvarig konsult" description="Varje kund kan tilldelas ansvarig konsult med rätt behörighet för arbetet." />
+        <NordklartActionCard meta="Mallar" title={`${templateCount || 0} aktiva byråmallar`} description="Återanvändbara mallar hjälper byrån att standardisera onboarding, deadlines, granskning och rapporter." />
       </div>
 
       <div className="rounded-3xl border bg-card p-5 shadow-sm">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-xl font-semibold">Senaste klientstatus</h2>
+          <h2 className="text-xl font-semibold">Senaste kundstatus</h2>
           <Button asChild variant="ghost" size="sm"><Link href="/agency/clients">Visa alla</Link></Button>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-5">
@@ -74,7 +74,7 @@ export default async function AgencyPage() {
               <div className="text-xs text-muted-foreground">Deadline: {client.next_deadline_at ?? 'ingen'}</div>
             </div>
           ))}
-          {(!latestClients || latestClients.length === 0) ? <div className="rounded-2xl border bg-background/70 p-4 text-sm text-muted-foreground">Inga klienter att visa ännu.</div> : null}
+          {(!latestClients || latestClients.length === 0) ? <div className="rounded-2xl border bg-background/70 p-4 text-sm text-muted-foreground">Inga kunder att visa ännu.</div> : null}
         </div>
       </div>
     </NordklartPageShell>

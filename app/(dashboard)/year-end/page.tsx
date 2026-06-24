@@ -42,12 +42,12 @@ export default async function YearEndProductPage() {
   return (
     <NordklartPageShell
       eyebrow="Bokslut"
-      title="Bokslut som modul eller engångsköp"
-      description="Starta bokslut från SIE eller befintlig bokföring, kör readiness-kontroller, skapa justeringar och bygg ett exportpaket utan att ändra låsta perioder tyst."
+      title="Bokslut från SIE eller befintlig bokföring"
+      description="Starta bokslut från SIE eller befintlig bokföring, gå igenom kontroller, skapa justeringar och bygg ett exportpaket med tydlig historik."
       actions={<Button asChild><Link href="/bookkeeping/year-end">Starta bokslut</Link></Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Feature" value={hasYearEnd ? 'Aktiv' : 'Ej aktiv'} description="Styrs av plan, engångsköp eller override." tone={hasYearEnd ? 'success' : 'warning'} />
+        <NordklartStatCard label="Tillgång" value={hasYearEnd ? 'Aktiv' : 'Ej aktiv'} description="Ingår i plan eller separat bokslutsköp." tone={hasYearEnd ? 'success' : 'warning'} />
         <NordklartStatCard label="Projekt" value={projects.length} description="Senaste bokslutsprojekt." />
         <NordklartStatCard label="Avvikelser" value={checksRes.count ?? 0} description="Kräver kontroll innan låsning." tone={(checksRes.count ?? 0) > 0 ? 'warning' : 'success'} />
         <NordklartStatCard label="Exportpaket" value={deliverablesRes.count ?? 0} description="Redo att lämnas vidare." tone="primary" />
@@ -67,9 +67,9 @@ export default async function YearEndProductPage() {
               <div key={project.id} className="rounded-2xl border bg-background/70 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="font-medium">{yearEndStatusLabel(project.status)}</div>
-                  <Badge variant={project.status === 'completed' || project.status === 'locked' ? 'success' : 'secondary'}>{project.source ?? 'module'}</Badge>
+                  <Badge variant={project.status === 'completed' || project.status === 'locked' ? 'success' : 'secondary'}>{project.source === 'sie_import' ? 'SIE-import' : project.source === 'existing_bookkeeping' ? 'Befintlig bokföring' : 'Bokslut'}</Badge>
                 </div>
-                <div className="mt-2 text-sm text-muted-foreground">Readiness: {project.readiness_score ?? 'saknas'}% · Exportpaket: {exportPackageLabel(project.export_package_status)}</div>
+                <div className="mt-2 text-sm text-muted-foreground">Kontrollstatus: {project.readiness_score ?? 'saknas'}% · Exportpaket: {exportPackageLabel(project.export_package_status)}</div>
                 <div className="mt-1 text-xs text-muted-foreground">Nästa steg: {project.next_action ?? 'kör kontroller'}</div>
               </div>
             ))}
@@ -100,7 +100,7 @@ export default async function YearEndProductPage() {
         <NordklartActionCard meta="Rapportpaket" title="Bygg exportpaket" description="Resultat, balans, bokslutsbilagor och underlag ska skapas från låst och spårbar data.">
           <Button asChild size="sm" variant="secondary"><Link href="/reports">Visa rapporter</Link></Button>
         </NordklartActionCard>
-        <NordklartActionCard meta="Access" title="Sälj bokslut separat" description="one_time_purchases och year_end_purchase_access gör bokslut säljbart utan månadsabonnemang.">
+        <NordklartActionCard meta="Bokslutsköp" title="Bokslut utan månadsabonnemang" description="Kunden kan köpa bokslut separat och ändå få samma kontroller, rapporter och exportpaket.">
           <Button asChild size="sm" variant="secondary"><Link href="/settings/billing">Hantera plan</Link></Button>
         </NordklartActionCard>
       </div>

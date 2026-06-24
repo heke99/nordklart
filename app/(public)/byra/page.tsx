@@ -24,7 +24,7 @@ export default function ByraPage() {
         {
           title: 'Kunden kan arbeta separat',
           body: 'Kundbolaget ska bara se sin egen data medan byrån får rätt åtkomst till de kunder den arbetar med.',
-          points: ['Rollstyrd åtkomst', 'Read-only för revisor', 'Tydlig separation mellan bolag'],
+          points: ['Rollstyrd åtkomst', 'Läsbehörighet för revisor', 'Tydlig separation mellan bolag'],
         },
       ]}
     />
