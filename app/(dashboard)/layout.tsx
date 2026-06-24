@@ -17,6 +17,7 @@ import { legacyRoleFromEffectiveRole, resolveCompanyAccess } from '@/lib/access/
 import { getBranding } from '@/lib/branding/service'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { countPendingOperations, countUnbookedTransactions } from '@/lib/worklist'
+import { PLATFORM_ROLES } from '@/lib/auth/platform'
 import type { EntityType, CompanyRole, Team } from '@/types'
 
 /**
@@ -233,7 +234,7 @@ export default async function DashboardLayout({
     // in, distinct from the active company shown at the top.
     supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
     supabase.from('user_preferences').select('active_workspace_type, active_agency_id').eq('user_id', user.id).maybeSingle(),
-    supabase.from('platform_roles').select('role').eq('user_id', user.id).eq('role', 'platform_admin').is('revoked_at', null).maybeSingle(),
+    supabase.from('platform_roles').select('role').eq('user_id', user.id).in('role', PLATFORM_ROLES).is('revoked_at', null).limit(1).maybeSingle(),
     supabase.from('agency_members').select('agency_id, role').eq('user_id', user.id).in('role', ['agency_owner', 'agency_admin', 'accountant', 'reviewer']).limit(1).maybeSingle(),
   ])
 
@@ -267,12 +268,17 @@ export default async function DashboardLayout({
 
   const canManagePlatform = Boolean(platformRole)
   const canManageAgency = Boolean(agencyMembership)
+  const preferredWorkspaceType = workspacePrefs?.active_workspace_type
   const workspaceType: 'company' | 'agency' | 'platform' =
     pathname.startsWith('/platform') && canManagePlatform
       ? 'platform'
       : pathname.startsWith('/agency') && canManageAgency
         ? 'agency'
-        : 'company'
+        : preferredWorkspaceType === 'platform' && canManagePlatform
+          ? 'platform'
+          : preferredWorkspaceType === 'agency' && canManageAgency
+            ? 'agency'
+            : 'company'
 
   const companyContextValue = {
     company: companyWithName,

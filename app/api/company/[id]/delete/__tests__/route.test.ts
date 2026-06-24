@@ -28,27 +28,27 @@ function mockService(rowsByTable: Record<string, Row[]>) {
   const insertSpy = vi.fn().mockResolvedValue({ data: null, error: null })
   const updateSpies: Record<string, ReturnType<typeof vi.fn>> = {}
 
+  const makeChain = (next: Row) => {
+    const chain: Record<string, unknown> = {}
+    for (const method of ['select', 'eq', 'is', 'limit', 'order']) {
+      chain[method] = vi.fn().mockReturnValue(chain)
+    }
+    chain.maybeSingle = vi.fn().mockResolvedValue(next)
+    chain.single = vi.fn().mockResolvedValue(next)
+    ;(chain as { then?: unknown }).then = (resolve: (v: unknown) => void) => resolve(next)
+    return chain
+  }
+
   const from = vi.fn().mockImplementation((table: string) => {
     const queue = rowsByTable[table] ?? []
     const next = queue.shift() ?? { data: null, error: null }
-
-    const updateFn = vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ data: null, error: null }),
-        then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }),
-      }),
-    })
+    const queryChain = makeChain(next)
+    const updateChain = makeChain({ data: null, error: null })
+    const updateFn = vi.fn().mockReturnValue(updateChain)
     updateSpies[table] = updateFn
 
     return {
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue(next),
-          }),
-          maybeSingle: vi.fn().mockResolvedValue(next),
-        }),
-      }),
+      ...queryChain,
       update: updateFn,
       insert: insertSpy,
     }

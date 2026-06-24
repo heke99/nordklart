@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { Building2, Filter, Search, ShieldCheck } from 'lucide-react'
-import { requirePlatformAdmin } from '@/lib/auth/platform'
+import { requirePlatformRole } from '@/lib/auth/platform'
 import { NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,7 +27,7 @@ function statusVariant(status: string | null | undefined): 'success' | 'warning'
 }
 
 export default async function PlatformCompaniesPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  await requirePlatformAdmin()
+  await requirePlatformRole()
   const params = await searchParams
   const filters = {
     q: asString(params.q),

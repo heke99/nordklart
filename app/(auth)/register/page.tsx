@@ -32,6 +32,7 @@ function RegisterContent() {
   const { toast } = useToast()
   const intent = searchParams.get('intent') ?? ''
   const planCode = searchParams.get('plan') ?? ''
+  const planVersionId = searchParams.get('plan_version_id') ?? ''
   const resolvedIntent = intent || (planCode.startsWith('agency_') ? 'agency' : planCode.startsWith('company_') ? 'company' : '')
   const initialWorkspace: WorkspaceType = searchParams.get('workspace') === 'agency' || resolvedIntent === 'agency' || resolvedIntent === 'byra'
     ? 'agency'
@@ -123,6 +124,8 @@ function RegisterContent() {
           postalCode,
           city,
           onboardingIntent: resolvedIntent || planCode,
+          selectedPlanVersionId: planVersionId || undefined,
+          selectedPlanCode: planCode || undefined,
           registryLookupToken: registryLookupToken ?? '',
           acceptedTerms: true,
           acceptedPrivacy: true,
@@ -181,7 +184,7 @@ function RegisterContent() {
           </div>
         </section>
 
-        {selectedFlow && workspaceType === 'company' ? <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">Du startar med: <span className="font-medium text-foreground">{selectedFlow === 'bank_automation' ? 'Automatisk bokföring' : selectedFlow === 'year_end_one_time' ? 'Bokslut' : selectedFlow === 'bankgiro_autogiro' ? 'Bankgiro/Autogiro' : 'Bokföring'}</span></div> : null}
+        {(selectedFlow || planCode) && workspaceType === 'company' ? <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">Du startar med: <span className="font-medium text-foreground">{selectedFlow === 'bank_automation' ? 'Automatisk bokföring' : selectedFlow === 'year_end_one_time' ? 'Bokslut' : selectedFlow === 'bankgiro_autogiro' ? 'Bankgiro/Autogiro' : planCode ? 'Vald prisplan' : 'Bokföring'}</span>{planVersionId ? <span className="ml-1">Planvalet sparas till betalningssteget.</span> : null}</div> : null}
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Förnamn" value={firstName} onChange={setFirstName} autoComplete="given-name" />

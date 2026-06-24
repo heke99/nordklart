@@ -118,13 +118,23 @@ export async function extractInvoiceFields(input: ExtractionInput): Promise<Extr
     return { data: emptyResult(), rawText: null }
   }
 
-  const ocr = await runOpenDataLoaderOcr({
-    buffer: input.buffer,
-    mimeType: input.mimeType,
-    fileName: input.fileName,
-    documentId: input.documentId,
-    companyId: input.companyId,
-  })
+  let ocr: Awaited<ReturnType<typeof runOpenDataLoaderOcr>>
+  try {
+    ocr = await runOpenDataLoaderOcr({
+      buffer: input.buffer,
+      mimeType: input.mimeType,
+      fileName: input.fileName,
+      documentId: input.documentId,
+      companyId: input.companyId,
+    })
+  } catch (err) {
+    log.warn('OCR worker failed for invoice extraction', {
+      file_name_hash: fileNameHash(input.fileName),
+      mimeType: input.mimeType,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return { data: emptyResult(), rawText: null }
+  }
 
   if (ocr.status !== 'succeeded') {
     return { data: emptyResult(), rawText: null }

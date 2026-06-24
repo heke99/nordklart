@@ -1,5 +1,7 @@
 import { Pool, type PoolClient } from 'pg'
-import { afterAll, beforeAll } from 'vitest'
+import { afterAll, beforeAll, vi } from 'vitest'
+
+vi.mock('server-only', () => ({}))
 
 // Shared pool for the pg-real project. DATABASE_URL must point at a Postgres
 // instance that already has every migration from supabase/migrations/ applied

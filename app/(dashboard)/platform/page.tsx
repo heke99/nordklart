@@ -1,17 +1,18 @@
 import Link from 'next/link'
-import { requirePlatformAdmin } from '@/lib/auth/platform'
+import { canWritePlatform, PLATFORM_ROLE_LABELS, requirePlatformRole } from '@/lib/auth/platform'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NordklartActionCard, NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Button } from '@/components/ui/button'
 
 export const dynamic = 'force-dynamic'
 
 export default async function PlatformPage() {
-  const { supabase, user } = await requirePlatformAdmin()
+  const { role } = await requirePlatformRole()
+  const supabase = createServiceClient()
 
   const [
     { count: companyCount },
     { count: agencyCount },
-    { data: ownPlatformRole },
     { count: pricePlanCount },
     { count: activeSubscriptionCount },
     { count: onboardingCount },
@@ -24,7 +25,6 @@ export default async function PlatformPage() {
   ] = await Promise.all([
     supabase.from('companies').select('*', { count: 'exact', head: true }),
     supabase.from('agencies').select('*', { count: 'exact', head: true }),
-    supabase.from('platform_roles').select('role').eq('user_id', user.id).is('revoked_at', null).maybeSingle(),
     supabase.from('platform_price_plans').select('*', { count: 'exact', head: true }),
     supabase.from('company_subscriptions').select('*', { count: 'exact', head: true }).in('status', ['trialing', 'active']),
     supabase.from('onboarding_sessions').select('*', { count: 'exact', head: true }).in('status', ['draft', 'in_progress', 'blocked']),
@@ -33,23 +33,23 @@ export default async function PlatformPage() {
     supabase.from('year_end_projects').select('*', { count: 'exact', head: true }),
     supabase.from('tax_submissions').select('*', { count: 'exact', head: true }).eq('status', 'waiting_for_signature'),
     supabase.from('bankgiro_applications').select('*', { count: 'exact', head: true }).in('status', ['submitted', 'needs_information', 'under_review']),
-    supabase.from('webhook_endpoints').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+    supabase.from('webhooks').select('*', { count: 'exact', head: true }).eq('active', true).is('disabled_at', null),
   ])
 
-  const isPlatform = ownPlatformRole?.role === 'platform_admin'
+  const isPlatform = canWritePlatform(role)
 
   return (
     <NordklartPageShell
       eyebrow="Nordklart Plattform"
       title="Nordklart styrs centralt men isolerar varje bolag"
       description="Hantera bolag, byråer, prisplaner, produktåtkomst och drift från en gemensam plattform utan att blanda kunddata mellan bolag."
-      actions={<Button variant={isPlatform ? 'default' : 'secondary'}>{isPlatform ? 'Platform admin aktiv' : 'Begär platform access'}</Button>}
+      actions={<Button variant={isPlatform ? 'default' : 'secondary'}>{isPlatform ? 'Superadmin aktiv' : PLATFORM_ROLE_LABELS[role]}</Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
         <NordklartStatCard label="Bolag" value={companyCount || 0} description="Alla bolag i plattformen." />
         <NordklartStatCard label="Byråer" value={agencyCount || 0} description="Redovisningsbyråer." tone="primary" />
         <NordklartStatCard label="Prisplaner" value={pricePlanCount || 0} description="Produktkatalog för Nordklart." />
-        <NordklartStatCard label="Din roll" value={ownPlatformRole?.role || 'standard'} description="Avgör om globala vyer ska öppnas fullt." tone={isPlatform ? 'success' : 'warning'} />
+        <NordklartStatCard label="Din roll" value={PLATFORM_ROLE_LABELS[role]} description={isPlatform ? 'Full plattformsbehörighet.' : 'Läsbehörighet i plattformen.'} tone={isPlatform ? 'success' : 'warning'} />
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">

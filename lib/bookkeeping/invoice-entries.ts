@@ -3,6 +3,7 @@ import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { generateSalesVatLines } from './vat-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
+import { resolveBookingAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
@@ -108,34 +109,44 @@ function generatePerRateLines(
     return lines
   }
 
-  // Group items by vat_rate
-  const rateGroups = new Map<number, { subtotal: number; vatAmount: number }>()
+  // Group net revenue by both VAT rate and booking account. Deferred
+  // items are booked to the 29xx interim account while ordinary items stay on
+  // the revenue account. VAT remains grouped by statutory rate and untouched.
+  const netGroups = new Map<string, { rate: number; account: string; subtotal: number }>()
+  const vatGroups = new Map<number, { vatAmount: number; treatment: VatTreatment }>()
   for (const item of items) {
     const rate = item.vat_rate ?? 0
-    const group = rateGroups.get(rate) || { subtotal: 0, vatAmount: 0 }
-    group.subtotal += item.line_total
-    group.vatAmount += item.vat_amount || 0
-    rateGroups.set(rate, group)
-  }
-
-  // Generate revenue + VAT lines per rate group
-  for (const [rate, group] of rateGroups) {
     const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
       ? invoiceVatTreatment
       : getVatTreatmentForRate(rate)
     const revenueAccount = getRevenueAccount(treatment, entityType)
-    const roundedSubtotal = Math.round(toSek(group.subtotal) * 100) / 100
+    const bookingAccount = treatment === 'reverse_charge' || treatment === 'export'
+      ? revenueAccount
+      : resolveBookingAccount('revenue', item, revenueAccount)
+    const key = `${rate}:${bookingAccount}`
+    const netGroup = netGroups.get(key) || { rate, account: bookingAccount, subtotal: 0 }
+    netGroup.subtotal += item.line_total
+    netGroups.set(key, netGroup)
 
+    const vatGroup = vatGroups.get(rate) || { vatAmount: 0, treatment }
+    vatGroup.vatAmount += item.vat_amount || 0
+    vatGroups.set(rate, vatGroup)
+  }
+
+  for (const group of netGroups.values()) {
+    const roundedSubtotal = Math.round(toSek(group.subtotal) * 100) / 100
     lines.push({
-      account_number: revenueAccount,
+      account_number: group.account,
       debit_amount: 0,
       credit_amount: roundedSubtotal,
       line_description: `Försäljning faktura ${invoiceTagText}`,
     })
+  }
 
+  for (const [rate, group] of vatGroups) {
     const roundedVat = Math.round(toSek(group.vatAmount) * 100) / 100
     if (roundedVat !== 0) {
-      const vatAccount = getOutputVatAccount(treatment)
+      const vatAccount = getOutputVatAccount(group.treatment)
       lines.push({
         account_number: vatAccount,
         debit_amount: 0,

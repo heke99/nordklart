@@ -11,6 +11,7 @@ const unitProject = {
     environment: 'node' as const,
     include: ['**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/*.pg.test.ts'],
+    setupFiles: ['tests/unit/setup.ts'],
   },
 }
 

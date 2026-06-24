@@ -2229,6 +2229,49 @@ const BULK_BOOK: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Bolagsverket extension
+// ─────────────────────────────────────────────────────────────────
+
+const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
+  BOLAGSVERKET_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att skicka eller hämta Bolagsverket-händelser.',
+    message_en: 'Insufficient permissions for the Bolagsverket operation.',
+  },
+  BOLAGSVERKET_INVALID_ENVIRONMENT: {
+    httpStatus: 400,
+    message_sv: 'Bolagsverket-miljön är ogiltig.',
+    message_en: 'Invalid Bolagsverket environment.',
+  },
+  BOLAGSVERKET_ENV_NOT_ALLOWED: {
+    httpStatus: 403,
+    message_sv: 'Vald Bolagsverket-miljö är inte tillåten för denna installation.',
+    message_en: 'The selected Bolagsverket environment exceeds the platform ceiling.',
+  },
+  BOLAGSVERKET_CONFIG_MISSING: {
+    httpStatus: 503,
+    message_sv: 'Bolagsverket-integrationen saknar nödvändig konfiguration.',
+    message_en: 'Required Bolagsverket configuration is missing.',
+  },
+  BOLAGSVERKET_SUBMISSION_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Det finns redan en aktiv inlämning för perioden.',
+    message_en: 'A Bolagsverket submission already exists for this period.',
+  },
+  BOLAGSVERKET_API_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Bolagsverket svarade med ett fel.',
+    message_en: 'Bolagsverket returned an upstream API error.',
+    retryable: true,
+  },
+  BOLAGSVERKET_NO_SUBSCRIPTION: {
+    httpStatus: 404,
+    message_sv: 'Ingen Bolagsverket-prenumeration hittades för bolaget.',
+    message_en: 'No Bolagsverket event subscription was found for this company.',
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
@@ -2268,6 +2311,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...COMPANY,
   ...API_KEY,
   ...PROVIDER,
+  ...BOLAGSVERKET,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

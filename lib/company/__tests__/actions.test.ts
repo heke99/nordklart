@@ -6,16 +6,18 @@ vi.mock('next/cache', () => ({
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
+  createServiceClient: vi.fn(),
 }))
 
 vi.mock('@/lib/company/context', () => ({
   setActiveCompany: vi.fn().mockResolvedValue(undefined),
 }))
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { createCompanyFromOnboarding } from '../actions'
 
 const mockCreateClient = vi.mocked(createClient)
+const mockCreateServiceClient = vi.mocked(createServiceClient)
 
 type CapturedCall = { table: string; method: string; args: unknown[] }
 
@@ -87,6 +89,7 @@ describe('createCompanyFromOnboarding — org_number validation', () => {
       rpcResults: { create_company_with_owner: { data: 'x' } },
     })
     mockCreateClient.mockResolvedValue(supabase as never)
+    mockCreateServiceClient.mockReturnValue(supabase as never)
 
     const result = await createCompanyFromOnboarding({
       teamId: 'team-1',
@@ -115,6 +118,7 @@ describe('createCompanyFromOnboarding — org_number validation', () => {
       rpcResults: { create_company_with_owner: { data: 'x' } },
     })
     mockCreateClient.mockResolvedValue(supabase as never)
+    mockCreateServiceClient.mockReturnValue(supabase as never)
 
     const result = await createCompanyFromOnboarding({
       teamId: 'team-1',
@@ -150,6 +154,7 @@ describe('createCompanyFromOnboarding — TIC snapshot persistence', () => {
       },
     })
     mockCreateClient.mockResolvedValue(supabase as never)
+    mockCreateServiceClient.mockReturnValue(supabase as never)
 
     const ticLookup = {
       companyName: 'Acme AB',
@@ -206,6 +211,7 @@ describe('createCompanyFromOnboarding — TIC snapshot persistence', () => {
       },
     })
     mockCreateClient.mockResolvedValue(supabase as never)
+    mockCreateServiceClient.mockReturnValue(supabase as never)
 
     const result = await createCompanyFromOnboarding({
       teamId: 'team-1',
@@ -249,6 +255,7 @@ describe('createCompanyFromOnboarding — TIC snapshot persistence', () => {
       },
     })
     mockCreateClient.mockResolvedValue(supabase as never)
+    mockCreateServiceClient.mockReturnValue(supabase as never)
 
     await createCompanyFromOnboarding({
       teamId: 'team-1',

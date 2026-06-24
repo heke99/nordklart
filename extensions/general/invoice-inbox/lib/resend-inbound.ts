@@ -85,11 +85,15 @@ export async function fetchInboundAttachment(
 // returning just the local_part. Returns null if no match.
 export function extractLocalPartForDomain(recipients: string[], domain: string): string | null {
   const normalized = domain.toLowerCase()
+  const acceptedDomains = new Set([normalized])
+  if (normalized === 'nordklart.io') acceptedDomains.add('nordklart.se')
+  if (normalized === 'nordklart.se') acceptedDomains.add('nordklart.io')
+
   for (const addr of recipients) {
     const match = addr.match(/^\s*([^@\s]+)@([^@\s]+?)\s*$/)
     if (!match) continue
     const [, localPart, addrDomain] = match
-    if (addrDomain.toLowerCase() === normalized) return localPart.toLowerCase()
+    if (acceptedDomains.has(addrDomain.toLowerCase())) return localPart.toLowerCase()
   }
   return null
 }

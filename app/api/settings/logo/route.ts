@@ -4,7 +4,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
 const MAX_SIZE = 2 * 1024 * 1024 // 2MB
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp']
+const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
 export async function POST(request: Request) {
   const supabase = await createClient()
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   }
 
   if (!ALLOWED_TYPES.includes(file.type)) {
-    return NextResponse.json({ error: 'Otillåten filtyp. Tillåtna: PNG, JPG, SVG, WebP.' }, { status: 400 })
+    return NextResponse.json({ error: 'Otillåten filtyp. Tillåtna: PNG, JPG eller WebP.' }, { status: 400 })
   }
 
   if (file.size > MAX_SIZE) {
@@ -36,7 +36,6 @@ export async function POST(request: Request) {
   const mimeToExt: Record<string, string> = {
     'image/png': 'png',
     'image/jpeg': 'jpg',
-    'image/svg+xml': 'svg',
     'image/webp': 'webp',
   }
   const ext = mimeToExt[file.type] ?? 'png'

@@ -2,37 +2,54 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
+  createServiceClient: vi.fn(),
 }))
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { GET } from '../route'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 const mockCreateClient = vi.mocked(createClient)
+const mockCreateServiceClient = vi.mocked(createServiceClient)
 
 /**
- * Minimal authenticated-client mock. `companies.data` seeds what the RLS-scoped
- * `from('companies').select().eq().is()` chain resolves to. In production RLS
- * filters this to the caller's own memberships; the route does no extra
- * filtering, so the test just controls what the query returns.
+ * Minimal Supabase mock. `memberCompanies` seeds the RLS-scoped client and
+ * `platformCompanies` seeds the service-client lookup used to detect existing
+ * companies outside the caller's memberships.
  */
 function buildSupabase(opts: {
   user: { id: string } | null
-  companies?: { data?: unknown; error?: unknown }
+  memberCompanies?: { data?: unknown; error?: unknown }
+  platformCompanies?: { data?: unknown; error?: unknown }
 }) {
-  const result = {
-    data: opts.companies?.data ?? null,
-    error: opts.companies?.error ?? null,
+  const makeClient = (result: { data?: unknown; error?: unknown }) => {
+    const chain: Record<string, unknown> = {}
+    for (const m of ['select', 'eq', 'is', 'limit', 'order', 'maybeSingle']) {
+      chain[m] = () => chain
+    }
+    ;(chain as { then?: unknown }).then = (resolve: (v: unknown) => void) => {
+      resolve({ data: result.data ?? null, error: result.error ?? null })
+    }
+    return { from: vi.fn(() => chain) }
   }
-  const chain: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'is', 'limit', 'order']) {
-    chain[m] = () => chain
-  }
-  ;(chain as { then?: unknown }).then = (resolve: (v: unknown) => void) => resolve(result)
+
+  const memberClient = makeClient(opts.memberCompanies ?? {})
+  const serviceClient = makeClient(opts.platformCompanies ?? opts.memberCompanies ?? {})
+
   return {
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: opts.user } }) },
-    from: vi.fn(() => chain),
+    supabase: {
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: opts.user } }) },
+      from: memberClient.from,
+    },
+    service: serviceClient,
   }
+}
+
+function mockClients(opts: Parameters<typeof buildSupabase>[0]) {
+  const { supabase, service } = buildSupabase(opts)
+  mockCreateClient.mockResolvedValue(supabase as never)
+  mockCreateServiceClient.mockReturnValue(service as never)
+  return { supabase, service }
 }
 
 beforeEach(() => {
@@ -41,22 +58,21 @@ beforeEach(() => {
 
 describe('GET /api/company/check-org-number', () => {
   it('returns 401 when unauthenticated', async () => {
-    mockCreateClient.mockResolvedValue(buildSupabase({ user: null }) as never)
+    mockClients({ user: null })
     const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(401)
   })
 
   it('returns 400 when org_number is missing', async () => {
-    mockCreateClient.mockResolvedValue(buildSupabase({ user: { id: 'u1' } }) as never)
+    mockClients({ user: { id: 'u1' } })
     const res = await GET(createMockRequest('/api/company/check-org-number'))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(400)
   })
 
   it('returns exists:false for malformed org_number without querying', async () => {
-    const supabase = buildSupabase({ user: { id: 'u1' } })
-    mockCreateClient.mockResolvedValue(supabase as never)
+    const { supabase } = mockClients({ user: { id: 'u1' } })
     const res = await GET(createMockRequest('/api/company/check-org-number?org_number=not-a-number'))
     const { status, body } = await parseJsonResponse<{
       data: { exists: boolean; companies: unknown[] }
@@ -68,13 +84,11 @@ describe('GET /api/company/check-org-number', () => {
   })
 
   it("reports the user's own matching companies (account-scoped via RLS)", async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({
-        user: { id: 'u1' },
-        companies: { data: [{ id: 'c1', name: 'Acme AB' }] },
-      }) as never,
-    )
-    // Hyphenated input still matches the stored 10-digit canonical.
+    mockClients({
+      user: { id: 'u1' },
+      memberCompanies: { data: [{ id: 'c1', name: 'Acme AB' }] },
+      platformCompanies: { data: { id: 'c1' } },
+    })
     const res = await GET(createMockRequest('/api/company/check-org-number?org_number=556012-5790'))
     const { status, body } = await parseJsonResponse<{
       data: { exists: boolean; companies: { id: string; name: string }[] }
@@ -85,9 +99,11 @@ describe('GET /api/company/check-org-number', () => {
   })
 
   it('returns exists:false when the user has no company with that org number', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ user: { id: 'u1' }, companies: { data: [] } }) as never,
-    )
+    mockClients({
+      user: { id: 'u1' },
+      memberCompanies: { data: [] },
+      platformCompanies: { data: null },
+    })
     const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
     const { status, body } = await parseJsonResponse<{ data: { exists: boolean } }>(res)
     expect(status).toBe(200)
@@ -95,9 +111,7 @@ describe('GET /api/company/check-org-number', () => {
   })
 
   it('returns 500 when the query errors', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ user: { id: 'u1' }, companies: { error: { message: 'boom' } } }) as never,
-    )
+    mockClients({ user: { id: 'u1' }, memberCompanies: { error: { message: 'boom' } } })
     const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(500)

@@ -33,8 +33,22 @@ function includedFeatures(plan: PublicPricePlan) {
   return picked.length > 0 ? picked.slice(0, 6) : plan.features_json.slice(0, 6)
 }
 
+function planCtaHref(plan: PublicPricePlan) {
+  const href = plan.cta_href || '/register'
+  if (!href.startsWith('/register')) return href
+  const [pathname, query = ''] = href.split('?')
+  const params = new URLSearchParams(query)
+  params.set('plan_version_id', plan.plan_version_id)
+  params.set('plan', plan.plan_code)
+  params.set('workspace', plan.audience_type === 'agency' ? 'agency' : 'company')
+  if (plan.company_form_scope === 'sole_trader') params.set('legal_form', 'enskild_firma')
+  if (plan.company_form_scope === 'limited_company') params.set('legal_form', 'aktiebolag')
+  return `${pathname}?${params.toString()}`
+}
+
 function PlanCard({ plan }: { plan: PublicPricePlan }) {
   const isAgency = plan.audience_type === 'agency'
+  const ctaHref = planCtaHref(plan)
   return (
     <article className="flex h-full flex-col rounded-3xl border bg-card p-6 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -77,7 +91,7 @@ function PlanCard({ plan }: { plan: PublicPricePlan }) {
 
       <div className="mt-auto pt-6">
         <Button asChild className="w-full">
-          <Link href={plan.cta_href}>{plan.cta_label}</Link>
+          <Link href={ctaHref}>{plan.cta_label}</Link>
         </Button>
       </div>
     </article>
@@ -113,9 +127,13 @@ export default async function PriserPage() {
           </div>
           <p className="max-w-2xl text-sm text-muted-foreground">Välj nivå efter antal användare och löneanställda. Bokföring och bokslut ingår i alla planer.</p>
         </div>
-        <div className="grid gap-5 lg:grid-cols-3">
-          {companyPlans.map((plan) => <PlanCard key={plan.plan_id} plan={plan} />)}
-        </div>
+        {companyPlans.length > 0 ? (
+          <div className="grid gap-5 lg:grid-cols-3">
+            {companyPlans.map((plan) => <PlanCard key={plan.plan_id} plan={plan} />)}
+          </div>
+        ) : (
+          <div className="rounded-3xl border bg-card p-6 text-sm text-muted-foreground shadow-sm">Prisplaner kunde inte hämtas just nu. Försök igen om en stund eller kontakta Nordklart.</div>
+        )}
       </section>
 
       <section>
@@ -126,9 +144,13 @@ export default async function PriserPage() {
           </div>
           <p className="max-w-2xl text-sm text-muted-foreground">Byrån har eget abonnemang och får hantera flera kundbolag enligt planens gränser.</p>
         </div>
-        <div className="grid gap-5 lg:grid-cols-3">
-          {agencyPlans.map((plan) => <PlanCard key={plan.plan_id} plan={plan} />)}
-        </div>
+        {agencyPlans.length > 0 ? (
+          <div className="grid gap-5 lg:grid-cols-3">
+            {agencyPlans.map((plan) => <PlanCard key={plan.plan_id} plan={plan} />)}
+          </div>
+        ) : (
+          <div className="rounded-3xl border bg-card p-6 text-sm text-muted-foreground shadow-sm">Byråplaner kunde inte hämtas just nu.</div>
+        )}
       </section>
     </main>
   )

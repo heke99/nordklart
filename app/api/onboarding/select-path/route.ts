@@ -33,7 +33,7 @@ const nextHrefForPath = (path: StartPath) => {
     case 'year_end_one_time':
       return '/year-end'
     case 'bankgiro_autogiro':
-      return '/payments/bankgiro'
+      return '/payments/bankgiro?start=1#bankgiro-application-form'
     case 'agency_setup':
       return '/agency'
     default:

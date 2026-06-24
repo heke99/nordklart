@@ -8,6 +8,7 @@ import {
 } from './vat-entries'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { resolveBookingAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -71,9 +72,10 @@ export async function createSupplierInvoiceRegistrationEntry(
   // Aggregate expense amounts by account number and convert to SEK
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
-    const current = expenseByAccount.get(item.account_number) || 0
+    const bookingAccount = resolveBookingAccount('expense', item, item.account_number)
+    const current = expenseByAccount.get(bookingAccount) || 0
     const itemSek = resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate)
-    expenseByAccount.set(item.account_number, current + itemSek)
+    expenseByAccount.set(bookingAccount, current + itemSek)
   }
 
   // Debit: Expense accounts (in SEK)
@@ -464,9 +466,10 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
   // Debit: Expense accounts (in SEK), aggregated per account
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
-    const current = expenseByAccount.get(item.account_number) || 0
+    const bookingAccount = resolveBookingAccount('expense', item, item.account_number)
+    const current = expenseByAccount.get(bookingAccount) || 0
     const itemSek = resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate)
-    expenseByAccount.set(item.account_number, current + itemSek)
+    expenseByAccount.set(bookingAccount, current + itemSek)
   }
   for (const [accountNumber, amount] of expenseByAccount) {
     lines.push({
@@ -542,9 +545,10 @@ export async function createSupplierCreditNoteEntry(
   const creditLines: CreateJournalEntryLineInput[] = []
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
-    const current = expenseByAccount.get(item.account_number) || 0
+    const bookingAccount = resolveBookingAccount('expense', item, item.account_number)
+    const current = expenseByAccount.get(bookingAccount) || 0
     const itemSek = Math.abs(resolveSekAmount(item.line_total, null, creditNote.currency, creditNote.exchange_rate))
-    expenseByAccount.set(item.account_number, current + itemSek)
+    expenseByAccount.set(bookingAccount, current + itemSek)
   }
 
   for (const [accountNumber, amount] of expenseByAccount) {

@@ -37,7 +37,7 @@ const PATH_COPY = {
     eyebrow: 'Arbetsytan är klar',
     title: 'Fortsätt med Bankgiro och Autogiro',
     description: 'Bokföringen är redan tillgänglig. Betalansansökan är ett separat och valfritt flöde.',
-    primaryHref: '/payments/bankgiro',
+    primaryHref: '/payments/bankgiro?start=1#bankgiro-application-form',
     primaryLabel: 'Öppna Bankgiro',
     icon: ShieldCheck,
   },

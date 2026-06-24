@@ -22,6 +22,8 @@ const signupDraftSchema = z.object({
   postalCode: z.string().trim().max(20).optional().or(z.literal('')),
   city: z.string().trim().max(100).optional().or(z.literal('')),
   onboardingIntent: z.string().trim().max(64).optional().or(z.literal('')),
+  selectedPlanVersionId: z.string().uuid().optional().or(z.literal('')),
+  selectedPlanCode: z.string().trim().max(120).optional().or(z.literal('')),
   registryLookupToken: z.string().trim().max(8_000).optional().or(z.literal('')),
   acceptedTerms: z.literal(true),
   acceptedPrivacy: z.literal(true),
@@ -87,9 +89,31 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Det här bolaget är inte aktivt och kan inte registreras automatiskt.' }, { status: 400 })
   }
 
+  const selectedPlanVersionId = input.selectedPlanVersionId || null
+  let selectedPlanCode = input.selectedPlanCode || null
+
+  const service = createServiceClient()
+
+  if (selectedPlanVersionId) {
+    const { data: selectedVersion } = await service
+      .from('platform_plan_versions')
+      .select('id, plan_id, status, platform_price_plans!inner(code, status)')
+      .eq('id', selectedPlanVersionId)
+      .eq('status', 'active')
+      .maybeSingle()
+
+    if (!selectedVersion) {
+      return NextResponse.json({ error: 'Den valda prisplanen är inte längre tillgänglig.' }, { status: 409 })
+    }
+
+    const planRow = Array.isArray(selectedVersion.platform_price_plans)
+      ? selectedVersion.platform_price_plans[0]
+      : selectedVersion.platform_price_plans
+    selectedPlanCode = selectedPlanCode || planRow?.code || null
+  }
+
   const token = randomBytes(32).toString('base64url')
   const tokenHash = createHash('sha256').update(token).digest('hex')
-  const service = createServiceClient()
   const email = input.loginEmail.toLowerCase()
 
   const { data: draft, error: draftError } = await service
@@ -110,6 +134,8 @@ export async function POST(request: NextRequest) {
       postal_code: input.postalCode || null,
       city: input.city || null,
       onboarding_intent: input.onboardingIntent || null,
+      selected_plan_version_id: selectedPlanVersionId,
+      selected_plan_code: selectedPlanCode,
       company_registry_source: registryLookup ? 'bolagsverket' : 'manual',
       company_registry_status: registryLookup?.company.registryStatus === 'active'
         ? 'verified'
@@ -158,6 +184,8 @@ export async function POST(request: NextRequest) {
         signup_state: 'pending_email_verification',
         onboarding_intent: null,
         onboarding_flow: null,
+        selected_plan_version_id: selectedPlanVersionId,
+        selected_plan_code: selectedPlanCode,
         accepted_terms: false,
         accepted_privacy: false,
       },
