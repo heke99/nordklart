@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { buildInvoicePaymentWithCustomerCreditLines } from '@/lib/bookkeeping/customer-overpayment-lines'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -10,7 +11,8 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
-import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planInvoiceCustomerPayment } from '@/lib/invoices/customer-payment-allocation'
+import { recordCustomerOverpayment, recordInvoiceUnderpayment } from '@/lib/invoices/customer-credit-recording'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
@@ -297,17 +299,26 @@ export const POST = withRouteContext(
       ? fx.paidInInvoiceCurrency
       : transaction.amount
 
-    // Overshoot guard + paid/remaining math — shared with the v1 and agent
-    // (commit) paths via planInvoicePayment so they cannot drift again. Runs
-    // before any JE is created, so a doomed match never burns a voucher number.
-    const payment = planInvoicePayment(invoice, paidAmountInInvoiceCurrency)
-    if (!payment.ok) {
-      return errorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
+    const allocation = planInvoiceCustomerPayment(invoice, paidAmountInInvoiceCurrency)
+    const {
+      appliedAmount,
+      overpaymentAmount,
+      newPaidAmount,
+      newRemaining,
+      isFullyPaid,
+      newStatus,
+    } = allocation
+
+    if (overpaymentAmount > 0 && (fx.required || transaction.currency !== 'SEK' || invoice.currency !== 'SEK')) {
+      return errorResponseFromCode('VALIDATION_ERROR', txLog, {
         requestId,
-        details: payment.details,
+        details: {
+          field: 'amount',
+          message: 'Överbetalning på valutafaktura behöver hanteras manuellt så kundsaldo och valutakursdifferens blir korrekt.',
+          overpayment_amount: overpaymentAmount,
+        },
       })
     }
-    const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
 
     const { data: settings } = await supabase
       .from('company_settings')
@@ -328,6 +339,17 @@ export const POST = withRouteContext(
     // receivable on the books) do we recognise revenue + VAT here.
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+
+    if (overpaymentAmount > 0 && !invoiceAlreadyBooked && accountingMethod === 'cash') {
+      return errorResponseFromCode('VALIDATION_ERROR', txLog, {
+        requestId,
+        details: {
+          field: 'amount',
+          message: 'Överbetalning på kontantmetoden-faktura utan tidigare verifikation behöver hanteras med manuella rader.',
+          overpayment_amount: overpaymentAmount,
+        },
+      })
+    }
 
     let journalEntryId: string | null = null
     let journalEntryError: string | null = null
@@ -364,6 +386,31 @@ export const POST = withRouteContext(
           source_type: sourceType,
           source_id: invoice.id,
           lines: customLines,
+        })
+        journalEntryId = journalEntry?.id ?? null
+      } else if (overpaymentAmount > 0) {
+        const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, transaction.date)
+        if (!fiscalPeriodId) {
+          return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+            requestId,
+            details: { paymentDate: transaction.date },
+          })
+        }
+        const desc = invoice.customer?.name
+          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+          : `Inbetalning kundfaktura ${invoice.invoice_number}`
+        const journalEntry = await createJournalEntry(supabase, companyId!, user.id, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: transaction.date,
+          description: `${desc} med överbetalning`,
+          source_type: 'invoice_paid',
+          source_id: invoice.id,
+          lines: buildInvoicePaymentWithCustomerCreditLines({
+            bankAmount: transaction.amount,
+            invoiceSettlementAmount: appliedAmount,
+            customerCreditAmount: overpaymentAmount,
+            description: desc,
+          }),
         })
         journalEntryId = journalEntry?.id ?? null
       } else if (useCashEntry) {
@@ -537,20 +584,22 @@ export const POST = withRouteContext(
     // ML 8 kap 21–23§. Falling back to invoice.exchange_rate would record
     // the invoice-date rate, which is what the round-7/8 bot reviews
     // explicitly flagged as wrong.
-    const { error: paymentInsertError } = await supabase
+    const { data: paymentRow, error: paymentInsertError } = await supabase
       .from('invoice_payments')
       .insert({
         user_id: user.id,
         company_id: companyId,
         invoice_id,
         payment_date: transaction.date,
-        amount: paidAmountInInvoiceCurrency,
+        amount: appliedAmount,
         currency: invoice.currency,
         exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
         journal_entry_id: journalEntryId,
         transaction_id: transactionId,
         notes: paymentNotes,
       })
+      .select('id')
+      .single()
 
     if (paymentInsertError) {
       if (paymentInsertError.code === '23505') {
@@ -558,6 +607,44 @@ export const POST = withRouteContext(
       }
       txLog.error('failed to record invoice payment', paymentInsertError)
       return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, { requestId })
+    }
+
+    const paymentId = (paymentRow as { id?: string } | null)?.id ?? null
+    let customerCreditId: string | null = null
+
+    try {
+      if (overpaymentAmount > 0) {
+        const result = await recordCustomerOverpayment(supabase, {
+          userId: user.id,
+          companyId: companyId!,
+          customerId: invoice.customer_id ?? null,
+          invoiceId: invoice_id,
+          paymentId,
+          transactionId,
+          journalEntryId,
+          amount: overpaymentAmount,
+          currency: invoice.currency,
+          notes: `Överbetalning ${overpaymentAmount} ${invoice.currency} på faktura ${invoice.invoice_number}.`,
+        })
+        customerCreditId = result.creditId
+      } else if (newRemaining > 0) {
+        await recordInvoiceUnderpayment(supabase, {
+          userId: user.id,
+          companyId: companyId!,
+          invoiceId: invoice_id,
+          paymentId,
+          transactionId,
+          journalEntryId,
+          amount: newRemaining,
+          currency: invoice.currency,
+          notes: `Restbelopp ${newRemaining} ${invoice.currency} kvar efter delbetalning.`,
+        })
+      }
+    } catch (adjustmentError) {
+      txLog.warn('payment adjustment ledger write failed', adjustmentError as Error)
+      journalEntryError = [journalEntryError, 'Betalningsavvikelse kunde inte loggas i reskontran.']
+        .filter(Boolean)
+        .join(' · ')
     }
 
     const { error: updateTxError } = await supabase
@@ -589,6 +676,9 @@ export const POST = withRouteContext(
         status: newStatus,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
+        applied_amount: appliedAmount,
+        overpayment_amount: overpaymentAmount,
+        customer_credit_id: customerCreditId,
         rate_source: fx.required ? fx.source : null,
         exchange_rate: fx.required ? fx.rate : null,
       },
@@ -621,6 +711,9 @@ export const POST = withRouteContext(
       paid_at: isFullyPaid ? now : null,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
+      applied_amount: appliedAmount,
+      overpayment_amount: overpaymentAmount,
+      customer_credit_id: customerCreditId,
       journal_entry_id: journalEntryId,
       journal_entry_error: journalEntryError,
       category: 'income_services',

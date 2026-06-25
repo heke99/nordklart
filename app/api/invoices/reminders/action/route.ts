@@ -39,7 +39,8 @@ export async function POST(request: Request) {
           id,
           invoice_number,
           status,
-          user_id
+          user_id,
+          company_id
         )
       `)
       .eq('action_token', token)
@@ -78,11 +79,35 @@ export async function POST(request: Request) {
       )
     }
 
-    // If customer marked as paid, we could optionally notify the business owner
-    // For now, we just log it - the business owner will see it in the UI
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const invoiceData = reminder.invoice as any
     const invoice = Array.isArray(invoiceData) ? invoiceData[0] : invoiceData
+
+    if (action === 'disputed' && invoice?.id) {
+      await supabase
+        .from('invoices')
+        .update({
+          status: 'disputed',
+          disputed_at: new Date().toISOString(),
+          dispute_reason: 'Kunden invände via påminnelselänk',
+          payment_resolution_status: 'has_difference',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', invoice.id)
+        .in('status', ['sent', 'partially_paid', 'overdue', 'collection_ready'])
+
+      await supabase.from('invoice_payment_adjustments').insert({
+        user_id: invoice.user_id,
+        company_id: invoice.company_id,
+        invoice_id: invoice.id,
+        adjustment_type: 'dispute',
+        amount: 0,
+        currency: 'SEK',
+        status: 'open',
+        notes: 'Kunden invände via påminnelselänk.',
+      })
+    }
+
     console.log(`Customer responded to invoice ${invoice?.invoice_number}: ${action}`)
 
     return NextResponse.json({

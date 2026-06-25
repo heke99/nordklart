@@ -42,9 +42,9 @@ export async function generateARReconciliation(
   // (booked at invoice-date rate), so convert each row before summing.
   const { data: invoices } = await supabase
     .from('invoices')
-    .select('total, paid_amount, currency, exchange_rate')
+    .select('total, paid_amount, remaining_amount, currency, exchange_rate')
     .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue'])
+    .in('status', ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready'])
 
   let unconvertedFxCount = 0
   const arLedgerTotal = (invoices || [])
@@ -57,7 +57,7 @@ export async function generateARReconciliation(
         unconvertedFxCount += 1
         return sum
       }
-      const outstanding = (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)
+      const outstanding = Number(inv.remaining_amount ?? ((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)))
       const sek = resolveSekAmount(outstanding, null, inv.currency, inv.exchange_rate)
       return Math.round((sum + sek) * 100) / 100
     }, 0)

@@ -38,8 +38,11 @@ import {
   createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { buildInvoicePaymentWithCustomerCreditLines } from '@/lib/bookkeeping/customer-overpayment-lines'
 import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import { planInvoiceCustomerPayment } from '@/lib/invoices/customer-payment-allocation'
+import { recordCustomerOverpayment, recordInvoiceUnderpayment } from '@/lib/invoices/customer-credit-recording'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
@@ -54,6 +57,9 @@ const InvoiceMarkPaidResponse = z.object({
   remaining_amount: z.number(),
   paid_at: z.string().nullable(),
   journal_entry_id: z.string().uuid().nullable(),
+  applied_amount: z.number().optional(),
+  overpayment_amount: z.number().optional(),
+  customer_credit_id: z.string().uuid().nullable().optional(),
   warnings: z
     .array(z.object({ code: z.string(), message: z.string() }))
     .optional(),
@@ -137,6 +143,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     let exchangeRateDifference: number | undefined
     let bodyPaymentDate: string | undefined
+    let explicitPaymentAmount: number | undefined
+    let paymentNotesInput: string | undefined
     let customLines:
       | {
           account_number: string
@@ -161,6 +169,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyPaymentDate = parsed.data.payment_date
+      explicitPaymentAmount = parsed.data.amount
+      paymentNotesInput = parsed.data.notes
       customLines = parsed.data.lines
       force = parsed.data.force === true
     }
@@ -207,7 +217,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    if (typed.status !== 'sent' && typed.status !== 'overdue') {
+    if (typed.status !== 'sent' && typed.status !== 'overdue' && typed.status !== 'partially_paid') {
       return v1ErrorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: typed.status },
@@ -247,7 +257,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // VAT double-count. Only true kontantmetoden invoices (never booked)
     // recognise revenue + VAT here.
     const invoiceAlreadyBooked = !!(typed as { journal_entry_id?: string | null }).journal_entry_id
-    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
+    const useCashEntryCandidate = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
     // Compute the would-be payment amount. Default path (no customLines):
     // use remaining_amount, not total — protects against over-crediting AR
@@ -255,26 +265,46 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // (pre-flight sees status='sent' but the race-guard UPDATE later sees
     // status='partially_paid' so a second full-total amount would be booked
     // against an already-reduced AR balance).
-    const paymentAmount = customLines
-      ? customLines.reduce((s, l) => s + l.debit_amount, 0)
-      : (typed.remaining_amount ?? typed.total)
-
-    const isPartial =
-      customLines !== undefined &&
-      Math.abs(paymentAmount - (typed.remaining_amount ?? typed.total)) > 0.005 // same half-öre epsilon as above
-
-    const newRemaining = Math.max(
-      0,
-      Math.round(((typed.remaining_amount ?? typed.total) - paymentAmount) * 100) / 100,
+    const paymentAmount = explicitPaymentAmount ?? (
+      customLines
+        ? customLines.reduce((sum, line) => sum + line.debit_amount, 0)
+        : (typed.remaining_amount ?? typed.total)
     )
-    // 0.005 epsilon = half an öre. After rounding to 2 decimals above,
-    // newRemaining is in steps of 0.01; values ≤ 0.005 only arise from
-    // floating-point artefacts (e.g. 0.0000000001 from a SEK 99.99 payment
-    // against a SEK 99.99 invoice). Treating those as 'paid' avoids
-    // permanently-partially_paid invoices on full payment.
-    const newStatus: 'paid' | 'partially_paid' = newRemaining <= 0.005 ? 'paid' : 'partially_paid'
-    const newPaidAmount =
-      Math.round(((typed.paid_amount ?? 0) + paymentAmount) * 100) / 100
+
+    const allocation = planInvoiceCustomerPayment(typed, paymentAmount)
+    const {
+      appliedAmount,
+      overpaymentAmount,
+      newPaidAmount,
+      newRemaining,
+      isFullyPaid,
+      newStatus,
+    } = allocation
+
+    const isPartial = newStatus === 'partially_paid'
+    const useCashEntry = useCashEntryCandidate && isFullyPaid && overpaymentAmount === 0
+
+    if (overpaymentAmount > 0 && customLines) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'lines',
+          message: 'Overpayments with custom lines must be handled as a manual journal entry; omit lines to let Nordklart post customer credit automatically.',
+          overpayment_amount: overpaymentAmount,
+        },
+      })
+    }
+
+    if (overpaymentAmount > 0 && useCashEntryCandidate) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'amount',
+          message: 'Overpayments on cash-basis invoices without a prior invoice voucher require manual journal lines.',
+          overpayment_amount: overpaymentAmount,
+        },
+      })
+    }
 
     // Duplicate-payment guard: surface a likely-matching unlinked inbound
     // bank transaction before booking (or before dry-run preview, so a
@@ -295,7 +325,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         const candidates = await findDuplicatePaymentCandidatesForInvoice(ctx.supabase, {
           companyId: ctx.companyId!,
           invoice: { invoice_number: typed.invoice_number, customer_name: customerName },
-          paymentAmount,
+          paymentAmount: appliedAmount,
           paymentDate,
         })
         if (candidates.length > 0) {
@@ -372,6 +402,40 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             input,
           )
           journalEntryId = entry?.id ?? null
+        } else if (overpaymentAmount > 0) {
+          const fiscalPeriodId = await findFiscalPeriod(
+            ctx.supabase,
+            ctx.companyId!,
+            paymentDate,
+          )
+          if (!fiscalPeriodId) {
+            return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
+              requestId: ctx.requestId,
+              details: { payment_date: paymentDate },
+            })
+          }
+          const desc = typed.customer?.name
+            ? `Inbetalning kundfaktura ${typed.invoice_number}, ${typed.customer.name}`
+            : `Inbetalning kundfaktura ${typed.invoice_number}`
+          const entry = await createJournalEntry(
+            ctx.supabase,
+            ctx.companyId!,
+            ctx.userId,
+            {
+              fiscal_period_id: fiscalPeriodId,
+              entry_date: paymentDate,
+              description: `${desc} med överbetalning`,
+              source_type: 'invoice_paid',
+              source_id: invoiceId,
+              lines: buildInvoicePaymentWithCustomerCreditLines({
+                bankAmount: paymentAmount,
+                invoiceSettlementAmount: appliedAmount,
+                customerCreditAmount: overpaymentAmount,
+                description: desc,
+              }),
+            },
+          )
+          journalEntryId = entry?.id ?? null
         } else if (useCashEntry) {
           const entry = await createInvoiceCashEntry(
             ctx.supabase,
@@ -392,8 +456,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             paymentDate,
             exchangeRateDifference,
             typed.customer?.name,
-            // Pass full or partial amount depending on path.
-            customLines ? paymentAmount : undefined,
+            // Pass the actual amount settled against 1510.
+            appliedAmount,
           )
           journalEntryId = entry?.id ?? null
         }
@@ -464,6 +528,73 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const { data: paymentRow, error: paymentInsertErr } = await ctx.supabase
+      .from('invoice_payments')
+      .insert({
+        user_id: ctx.userId,
+        company_id: ctx.companyId!,
+        invoice_id: invoiceId,
+        payment_date: paymentDate,
+        amount: appliedAmount,
+        currency: typed.currency,
+        exchange_rate: typed.exchange_rate,
+        exchange_rate_difference: exchangeRateDifference ?? 0,
+        journal_entry_id: journalEntryId,
+        transaction_id: null,
+        notes: paymentNotesInput ?? null,
+      })
+      .select('id')
+      .single()
+
+    if (paymentInsertErr) {
+      ctx.log.error('mark-paid: invoice payment row insert failed', paymentInsertErr as Error, {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
+      return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
+
+    const paymentId = (paymentRow as { id?: string } | null)?.id ?? null
+    let customerCreditId: string | null = null
+    try {
+      if (overpaymentAmount > 0) {
+        const result = await recordCustomerOverpayment(ctx.supabase, {
+          userId: ctx.userId,
+          companyId: ctx.companyId!,
+          customerId: typed.customer_id ?? null,
+          invoiceId,
+          paymentId,
+          journalEntryId,
+          amount: overpaymentAmount,
+          currency: typed.currency,
+          notes: `Överbetalning ${overpaymentAmount} ${typed.currency} på faktura ${typed.invoice_number}.`,
+        })
+        customerCreditId = result.creditId
+      } else if (newRemaining > 0) {
+        await recordInvoiceUnderpayment(ctx.supabase, {
+          userId: ctx.userId,
+          companyId: ctx.companyId!,
+          invoiceId,
+          paymentId,
+          journalEntryId,
+          amount: newRemaining,
+          currency: typed.currency,
+          notes: `Restbelopp ${newRemaining} ${typed.currency} kvar efter delbetalning.`,
+        })
+      }
+    } catch (adjustmentErr) {
+      ctx.log.error('mark-paid: payment adjustment ledger write failed', adjustmentErr as Error, {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
+      warnings.push({
+        code: 'PAYMENT_ADJUSTMENT_NOT_RECORDED',
+        message: 'Payment was recorded, but the AR adjustment ledger row could not be created. Review customer balance manually.',
+      })
+    }
+
     // Step 3: emit invoice.paid (best-effort, surfaces in warnings on fail).
     try {
       await eventBus.emit({
@@ -472,7 +603,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           invoice: updated as unknown as Invoice,
           companyId: ctx.companyId!,
           userId: ctx.userId,
-          paymentAmount,
+          paymentAmount: appliedAmount,
           paymentDate,
         },
       })
@@ -494,6 +625,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       newStatus,
       journalEntryId,
       paymentAmount,
+      appliedAmount,
+      overpaymentAmount,
+      customerCreditId,
       isPartial,
       hadWarnings: warnings.length > 0,
     })
@@ -502,6 +636,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       {
         ...(updated as object),
         journal_entry_id: journalEntryId,
+        applied_amount: appliedAmount,
+        overpayment_amount: overpaymentAmount,
+        customer_credit_id: customerCreditId,
         ...(warnings.length > 0 ? { warnings } : {}),
       },
       { requestId: ctx.requestId },

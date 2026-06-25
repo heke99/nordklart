@@ -169,7 +169,7 @@ export type CustomerType =
   | 'non_eu_business'   // Non-EU company
 
 // Invoice status
-export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'partially_paid' | 'overdue' | 'cancelled' | 'credited'
+export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'partially_paid' | 'overdue' | 'cancelled' | 'credited' | 'disputed' | 'collection_ready' | 'written_off'
 
 // Invoice document type
 export type InvoiceDocumentType = 'invoice' | 'proforma' | 'delivery_note'
@@ -827,6 +827,60 @@ export interface InvoicePayment {
   created_at: string
 }
 
+
+export type CustomerAccountCreditStatus = 'open' | 'partially_applied' | 'applied' | 'refunded' | 'written_off' | 'void'
+export type CustomerAccountCreditReason = 'overpayment' | 'prepayment' | 'refund_due' | 'manual_adjustment'
+
+export interface CustomerAccountCredit {
+  id: string
+  user_id: string
+  company_id: string
+  customer_id: string | null
+  source_invoice_id: string | null
+  source_payment_id: string | null
+  source_transaction_id: string | null
+  source_journal_entry_id: string | null
+  amount: number
+  remaining_amount: number
+  currency: string
+  status: CustomerAccountCreditStatus
+  reason: CustomerAccountCreditReason
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type InvoicePaymentAdjustmentType =
+  | 'underpayment'
+  | 'overpayment'
+  | 'rounding'
+  | 'discount'
+  | 'bank_fee'
+  | 'write_off'
+  | 'credit_note_offset'
+  | 'refund'
+  | 'collection_escalation'
+  | 'dispute'
+
+export interface InvoicePaymentAdjustment {
+  id: string
+  user_id: string
+  company_id: string
+  invoice_id: string
+  payment_id: string | null
+  transaction_id: string | null
+  customer_credit_id: string | null
+  journal_entry_id: string | null
+  adjustment_date: string
+  adjustment_type: InvoicePaymentAdjustmentType
+  amount: number
+  currency: string
+  status: 'open' | 'resolved' | 'posted' | 'void'
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
 // Invoice
 export interface Invoice {
   id: string
@@ -844,6 +898,12 @@ export interface Invoice {
 
   // Status
   status: InvoiceStatus
+  disputed_at?: string | null
+  dispute_reason?: string | null
+  collection_ready_at?: string | null
+  written_off_at?: string | null
+  payment_resolution_status?: 'open' | 'has_difference' | 'customer_credit' | 'resolved' | 'written_off' | 'collection' | null
+  payment_resolution_notes?: string | null
 
   // Currency
   currency: Currency

@@ -129,7 +129,8 @@ export const SupplierTypeSchema = z.enum([
 ])
 
 export const InvoiceStatusSchema = z.enum([
-  'draft', 'sent', 'paid', 'overdue', 'cancelled', 'credited',
+  'draft', 'sent', 'paid', 'partially_paid', 'overdue', 'cancelled', 'credited',
+  'disputed', 'collection_ready', 'written_off',
 ])
 
 export const InvoiceDocumentTypeSchema = z.enum([
@@ -486,6 +487,7 @@ export const UpdateRecurringScheduleSchema = z.object({
 
 export const MarkInvoicePaidSchema = z.object({
   payment_date: isoDate.optional(),
+  amount: z.number().positive().optional(),
   exchange_rate_difference: z.number().optional(),
   notes: z.string().optional(),
   lines: z.array(z.object({

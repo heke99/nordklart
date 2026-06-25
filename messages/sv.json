@@ -389,7 +389,9 @@
     "status_overdue": "Förfallen",
     "status_disputed": "Tvist",
     "status_credited": "Krediterad",
-    "status_reversed": "Makulerad"
+    "status_reversed": "Makulerad",
+    "status_collection_ready": "Inkassoklar",
+    "status_written_off": "Avskriven"
   },
   "purchase_orders": {
     "title": "Inköpsorder",
@@ -2356,7 +2358,10 @@
     "cancelled_draft": "Utkastet har makulerats.",
     "cancel_failed_title": "Kunde inte makulera fakturan",
     "paid_toast_title": "Betald",
-    "paid_toast_description": "Faktura {number} har markerats som betald och bokförts"
+    "paid_toast_description": "Faktura {number} har markerats som betald och bokförts",
+    "status_disputed": "Tvist",
+    "status_collection_ready": "Inkassoklar",
+    "status_written_off": "Avskriven"
   },
   "invoice_credit": {
     "back": "Tillbaka",
@@ -2779,7 +2784,9 @@
     "duplicate_payment_description_many": "Vi hittade banktransaktioner som verkar matcha denna betalning. Länka den befintliga transaktionen istället för att skapa en ny verifikation.",
     "bank_transaction_fallback": "Banktransaktion",
     "go_to": "Gå till",
-    "create_voucher_anyway": "Skapa ny verifikation ändå"
+    "create_voucher_anyway": "Skapa ny verifikation ändå",
+    "status_collection_ready": "Inkassoklar",
+    "status_written_off": "Avskriven"
   },
   "supplier_detail": {
     "back": "Tillbaka",
@@ -2833,7 +2840,10 @@
     "status_paid": "Betald",
     "status_partially_paid": "Delbetald",
     "status_overdue": "Förfallen",
-    "status_credited": "Krediterad"
+    "status_credited": "Krediterad",
+    "status_disputed": "Tvist",
+    "status_collection_ready": "Inkassoklar",
+    "status_written_off": "Avskriven"
   },
   "retention_notice": {
     "company_title": "Bokföringen behålls i 7 år",
@@ -3715,7 +3725,10 @@
     "status_credited": "Krediterad",
     "due_days_overdue": "{days} dagar försenad",
     "due_today": "Förfaller idag",
-    "due_days_left": "{days} dagar kvar"
+    "due_days_left": "{days} dagar kvar",
+    "status_disputed": "Tvist",
+    "status_collection_ready": "Inkassoklar",
+    "status_written_off": "Avskriven"
   },
   "dashboard": {
     "result": "Resultat",

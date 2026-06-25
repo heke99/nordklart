@@ -53,6 +53,9 @@ const statusVariantMap: Record<InvoiceStatus, 'default' | 'secondary' | 'success
   overdue: 'destructive',
   cancelled: 'secondary',
   credited: 'secondary',
+  disputed: 'warning',
+  collection_ready: 'destructive',
+  written_off: 'secondary',
 }
 
 interface InvoiceWithRelations extends Invoice {

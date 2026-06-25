@@ -28,7 +28,7 @@ export async function getOpenForeignCurrencyReceivables(
     .from('invoices')
     .select('*')
     .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue'])
+    .in('status', ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready'])
     .neq('currency', 'SEK')
     .not('exchange_rate', 'is', null)
 

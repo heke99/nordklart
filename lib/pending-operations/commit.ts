@@ -42,7 +42,9 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
-import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planInvoiceCustomerPayment } from '@/lib/invoices/customer-payment-allocation'
+import { buildInvoicePaymentWithCustomerCreditLines } from '@/lib/bookkeeping/customer-overpayment-lines'
+import { recordCustomerOverpayment, recordInvoiceUnderpayment } from '@/lib/invoices/customer-credit-recording'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -1146,22 +1148,23 @@ async function commitMatchTransactionInvoice(
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
-  // Overshoot guard + paid/remaining math — shared with the dashboard and v1
-  // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
-  // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
-  // total, AR over-credited). Runs BEFORE the storno + JE below, so a rejected
-  // match leaves the transaction untouched and never burns a voucher number.
   const paidAmount = transaction.amount
-  const payment = planInvoicePayment(invoice, paidAmount)
-  if (!payment.ok) {
+  const allocation = planInvoiceCustomerPayment(invoice, paidAmount)
+  const {
+    appliedAmount,
+    overpaymentAmount,
+    newPaidAmount,
+    newRemaining,
+    isFullyPaid,
+    newStatus,
+  } = allocation
+
+  if (overpaymentAmount > 0 && (transaction.currency !== 'SEK' || invoice.currency !== 'SEK')) {
     return {
-      error:
-        getErrorEntry('MATCH_AMOUNT_EXCEEDS_REMAINING')?.message_sv ??
-        'Transaktionsbeloppet är större än fakturans återstående belopp.',
+      error: 'Överbetalning på valutafaktura behöver hanteras manuellt så kundsaldo och valutakursdifferens blir korrekt.',
       status: 400,
     }
   }
-  const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
 
   if (transaction.journal_entry_id) {
     await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
@@ -1179,18 +1182,45 @@ async function commitMatchTransactionInvoice(
   // Route on invoice state, not the company's current setting. Mirror of
   // the match-invoice route fix — see that handler for the full rationale.
   const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-  const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+  const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid && overpaymentAmount === 0
+
+  if (overpaymentAmount > 0 && !invoiceAlreadyBooked && accountingMethod === 'cash') {
+    return {
+      error: 'Överbetalning på kontantmetoden-faktura utan tidigare verifikation behöver hanteras manuellt.',
+      status: 400,
+    }
+  }
 
   let journalEntryId: string | null = null
   try {
-    if (useCashEntry) {
+    if (overpaymentAmount > 0) {
+      const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
+      if (!fiscalPeriodId) return { error: 'No open fiscal period found for payment date', status: 400 }
+      const desc = invoice.customer?.name
+        ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+        : `Inbetalning kundfaktura ${invoice.invoice_number}`
+      const je = await createJournalEntry(supabase, companyId, userId, {
+        fiscal_period_id: fiscalPeriodId,
+        entry_date: transaction.date,
+        description: `${desc} med överbetalning`,
+        source_type: 'invoice_paid',
+        source_id: invoice.id,
+        lines: buildInvoicePaymentWithCustomerCreditLines({
+          bankAmount: transaction.amount,
+          invoiceSettlementAmount: appliedAmount,
+          customerCreditAmount: overpaymentAmount,
+          description: desc,
+        }),
+      })
+      journalEntryId = je?.id ?? null
+    } else if (useCashEntry) {
       const je = await createInvoiceCashEntry(
         supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name
       )
       journalEntryId = je?.id ?? null
     } else {
       const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, transaction.date, undefined, invoice.customer?.name, paidAmount
+        supabase, companyId, userId, invoice as Invoice, transaction.date, undefined, invoice.customer?.name, appliedAmount
       )
       journalEntryId = je?.id ?? null
     }
@@ -1219,18 +1249,48 @@ async function commitMatchTransactionInvoice(
   const paymentNotes = (accountingMethod === 'cash' && !isFullyPaid)
     ? 'Kontantmetoden: intäkt bokförs vid slutbetalning' : null
 
-  await supabase.from('invoice_payments').insert({
+  const { data: paymentRow } = await supabase.from('invoice_payments').insert({
     user_id: userId,
     company_id: companyId,
     invoice_id: invoiceId,
     payment_date: transaction.date,
-    amount: paidAmount,
+    amount: appliedAmount,
     currency: invoice.currency,
     exchange_rate: invoice.exchange_rate,
     journal_entry_id: journalEntryId,
     transaction_id: transactionId,
     notes: paymentNotes,
-  })
+  }).select('id').single()
+
+  const paymentId = (paymentRow as { id?: string } | null)?.id ?? null
+  let customerCreditId: string | null = null
+  if (overpaymentAmount > 0) {
+    const result = await recordCustomerOverpayment(supabase, {
+      userId,
+      companyId,
+      customerId: invoice.customer_id ?? null,
+      invoiceId,
+      paymentId,
+      transactionId,
+      journalEntryId,
+      amount: overpaymentAmount,
+      currency: invoice.currency,
+      notes: `Överbetalning ${overpaymentAmount} ${invoice.currency} på faktura ${invoice.invoice_number}.`,
+    })
+    customerCreditId = result.creditId
+  } else if (newRemaining > 0) {
+    await recordInvoiceUnderpayment(supabase, {
+      userId,
+      companyId,
+      invoiceId,
+      paymentId,
+      transactionId,
+      journalEntryId,
+      amount: newRemaining,
+      currency: invoice.currency,
+      notes: `Restbelopp ${newRemaining} ${invoice.currency} kvar efter delbetalning.`,
+    })
+  }
 
   await supabase
     .from('transactions')
@@ -1250,7 +1310,7 @@ async function commitMatchTransactionInvoice(
     })
   } catch { /* non-critical */ }
 
-  return { data: { invoice_status: newStatus, paid_amount: newPaidAmount, journal_entry_id: journalEntryId } }
+  return { data: { invoice_status: newStatus, paid_amount: newPaidAmount, remaining_amount: newRemaining, applied_amount: appliedAmount, overpayment_amount: overpaymentAmount, customer_credit_id: customerCreditId, journal_entry_id: journalEntryId } }
 }
 
 async function commitLinkInvoiceVoucher(

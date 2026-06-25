@@ -153,16 +153,15 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
   const cutoffDate = new Date()
   cutoffDate.setDate(cutoffDate.getDate() - minOverdueDays)
 
-  // Positive allowlist — inherently excludes 'paid', 'partially_paid', 'cancelled', 'credited'.
-  // Including 'overdue' ensures level-2 / level-3 reminders re-fire after the first reminder
-  // flips status to 'overdue' (see status update below).
+  // Positive allowlist — excludes paid/cancelled/credited/disputed.
+  // Includes partially_paid so real restbelopp keeps flowing through reminders.
   const { data: overdueInvoices, error: invoiceError } = await supabase
     .from('invoices')
     .select(`
       *,
       customer:customers(*)
     `)
-    .in('status', ['sent', 'overdue'])
+    .in('status', ['sent', 'partially_paid', 'overdue'])
     .is('credited_invoice_id', null)
     .lte('due_date', cutoffDate.toISOString().split('T')[0])
     .order('due_date', { ascending: true })
@@ -252,8 +251,14 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       .eq('id', invoice.id)
       .single()
 
-    if (!currentInvoice || !['sent', 'overdue'].includes(currentInvoice.status as string)) {
+    if (!currentInvoice || !['sent', 'partially_paid', 'overdue'].includes(currentInvoice.status as string)) {
       log.info(`Skipping invoice ${invoice.invoice_number}: status changed to ${currentInvoice?.status ?? 'unknown'} mid-run`)
+      continue
+    }
+
+    const overdueAmount = Math.max(0, Math.round(Number(invoice.remaining_amount ?? (invoice.total - (invoice.paid_amount ?? 0))) * 100) / 100)
+    if (overdueAmount <= 0) {
+      log.info(`Skipping invoice ${invoice.invoice_number}: no remaining amount`)
       continue
     }
 
@@ -261,7 +266,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     // company override if set, else Riksbankens referensränta + 8 pp.
     const asOfDate = new Date().toISOString().split('T')[0]
     const interest = calculateLatePaymentInterest({
-      overdueAmount: invoice.total,
+      overdueAmount,
       dueDate: invoice.due_date,
       asOfDate,
       overrideRate: company.reminder_interest_rate_override,
@@ -300,7 +305,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     }
 
     const totalDue =
-      Math.round((invoice.total + interest.amount + reminderFee) * 100) / 100
+      Math.round((overdueAmount + interest.amount + reminderFee) * 100) / 100
 
     // Create reminder record first (to get action token), persisting the
     // computed surcharges so the public action page + audit trail show them.

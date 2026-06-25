@@ -26,11 +26,13 @@ import {
   createInvoicePaymentJournalEntry,
   createInvoiceCashEntry,
 } from '@/lib/bookkeeping/invoice-entries'
+import { buildInvoicePaymentWithCustomerCreditLines } from '@/lib/bookkeeping/customer-overpayment-lines'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
-import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planInvoiceCustomerPayment } from '@/lib/invoices/customer-payment-allocation'
+import { recordCustomerOverpayment, recordInvoiceUnderpayment } from '@/lib/invoices/customer-credit-recording'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
 import type { EntityType, Invoice, Transaction } from '@/types'
@@ -48,6 +50,9 @@ const MatchInvoiceResponse = z.object({
   // for unmatched-revenue rows because the wrong default flows into
   // BAS 3001/3041/3530 selection and INK2R/SRU reporting.
   category: z.string().nullable(),
+  applied_amount: z.number().optional(),
+  overpayment_amount: z.number().optional(),
+  customer_credit_id: z.string().uuid().nullable().optional(),
 })
 
 registerEndpoint({
@@ -268,19 +273,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const paidAmount = transaction.amount
 
-    // Overshoot guard + paid/remaining math — shared with the dashboard and
-    // agent (commit) paths via planInvoicePayment. Without this, the public API
-    // silently overpaid an invoice (recording paid_amount > total, over-crediting
-    // AR). Runs BEFORE the storno + strict-mode JE creation, so a rejected match
-    // touches no state.
-    const payment = planInvoicePayment(invoice, paidAmount)
-    if (!payment.ok) {
-      return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
+    const allocation = planInvoiceCustomerPayment(invoice, paidAmount)
+    const {
+      appliedAmount,
+      overpaymentAmount,
+      newPaidAmount,
+      newRemaining,
+      isFullyPaid,
+      newStatus,
+    } = allocation
+
+    if (overpaymentAmount > 0 && (transaction.currency !== 'SEK' || invoice.currency !== 'SEK')) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', txLog, {
         requestId: ctx.requestId,
-        details: payment.details,
+        details: {
+          field: 'amount',
+          message: 'Overpayments on foreign-currency invoices require manual review so AR, customer credit and FX are booked correctly.',
+          overpayment_amount: overpaymentAmount,
+        },
       })
     }
-    const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
 
     if (transaction.journal_entry_id) {
       try {
@@ -323,6 +335,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // invoices that were never booked.
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+
+    if (overpaymentAmount > 0 && !invoiceAlreadyBooked && accountingMethod === 'cash') {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', txLog, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'amount',
+          message: 'Overpayments on cash-basis invoices without a prior invoice voucher require manual journal lines.',
+          overpayment_amount: overpaymentAmount,
+        },
+      })
+    }
 
     // Reject cash-method partial payments ONLY for pure kontantmetoden
     // invoices (no prior JE). Under kontantmetoden utgående moms must be
@@ -383,6 +406,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           lines: customLines,
         })
         journalEntryId = je?.id ?? null
+      } else if (overpaymentAmount > 0) {
+        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, transaction.date)
+        if (!fiscalPeriodId) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+            requestId: ctx.requestId,
+            details: { payment_date: transaction.date },
+          })
+        }
+        const desc = invoice.customer?.name
+          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+          : `Inbetalning kundfaktura ${invoice.invoice_number}`
+        const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: transaction.date,
+          description: `${desc} med överbetalning`,
+          source_type: 'invoice_paid',
+          source_id: invoice.id,
+          lines: buildInvoicePaymentWithCustomerCreditLines({
+            bankAmount: transaction.amount,
+            invoiceSettlementAmount: appliedAmount,
+            customerCreditAmount: overpaymentAmount,
+            description: desc,
+          }),
+        })
+        journalEntryId = je?.id ?? null
       } else if (useCashEntry) {
         const je = await createInvoiceCashEntry(
           ctx.supabase,
@@ -403,7 +451,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           transaction.date,
           undefined,
           invoice.customer?.name,
-          paidAmount,
+          appliedAmount,
         )
         journalEntryId = je?.id ?? null
       }
@@ -488,20 +536,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ? 'Kontantmetoden: intäkt bokförs vid slutbetalning'
         : null
 
-    const { error: paymentInsertErr } = await ctx.supabase
+    const { data: paymentRow, error: paymentInsertErr } = await ctx.supabase
       .from('invoice_payments')
       .insert({
         user_id: ctx.userId,
         company_id: ctx.companyId!,
         invoice_id,
         payment_date: transaction.date,
-        amount: paidAmount,
+        amount: appliedAmount,
         currency: invoice.currency,
         exchange_rate: invoice.exchange_rate,
         journal_entry_id: journalEntryId,
         transaction_id: txId,
         notes: paymentNotes,
       })
+      .select('id')
+      .single()
     if (paymentInsertErr) {
       if (paymentInsertErr.code === '23505') {
         return v1ErrorResponseFromCode('MATCH_INVOICE_DUPLICATE_PAYMENT', txLog, {
@@ -512,6 +562,41 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, {
         requestId: ctx.requestId,
       })
+    }
+
+    const paymentId = (paymentRow as { id?: string } | null)?.id ?? null
+    let customerCreditId: string | null = null
+    try {
+      if (overpaymentAmount > 0) {
+        const result = await recordCustomerOverpayment(ctx.supabase, {
+          userId: ctx.userId,
+          companyId: ctx.companyId!,
+          customerId: invoice.customer_id ?? null,
+          invoiceId: invoice_id,
+          paymentId,
+          transactionId: txId,
+          journalEntryId,
+          amount: overpaymentAmount,
+          currency: invoice.currency,
+          notes: `Överbetalning ${overpaymentAmount} ${invoice.currency} på faktura ${invoice.invoice_number}.`,
+        })
+        customerCreditId = result.creditId
+      } else if (newRemaining > 0) {
+        await recordInvoiceUnderpayment(ctx.supabase, {
+          userId: ctx.userId,
+          companyId: ctx.companyId!,
+          invoiceId: invoice_id,
+          paymentId,
+          transactionId: txId,
+          journalEntryId,
+          amount: newRemaining,
+          currency: invoice.currency,
+          notes: `Restbelopp ${newRemaining} ${invoice.currency} kvar efter delbetalning.`,
+        })
+      }
+    } catch (adjustmentErr) {
+      txLog.error('payment adjustment ledger write failed', adjustmentErr as Error)
+      return v1ErrorResponse(adjustmentErr, txLog, { requestId: ctx.requestId })
     }
 
     // When the tx already has a category (set by a prior :categorize call,
@@ -548,6 +633,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         status: newStatus,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
+        applied_amount: appliedAmount,
+        overpayment_amount: overpaymentAmount,
+        customer_credit_id: customerCreditId,
       },
     })
 
@@ -572,6 +660,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         paid_at: isFullyPaid ? now : null,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
+        applied_amount: appliedAmount,
+        overpayment_amount: overpaymentAmount,
+        customer_credit_id: customerCreditId,
         journal_entry_id: journalEntryId,
         category: existingTxCategory,
       },

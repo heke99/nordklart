@@ -389,7 +389,9 @@
     "status_overdue": "Overdue",
     "status_disputed": "Disputed",
     "status_credited": "Credited",
-    "status_reversed": "Reversed"
+    "status_reversed": "Reversed",
+    "status_collection_ready": "Ready for collection",
+    "status_written_off": "Written off"
   },
   "purchase_orders": {
     "title": "Purchase orders",
@@ -2356,7 +2358,10 @@
     "cancelled_draft": "The draft has been cancelled.",
     "cancel_failed_title": "Could not cancel the invoice",
     "paid_toast_title": "Paid",
-    "paid_toast_description": "Invoice {number} has been marked as paid and posted"
+    "paid_toast_description": "Invoice {number} has been marked as paid and posted",
+    "status_disputed": "Disputed",
+    "status_collection_ready": "Ready for collection",
+    "status_written_off": "Written off"
   },
   "invoice_credit": {
     "back": "Back",
@@ -2779,7 +2784,9 @@
     "duplicate_payment_description_many": "We found bank transactions that appear to match this payment. Link the existing transaction instead of creating a new verifikat.",
     "bank_transaction_fallback": "Bank transaction",
     "go_to": "Go to",
-    "create_voucher_anyway": "Create new verifikat anyway"
+    "create_voucher_anyway": "Create new verifikat anyway",
+    "status_collection_ready": "Ready for collection",
+    "status_written_off": "Written off"
   },
   "supplier_detail": {
     "back": "Back",
@@ -2833,7 +2840,10 @@
     "status_paid": "Paid",
     "status_partially_paid": "Partly paid",
     "status_overdue": "Overdue",
-    "status_credited": "Credited"
+    "status_credited": "Credited",
+    "status_disputed": "Disputed",
+    "status_collection_ready": "Ready for collection",
+    "status_written_off": "Written off"
   },
   "retention_notice": {
     "company_title": "Bookkeeping is retained for 7 years",
@@ -3715,7 +3725,10 @@
     "status_credited": "Credited",
     "due_days_overdue": "{days} days overdue",
     "due_today": "Due today",
-    "due_days_left": "{days} days left"
+    "due_days_left": "{days} days left",
+    "status_disputed": "Disputed",
+    "status_collection_ready": "Ready for collection",
+    "status_written_off": "Written off"
   },
   "dashboard": {
     "result": "Net result",

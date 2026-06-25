@@ -39,12 +39,15 @@ const STATUS_CONFIG: Record<InvoiceStatus, { labelKey: string; variant: InvoiceS
   overdue: { labelKey: 'status_overdue', variant: 'destructive' },
   cancelled: { labelKey: 'status_cancelled', variant: 'secondary' },
   credited: { labelKey: 'status_credited', variant: 'secondary' },
+  disputed: { labelKey: 'status_disputed', variant: 'warning' },
+  collection_ready: { labelKey: 'status_collection_ready', variant: 'destructive' },
+  written_off: { labelKey: 'status_written_off', variant: 'secondary' },
 }
 
 function useRelativeTimeLabel() {
   const t = useTranslations('invoices')
   return function getRelativeTimeLabel(dueDateStr: string, status: InvoiceStatus): { text: string; color: string } | null {
-    if (status === 'paid' || status === 'cancelled' || status === 'credited' || status === 'draft') return null
+    if (status === 'paid' || status === 'cancelled' || status === 'credited' || status === 'draft' || status === 'written_off') return null
 
     const today = new Date()
     today.setHours(0, 0, 0, 0)
@@ -121,7 +124,7 @@ export default function InvoicesPage() {
     const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
     const matchesTab =
       (activeTab === 'all' && invoice.status !== 'cancelled') ||
-      (activeTab === 'unpaid' && ['sent', 'overdue'].includes(invoice.status) && !isCreditNote && docType === 'invoice') ||
+      (activeTab === 'unpaid' && ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready'].includes(invoice.status) && !isCreditNote && docType === 'invoice') ||
       (activeTab === 'credit' && isCreditNote) ||
       (activeTab === 'proforma' && docType === 'proforma' && invoice.status !== 'cancelled') ||
       (activeTab === 'delivery_note' && docType === 'delivery_note' && invoice.status !== 'cancelled') ||
@@ -132,18 +135,18 @@ export default function InvoicesPage() {
   })
 
   const isOutstandingReceivable = (i: Invoice) =>
-    ['sent', 'overdue'].includes(i.status) && !i.credited_invoice_id
+    ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready'].includes(i.status) && !i.credited_invoice_id
   const stats = {
     unpaid: invoices.filter(isOutstandingReceivable).length,
     unpaidAmount: invoices
       .filter(isOutstandingReceivable)
       .reduce((sum, i) => {
         if (i.currency === 'SEK') {
-          return sum + getDisplayTotal({ total: Number(i.total), currency: 'SEK' }, { ore_rounding: oreRounding }).displayed
+          return sum + getDisplayTotal({ total: Number(i.remaining_amount ?? i.total), currency: 'SEK' }, { ore_rounding: oreRounding }).displayed
         }
-        return sum + Number(i.total_sek || i.total)
+        return sum + Number(i.remaining_amount ?? i.total_sek ?? i.total)
       }, 0),
-    overdue: invoices.filter((i) => i.status === 'overdue' && !i.credited_invoice_id).length,
+    overdue: invoices.filter((i) => ['overdue', 'collection_ready'].includes(i.status) && !i.credited_invoice_id).length,
   }
 
   return (

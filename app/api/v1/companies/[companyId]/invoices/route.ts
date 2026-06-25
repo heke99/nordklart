@@ -40,6 +40,9 @@ const InvoiceStatus = z.enum([
   'overdue',
   'cancelled',
   'credited',
+  'disputed',
+  'collection_ready',
+  'written_off',
 ])
 
 const InvoiceDocumentType = z.enum(['invoice', 'proforma', 'delivery_note'])

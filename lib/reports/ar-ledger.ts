@@ -68,7 +68,7 @@ export async function generateARLedger(
         .from('invoices')
         .select('*, customer:customers(id, name)')
         .eq('company_id', companyId)
-        .in('status', ['sent', 'overdue', 'credited'])
+        .in('status', ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready', 'credited'])
         .range(from, to)
     )
   } catch {
@@ -109,7 +109,7 @@ export async function generateARLedger(
     const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
     const paidAmount = Number(inv.paid_amount) || 0
     const total = Number(inv.total) || 0
-    const outstanding = Math.round((total - paidAmount) * 100) / 100
+    const outstanding = Math.round(Number(inv.remaining_amount ?? (total - paidAmount)) * 100) / 100
 
     // Aging buckets and totals must be in SEK so they reconcile with account 1510.
     // Foreign-currency invoices without an exchange_rate cannot be converted —

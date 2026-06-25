@@ -54,6 +54,8 @@ export const marketingSecondaryCta =
 
 export const marketingSectionLabel = 'text-sm font-semibold uppercase tracking-[0.22em] text-primary'
 
+const NORDKLART_ORG_NUMBER = '559416-7149'
+
 export function MarketingChrome({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen overflow-hidden bg-background text-foreground">
@@ -113,7 +115,7 @@ export function MarketingFooter() {
           <p className="max-w-sm leading-7 text-muted-foreground">
             Automatiserad svensk bokföring med fakturor, verifikationer, fristående bokslut och hjälp med Bankgiro via partner.
           </p>
-          <p className="text-sm text-muted-foreground">© Nordklart. Alla rättigheter förbehållna.</p>
+          <p className="text-sm text-muted-foreground">© Nordklart. Org.nr {NORDKLART_ORG_NUMBER}. Alla rättigheter förbehållna.</p>
         </div>
 
         {footerGroups.map((group) => (
