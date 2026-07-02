@@ -12,10 +12,12 @@ import { makeTransaction } from '@/tests/helpers'
 // Mocks
 // ---------------------------------------------------------------------------
 
-const mockGetBestInvoiceMatch = vi.fn()
-vi.mock('@/lib/invoices/invoice-matching', () => ({
-  getBestInvoiceMatch: (...args: unknown[]) => mockGetBestInvoiceMatch(...args),
+const mockMatchTransactionToPayments = vi.fn()
+vi.mock('@/lib/payments/payment-matching-service', () => ({
+  matchTransactionToPayments: (...args: unknown[]) => mockMatchTransactionToPayments(...args),
 }))
+
+const NO_MATCH_RESULT = { candidates: [], best: null, ambiguous: false }
 
 const mockFetchExchangeRate = vi.fn()
 vi.mock('@/lib/currency/riksbanken', () => ({
@@ -153,6 +155,7 @@ describe('ingestTransactions', () => {
     mockLoadAutomationSettings.mockResolvedValue(DEFAULT_TEST_SETTINGS)
     mockCheckSieOverlapForDates.mockResolvedValue({ overlaps: false, importIds: [] })
     mockProcessAutomation.mockResolvedValue(IGNORED_OUTCOME)
+    mockMatchTransactionToPayments.mockResolvedValue(NO_MATCH_RESULT)
   })
 
   // -----------------------------------------------------------------------
@@ -636,10 +639,23 @@ describe('ingestTransactions', () => {
     // Mapping rules auto-categorization update (if triggered)
     enqueue({ data: null, error: null })
 
-    mockGetBestInvoiceMatch.mockResolvedValue({
-      invoice: { id: 'inv-1' },
-      confidence: 0.95,
-      matchReason: 'OCR reference match',
+    mockMatchTransactionToPayments.mockResolvedValue({
+      candidates: [
+        {
+          candidateType: 'customer_invoice',
+          candidateId: 'inv-1',
+          score: 95,
+          reasonCodes: ['OCR reference match'],
+          blockingReasons: [],
+          ambiguous: false,
+          recommendedAction: 'auto_settle',
+          classification: 'exact',
+          amountDifference: 0,
+          invoice: { id: 'inv-1' },
+        },
+      ],
+      best: null,
+      ambiguous: false,
     })
     mockProcessAutomation.mockResolvedValue({
       ...IGNORED_OUTCOME,
@@ -651,11 +667,11 @@ describe('ingestTransactions', () => {
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
     expect(result.auto_matched_invoices).toBe(1)
-    expect(mockGetBestInvoiceMatch).toHaveBeenCalledWith(
+    expect(mockMatchTransactionToPayments).toHaveBeenCalledWith(
       expect.anything(), // supabase client
       COMPANY_ID,
       expect.objectContaining({ id: 'tx-income' }),
-      0.50
+      expect.objectContaining({ minConfidence: 0.50 }),
     )
     // The engine received the precomputed match — it decides what happens.
     expect(mockProcessAutomation).toHaveBeenCalledWith(
@@ -698,7 +714,9 @@ describe('ingestTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(result.auto_matched_invoices).toBe(0)
-    expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
+    // The unified matching service is still consulted (it handles both
+    // directions), but no candidate was produced.
+    expect(mockMatchTransactionToPayments).toHaveBeenCalledTimes(1)
   })
 
   // -----------------------------------------------------------------------
@@ -886,11 +904,24 @@ describe('ingestTransactions', () => {
     // Transaction rawErr: insert fails
     enqueue({ data: null, error: { message: 'Insert failed' } })
 
-    // Income transaction gets an invoice match
-    mockGetBestInvoiceMatch.mockResolvedValue({
-      invoice: { id: 'inv-match' },
-      confidence: 0.95,
-      matchReason: 'Exact amount match',
+    // Income transaction gets an invoice match from the matching service
+    mockMatchTransactionToPayments.mockResolvedValue({
+      candidates: [
+        {
+          candidateType: 'customer_invoice',
+          candidateId: 'inv-match',
+          score: 95,
+          reasonCodes: ['Exact amount match'],
+          blockingReasons: [],
+          ambiguous: false,
+          recommendedAction: 'auto_settle',
+          classification: 'exact',
+          amountDifference: 0,
+          invoice: { id: 'inv-match' },
+        },
+      ],
+      best: null,
+      ambiguous: false,
     })
     // Engine suggests the invoice match for the income transaction.
     mockProcessAutomation.mockResolvedValue({
@@ -952,7 +983,7 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null })
     enqueue({ data: inserted, error: null })
 
-    mockGetBestInvoiceMatch.mockRejectedValue(new Error('Network error'))
+    mockMatchTransactionToPayments.mockRejectedValue(new Error('Network error'))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -1055,7 +1086,7 @@ describe('ingestTransactions', () => {
     expect(result.auto_categorized).toBe(0)
     expect(result.auto_matched_invoices).toBe(0)
     // Should NOT have attempted any post-insert operations
-    expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
+    expect(mockMatchTransactionToPayments).not.toHaveBeenCalled()
     expect(mockProcessAutomation).not.toHaveBeenCalled()
     expect(mockLoadAutomationSettings).not.toHaveBeenCalled()
   })

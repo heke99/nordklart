@@ -5,6 +5,8 @@ type MatchAction =
   | 'unmatched'
   | 'auto_suggested'
   | 'auto_matched'
+  /** A candidate was scored but no suggestion/link resulted (blocked/below threshold). */
+  | 'evaluated'
   | 'suggestion_cleared'
   | 'storno_conflict_resolved'
   | 'linked_to_existing_voucher'
@@ -25,6 +27,8 @@ export async function logMatchEvent(
     matchMethod?: string
     previousState?: Record<string, unknown>
     newState?: Record<string, unknown>
+    /** Company scope for the audit row — pass whenever available. */
+    companyId?: string
   }
 ): Promise<void> {
   try {
@@ -33,6 +37,7 @@ export async function logMatchEvent(
       transaction_id: transactionId,
       invoice_id: opts?.invoiceId ?? null,
       supplier_invoice_id: opts?.supplierInvoiceId ?? null,
+      ...(opts?.companyId ? { company_id: opts.companyId } : {}),
       action,
       match_confidence: opts?.matchConfidence ?? null,
       match_method: opts?.matchMethod ?? null,

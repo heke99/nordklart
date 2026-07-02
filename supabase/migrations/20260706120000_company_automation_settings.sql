@@ -163,6 +163,7 @@ alter table public.payment_match_log
     'unmatched',
     'auto_suggested',
     'auto_matched',
+    'evaluated',
     'suggestion_cleared',
     'storno_conflict_resolved',
     'linked_to_existing_voucher'

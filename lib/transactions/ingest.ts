@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
-import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
+import { matchTransactionToPayments } from '@/lib/payments/payment-matching-service'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { contentBucketKey, descriptionsBridge, normalizeImportedDescription } from '@/lib/transactions/external-id'
@@ -8,6 +7,8 @@ import {
   loadAutomationSettings,
   processBankTransactionAutomation,
   type CompanyAutomationSettings,
+  type CustomerInvoiceMatchInput,
+  type SupplierInvoiceMatchInput,
 } from '@/lib/automation/bank-transaction-automation'
 import { checkSieOverlapForDates } from '@/lib/automation/sie-overlap'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
@@ -427,45 +428,47 @@ export async function ingestTransactions(
     // the user without any explicit action. Reconciliation is now a manual
     // operation (BankReconciliationView / runReconciliation / manualLink).
 
-    // 3. Build match candidates for the automation engine.
+    // 3. Build match candidates via the shared payment-matching service.
     //    Matching itself never writes — what happens with a match (suggest,
     //    pending operation, auto-settle) is decided by the engine under
     //    company_automation_settings.
-    let invoiceMatch: Awaited<ReturnType<typeof getBestInvoiceMatch>> = null
-    if (newTransaction.amount > 0) {
-      try {
-        // OCR/reference matching is handled inside getBestInvoiceMatch
-        // (which calls findMatchingInvoices, which checks references).
-        // 0.50 floor keeps low-confidence candidates visible in the
-        // candidate log; the engine gates suggestions at the company's
-        // min_suggestion_confidence.
-        const bestMatch = await getBestInvoiceMatch(
-          supabase,
-          companyId,
-          newTransaction as Transaction,
-          0.50
-        )
-        if (bestMatch && !matchedInvoiceIds.has(bestMatch.invoice.id)) {
-          invoiceMatch = bestMatch
+    let invoiceMatch: CustomerInvoiceMatchInput | null = null
+    let supplierMatch: SupplierInvoiceMatchInput | null = null
+    let matchAmbiguous = false
+    let matchBlockingReasons: string[] = []
+    try {
+      const matchResult = await matchTransactionToPayments(
+        supabase,
+        companyId,
+        newTransaction as Transaction,
+        { unpaidSupplierInvoices, minConfidence: 0.50 },
+      )
+      matchAmbiguous = matchResult.ambiguous
+      // Batch-dedup: skip candidates already consumed by an earlier
+      // transaction in this import so one invoice never matches twice.
+      const usable = matchResult.candidates.filter((c) =>
+        c.candidateType === 'customer_invoice'
+          ? !matchedInvoiceIds.has(c.candidateId)
+          : !matchedSupplierInvoiceIds.has(c.candidateId),
+      )
+      const best = usable[0] ?? null
+      if (best?.candidateType === 'customer_invoice' && best.invoice) {
+        invoiceMatch = {
+          invoice: best.invoice,
+          confidence: best.score / 100,
+          matchReason: best.reasonCodes[0] ?? 'match',
         }
-      } catch {
-        // Non-critical — continue processing
-      }
-    }
-
-    let supplierMatch: ReturnType<typeof findSupplierInvoiceMatch> = null
-    if (newTransaction.amount < 0 && unpaidSupplierInvoices.length > 0) {
-      try {
-        const match = findSupplierInvoiceMatch(
-          newTransaction as Transaction,
-          unpaidSupplierInvoices
-        )
-        if (match && !matchedSupplierInvoiceIds.has(match.supplierInvoice.id)) {
-          supplierMatch = match
+        matchBlockingReasons = best.blockingReasons
+      } else if (best?.candidateType === 'supplier_invoice' && best.supplierInvoice) {
+        supplierMatch = {
+          supplierInvoice: best.supplierInvoice,
+          confidence: best.score / 100,
+          matchMethod: best.reasonCodes[0] ?? 'match',
         }
-      } catch {
-        // Non-critical — continue processing
+        matchBlockingReasons = best.blockingReasons
       }
+    } catch {
+      // Non-critical — continue processing
     }
 
     // 4. Controlled automation: candidates → decision → effects.
@@ -486,6 +489,8 @@ export async function ingestTransactions(
             settlementAccount: options?.settlementAccount,
             invoiceMatch,
             supplierMatch,
+            matchAmbiguous,
+            matchBlockingReasons,
             skipAutoCategorization: options?.skipAutoCategorization,
           },
           raw.import_source === 'enable_banking' ? 'bank_sync' : 'bank_import',

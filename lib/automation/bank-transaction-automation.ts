@@ -191,6 +191,13 @@ export interface ProcessTransactionInput {
   /** Precomputed candidate matches (from the shared matching layer). */
   invoiceMatch?: CustomerInvoiceMatchInput | null
   supplierMatch?: SupplierInvoiceMatchInput | null
+  /**
+   * Ambiguity flag from the payment-matching service — true when another
+   * invoice was a close runner-up. Blocks auto-commits.
+   */
+  matchAmbiguous?: boolean
+  /** Blocking reasons from the payment-matching service for the best match. */
+  matchBlockingReasons?: string[]
   /** Legacy skip flag from IngestOptions (SIE overlap paths set it). */
   skipAutoCategorization?: boolean
 }
@@ -408,14 +415,30 @@ async function evaluateTransaction(
 
   if (selected.score < minAutoScore) blocking.push('below_auto_confidence')
 
-  // Ambiguity: a close runner-up that points at a different target.
+  // Ambiguity: a close runner-up that points at a different target — either
+  // detected across the engine's own candidate set, or flagged by the
+  // payment-matching service (close invoice-vs-invoice candidates).
   if (
-    runnerUp &&
-    runnerUp.score >= minSuggestScore &&
-    selected.score - runnerUp.score < AMBIGUITY_SCORE_GAP &&
-    (runnerUp.candidateId !== selected.candidateId || runnerUp.type !== selected.type)
+    (runnerUp &&
+      runnerUp.score >= minSuggestScore &&
+      selected.score - runnerUp.score < AMBIGUITY_SCORE_GAP &&
+      (runnerUp.candidateId !== selected.candidateId || runnerUp.type !== selected.type)) ||
+    (input.matchAmbiguous &&
+      (selected.type === 'customer_invoice' || selected.type === 'supplier_invoice'))
   ) {
     blocking.push('ambiguous_candidates')
+  }
+
+  // Blocking reasons the payment-matching service attached to the best match
+  // (disputed/already paid/cross-currency/partial …). Exactness and currency
+  // are re-verified below for customer invoices; dedupe when merging.
+  if (
+    input.matchBlockingReasons?.length &&
+    (selected.type === 'customer_invoice' || selected.type === 'supplier_invoice')
+  ) {
+    for (const reason of input.matchBlockingReasons) {
+      if (!blocking.includes(reason)) blocking.push(reason)
+    }
   }
 
   // Amount cap.
@@ -880,6 +903,19 @@ export async function processBankTransactionAutomation(
   switch (action.kind) {
     case 'none': {
       decisionKind = reasonCodes.includes('already_linked') ? 'blocked' : 'ignored'
+      // Audit trail: a candidate was scored but nothing came of it — the
+      // "varför matchades inte transaktionen?" answer lives here.
+      if (selected && (selected.type === 'customer_invoice' || selected.type === 'supplier_invoice')) {
+        logMatchEvent(supabase, userId, transaction.id, 'evaluated', {
+          companyId,
+          ...(selected.type === 'customer_invoice'
+            ? { invoiceId: selected.candidateId ?? undefined }
+            : { supplierInvoiceId: selected.candidateId ?? undefined }),
+          matchConfidence: confidence,
+          matchMethod: selected.reasonCodes[0],
+          newState: { reason_codes: reasonCodes },
+        })
+      }
       break
     }
 
@@ -892,6 +928,7 @@ export async function processBankTransactionAutomation(
           .update({ potential_invoice_id: selected.candidateId })
           .eq('id', transaction.id)
         logMatchEvent(supabase, userId, transaction.id, 'auto_suggested', {
+          companyId,
           invoiceId: selected.candidateId,
           matchConfidence: confidence,
           matchMethod: selected.reasonCodes[0],
@@ -902,6 +939,7 @@ export async function processBankTransactionAutomation(
           .update({ potential_supplier_invoice_id: selected.candidateId })
           .eq('id', transaction.id)
         logMatchEvent(supabase, userId, transaction.id, 'auto_suggested', {
+          companyId,
           supplierInvoiceId: selected.candidateId,
           matchConfidence: confidence,
           matchMethod: selected.reasonCodes[0],
@@ -942,6 +980,7 @@ export async function processBankTransactionAutomation(
           'medium',
         )
         logMatchEvent(supabase, userId, transaction.id, 'auto_suggested', {
+          companyId,
           invoiceId,
           matchConfidence: confidence,
           matchMethod: selected?.reasonCodes[0],
@@ -1043,6 +1082,7 @@ export async function processBankTransactionAutomation(
                   ? commitResult.data.journal_entry_id
                   : null
               logMatchEvent(supabase, userId, transaction.id, 'auto_matched', {
+                companyId,
                 invoiceId,
                 matchConfidence: confidence,
                 matchMethod: selected?.reasonCodes[0],
@@ -1071,6 +1111,7 @@ export async function processBankTransactionAutomation(
           .update({ supplier_invoice_id: supplierInvoiceId })
           .eq('id', transaction.id)
         logMatchEvent(supabase, userId, transaction.id, 'auto_matched', {
+          companyId,
           supplierInvoiceId,
           matchConfidence: confidence,
           matchMethod: selected?.reasonCodes[0],

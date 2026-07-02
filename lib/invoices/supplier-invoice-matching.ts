@@ -27,22 +27,25 @@ function normalizeReference(ref: string): string {
 }
 
 /**
- * Find the best matching supplier invoice for an expense transaction.
- * Expects invoices to have the `supplier` relation populated (for name/bankgiro matching).
- * Only matches against invoices with status 'registered' or 'approved'
- * and with remaining_amount > 0.
+ * Find ALL matching supplier invoices for an expense transaction, ranked by
+ * confidence. The full list is what lets callers detect ambiguity (two
+ * invoices from the same or different suppliers with the same amount).
+ *
+ * Expects invoices to have the `supplier` relation populated (for
+ * name/bankgiro matching). Only matches against invoices with status
+ * 'registered' or 'approved' and with remaining_amount > 0.
  */
-export function findSupplierInvoiceMatch(
+export function findSupplierInvoiceMatches(
   transaction: Transaction,
   unpaidInvoices: SupplierInvoice[]
-): SupplierInvoiceMatch | null {
-  if (unpaidInvoices.length === 0) return null
+): SupplierInvoiceMatch[] {
+  if (unpaidInvoices.length === 0) return []
 
   // Only match expense transactions
   const txAmount = Math.abs(transaction.amount)
-  if (txAmount === 0) return null
+  if (txAmount === 0) return []
 
-  let bestMatch: SupplierInvoiceMatch | null = null
+  const matches: SupplierInvoiceMatch[] = []
 
   for (const invoice of unpaidInvoices) {
     // Only match against registered/approved invoices with remaining amount
@@ -55,11 +58,12 @@ export function findSupplierInvoiceMatch(
       const txRef = normalizeReference(transaction.reference)
       const invRef = normalizeReference(invoice.payment_reference)
       if (txRef && invRef && txRef === invRef) {
-        return {
+        matches.push({
           supplierInvoice: invoice,
           confidence: 0.98,
           matchMethod: 'payment_reference',
-        }
+        })
+        continue
       }
     }
 
@@ -73,11 +77,12 @@ export function findSupplierInvoiceMatch(
       const pgMatch = supplierPg && txDesc.includes(normalizeReference(supplierPg))
 
       if (bgMatch || pgMatch) {
-        return {
+        matches.push({
           supplierInvoice: invoice,
           confidence: 0.92,
           matchMethod: 'amount_bankgiro',
-        }
+        })
+        continue
       }
     }
 
@@ -88,14 +93,12 @@ export function findSupplierInvoiceMatch(
       const diffDays = Math.abs((txDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
 
       if (diffDays <= 5) {
-        const confidence = 0.85
-        if (!bestMatch || confidence > bestMatch.confidence) {
-          bestMatch = {
-            supplierInvoice: invoice,
-            confidence,
-            matchMethod: 'amount_date',
-          }
-        }
+        matches.push({
+          supplierInvoice: invoice,
+          confidence: 0.85,
+          matchMethod: 'amount_date',
+        })
+        continue
       }
     }
 
@@ -116,17 +119,28 @@ export function findSupplierInvoiceMatch(
       const nameInDesc = nameWords.some((word) => txDesc.includes(word))
 
       if (nameInDesc) {
-        const confidence = 0.70
-        if (!bestMatch || confidence > bestMatch.confidence) {
-          bestMatch = {
-            supplierInvoice: invoice,
-            confidence,
-            matchMethod: 'fuzzy_name',
-          }
-        }
+        matches.push({
+          supplierInvoice: invoice,
+          confidence: 0.70,
+          matchMethod: 'fuzzy_name',
+        })
       }
     }
   }
 
-  return bestMatch
+  matches.sort((a, b) => b.confidence - a.confidence)
+  return matches
+}
+
+/**
+ * Find the best matching supplier invoice for an expense transaction.
+ * Thin wrapper over findSupplierInvoiceMatches — kept for callers that only
+ * need the top candidate.
+ */
+export function findSupplierInvoiceMatch(
+  transaction: Transaction,
+  unpaidInvoices: SupplierInvoice[]
+): SupplierInvoiceMatch | null {
+  const matches = findSupplierInvoiceMatches(transaction, unpaidInvoices)
+  return matches[0] ?? null
 }
