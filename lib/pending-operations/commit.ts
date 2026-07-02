@@ -130,7 +130,7 @@ export interface CommitOptions {
    * still human-approval-gated; agent auto-commit was removed in
    * 20260505190027_drop_agent_auto_commit.
    */
-  commitMethod?: 'user_accept' | 'bulk_accept' | 'agent' | 'api_key'
+  commitMethod?: 'user_accept' | 'bulk_accept' | 'agent' | 'api_key' | 'automation'
   /**
    * WHO is relaying this approval (api_key with the key's display name, plain
    * user, agent_chat, …). Propagated to every journal-entry commit made by the

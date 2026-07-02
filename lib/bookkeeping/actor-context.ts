@@ -18,7 +18,7 @@
  */
 export interface CommitActor {
   /** Matches the journal_entries.committed_actor_type CHECK constraint. */
-  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat'
+  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat' | 'automation'
   /** Human-readable credential label, e.g. the API key name. */
   label?: string
 }

@@ -4,6 +4,7 @@ type MatchAction =
   | 'matched'
   | 'unmatched'
   | 'auto_suggested'
+  | 'auto_matched'
   | 'suggestion_cleared'
   | 'storno_conflict_resolved'
   | 'linked_to_existing_voucher'

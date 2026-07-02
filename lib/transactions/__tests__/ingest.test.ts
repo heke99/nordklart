@@ -6,22 +6,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ingestTransactions, type RawTransaction } from '../ingest'
-import { makeJournalEntry, makeTransaction } from '@/tests/helpers'
+import { makeTransaction } from '@/tests/helpers'
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
-
-const mockEvaluateMappingRules = vi.fn()
-vi.mock('@/lib/bookkeeping/mapping-engine', () => ({
-  evaluateMappingRules: (...args: unknown[]) => mockEvaluateMappingRules(...args),
-}))
-
-const mockCreateTransactionJournalEntry = vi.fn()
-vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
-  createTransactionJournalEntry: (...args: unknown[]) =>
-    mockCreateTransactionJournalEntry(...args),
-}))
 
 const mockGetBestInvoiceMatch = vi.fn()
 vi.mock('@/lib/invoices/invoice-matching', () => ({
@@ -32,6 +21,50 @@ const mockFetchExchangeRate = vi.fn()
 vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args),
 }))
+
+// Controlled automation: ingest delegates all post-insert decisions to the
+// engine — mock it so these tests stay focused on the ingest pipeline itself.
+// Engine behavior (modes, thresholds, guards) is covered in
+// lib/automation/__tests__/bank-transaction-automation.test.ts.
+const mockLoadAutomationSettings = vi.fn()
+const mockProcessAutomation = vi.fn()
+vi.mock('@/lib/automation/bank-transaction-automation', () => ({
+  loadAutomationSettings: (...args: unknown[]) => mockLoadAutomationSettings(...args),
+  processBankTransactionAutomation: (...args: unknown[]) => mockProcessAutomation(...args),
+}))
+
+const mockCheckSieOverlapForDates = vi.fn()
+vi.mock('@/lib/automation/sie-overlap', () => ({
+  checkSieOverlapForDates: (...args: unknown[]) => mockCheckSieOverlapForDates(...args),
+}))
+
+const DEFAULT_TEST_SETTINGS = {
+  bankTransactionMode: 'suggest',
+  invoicePaymentMatchingMode: 'auto_safe',
+  supplierInvoiceMatchingMode: 'suggest',
+  bankImportAfterSyncMode: 'process_pending',
+  minAutoConfidence: 0.95,
+  minSuggestionConfidence: 0.7,
+  maxAutoBookAmount: null,
+  allowAutoCustomerInvoiceSettlement: true,
+  allowAutoSupplierInvoiceSettlement: false,
+  allowAutoBankFeeBooking: true,
+  allowAutoCategoryBooking: false,
+  allowAutoTaxPaymentBooking: false,
+  allowAutoSalaryPaymentBooking: false,
+}
+
+const IGNORED_OUTCOME = {
+  decision: 'ignored',
+  confidence: 0,
+  candidate: null,
+  reasonCodes: [],
+  riskLevel: 'low',
+  journalEntryId: null,
+  pendingOperationId: null,
+  decisionId: null,
+  replayed: false,
+}
 
 // ---------------------------------------------------------------------------
 // Queue-based Supabase mock
@@ -103,21 +136,6 @@ function makeRaw(overrides: Partial<RawTransaction> = {}): RawTransaction {
   }
 }
 
-function makeMappingResult(overrides: Record<string, unknown> = {}) {
-  return {
-    rule: null,
-    debit_account: '5410',
-    credit_account: '1930',
-    risk_level: 'low',
-    confidence: 0.9,
-    requires_review: false,
-    default_private: false,
-    vat_lines: [],
-    description: 'Office supplies',
-    ...overrides,
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 //
@@ -132,6 +150,9 @@ function makeMappingResult(overrides: Record<string, unknown> = {}) {
 describe('ingestTransactions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockLoadAutomationSettings.mockResolvedValue(DEFAULT_TEST_SETTINGS)
+    mockCheckSieOverlapForDates.mockResolvedValue({ overlaps: false, importIds: [] })
+    mockProcessAutomation.mockResolvedValue(IGNORED_OUTCOME)
   })
 
   // -----------------------------------------------------------------------
@@ -153,7 +174,6 @@ describe('ingestTransactions', () => {
     // Insert returns the new transaction
     enqueue({ data: inserted, error: null })
     // evaluateMappingRules will be called but we want low confidence
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -177,7 +197,6 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // external_id dedup
     enqueue({ data: { id: 'ca-1931' }, error: null }) // cash_accounts lookup
     enqueue({ data: inserted, error: null }) // insert
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
       settlementAccount: '1931',
@@ -201,7 +220,6 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // external_id dedup
     // No cash_accounts lookup — settlementAccount omitted.
     enqueue({ data: inserted, error: null }) // insert
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -381,7 +399,6 @@ describe('ingestTransactions', () => {
     // Insert succeeds — the new row is not a duplicate
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -454,7 +471,6 @@ describe('ingestTransactions', () => {
       data: makeTransaction({ id: 'tx-lunch', description: insertedDesc, amount: -250 }),
       error: null,
     }) // insert for the non-bridging "Lunch"
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)
 
@@ -494,7 +510,6 @@ describe('ingestTransactions', () => {
       data: makeTransaction({ id: 'tx-ica-surplus', description: 'ICA Kortköp 3', amount: -100 }),
       error: null,
     }) // insert for the surplus third row
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)
 
@@ -531,7 +546,6 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // external_id dedup — no match
     enqueue({ data: { id: 'acct-B' }, error: null }) // cash_accounts lookup → batch settled on account B
     enqueue({ data: inserted, error: null }) // insert — not a duplicate
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
       settlementAccount: '1931',
@@ -627,7 +641,12 @@ describe('ingestTransactions', () => {
       confidence: 0.95,
       matchReason: 'OCR reference match',
     })
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+    mockProcessAutomation.mockResolvedValue({
+      ...IGNORED_OUTCOME,
+      decision: 'suggested',
+      confidence: 0.95,
+      candidate: { type: 'customer_invoice', candidateId: 'inv-1', score: 95, reasonCodes: [], proposedAccount: null, metadata: {} },
+    })
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -637,6 +656,17 @@ describe('ingestTransactions', () => {
       COMPANY_ID,
       expect.objectContaining({ id: 'tx-income' }),
       0.50
+    )
+    // The engine received the precomputed match — it decides what happens.
+    expect(mockProcessAutomation).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      USER_ID,
+      expect.objectContaining({
+        invoiceMatch: expect.objectContaining({ invoice: expect.objectContaining({ id: 'inv-1' }) }),
+        settings: DEFAULT_TEST_SETTINGS,
+      }),
+      'bank_import',
     )
   })
 
@@ -663,7 +693,6 @@ describe('ingestTransactions', () => {
     // Insert
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -673,9 +702,9 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
-  // 6. Auto-categorizes when mapping confidence >= 0.8
+  // 6. Counts auto-booked category/fee/transfer entries from the engine
   // -----------------------------------------------------------------------
-  it('auto-categorizes when mapping confidence is at least 0.8', async () => {
+  it('increments auto_categorized when the automation engine auto-books a mapping candidate', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -500, mcc_code: 5411, merchant_name: 'ICA' })
     const inserted = makeTransaction({
@@ -683,7 +712,6 @@ describe('ingestTransactions', () => {
       amount: -500,
       external_id: raw.external_id,
     })
-    const journalEntry = makeJournalEntry({ id: 'je-1' })
 
     // Booked transaction map query
     enqueue({ data: [], error: null })
@@ -695,30 +723,31 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null })
     // Insert
     enqueue({ data: inserted, error: null })
-    // Update after journal entry creation
-    enqueue({ data: null, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(
-      makeMappingResult({ confidence: 0.85, requires_review: false })
-    )
-    mockCreateTransactionJournalEntry.mockResolvedValue(journalEntry)
+    mockProcessAutomation.mockResolvedValue({
+      ...IGNORED_OUTCOME,
+      decision: 'auto_committed',
+      confidence: 0.95,
+      candidate: { type: 'manual_rule', candidateId: null, score: 95, reasonCodes: [], proposedAccount: '5410', metadata: {} },
+      journalEntryId: 'je-1',
+    })
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
     expect(result.auto_categorized).toBe(1)
-    expect(mockCreateTransactionJournalEntry).toHaveBeenCalledWith(
+    expect(mockProcessAutomation).toHaveBeenCalledWith(
       expect.anything(),
       COMPANY_ID,
       USER_ID,
-      expect.objectContaining({ id: 'tx-cat' }),
-      expect.objectContaining({ confidence: 0.85 })
+      expect.objectContaining({ transaction: expect.objectContaining({ id: 'tx-cat' }) }),
+      'bank_import',
     )
   })
 
   // -----------------------------------------------------------------------
-  // 7. Skips auto-categorization when confidence < 0.8
+  // 7. No auto-count when the engine only suggests / ignores
   // -----------------------------------------------------------------------
-  it('skips auto-categorization when confidence is below 0.8', async () => {
+  it('does not count auto_categorized when the engine decision is not a booking', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -200 })
     const inserted = makeTransaction({
@@ -738,24 +767,26 @@ describe('ingestTransactions', () => {
     // Insert
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(
-      makeMappingResult({ confidence: 0.6 })
-    )
+    mockProcessAutomation.mockResolvedValue({
+      ...IGNORED_OUTCOME,
+      decision: 'suggested',
+      confidence: 0.6,
+      candidate: { type: 'manual_rule', candidateId: null, score: 60, reasonCodes: [], proposedAccount: null, metadata: {} },
+    })
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
     expect(result.auto_categorized).toBe(0)
-    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
   })
 
   // -----------------------------------------------------------------------
-  // 7b. Skips auto-categorization when requires_review is true
+  // 7b. SIE overlap flag is passed to the engine
   // -----------------------------------------------------------------------
-  it('skips auto-categorization when requires_review is true even if confidence is high', async () => {
+  it('passes the SIE overlap flag to the automation engine', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -800 })
     const inserted = makeTransaction({
-      id: 'tx-review',
+      id: 'tx-overlap',
       amount: -800,
       external_id: raw.external_id,
     })
@@ -771,14 +802,18 @@ describe('ingestTransactions', () => {
     // Insert
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(
-      makeMappingResult({ confidence: 0.95, requires_review: true })
-    )
+    mockCheckSieOverlapForDates.mockResolvedValue({ overlaps: true, importIds: ['sie-1'] })
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
-    expect(result.auto_categorized).toBe(0)
-    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    expect(result.imported).toBe(1)
+    expect(mockProcessAutomation).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      USER_ID,
+      expect.objectContaining({ sieOverlap: true }),
+      'bank_import',
+    )
   })
 
   // -----------------------------------------------------------------------
@@ -805,7 +840,6 @@ describe('ingestTransactions', () => {
     // Transaction 2: insert OK
     enqueue({ data: inserted2, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw1, raw2])
 
@@ -858,13 +892,13 @@ describe('ingestTransactions', () => {
       confidence: 0.95,
       matchReason: 'Exact amount match',
     })
-
-    // Auto-categorization with high confidence
-    mockEvaluateMappingRules.mockResolvedValue(
-      makeMappingResult({ confidence: 0.85 })
-    )
-    const journalEntry = makeJournalEntry({ id: 'je-mixed' })
-    mockCreateTransactionJournalEntry.mockResolvedValue(journalEntry)
+    // Engine suggests the invoice match for the income transaction.
+    mockProcessAutomation.mockResolvedValue({
+      ...IGNORED_OUTCOME,
+      decision: 'suggested',
+      confidence: 0.95,
+      candidate: { type: 'customer_invoice', candidateId: 'inv-match', score: 95, reasonCodes: [], proposedAccount: null, metadata: {} },
+    })
 
     const result = await ingestTransactions(
       supabase as never,
@@ -877,7 +911,7 @@ describe('ingestTransactions', () => {
     expect(result.duplicates).toBe(1)
     expect(result.errors).toBe(1)
     expect(result.auto_matched_invoices).toBe(1)
-    expect(result.auto_categorized).toBe(0) // Skipped: invoice match triggers continue
+    expect(result.auto_categorized).toBe(0) // Engine suggested an invoice — no booking
     expect(result.transaction_ids).toEqual(['tx-new'])
   })
 
@@ -919,7 +953,6 @@ describe('ingestTransactions', () => {
     enqueue({ data: inserted, error: null })
 
     mockGetBestInvoiceMatch.mockRejectedValue(new Error('Network error'))
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -930,9 +963,9 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
-  // Edge: auto-categorization error is non-critical
+  // Edge: automation engine error is non-critical
   // -----------------------------------------------------------------------
-  it('continues processing when auto-categorization throws', async () => {
+  it('continues processing when the automation engine throws', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -400 })
     const inserted = makeTransaction({ id: 'tx-cat-err', amount: -400 })
@@ -947,7 +980,7 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null })
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockRejectedValue(new Error('Mapping error'))
+    mockProcessAutomation.mockRejectedValue(new Error('Engine error'))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -983,7 +1016,6 @@ describe('ingestTransactions', () => {
     // Insert
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -1024,7 +1056,8 @@ describe('ingestTransactions', () => {
     expect(result.auto_matched_invoices).toBe(0)
     // Should NOT have attempted any post-insert operations
     expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
-    expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+    expect(mockProcessAutomation).not.toHaveBeenCalled()
+    expect(mockLoadAutomationSettings).not.toHaveBeenCalled()
   })
 
   it('still deduplicates when rawInsertOnly is set', async () => {
@@ -1099,7 +1132,6 @@ describe('ingestTransactions', () => {
     // Insert
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
@@ -1204,7 +1236,6 @@ describe('ingestTransactions', () => {
     // raw3: not in external_id set → content dedup exhausted → insert
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw1, raw2, raw3])
 
@@ -1234,7 +1265,6 @@ describe('ingestTransactions', () => {
     enqueue({ data: makeTransaction({ id: 'tx-4' }), error: null })
 
     mockFetchExchangeRate.mockResolvedValue({ currency: 'USD', rate: 9.2, date: '2026-05-07' })
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw1, raw2, raw3, raw4])
 
@@ -1260,7 +1290,6 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // dedup
     enqueue({ data: makeTransaction({ id: 'tx-sek' }), error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
     expect(mockFetchExchangeRate).not.toHaveBeenCalled()
@@ -1282,7 +1311,6 @@ describe('ingestTransactions', () => {
     // Insert
     enqueue({ data: inserted, error: null })
 
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 

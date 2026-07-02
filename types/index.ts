@@ -556,6 +556,14 @@ export interface Transaction {
   // Notes
   notes: string | null
 
+  // Controlled automation state (set by lib/automation/bank-transaction-automation).
+  // Optional — rows predating the automation columns (20260625120000) and
+  // fixtures may omit them.
+  automation_status?: 'not_evaluated' | 'auto_booked' | 'suggested' | 'needs_review' | 'ignored' | 'failed' | null
+  /** 0–100 confidence of the selected automation candidate. */
+  automation_confidence?: number | null
+  automation_decision_id?: string | null
+
   created_at: string
   updated_at: string
 }

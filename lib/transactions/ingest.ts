@@ -1,13 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
-import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
-import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { contentBucketKey, descriptionsBridge, normalizeImportedDescription } from '@/lib/transactions/external-id'
+import {
+  loadAutomationSettings,
+  processBankTransactionAutomation,
+  type CompanyAutomationSettings,
+} from '@/lib/automation/bank-transaction-automation'
+import { checkSieOverlapForDates } from '@/lib/automation/sie-overlap'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
 // Re-export types for backward compatibility
@@ -178,6 +180,27 @@ export async function ingestTransactions(
   // Keyed by `${currency}|${date}` so each non-SEK transaction gets the
   // rate that was valid on its own transaction date, not the import date.
   const exchangeRatesByDate = new Map<string, ExchangeRate>()
+
+  // Company automation posture + SIE-overlap flag, loaded once per batch.
+  // Automation replaces the old NODE_ENV-gated auto-booking: what happens to
+  // each imported transaction is decided by company_automation_settings, and
+  // every decision is recorded in automation_decisions.
+  let automationSettings: CompanyAutomationSettings | null = null
+  let sieOverlap = false
+  if (!options?.rawInsertOnly && rawTransactions.length > 0) {
+    automationSettings = await loadAutomationSettings(supabase, companyId)
+    try {
+      const overlap = await checkSieOverlapForDates(
+        supabase,
+        companyId,
+        rawTransactions.map((t) => t.date),
+      )
+      sieOverlap = overlap.overlaps
+    } catch {
+      // Fail safe — treat as overlapping so nothing auto-books.
+      sieOverlap = true
+    }
+  }
 
   if (!options?.rawInsertOnly) {
   // Pre-fetch unpaid supplier invoices for expense matching (non-critical)
@@ -404,142 +427,101 @@ export async function ingestTransactions(
     // the user without any explicit action. Reconciliation is now a manual
     // operation (BankReconciliationView / runReconciliation / manualLink).
 
-    // 3. For income transactions, try invoice matching
+    // 3. Build match candidates for the automation engine.
+    //    Matching itself never writes — what happens with a match (suggest,
+    //    pending operation, auto-settle) is decided by the engine under
+    //    company_automation_settings.
+    let invoiceMatch: Awaited<ReturnType<typeof getBestInvoiceMatch>> = null
     if (newTransaction.amount > 0) {
       try {
         // OCR/reference matching is handled inside getBestInvoiceMatch
-        // (which calls findMatchingInvoices, which now checks references)
+        // (which calls findMatchingInvoices, which checks references).
+        // 0.50 floor keeps low-confidence candidates visible in the
+        // candidate log; the engine gates suggestions at the company's
+        // min_suggestion_confidence.
         const bestMatch = await getBestInvoiceMatch(
           supabase,
           companyId,
           newTransaction as Transaction,
           0.50
         )
-
         if (bestMatch && !matchedInvoiceIds.has(bestMatch.invoice.id)) {
-          await supabase
-            .from('transactions')
-            .update({ potential_invoice_id: bestMatch.invoice.id })
-            .eq('id', newTransaction.id)
-
-          logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
-            invoiceId: bestMatch.invoice.id,
-            matchConfidence: bestMatch.confidence,
-            matchMethod: bestMatch.matchReason,
-          })
-
-          matchedInvoiceIds.add(bestMatch.invoice.id)
-          result.auto_matched_invoices++
-          // Skip mapping engine — transaction has an invoice match.
-          // Auto-categorization would create an orphaned journal entry
-          // that conflicts with the eventual invoice payment entry.
-          continue
+          invoiceMatch = bestMatch
         }
       } catch {
         // Non-critical — continue processing
       }
     }
 
-    // 3b. For expense transactions, try supplier invoice matching
+    let supplierMatch: ReturnType<typeof findSupplierInvoiceMatch> = null
     if (newTransaction.amount < 0 && unpaidSupplierInvoices.length > 0) {
       try {
         const match = findSupplierInvoiceMatch(
           newTransaction as Transaction,
           unpaidSupplierInvoices
         )
-
         if (match && !matchedSupplierInvoiceIds.has(match.supplierInvoice.id)) {
-          if (match.confidence >= 0.85) {
-            // Auto-link at high confidence
-            await supabase
-              .from('transactions')
-              .update({ supplier_invoice_id: match.supplierInvoice.id })
-              .eq('id', newTransaction.id)
-
-            // Log the match THEN drain the pool (captures which invoice was matched)
-            logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
-              supplierInvoiceId: match.supplierInvoice.id,
-              matchConfidence: match.confidence,
-              matchMethod: match.matchMethod,
-            })
-
-            // Drain the pool — prevents next transaction from matching same invoice
-            unpaidSupplierInvoices = unpaidSupplierInvoices.filter(
-              inv => inv.id !== match.supplierInvoice.id
-            )
-            matchedSupplierInvoiceIds.add(match.supplierInvoice.id)
-
-            result.auto_matched_invoices++
-            // Skip mapping engine — transaction has a supplier invoice match
-            continue
-          } else {
-            // Store as suggestion at lower confidence (0.70–0.85)
-            // Do NOT drain pool for suggestions — they are tentative
-            await supabase
-              .from('transactions')
-              .update({ potential_supplier_invoice_id: match.supplierInvoice.id })
-              .eq('id', newTransaction.id)
-
-            logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
-              supplierInvoiceId: match.supplierInvoice.id,
-              matchConfidence: match.confidence,
-              matchMethod: match.matchMethod,
-            })
-          }
+          supplierMatch = match
         }
       } catch {
         // Non-critical — continue processing
       }
     }
 
-    // 4. Evaluate mapping rules for auto-categorization
-    // Production-disabled: auto-booking only runs in local dev (and tests).
-    // Users must explicitly book each transaction on the deployed app.
-    // Reconciliation (step 2.5) still links transactions to existing GL lines.
-    const autoBookEnabled = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
-    if (autoBookEnabled && !options?.skipAutoCategorization) {
+    // 4. Controlled automation: candidates → decision → effects.
+    //    Replaces the previous NODE_ENV-gated auto-booking. The engine
+    //    respects company modes/thresholds, period locks, SIE overlap and the
+    //    amount cap; every decision lands in automation_decisions with a
+    //    deterministic idempotency key.
+    if (automationSettings) {
       try {
-        const mappingResult = await evaluateMappingRules(
+        const outcome = await processBankTransactionAutomation(
           supabase,
           companyId,
-          newTransaction as Transaction,
-          undefined,
-          options?.settlementAccount
+          userId,
+          {
+            transaction: newTransaction as Transaction,
+            settings: automationSettings,
+            sieOverlap,
+            settlementAccount: options?.settlementAccount,
+            invoiceMatch,
+            supplierMatch,
+            skipAutoCategorization: options?.skipAutoCategorization,
+          },
+          raw.import_source === 'enable_banking' ? 'bank_sync' : 'bank_import',
         )
 
-        if (mappingResult.confidence >= 0.8 && !mappingResult.requires_review) {
-          const journalEntry = await createTransactionJournalEntry(
-            supabase,
-            companyId,
-            userId,
-            newTransaction as Transaction,
-            mappingResult
-          )
+        const candidateType = outcome.candidate?.type
+        const actedOnMatch =
+          outcome.decision === 'suggested' ||
+          outcome.decision === 'pending_operation_created' ||
+          outcome.decision === 'auto_committed'
 
-          if (journalEntry) {
-            await supabase
-              .from('transactions')
-              .update({
-                journal_entry_id: journalEntry.id,
-                is_business: !mappingResult.default_private,
-              })
-              .eq('id', newTransaction.id)
-
-            // Upsert counterparty template (auto-learned, lower confidence)
-            try {
-              await upsertCounterpartyTemplate(
-                supabase, companyId, newTransaction as Transaction,
-                mappingResult, 'auto_learned'
-              )
-            } catch {
-              // Non-critical
-            }
-
-            result.auto_categorized++
+        if (candidateType === 'customer_invoice' && actedOnMatch && invoiceMatch) {
+          matchedInvoiceIds.add(invoiceMatch.invoice.id)
+          result.auto_matched_invoices++
+        } else if (candidateType === 'supplier_invoice' && actedOnMatch && supplierMatch) {
+          result.auto_matched_invoices++
+          if (outcome.decision === 'auto_committed') {
+            // Auto-linked — drain the pool so the next transaction cannot
+            // match the same supplier invoice. Suggestions stay tentative.
+            unpaidSupplierInvoices = unpaidSupplierInvoices.filter(
+              inv => inv.id !== supplierMatch!.supplierInvoice.id
+            )
+            matchedSupplierInvoiceIds.add(supplierMatch.supplierInvoice.id)
           }
         }
+
+        if (
+          outcome.journalEntryId &&
+          candidateType !== 'customer_invoice' &&
+          candidateType !== 'supplier_invoice'
+        ) {
+          result.auto_categorized++
+        }
       } catch {
-        // Non-critical — continue processing
+        // Automation is best-effort — an engine failure must never lose the
+        // imported transaction. It stays unprocessed for manual review.
       }
     }
   }
