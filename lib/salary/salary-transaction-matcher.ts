@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { logMatchEvent } from '@/lib/invoices/match-log'
 
 const log = createLogger('salary-transaction-matcher')
 
@@ -21,6 +22,7 @@ const log = createLogger('salary-transaction-matcher')
 export async function matchSalaryTransactions(
   supabase: SupabaseClient,
   companyId: string,
+  userId: string,
   transactionIds: string[]
 ): Promise<{ matched: number }> {
   if (transactionIds.length === 0) return { matched: 0 }
@@ -75,15 +77,18 @@ export async function matchSalaryTransactions(
         matched++
         log.info(`Matched salary transaction ${tx.id} to run ${matchingRun.id} (${txAmount} SEK)`)
 
-        // Log the match in payment_match_log for audit trail
-        await supabase.from('payment_match_log').insert({
-          company_id: companyId,
-          transaction_id: tx.id,
-          match_type: 'salary_payment',
-          matched_entity_id: matchingRun.id,
-          matched_entity_type: 'salary_run',
-          amount: txAmount,
-          auto_matched: true,
+        // Audit trail via the shared match log (the previous inline insert
+        // used columns that do not exist on payment_match_log and silently
+        // failed the CHECK/NOT NULL constraints).
+        await logMatchEvent(supabase, userId, tx.id, 'auto_matched', {
+          companyId,
+          matchConfidence: 0.9,
+          matchMethod: 'salary_run_payment',
+          newState: {
+            salary_run_id: matchingRun.id,
+            journal_entry_id: matchingRun.salary_entry_id,
+            amount: txAmount,
+          },
         })
       }
     }

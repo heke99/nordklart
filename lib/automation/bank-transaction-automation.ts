@@ -299,6 +299,7 @@ interface EvaluationResult {
     | { kind: 'auto_book_mapping'; reasonCodes: string[] }
     | { kind: 'auto_settle_invoice'; reasonCodes: string[] }
     | { kind: 'auto_link_supplier'; reasonCodes: string[] }
+    | { kind: 'auto_link_salary'; reasonCodes: string[] }
   riskLevel: 'low' | 'normal' | 'high'
 }
 
@@ -363,6 +364,45 @@ async function evaluateTransaction(
         remaining_amount: supplierMatch.supplierInvoice.remaining_amount,
       },
     })
+  }
+
+  // Candidate: salary payment — a booked salary run whose payment_date and
+  // net amount match this outgoing transaction. The action is a LINK to the
+  // run's existing salary journal entry (reconciliation), never a new booking.
+  let salaryRun: { id: string; salary_entry_id: string } | null = null
+  if (transaction.amount < 0) {
+    try {
+      const { data: runs } = await supabase
+        .from('salary_runs')
+        .select('id, payment_date, total_net, salary_entry_id, status')
+        .eq('company_id', companyId)
+        .eq('status', 'booked')
+        .eq('payment_date', transaction.date)
+      const txAmount = Math.abs(transaction.amount)
+      const run = (runs ?? []).find(
+        (r) =>
+          Math.abs(Number((r as { total_net: number }).total_net) - txAmount) <= 1 &&
+          (r as { salary_entry_id: string | null }).salary_entry_id,
+      )
+      if (run) {
+        salaryRun = {
+          id: (run as { id: string }).id,
+          salary_entry_id: (run as { salary_entry_id: string }).salary_entry_id,
+        }
+        candidates.push({
+          type: 'salary',
+          candidateId: salaryRun.id,
+          // Exact payment-date + net-amount match against a booked run is a
+          // very strong signal (mirrors lib/salary/salary-transaction-matcher).
+          score: 95,
+          reasonCodes: ['salary_run_payment_match'],
+          proposedAccount: null,
+          metadata: { salary_entry_id: salaryRun.salary_entry_id },
+        })
+      }
+    } catch {
+      // Non-critical — salary detection is best-effort.
+    }
   }
 
   // Candidate: mapping rule / template / own transfer / bank fee / tax payment
@@ -546,6 +586,9 @@ async function evaluateTransaction(
     }
     if (selected.type === 'supplier_invoice') {
       return { candidates, selected, mapping, action: { kind: 'auto_link_supplier', reasonCodes }, riskLevel }
+    }
+    if (selected.type === 'salary') {
+      return { candidates, selected, mapping, action: { kind: 'auto_link_salary', reasonCodes }, riskLevel }
     }
     return { candidates, selected, mapping, action: { kind: 'auto_book_mapping', reasonCodes }, riskLevel }
   }
@@ -1095,6 +1138,46 @@ export async function processBankTransactionAutomation(
             }
           }
         }
+      }
+      break
+    }
+
+    case 'auto_link_salary': {
+      // Link the outgoing bank transaction to the salary run's EXISTING
+      // journal entry (reconciliation) — no new booking is created.
+      const salaryEntryId =
+        typeof selected?.metadata?.salary_entry_id === 'string'
+          ? (selected.metadata.salary_entry_id as string)
+          : null
+      if (salaryEntryId) {
+        const { data: linked } = await supabase
+          .from('transactions')
+          .update({
+            journal_entry_id: salaryEntryId,
+            is_business: true,
+            category: 'salary',
+          })
+          .eq('id', transaction.id)
+          .is('journal_entry_id', null) // CAS guard
+          .select('id')
+        if (linked && linked.length > 0) {
+          logMatchEvent(supabase, userId, transaction.id, 'auto_matched', {
+            companyId,
+            matchConfidence: confidence,
+            matchMethod: 'salary_run_payment',
+            newState: {
+              salary_run_id: selected?.candidateId ?? null,
+              journal_entry_id: salaryEntryId,
+            },
+          })
+          decisionKind = 'auto_committed'
+          journalEntryId = salaryEntryId
+        } else {
+          reasonCodes = [...reasonCodes, 'salary_link_lost_race']
+          decisionKind = 'suggested'
+        }
+      } else {
+        decisionKind = 'suggested'
       }
       break
     }

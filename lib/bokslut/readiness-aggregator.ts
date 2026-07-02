@@ -120,6 +120,84 @@ async function buildAssetReadinessBlockers(
   return blockers
 }
 
+/**
+ * Operational blockers beyond the core legal validator:
+ *   - unresolved pending operations dated in the period (approve/reject
+ *     before closing — a staged categorization or invoice match left open
+ *     means the books are known-incomplete),
+ *   - non-completed SIE imports for the period (a pending/failed import
+ *     slot must be resolved or undone),
+ *   - unbooked bank transactions in the period (bank reconciliation
+ *     blocker — every transaction must be booked, matched or explicitly
+ *     ignored before closing, BFL 5 kap).
+ *
+ * Fails soft: a query error never blocks year-end by itself (the core
+ * validator remains the legal source of truth).
+ */
+async function buildOperationalBlockers(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<string[]> {
+  const blockers: string[] = []
+
+  try {
+    const { count: pendingOps } = await supabase
+      .from('pending_operations')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('status', ['pending', 'committing'])
+    if ((pendingOps ?? 0) > 0) {
+      blockers.push(
+        `${pendingOps} väntande åtgärder (pending operations) måste godkännas eller avvisas innan bokslut.`,
+      )
+    }
+  } catch {
+    // soft
+  }
+
+  try {
+    const { data: sieRows } = await supabase
+      .from('sie_imports')
+      .select('id, status, fiscal_year_start, fiscal_year_end')
+      .eq('company_id', companyId)
+      .in('status', ['pending', 'mapped', 'failed'])
+      .gte('fiscal_year_end', periodStart)
+      .lte('fiscal_year_start', periodEnd)
+      .limit(5)
+    if (sieRows && sieRows.length > 0) {
+      blockers.push(
+        `${sieRows.length} SIE-import(er) för perioden är inte slutförda (status: ${[...new Set(sieRows.map((r) => (r as { status: string }).status))].join(', ')}). Slutför eller ångra dem innan bokslut.`,
+      )
+    }
+  } catch {
+    // soft
+  }
+
+  try {
+    const { count: unbookedTx } = await supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .gte('date', periodStart)
+      .lte('date', periodEnd)
+      .is('journal_entry_id', null)
+      .is('invoice_id', null)
+      .is('supplier_invoice_id', null)
+      .eq('is_ignored', false)
+    if ((unbookedTx ?? 0) > 0) {
+      blockers.push(
+        `${unbookedTx} banktransaktioner i perioden är varken bokförda, matchade eller ignorerade. Avstäm banken innan bokslut (BFL 5 kap).`,
+      )
+    }
+  } catch {
+    // soft
+  }
+
+  return blockers
+}
+
 export async function buildBokslutReadinessReport(
   supabase: SupabaseClient,
   companyId: string,
@@ -228,7 +306,13 @@ export async function buildBokslutReadinessReport(
   }
 
   const assetBlockers = await buildAssetReadinessBlockers(supabase, companyId, fiscalPeriodId, period.period_end)
-  const blockers = [...validation.errors, ...assetBlockers]
+  const operationalBlockers = await buildOperationalBlockers(
+    supabase,
+    companyId,
+    period.period_start,
+    period.period_end,
+  )
+  const blockers = [...validation.errors, ...assetBlockers, ...operationalBlockers]
 
   return {
     ready: blockers.length === 0,

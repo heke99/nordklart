@@ -569,6 +569,62 @@ describe('supplier invoice linking', () => {
   })
 })
 
+// ── Salary payment linking ───────────────────────────────────────────────────
+
+describe('salary payment linking', () => {
+  const salaryRunRow = {
+    id: 'run-1',
+    payment_date: '2024-06-15',
+    total_net: 25000,
+    salary_entry_id: 'je-salary',
+    status: 'booked',
+  }
+
+  it('links a matching salary payment to the run journal entry when allowed', async () => {
+    const { supabase, setResult, updates } = createTableMockSupabase()
+    setupDecisionInsert(setResult)
+    setResult('salary_runs:select', { data: [salaryRunRow] })
+    setResult('transactions:update', { data: [{ id: 'tx-sal' }] })
+    mockEvaluateMappingRules.mockResolvedValue(lowMapping())
+
+    const outcome = await processBankTransactionAutomation(supabase as never, COMPANY_ID, USER_ID, {
+      transaction: makeTransaction({ id: 'tx-sal', amount: -25000, date: '2024-06-15' }),
+      settings: autoSettings({ allowAutoSalaryPaymentBooking: true }),
+      sieOverlap: false,
+    } as never)
+
+    expect(outcome.decision).toBe('auto_committed')
+    expect(outcome.candidate?.type).toBe('salary')
+    expect(outcome.journalEntryId).toBe('je-salary')
+    const txUpdates = updates['transactions'] ?? []
+    expect(
+      txUpdates.some((u) => (u as { journal_entry_id?: string }).journal_entry_id === 'je-salary'),
+    ).toBe(true)
+    // Linking to the EXISTING salary entry — never a new booking.
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('salary payments stay suggestions when allow_auto_salary_payment_booking is off (default)', async () => {
+    const { supabase, setResult, updates } = createTableMockSupabase()
+    setupDecisionInsert(setResult)
+    setResult('salary_runs:select', { data: [salaryRunRow] })
+    mockEvaluateMappingRules.mockResolvedValue(lowMapping())
+
+    const outcome = await processBankTransactionAutomation(supabase as never, COMPANY_ID, USER_ID, {
+      transaction: makeTransaction({ id: 'tx-sal2', amount: -25000, date: '2024-06-15' }),
+      settings: autoSettings(),
+      sieOverlap: false,
+    } as never)
+
+    expect(outcome.decision).toBe('suggested')
+    expect(outcome.reasonCodes).toContain('salary_auto_disabled')
+    const txUpdates = updates['transactions'] ?? []
+    expect(
+      txUpdates.some((u) => (u as { journal_entry_id?: string }).journal_entry_id === 'je-salary'),
+    ).toBe(false)
+  })
+})
+
 // ── Idempotency & audit ──────────────────────────────────────────────────────
 
 describe('idempotency and audit', () => {
