@@ -81,14 +81,50 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       }
     }
 
-    const result = await executeRecurringSchedule(supabase, schedule, today)
+    // CAS claim BEFORE creating the invoice: flip last_run_at to now, but
+    // only if the stored value is still older than today. Two concurrent
+    // cron invocations (retry, manual trigger during the scheduled run) can
+    // both pass the read-time check above — the claim makes exactly one of
+    // them proceed. A duplicate invoice is unrecoverable without manual
+    // credit; a missed spawn (claim then crash) is visible in last_run_at
+    // vs last_invoice_id and recoverable via manual run.
+    const { data: claimed, error: claimError } = await supabase
+      .from('recurring_invoice_schedules')
+      .update({ last_run_at: today.toISOString() })
+      .eq('id', schedule.id)
+      .eq('company_id', schedule.company_id)
+      .eq('status', 'active')
+      .or(`last_run_at.is.null,last_run_at.lt.${todayIso}`)
+      .select('id')
+
+    if (claimError || !claimed || claimed.length === 0) {
+      itemCtx.log.info('schedule claim lost (concurrent run or paused) — skipping', {
+        scheduleId: schedule.id,
+      })
+      results.push({ scheduleId: schedule.id, skipped: true, skipReason: 'claim_lost' })
+      return
+    }
+
+    let result: Awaited<ReturnType<typeof executeRecurringSchedule>>
+    try {
+      result = await executeRecurringSchedule(supabase, schedule, today)
+    } catch (err) {
+      // Best-effort claim release so tomorrow's run (or a manual retry)
+      // picks the schedule up again. If the release itself fails the claim
+      // stays and last_invoice_id shows the gap.
+      await supabase
+        .from('recurring_invoice_schedules')
+        .update({ last_run_at: schedule.last_run_at })
+        .eq('id', schedule.id)
+        .eq('company_id', schedule.company_id)
+      throw err
+    }
 
     const nextRunDate = computeNextRunDate(today, schedule.day_of_month)
     const { error: updateError } = await supabase
       .from('recurring_invoice_schedules')
       .update({
         next_run_date: nextRunDate,
-        last_run_at: today.toISOString(),
         last_invoice_id: result.invoiceId,
         last_run_warning: result.warning,
         generated_count: schedule.generated_count + 1,
@@ -97,15 +133,16 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       .eq('company_id', schedule.company_id)
 
     if (updateError) {
-      // The invoice exists. If we don't mark the schedule as ran, tomorrow's
-      // cron would spawn a duplicate. Surface this loudly.
+      // The invoice exists and the claim is held (last_run_at = today), so
+      // tomorrow's run will NOT double-spawn — but next_run_date was not
+      // advanced. Surface loudly for manual follow-up.
       itemCtx.log.error(
-        'invoice created but failed to update schedule — manual cleanup may be needed',
+        'invoice created but failed to finalize schedule — next_run_date not advanced',
         updateError,
         { scheduleId: schedule.id, invoiceId: result.invoiceId },
       )
       throw new Error(
-        `schedule update failed after invoice ${result.invoiceId} created: ${updateError.message}`,
+        `schedule finalize failed after invoice ${result.invoiceId} created: ${updateError.message}`,
       )
     }
 

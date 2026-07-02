@@ -182,7 +182,8 @@ export async function executeRecurringSchedule(
   let vatAmountSek: number | null = null
   let totalSek: number | null = null
   if (schedule.currency !== 'SEK') {
-    const rateData = await fetchExchangeRate(schedule.currency)
+    // ML 8 kap 21–23 §§: rate valid on the invoice date (= the spawn day).
+    const rateData = await fetchExchangeRate(schedule.currency, new Date(invoiceDate))
     if (rateData) {
       exchangeRate = rateData.rate
       exchangeRateDate = rateData.date

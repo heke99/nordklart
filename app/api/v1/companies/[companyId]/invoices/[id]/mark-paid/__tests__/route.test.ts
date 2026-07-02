@@ -145,6 +145,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: SENT_INVOICE, error: null },
+          // The shared mark-paid service re-fetches the invoice in its own
+          // preflight before the race-guarded update returns the paid row.
+          { data: SENT_INVOICE, error: null },
           { data: PAID_INVOICE, error: null },
         ],
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
@@ -173,6 +176,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
+          { data: SENT_INVOICE, error: null },
+          // The shared mark-paid service re-fetches the invoice in its own
+          // preflight before the race-guarded update returns the paid row.
           { data: SENT_INVOICE, error: null },
           { data: PAID_INVOICE, error: null },
         ],
@@ -353,6 +359,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
+          { data: SENT_INVOICE, error: null },
+          // The shared mark-paid service re-fetches the invoice in its own
+          // preflight before the race-guarded update returns the paid row.
           { data: SENT_INVOICE, error: null },
           { data: PAID_INVOICE, error: null },
         ],

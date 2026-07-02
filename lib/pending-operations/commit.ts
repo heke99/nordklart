@@ -42,6 +42,7 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
+import { markInvoicePaid } from '@/lib/invoices/mark-paid-service'
 import { planInvoiceCustomerPayment } from '@/lib/invoices/customer-payment-allocation'
 import { buildInvoicePaymentWithCustomerCreditLines } from '@/lib/bookkeeping/customer-overpayment-lines'
 import { recordCustomerOverpayment, recordInvoiceUnderpayment } from '@/lib/invoices/customer-credit-recording'
@@ -716,6 +717,8 @@ async function commitCreateInvoice(
 
   const total = subtotal + vatAmount
   const currency = ((params.currency as string) || 'SEK') as Currency
+  const invoiceDateForFx =
+    (params.invoice_date as string) || new Date().toISOString().split('T')[0]
 
   let exchangeRate: number | null = null
   let exchangeRateDate: string | null = null
@@ -724,7 +727,8 @@ async function commitCreateInvoice(
   let totalSek: number | null = null
 
   if (currency !== 'SEK') {
-    const rateData = await fetchExchangeRate(currency)
+    // ML 8 kap 21–23 §§: rate valid on the invoice date, not "today".
+    const rateData = await fetchExchangeRate(currency, new Date(invoiceDateForFx))
     if (rateData) {
       exchangeRate = rateData.rate
       exchangeRateDate = rateData.date
@@ -840,57 +844,50 @@ async function commitMarkInvoicePaid(
 ): Promise<ExecutorResult> {
   const invoiceId = params.invoice_id as string
   const paymentDate = (params.payment_date as string) || new Date().toISOString().split('T')[0]
+  const paymentAmount =
+    typeof params.amount === 'number' && Number.isFinite(params.amount)
+      ? (params.amount as number)
+      : undefined
 
-  const { data: invoice, error: invoiceError } = await supabase
-    .from('invoices')
-    .select('*, customer:customers(*), items:invoice_items(*)')
-    .eq('id', invoiceId)
-    .eq('company_id', companyId)
-    .single()
+  // Delegates to the shared mark-paid service — the same orchestration the
+  // dashboard and v1 routes use: partial payments, overpayment→kundsaldo,
+  // invoice_payments row, race-guarded update with orphan-JE cleanup and the
+  // invoice.paid event.
+  const result = await markInvoicePaid(supabase, companyId, userId, {
+    invoiceId,
+    paymentDate,
+    paymentAmount,
+    notes: typeof params.notes === 'string' ? params.notes : undefined,
+  })
 
-  if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
-    return { error: 'Invoice can only be marked as paid when status is "sent" or "overdue"', status: 409 }
-  }
-
-  const { data: settings } = await supabase
-    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
-
-  const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
-  const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
-  let journalEntryId: string | null = null
-
-  // Route on invoice state, not the company's current accounting_method —
-  // an invoice booked at send under accrual must clear 1510 here even if
-  // the company has since switched to kontantmetoden.
-  const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-  const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
-
-  if (isRealInvoice) {
-    if (useCashEntry) {
-      const je = await createInvoiceCashEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, entityType, invoice.customer?.name
-      )
-      journalEntryId = je?.id ?? null
-    } else {
-      const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, paymentDate, undefined, invoice.customer?.name
-      )
-      journalEntryId = je?.id ?? null
+  if (!result.ok) {
+    const statusByCode: Record<string, number> = {
+      INVOICE_PAID_NOT_FOUND: 404,
+      INVOICE_PAID_NOT_PAYABLE: 409,
+      INVOICE_PAID_RACE: 409,
+      INVOICE_PAID_LINES_UNBALANCED: 400,
+      VALIDATION_ERROR: 400,
+      INVOICE_PAID_NO_FISCAL_PERIOD: 400,
+      INVOICE_PAID_BOOK_FAILED: 500,
+    }
+    if (result.bookkeepingError && isBookkeepingError(result.bookkeepingError)) {
+      throw result.bookkeepingError
+    }
+    return {
+      error: `Mark-paid failed: ${result.code}`,
+      status: statusByCode[result.code] ?? 500,
     }
   }
 
-  const now = new Date().toISOString()
-  const { error: updateError } = await supabase
-    .from('invoices')
-    .update({ status: 'paid', paid_at: now, paid_amount: invoice.total })
-    .eq('id', invoiceId)
-    .eq('company_id', companyId)
-
-  if (updateError) return { error: 'Failed to update invoice status', status: 500 }
-
-  return { data: { status: 'paid', journal_entry_id: journalEntryId } }
+  return {
+    data: {
+      status: result.newStatus,
+      journal_entry_id: result.journalEntryId,
+      applied_amount: result.appliedAmount,
+      overpayment_amount: result.overpaymentAmount,
+      customer_credit_id: result.customerCreditId,
+    },
+  }
 }
 
 async function commitSendInvoice(

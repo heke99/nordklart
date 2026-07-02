@@ -33,17 +33,10 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
-import {
-  createInvoiceCashEntry,
-  createInvoicePaymentJournalEntry,
-} from '@/lib/bookkeeping/invoice-entries'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { buildInvoicePaymentWithCustomerCreditLines } from '@/lib/bookkeeping/customer-overpayment-lines'
-import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
+import { markInvoicePaid } from '@/lib/invoices/mark-paid-service'
 import { planInvoiceCustomerPayment } from '@/lib/invoices/customer-payment-allocation'
-import { recordCustomerOverpayment, recordInvoiceUnderpayment } from '@/lib/invoices/customer-credit-recording'
-import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
+import type { EntityType, Invoice } from '@/types'
 
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
@@ -360,261 +353,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
-    const warnings: { code: string; message: string }[] = []
+    // Commit path — delegated to the shared mark-paid service (same
+    // orchestration the dashboard route and the pending-operation executor
+    // use): journal entry, race-guarded invoice update with orphan-JE
+    // cleanup, invoice_payments row, over/underpayment ledger, invoice.paid.
+    const result = await markInvoicePaid(ctx.supabase, ctx.companyId!, ctx.userId, {
+      invoiceId,
+      paymentDate,
+      paymentAmount: explicitPaymentAmount,
+      exchangeRateDifference,
+      customLines,
+      notes: paymentNotesInput,
+    })
 
-    // Commit path. Step 1: book the journal entry. Three flavors:
-    //   - Custom lines (partial payment etc.) → createJournalEntry directly
-    //   - Cash basis → createInvoiceCashEntry (recognizes revenue here)
-    //   - Accrual basis → createInvoicePaymentJournalEntry (settles AR)
-    let journalEntryId: string | null = null
-    const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
-    if (isRealInvoice) {
-      try {
-        if (customLines) {
-          const fiscalPeriodId = await findFiscalPeriod(
-            ctx.supabase,
-            ctx.companyId!,
-            paymentDate,
-          )
-          if (!fiscalPeriodId) {
-            return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
-              requestId: ctx.requestId,
-              details: { payment_date: paymentDate },
-            })
-          }
-          const input: CreateJournalEntryInput = {
-            fiscal_period_id: fiscalPeriodId,
-            entry_date: paymentDate,
-            description: `Delbetalning faktura ${typed.invoice_number ?? typed.id}`,
-            source_type: 'invoice_paid',
-            source_id: invoiceId,
-            lines: customLines.map((l) => ({
-              account_number: l.account_number,
-              debit_amount: l.debit_amount,
-              credit_amount: l.credit_amount,
-              line_description: l.line_description ?? undefined,
-            })),
-          }
-          const entry = await createJournalEntry(
-            ctx.supabase,
-            ctx.companyId!,
-            ctx.userId,
-            input,
-          )
-          journalEntryId = entry?.id ?? null
-        } else if (overpaymentAmount > 0) {
-          const fiscalPeriodId = await findFiscalPeriod(
-            ctx.supabase,
-            ctx.companyId!,
-            paymentDate,
-          )
-          if (!fiscalPeriodId) {
-            return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
-              requestId: ctx.requestId,
-              details: { payment_date: paymentDate },
-            })
-          }
-          const desc = typed.customer?.name
-            ? `Inbetalning kundfaktura ${typed.invoice_number}, ${typed.customer.name}`
-            : `Inbetalning kundfaktura ${typed.invoice_number}`
-          const entry = await createJournalEntry(
-            ctx.supabase,
-            ctx.companyId!,
-            ctx.userId,
-            {
-              fiscal_period_id: fiscalPeriodId,
-              entry_date: paymentDate,
-              description: `${desc} med överbetalning`,
-              source_type: 'invoice_paid',
-              source_id: invoiceId,
-              lines: buildInvoicePaymentWithCustomerCreditLines({
-                bankAmount: paymentAmount,
-                invoiceSettlementAmount: appliedAmount,
-                customerCreditAmount: overpaymentAmount,
-                description: desc,
-              }),
-            },
-          )
-          journalEntryId = entry?.id ?? null
-        } else if (useCashEntry) {
-          const entry = await createInvoiceCashEntry(
-            ctx.supabase,
-            ctx.companyId!,
-            ctx.userId,
-            typed as Invoice,
-            paymentDate,
-            entityType,
-            typed.customer?.name,
-          )
-          journalEntryId = entry?.id ?? null
-        } else {
-          const entry = await createInvoicePaymentJournalEntry(
-            ctx.supabase,
-            ctx.companyId!,
-            ctx.userId,
-            typed as Invoice,
-            paymentDate,
-            exchangeRateDifference,
-            typed.customer?.name,
-            // Pass the actual amount settled against 1510.
-            appliedAmount,
-          )
-          journalEntryId = entry?.id ?? null
-        }
-
-        if (!journalEntryId) {
-          warnings.push({
-            code: 'JOURNAL_ENTRY_NOT_POSTED',
-            message:
-              'Payment journal entry was not created (likely no open fiscal period). Verify the period and book manually if required.',
-          })
-        }
-      } catch (err) {
-        ctx.log.error('mark-paid: journal entry creation failed', err as Error, {
-          invoiceId,
-          companyId: ctx.companyId,
-        })
-        warnings.push({
-          code: 'JOURNAL_ENTRY_NOT_POSTED',
-          message:
-            'Payment was recorded but the journal entry posting failed. Check the engine logs; reconcile before period close.',
-        })
-      }
-    }
-
-    // Step 2: update the invoice row.
-    const updatePayload: Record<string, unknown> = {
-      status: newStatus,
-      remaining_amount: newRemaining,
-      paid_amount: newPaidAmount,
-      updated_at: new Date().toISOString(),
-    }
-    if (newStatus === 'paid') {
-      updatePayload.paid_at = paymentDate
-    }
-    if (journalEntryId) {
-      updatePayload.journal_entry_id = journalEntryId
-    }
-
-    const { data: updated, error: updateErr } = await ctx.supabase
-      .from('invoices')
-      .update(updatePayload)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', invoiceId)
-      // Race guard: only flip from a payable status.
-      .in('status', ['sent', 'overdue', 'partially_paid'])
-      .select(INVOICE_MARK_PAID_RESPONSE_COLUMNS)
-      .maybeSingle()
-
-    if (updateErr) {
-      ctx.log.error('mark-paid: invoice update failed', updateErr as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-        pgCode: (updateErr as { code?: string }).code,
-      })
-      return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
+    if (!result.ok) {
+      return v1ErrorResponseFromCode(result.code, ctx.log, {
         requestId: ctx.requestId,
-      })
-    }
-    if (!updated) {
-      // Race: status transitioned (concurrent mark-paid / credit) between
-      // pre-flight and our update. Surface as 409.
-      ctx.log.warn('mark-paid: race — invoice status transitioned during request', {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('INVOICE_PAID_RACE', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    const { data: paymentRow, error: paymentInsertErr } = await ctx.supabase
-      .from('invoice_payments')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        invoice_id: invoiceId,
-        payment_date: paymentDate,
-        amount: appliedAmount,
-        currency: typed.currency,
-        exchange_rate: typed.exchange_rate,
-        exchange_rate_difference: exchangeRateDifference ?? 0,
-        journal_entry_id: journalEntryId,
-        transaction_id: null,
-        notes: paymentNotesInput ?? null,
-      })
-      .select('id')
-      .single()
-
-    if (paymentInsertErr) {
-      ctx.log.error('mark-paid: invoice payment row insert failed', paymentInsertErr as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    const paymentId = (paymentRow as { id?: string } | null)?.id ?? null
-    let customerCreditId: string | null = null
-    try {
-      if (overpaymentAmount > 0) {
-        const result = await recordCustomerOverpayment(ctx.supabase, {
-          userId: ctx.userId,
-          companyId: ctx.companyId!,
-          customerId: typed.customer_id ?? null,
-          invoiceId,
-          paymentId,
-          journalEntryId,
-          amount: overpaymentAmount,
-          currency: typed.currency,
-          notes: `Överbetalning ${overpaymentAmount} ${typed.currency} på faktura ${typed.invoice_number}.`,
-        })
-        customerCreditId = result.creditId
-      } else if (newRemaining > 0) {
-        await recordInvoiceUnderpayment(ctx.supabase, {
-          userId: ctx.userId,
-          companyId: ctx.companyId!,
-          invoiceId,
-          paymentId,
-          journalEntryId,
-          amount: newRemaining,
-          currency: typed.currency,
-          notes: `Restbelopp ${newRemaining} ${typed.currency} kvar efter delbetalning.`,
-        })
-      }
-    } catch (adjustmentErr) {
-      ctx.log.error('mark-paid: payment adjustment ledger write failed', adjustmentErr as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      warnings.push({
-        code: 'PAYMENT_ADJUSTMENT_NOT_RECORDED',
-        message: 'Payment was recorded, but the AR adjustment ledger row could not be created. Review customer balance manually.',
-      })
-    }
-
-    // Step 3: emit invoice.paid (best-effort, surfaces in warnings on fail).
-    try {
-      await eventBus.emit({
-        type: 'invoice.paid',
-        payload: {
-          invoice: updated as unknown as Invoice,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-          paymentAmount: appliedAmount,
-          paymentDate,
-        },
-      })
-    } catch (err) {
-      ctx.log.error('invoice.paid emit failed', err as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      warnings.push({
-        code: 'EVENT_EMIT_FAILED',
-        message: 'invoice.paid event did not reach the bus; downstream subscribers may miss this transition.',
+        details: result.details,
       })
     }
 
@@ -622,24 +377,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       invoiceId,
       companyId: ctx.companyId,
       userId: ctx.userId,
-      newStatus,
-      journalEntryId,
+      newStatus: result.newStatus,
+      journalEntryId: result.journalEntryId,
       paymentAmount,
-      appliedAmount,
-      overpaymentAmount,
-      customerCreditId,
+      appliedAmount: result.appliedAmount,
+      overpaymentAmount: result.overpaymentAmount,
+      customerCreditId: result.customerCreditId,
       isPartial,
-      hadWarnings: warnings.length > 0,
+      hadWarnings: result.warnings.length > 0,
     })
+
+    const responseInvoice = Object.fromEntries(
+      INVOICE_MARK_PAID_RESPONSE_COLUMNS.split(', ').map((column) => [
+        column,
+        (result.invoice as unknown as Record<string, unknown>)[column],
+      ]),
+    )
 
     return ok(
       {
-        ...(updated as object),
-        journal_entry_id: journalEntryId,
-        applied_amount: appliedAmount,
-        overpayment_amount: overpaymentAmount,
-        customer_credit_id: customerCreditId,
-        ...(warnings.length > 0 ? { warnings } : {}),
+        ...responseInvoice,
+        journal_entry_id: result.journalEntryId,
+        applied_amount: result.appliedAmount,
+        overpayment_amount: result.overpaymentAmount,
+        customer_credit_id: result.customerCreditId,
+        ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
       },
       { requestId: ctx.requestId },
     )

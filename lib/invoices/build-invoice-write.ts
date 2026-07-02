@@ -302,7 +302,10 @@ export async function buildInvoiceWriteData(params: {
   let totalSek: number | null = null
 
   if (input.currency !== 'SEK') {
-    const rateData = await fetchExchangeRate(input.currency)
+    // ML 8 kap 21–23 §§: convert at the rate valid on the INVOICE date, not
+    // "today". fetchExchangeRate falls back through the last 7 days when the
+    // date is a weekend/holiday.
+    const rateData = await fetchExchangeRate(input.currency, new Date(input.invoice_date))
     if (rateData) {
       exchangeRate = rateData.rate
       exchangeRateDate = rateData.date

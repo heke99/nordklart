@@ -1,26 +1,22 @@
 import { NextResponse } from 'next/server'
-import {
-  createInvoicePaymentJournalEntry,
-  createInvoiceCashEntry,
-} from '@/lib/bookkeeping/invoice-entries'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
+import { markInvoicePaid } from '@/lib/invoices/mark-paid-service'
+import type { Invoice } from '@/types'
 
 ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/mark-paid
  *
- * Manually marks an invoice as paid (for payments received outside bank sync).
- *
- * Faktureringsmetoden (accrual): Debit 1930, Credit 1510 (clearing entry)
- * Kontantmetoden (cash):         Debit 1930, Credit 30xx, Credit 26xx
+ * Manually marks an invoice as paid (for payments received outside bank
+ * sync). Delegates the settlement to the shared mark-paid service — the same
+ * orchestration the v1 API and the pending-operation executor use — so
+ * partial payments, overpayment→kundsaldo, invoice_payments rows and race
+ * handling behave identically across entry points.
  */
 export const POST = withRouteContext(
   'invoice.mark_paid',
@@ -31,7 +27,7 @@ export const POST = withRouteContext(
 
     const { data: invoice, error: invoiceError } = await supabase
       .from('invoices')
-      .select('*, customer:customers(*), items:invoice_items(*)')
+      .select('*, customer:customers(*)')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -40,7 +36,11 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_PAID_NOT_FOUND', opLog, { requestId })
     }
 
-    if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
+    if (
+      invoice.status !== 'sent' &&
+      invoice.status !== 'overdue' &&
+      invoice.status !== 'partially_paid'
+    ) {
       return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
         requestId,
         details: { currentStatus: invoice.status },
@@ -84,9 +84,7 @@ export const POST = withRouteContext(
     // transaction before booking. Skipped on partial payments (explicit,
     // deliberate action), on force=true, and on invoices without a resolved
     // customer name. Mirrors the supplier-side guard at
-    // /api/supplier-invoices/[id]/mark-paid. The dialog always sends custom
-    // lines, so the partial-payment skip is gated on total debit vs remaining,
-    // not on the mere presence of customLines.
+    // /api/supplier-invoices/[id]/mark-paid.
     const remainingAmount =
       (invoice as Invoice & { remaining_amount?: number }).remaining_amount ?? invoice.total
     const paymentAmount = customLines
@@ -124,137 +122,34 @@ export const POST = withRouteContext(
       })
     }
 
-    const { data: settings } = await supabase
-      .from('company_settings')
-      .select('accounting_method, entity_type')
-      .eq('company_id', companyId)
-      .single()
+    const result = await markInvoicePaid(supabase, companyId!, user.id, {
+      invoiceId: id,
+      paymentDate,
+      exchangeRateDifference,
+      customLines,
+    })
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
-
-    // Drive the JE shape from the invoice's actual booking state, not from
-    // the current accounting_method setting. If the invoice was booked at
-    // send (Dr 1510 / Cr 30xx + VAT), the payment MUST clear 1510 —
-    // otherwise the receivable orphans and 30xx + VAT double-count. Only
-    // when there is no prior JE (pure kontantmetoden) do we recognise
-    // revenue + VAT here.
-    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
-
-    const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
-    let journalEntryId: string | null = null
-
-    if (isRealInvoice) {
-      try {
-        if (customLines) {
-          const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-          const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-          if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-            return errorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', opLog, {
-              requestId,
-              details: { totalDebit, totalCredit },
-            })
-          }
-
-          const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, paymentDate)
-          if (!fiscalPeriodId) {
-            return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', opLog, {
-              requestId,
-              details: { paymentDate },
-            })
-          }
-          const sourceType = useCashEntry ? 'invoice_cash_payment' : 'invoice_paid'
-          const input: CreateJournalEntryInput = {
-            fiscal_period_id: fiscalPeriodId,
-            entry_date: paymentDate,
-            description: invoice.customer?.name
-              ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
-              : `Inbetalning kundfaktura ${invoice.invoice_number}`,
-            source_type: sourceType,
-            source_id: invoice.id,
-            lines: customLines,
-          }
-          const journalEntry = await createJournalEntry(supabase, companyId!, user.id, input)
-          journalEntryId = journalEntry?.id ?? null
-        } else if (useCashEntry) {
-          const journalEntry = await createInvoiceCashEntry(
-            supabase, companyId!, user.id, invoice as Invoice, paymentDate,
-            entityType, invoice.customer?.name,
-          )
-          journalEntryId = journalEntry?.id ?? null
-        } else {
-          const journalEntry = await createInvoicePaymentJournalEntry(
-            supabase, companyId!, user.id, invoice as Invoice, paymentDate,
-            exchangeRateDifference, invoice.customer?.name,
-          )
-          journalEntryId = journalEntry?.id ?? null
-        }
-      } catch (err) {
-        if (isBookkeepingError(err)) {
-          return errorResponse(err, opLog, { requestId })
-        }
-        opLog.error('failed to create payment journal entry', err as Error)
-        return errorResponseFromCode('INVOICE_PAID_BOOK_FAILED', opLog, {
-          requestId,
-          details: { reason: err instanceof Error ? err.message : 'unknown' },
-        })
+    if (!result.ok) {
+      if (result.bookkeepingError) {
+        return errorResponse(result.bookkeepingError, opLog, { requestId })
       }
-    }
-
-    // CAS guard: only update if status is still in a payable state.
-    const { data: updateResult, error: updateError } = await supabase
-      .from('invoices')
-      .update({
-        status: 'paid',
-        paid_at: now,
-        paid_amount: invoice.total,
+      return errorResponseFromCode(result.code, opLog, {
+        requestId,
+        details: result.details,
       })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .in('status', ['sent', 'overdue'])
-      .select('id')
-
-    if (updateError) {
-      opLog.error('failed to update invoice status', updateError)
-      return errorResponse(updateError, opLog, { requestId })
-    }
-
-    if (!updateResult || updateResult.length === 0) {
-      // Status changed between read and write — cancel the orphaned JE and
-      // document the voucher gap before reporting back.
-      if (journalEntryId) {
-        const { data: orphan } = await supabase
-          .from('journal_entries')
-          .select('fiscal_period_id, voucher_series, voucher_number')
-          .eq('id', journalEntryId)
-          .single()
-
-        await supabase
-          .from('journal_entries')
-          .update({ status: 'cancelled' })
-          .eq('id', journalEntryId)
-
-        if (orphan) {
-          await supabase.from('voucher_gap_explanations').insert({
-            company_id: companyId,
-            fiscal_period_id: orphan.fiscal_period_id,
-            voucher_series: orphan.voucher_series || 'A',
-            gap_number: orphan.voucher_number,
-            explanation: 'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-            created_by: user.id,
-          })
-        }
-      }
-      return errorResponseFromCode('INVOICE_PAID_RACE', opLog, { requestId })
     }
 
     return NextResponse.json({
       success: true,
-      status: 'paid',
-      paid_at: now,
-      paid_amount: invoice.total,
-      journal_entry_id: journalEntryId,
+      status: result.newStatus,
+      paid_at: result.newStatus === 'paid' ? paymentDate : null,
+      paid_amount: result.newPaidAmount,
+      remaining_amount: result.newRemaining,
+      applied_amount: result.appliedAmount,
+      overpayment_amount: result.overpaymentAmount,
+      customer_credit_id: result.customerCreditId,
+      journal_entry_id: result.journalEntryId,
+      ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
     })
   },
   { requireWrite: true },
