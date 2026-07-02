@@ -69,6 +69,22 @@ interface FiscalYearRef {
 }
 
 /**
+ * Resolve a non-optional FiscalYearRef.id from a provider row whose ids are
+ * optional (Björn Lundén). Preference order: provider `id`, then `entityId`,
+ * then a stable synthetic id derived from year + period bounds so two fiscal
+ * years starting in the same calendar year (broken räkenskapsår) still get
+ * distinct, deterministic ids.
+ */
+export function resolveFiscalYearId(
+  fy: { id?: string | number; entityId?: string | number; fromDate?: string; toDate?: string },
+  year: number,
+): string | number {
+  if (fy.id !== undefined && fy.id !== null) return fy.id
+  if (fy.entityId !== undefined && fy.entityId !== null) return fy.entityId
+  return `fy-${year}_${fy.fromDate ?? 'unknown'}_${fy.toDate ?? 'unknown'}`
+}
+
+/**
  * Fetch SIE type-4 exports from the provider, one file per allowed fiscal
  * year (oldest first). Years whose export fails do not block the rest of the
  * migration, but they are reported in `failedYears` so the caller can warn
@@ -181,8 +197,8 @@ function getSieFetcher(
           return {
             // BL's SIE export is date-ranged, so an explicit provider year id is
             // optional. Still keep FiscalYearRef.id stable for logging and shared
-            // fetcher typing by falling back to the calendar year.
-            id: fy.id ?? fy.entityId ?? year,
+            // fetcher typing via the id → entityId → synthetic fallback chain.
+            id: resolveFiscalYearId(fy, year),
             year,
             fromDate: fy.fromDate,
             toDate: fy.toDate,

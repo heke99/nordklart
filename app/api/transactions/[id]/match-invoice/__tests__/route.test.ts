@@ -635,19 +635,23 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
-  it('returns 400 MATCH_AMOUNT_EXCEEDS_REMAINING when tx amount exceeds invoice remaining', async () => {
-    // Tx is +12 000 SEK, invoice has 5 000 SEK remaining. Legacy code path
-    // would push paid_amount past invoice.total; the new guard rejects so
-    // the user routes the excess through the split-payment flow.
+  it('rejects an overpayment on a foreign-currency invoice with 400 (must be handled manually)', async () => {
+    // Tx is +12 000 SEK against an EUR invoice with 500 EUR remaining
+    // (rate 10 → payment ≈ 1 200 EUR). SEK overpayments become customer
+    // credit via planInvoiceCustomerPayment, but a cross-currency
+    // overpayment is blocked: the FX diff on the credit portion cannot be
+    // booked safely without manual review.
     const tx = makeTransaction({ id: 'tx-1', amount: 12000, invoice_id: null, date: '2024-06-15' })
     const invoice = makeInvoice({
       id: VALID_UUID,
       status: 'partially_paid',
-      total: 10000,
-      remaining_amount: 5000,
-      paid_amount: 5000,
+      currency: 'EUR',
+      total: 1000,
+      remaining_amount: 500,
+      paid_amount: 500,
     })
 
+    mockFetchExchangeRate.mockResolvedValue({ rate: 10, date: '2024-06-15' })
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
     // Hard-duplicate check is skipped for partially_paid status — no enqueue needed.
@@ -660,13 +664,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const { status, body } = await parseJsonResponse<{ error: unknown }>(response)
 
     expect(status).toBe(400)
-    expect((body.error as unknown as { code: string }).code).toBe(
-      'MATCH_AMOUNT_EXCEEDS_REMAINING',
-    )
-    const details = (body.error as unknown as { details: Record<string, number> }).details
-    expect(details.transaction_amount).toBe(12000)
-    expect(details.remaining_amount).toBe(5000)
-    expect(details.excess).toBe(7000)
+    expect((body.error as unknown as { code: string }).code).toBe('VALIDATION_ERROR')
+    const details = (body.error as unknown as { details: Record<string, unknown> }).details
+    expect(details.overpayment_amount).toBe(700)
   })
 
   it('cash method partial payment uses clearing entry with note', async () => {

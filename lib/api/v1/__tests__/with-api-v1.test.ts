@@ -61,12 +61,16 @@ const mockCheckIdempotency = checkIdempotencyKey as ReturnType<typeof vi.fn>
 const mockStoreIdempotency = storeIdempotencyResponse as ReturnType<typeof vi.fn>
 
 function makeSupabaseStub(membership: { company_id: string; role: string } | null) {
+  // Mirrors the wrapper's membership lookup chain:
+  // .from().select().eq().eq().in().maybeSingle()
   return {
     from: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            in: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: membership, error: null }),
+            }),
           }),
         }),
       }),
@@ -86,6 +90,9 @@ function emptyParams() {
 function companyParams(companyId: string) {
   return { params: Promise.resolve({ companyId }) }
 }
+
+// Route param shape for /api/v1/companies/[companyId]/* handlers under test.
+type CompanyRouteParams = { params: Promise<{ companyId: string }> }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -201,7 +208,7 @@ describe('withApiV1 — company membership', () => {
     // No membership → null
     mockServiceClient.mockReturnValue(makeSupabaseStub(null))
 
-    const handler = withApiV1(
+    const handler = withApiV1<CompanyRouteParams>(
       'companies.get',
       async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }),
       { requireScope: 'companies:read' },
@@ -228,7 +235,7 @@ describe('withApiV1 — company membership', () => {
 
     mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
 
-    const handler = withApiV1(
+    const handler = withApiV1<CompanyRouteParams>(
       'companies.get',
       async (_req, ctx) => ok({ companyId: ctx.companyId }, { requestId: ctx.requestId }),
       { requireScope: 'companies:read' },
@@ -262,7 +269,7 @@ describe('withApiV1 — idempotency', () => {
       body: { data: { id: 'inv-cached' } },
     })
 
-    const handler = withApiV1(
+    const handler = withApiV1<CompanyRouteParams>(
       'invoices.create',
       async () => {
         return NextResponse.json({ data: { id: 'inv-fresh' } }, { status: 201 })
@@ -297,7 +304,7 @@ describe('withApiV1 — idempotency', () => {
     })
     mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
 
-    const handler = withApiV1(
+    const handler = withApiV1<CompanyRouteParams>(
       'invoices.create',
       async (_req, ctx) => ok({ ok: true }, { requestId: ctx.requestId }),
       { requireScope: 'invoices:write', requireIdempotencyKey: true },
@@ -327,7 +334,7 @@ describe('withApiV1 — dry-run', () => {
     mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
 
     let observedDryRun: boolean | null = null
-    const handler = withApiV1(
+    const handler = withApiV1<CompanyRouteParams>(
       'invoices.create',
       async (_req, ctx) => {
         observedDryRun = ctx.dryRun
@@ -362,7 +369,7 @@ describe('withApiV1 — dry-run', () => {
     mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
 
     let observedDryRun: boolean | null = null
-    const handler = withApiV1(
+    const handler = withApiV1<CompanyRouteParams>(
       'invoices.create',
       async (_req, ctx) => {
         observedDryRun = ctx.dryRun

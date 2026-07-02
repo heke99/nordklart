@@ -89,7 +89,10 @@ import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoic
 // ── Actor context ────────────────────────────────────────────
 
 interface ActorContext {
-  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+  // Mirrors lib/agent/tools/types.ts AgentActorContext — the in-app chat agent
+  // dispatches the same tools with type 'agent_chat' (allowed by the
+  // pending_operations/audit_log actor_type CHECK since 20260519090000).
+  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
   id?: string
   label?: string
   /**

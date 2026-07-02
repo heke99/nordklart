@@ -32,6 +32,7 @@ const transaktionerResponseExample = {
       ranteberakningsdatum: '2019-04-13',
       transaktionstext: 'Inbetalning bokförd 190412',
       beloppSkatteverket: 1292,
+      beloppKronofogden: null,
     },
     {
       transaktionsidentitet: 746876988,
@@ -39,6 +40,7 @@ const transaktionerResponseExample = {
       ranteberakningsdatum: '2019-04-13',
       transaktionstext: 'Debiterad preliminärskatt',
       beloppSkatteverket: -1292,
+      beloppKronofogden: null,
     },
     {
       transaktionsidentitet: 746876989,
@@ -46,6 +48,7 @@ const transaktionerResponseExample = {
       ranteberakningsdatum: '2019-04-12',
       transaktionstext: 'Inbetalning bokförd 190411',
       beloppSkatteverket: 5402,
+      beloppKronofogden: null,
     },
     {
       transaktionsidentitet: 746876990,
@@ -53,6 +56,7 @@ const transaktionerResponseExample = {
       ranteberakningsdatum: '2019-04-13',
       transaktionstext: 'Avdragen skatt mars 2019',
       beloppSkatteverket: -3000,
+      beloppKronofogden: null,
     },
     {
       transaktionsidentitet: 746876991,
@@ -60,15 +64,18 @@ const transaktionerResponseExample = {
       ranteberakningsdatum: '2019-04-13',
       transaktionstext: 'Arbetsgivaravgift mars 2019',
       beloppSkatteverket: -2402,
+      beloppKronofogden: null,
     },
   ],
   kommandeTransaktioner: [
     {
+      transaktionsidentitet: null,
       transaktionsdatum: '2019-03-13',
       forfallodatum: '2019-05-13',
       ranteberakningsdatum: '2019-05-14',
       transaktionstext: 'Debiterad prelimniärskatt',
       beloppSkatteverket: -1292,
+      beloppKronofogden: null,
     },
   ],
 }

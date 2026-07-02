@@ -20,7 +20,11 @@ vi.mock('@/lib/supabase/fetch-all', () => ({
   fetchAllRows: (...a: unknown[]) => mockFetchAllRows(...a),
 }))
 
-import { GET } from '../route'
+import { GET as getRoute } from '../route'
+
+// Next.js 16 route handlers receive `{ params: Promise<...> }` as a second arg.
+const routeContext = { params: Promise.resolve({} as Record<string, never>) }
+const GET = (request: Request) => getRoute(request, routeContext)
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 

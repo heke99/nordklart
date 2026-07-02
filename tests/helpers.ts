@@ -673,6 +673,15 @@ export function createMockRouteParams<T extends Record<string, string>>(
 }
 
 /**
+ * Empty Next.js 16 route-handler context for non-dynamic routes.
+ * Next.js always passes `{ params: Promise<...> }` as the second argument to
+ * route handlers — static routes receive an empty params object.
+ */
+export function emptyRouteParams(): { params: Promise<Record<string, never>> } {
+  return { params: Promise.resolve({} as Record<string, never>) }
+}
+
+/**
  * Queue-based Supabase mock for routes with multiple sequential DB calls.
  *
  * Each call to `.from()` or `.rpc()` consumes the next result in the queue.

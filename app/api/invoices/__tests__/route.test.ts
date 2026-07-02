@@ -62,7 +62,12 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
     mockCreateCreditNoteJournalEntry(...args),
 }))
 
-import { GET, POST } from '../route'
+import { GET as getRoute, POST as postRoute } from '../route'
+
+// Next.js 16 route handlers receive `{ params: Promise<...> }` as a second arg.
+const routeContext = { params: Promise.resolve({} as Record<string, never>) }
+const GET = (request: Request) => getRoute(request, routeContext)
+const POST = (request: Request) => postRoute(request, routeContext)
 
 describe('GET /api/invoices', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }

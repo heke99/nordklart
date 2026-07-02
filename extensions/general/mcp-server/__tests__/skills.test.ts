@@ -405,9 +405,8 @@ describe('nordklart_load_skill tool', () => {
   })
 
   it('skips an atom whose body is null in the DB (no on-disk fallback in prod)', async () => {
-    const prev = process.env.NODE_ENV
     // Force the prod path so the dev disk-fallback is disabled.
-    process.env.NODE_ENV = 'production'
+    vi.stubEnv('NODE_ENV', 'production')
     try {
       const tool = tools.find((t) => t.name === 'nordklart_load_skill')!
       const supabase = makeSupabaseWithEmptyAtomRegistry([
@@ -426,7 +425,7 @@ describe('nordklart_load_skill tool', () => {
         tool.execute({ slug: 'vertical/konsult-it' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
       ).rejects.toThrow()
     } finally {
-      process.env.NODE_ENV = prev
+      vi.unstubAllEnvs()
     }
   })
 })

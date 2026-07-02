@@ -864,6 +864,29 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
   },
 }
 
+const ACCRUALS: Record<string, StructuredErrorEntry> = {
+  ACCRUAL_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Periodiseringen kunde inte hittas.',
+    message_en: 'Accrual schedule not found.',
+  },
+  ACCRUAL_NOT_ACTIVE: {
+    httpStatus: 400,
+    message_sv: 'Periodiseringen är inte aktiv och kan inte lösas upp.',
+    message_en: 'Accrual schedule is not active and cannot be dissolved.',
+  },
+  ACCRUAL_NOTHING_TO_DISSOLVE: {
+    httpStatus: 400,
+    message_sv: 'Periodiseringen har inga återstående belopp att lösa upp.',
+    message_en: 'Accrual schedule has no remaining amount to dissolve.',
+  },
+  ACCRUAL_DISSOLVE_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Periodiseringen kunde inte lösas upp.',
+    message_en: 'Failed to dissolve accrual schedule.',
+  },
+}
+
 const YEAR_END: Record<string, StructuredErrorEntry> = {
   YEAR_END_PREVIEW_FAILED: {
     httpStatus: 400,
@@ -2289,6 +2312,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...INVOICE,
   ...SUPPLIER_INVOICE,
   ...PERIOD,
+  ...ACCRUALS,
   ...YEAR_END,
   ...OPENING_BAL,
   ...FX,

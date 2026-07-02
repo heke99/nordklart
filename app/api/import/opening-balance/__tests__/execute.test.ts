@@ -43,7 +43,22 @@ vi.mock('@/lib/supabase/fetch-all', () => ({
   ]),
 }))
 
-import { POST } from '../execute/route'
+import { POST as postRoute } from '../execute/route'
+
+// Next.js 16 route handlers receive `{ params: Promise<...> }` as a second arg.
+const routeContext = { params: Promise.resolve({} as Record<string, never>) }
+const POST = (request: Request) => postRoute(request, routeContext)
+
+interface ExecuteResponseBody {
+  error: unknown
+  data: {
+    success: boolean
+    journal_entry_id: string
+    lines_created: number
+    total_debit: number
+    total_credit: number
+  }
+}
 
 const PERIOD_ID = '550e8400-e29b-41d4-a716-446655440000'
 
@@ -73,7 +88,7 @@ describe('POST /api/import/opening-balance/execute', () => {
         { account_number: '2099', debit_amount: 0, credit_amount: 50000 },
       ],
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(401)
     expect(body.error).toBe('Unauthorized')
@@ -99,7 +114,7 @@ describe('POST /api/import/opening-balance/execute', () => {
         { account_number: '2099', debit_amount: 0, credit_amount: 50000 },
       ],
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(404)
     expect((body.error as unknown as { code: string }).code).toBe('OB_PERIOD_NOT_FOUND')
@@ -125,7 +140,7 @@ describe('POST /api/import/opening-balance/execute', () => {
         { account_number: '2099', debit_amount: 0, credit_amount: 50000 },
       ],
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(409)
     expect((body.error as unknown as { code: string }).code).toBe('OB_PERIOD_ALREADY_HAS_BALANCES')
@@ -153,7 +168,7 @@ describe('POST /api/import/opening-balance/execute', () => {
         { account_number: '2099', debit_amount: 0, credit_amount: 40000 },
       ],
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(400)
     expect((body.error as unknown as { code: string }).code).toBe('OB_UNBALANCED')
@@ -178,7 +193,7 @@ describe('POST /api/import/opening-balance/execute', () => {
         { account_number: '1930', debit_amount: 50000, credit_amount: 0 },
       ],
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(400)
     expect((body.error as unknown as { code: string }).code).toBe('OB_PNL_ACCOUNT')
@@ -227,7 +242,7 @@ describe('POST /api/import/opening-balance/execute', () => {
         { account_number: '2099', debit_amount: 0, credit_amount: 50000 },
       ],
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(200)
     expect(body.data.success).toBe(true)

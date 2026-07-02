@@ -104,25 +104,25 @@ describe('processOverdueReminders — credit-note filter', () => {
       (c) => c.method === 'lte' && c.args[0] === 'due_date',
     )
 
-    expect(inStatus?.args[1]).toEqual(['sent', 'overdue'])
+    expect(inStatus?.args[1]).toEqual(['sent', 'partially_paid', 'overdue'])
     expect(isCreditedNull?.args[1]).toBeNull()
     expect(lteDueDate).toBeDefined()
   })
 
-  it('uses a positive allowlist (sent + overdue) so paid / partially_paid / cancelled / credited can never match', async () => {
+  it('uses a positive allowlist (sent + partially_paid + overdue) so paid / cancelled / credited can never match', async () => {
     await processOverdueReminders()
 
     const inStatus = chainCalls.find(
       (c) => c.method === 'in' && c.args[0] === 'status',
     )
-    expect(inStatus?.args[1]).toEqual(['sent', 'overdue'])
+    expect(inStatus?.args[1]).toEqual(['sent', 'partially_paid', 'overdue'])
 
     // Defense in depth: ensure no .eq('status', terminal) somehow snuck in.
     const eqTerminal = chainCalls.find(
       (c) =>
         c.method === 'eq' &&
         c.args[0] === 'status' &&
-        ['paid', 'partially_paid', 'cancelled', 'credited'].includes(
+        ['paid', 'cancelled', 'credited'].includes(
           c.args[1] as string,
         ),
     )

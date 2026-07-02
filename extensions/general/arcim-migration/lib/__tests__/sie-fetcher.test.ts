@@ -3,6 +3,7 @@ import {
   providerSupportsSie,
   fetchProviderSieFiles,
   getAllowedFiscalYears,
+  resolveFiscalYearId,
 } from '../sie-fetcher'
 
 // The allowed window is rolling (current year and the two before it) — derive
@@ -65,6 +66,35 @@ describe('getAllowedFiscalYears', () => {
     expect(years.has(CY)).toBe(true)
     expect(years.has(CY - 2)).toBe(true)
     expect(years.has(CY - 3)).toBe(false)
+  })
+})
+
+describe('resolveFiscalYearId', () => {
+  it('prefers the provider id when present', () => {
+    expect(
+      resolveFiscalYearId({ id: '202401', entityId: 7, fromDate: '2024-01-01', toDate: '2024-12-31' }, 2024),
+    ).toBe('202401')
+    // A numeric 0 id is a valid provider id and must not fall through.
+    expect(resolveFiscalYearId({ id: 0, entityId: 7 }, 2024)).toBe(0)
+  })
+
+  it('falls back to entityId when id is missing', () => {
+    expect(
+      resolveFiscalYearId({ entityId: 7, fromDate: '2024-01-01', toDate: '2024-12-31' }, 2024),
+    ).toBe(7)
+  })
+
+  it('generates a stable synthetic id from year + period bounds when both ids are missing', () => {
+    const a = resolveFiscalYearId({ fromDate: '2024-01-01', toDate: '2024-12-31' }, 2024)
+    const b = resolveFiscalYearId({ fromDate: '2024-01-01', toDate: '2024-12-31' }, 2024)
+    expect(a).toBe('fy-2024_2024-01-01_2024-12-31')
+    expect(a).toBe(b) // deterministic
+
+    // Two broken fiscal years starting in the same calendar year must still
+    // get distinct ids.
+    const brokenYear = resolveFiscalYearId({ fromDate: '2024-07-01', toDate: '2025-06-30' }, 2024)
+    expect(brokenYear).toBe('fy-2024_2024-07-01_2025-06-30')
+    expect(brokenYear).not.toBe(a)
   })
 })
 
@@ -259,6 +289,33 @@ describe('fetchProviderSieFiles', () => {
         'User-Key': 'user-key-guid',
         Authorization: 'Bearer token',
       })
+    })
+
+    it('fetches a year whose row has neither id nor entityId (synthetic fallback id)', async () => {
+      routeFetch(fetchSpy, [
+        {
+          match: `/sie/export/${CY - 1}-01-01/${CY - 1}-12-31`,
+          respond: () => octetResponse(cp437SieBytes(String(CY - 1))),
+        },
+        {
+          match: '/financialyear',
+          respond: () =>
+            jsonResponse([
+              {
+                fromDate: `${CY - 1}-01-01`,
+                toDate: `${CY - 1}-12-31`,
+                open: true,
+              },
+            ]),
+        },
+      ])
+
+      const result = await fetchProviderSieFiles('bjornlunden', 'token', 'user-key-guid')
+
+      expect(result.failedYears).toEqual([])
+      expect(result.files).toHaveLength(1)
+      expect(result.files[0].fiscalYear).toBe(CY - 1)
+      expect(result.files[0].rawContent).toContain(`Företagskonto ${CY - 1}`)
     })
 
     it('also decodes the swagger-declared base64 body shape', async () => {

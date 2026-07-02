@@ -33,7 +33,11 @@ vi.mock('@/lib/bookkeeping/template-library', () => ({
   applyTemplate: vi.fn(),
 }))
 
-import { POST } from '../route'
+import { POST as postRoute } from '../route'
+
+// Next.js 16 route handlers receive `{ params: Promise<...> }` as a second arg.
+const routeContext = { params: Promise.resolve({} as Record<string, never>) }
+const POST = (request: Request) => postRoute(request, routeContext)
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
 
 const TX1 = '11111111-1111-4111-8111-111111111111'

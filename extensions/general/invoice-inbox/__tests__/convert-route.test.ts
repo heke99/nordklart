@@ -29,10 +29,14 @@ function buildCtx(supabase: unknown, overrides: Partial<ExtensionContext> = {}):
     extensionId: 'invoice-inbox',
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
-    settings: { get: vi.fn(), set: vi.fn() },
+    settings: { get: vi.fn(), set: vi.fn(), clear: vi.fn() },
     storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
-    services: {},
+    services: {
+      ingestTransactions: vi.fn(),
+      getCashAccounts: vi.fn(),
+      getPrimaryCashAccount: vi.fn(),
+    } as unknown as ExtensionContext['services'],
     ...overrides,
   } as ExtensionContext
 }

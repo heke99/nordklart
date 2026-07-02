@@ -77,6 +77,7 @@ const RECON_CLEAN = {
   gl_1930_balance: 100,
   gl_1930_period_movement: 100,
   gl_1930_opening_balance: 0,
+  gl_1930_correction_adjustment: 0,
   difference: 0,
   is_reconciled: true,
   matched_count: 5,

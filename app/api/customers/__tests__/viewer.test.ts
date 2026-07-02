@@ -38,7 +38,11 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWritePermissionMock(...args),
 }))
 
-import { POST } from '../route'
+import { POST as postRoute } from '../route'
+
+// Next.js 16 route handlers receive `{ params: Promise<...> }` as a second arg.
+const routeContext = { params: Promise.resolve({} as Record<string, never>) }
+const POST = (request: Request) => postRoute(request, routeContext)
 
 describe('POST /api/customers — viewer role gate', () => {
   const mockUser = { id: 'user-1', email: 'viewer@test.se' }

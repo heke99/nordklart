@@ -43,7 +43,11 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
   createInvoiceJournalEntry: (...args: unknown[]) => mockCreateInvoiceJournalEntry(...args),
 }))
 
-import { POST } from '../route'
+import { POST as postRoute } from '../route'
+
+// Next.js 16 route handlers receive `{ params: Promise<...> }` as a second arg.
+const routeContext = { params: Promise.resolve({} as Record<string, never>) }
+const POST = (request: Request) => postRoute(request, routeContext)
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const mockUser = { id: 'user-1', email: 'test@test.se' }

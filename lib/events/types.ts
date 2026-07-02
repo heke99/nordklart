@@ -158,7 +158,7 @@ export type CoreEvent =
   | { type: 'mcp.tool_called'; payload: {
       tool: string                                  // e.g. 'nordklart_create_invoice'
       requiredScope: string | null                  // from TOOL_SCOPE_MAP, null if unscoped
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null                        // api_key id, oauth client, etc.
       actorLabel: string | null                     // human-readable actor label
       latencyMs: number                             // wall-clock time inside execute()
@@ -179,7 +179,7 @@ export type CoreEvent =
   // the caller's scope set.
   | { type: 'mcp.tools_list_called'; payload: {
       toolCount: number                             // tools actually returned (post scope filter)
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null
       actorLabel: string | null
       latencyMs: number
@@ -197,7 +197,7 @@ export type CoreEvent =
       success: boolean
       errorCode: string | null
       latencyMs: number
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null
       actorLabel: string | null
       requestId: string | number | null
@@ -212,7 +212,7 @@ export type CoreEvent =
   | { type: 'mcp.workflow_started'; payload: {
       slug: string                                  // e.g. 'month-end-close'
       sessionId: string | null
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null
       actorLabel: string | null
       userId: string
@@ -224,7 +224,7 @@ export type CoreEvent =
       outcome: 'success' | 'abandoned' | 'failed'
       stepsCompleted: number | null                 // null when not tracked granularly
       durationMs: number | null
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null
       actorLabel: string | null
       userId: string
@@ -239,7 +239,7 @@ export type CoreEvent =
       slug: string                                  // e.g. 'modifier/holding-ab', 'month-end-close'
       tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
       sessionId: string | null
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null
       actorLabel: string | null
       userId: string
@@ -253,7 +253,7 @@ export type CoreEvent =
       fromTool: string
       toTool: string
       sessionId: string | null
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null
       actorLabel: string | null
       userId: string
@@ -268,7 +268,7 @@ export type CoreEvent =
       toolName: string | null
       skillSlug: string | null
       sessionId: string | null
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null
       actorLabel: string | null
       userId: string

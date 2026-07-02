@@ -41,7 +41,21 @@ vi.mock('@/lib/articles/validate-revenue-account', () => ({
   checkRevenueAccount: (...a: unknown[]) => mockCheckRevenueAccount(...a),
 }))
 
-import { POST } from '../execute/route'
+import { POST as postRoute } from '../execute/route'
+
+// Next.js 16 route handlers receive `{ params: Promise<...> }` as a second arg.
+const routeContext = { params: Promise.resolve({} as Record<string, never>) }
+const POST = (request: Request) => postRoute(request, routeContext)
+
+interface ExecuteResponseBody {
+  data: {
+    created: number
+    updated: number
+    skipped: number
+    failed: number
+    warnings: string[]
+  }
+}
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -99,7 +113,7 @@ describe('POST /api/import/articles/execute', () => {
       rows: [row(), row({ row_index: 3, name: 'Skruv', article_number: 'A-200', type: 'vara' })],
       update_duplicates: false,
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(200)
     expect(body.data.created).toBe(2)
@@ -116,7 +130,7 @@ describe('POST /api/import/articles/execute', () => {
       rows: [row({ article_number: 'A-1' })],
       update_duplicates: false,
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(200)
     expect(body.data.skipped).toBe(1)
@@ -131,7 +145,7 @@ describe('POST /api/import/articles/execute', () => {
       rows: [row({ article_number: 'A-1', name: 'New name' })],
       update_duplicates: true,
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(200)
     expect(body.data.updated).toBe(1)
@@ -145,7 +159,7 @@ describe('POST /api/import/articles/execute', () => {
       rows: [row({ name: 'KONSULTTIMME' })],
       update_duplicates: false,
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(200)
     expect(body.data.skipped).toBe(1)
@@ -158,7 +172,7 @@ describe('POST /api/import/articles/execute', () => {
       rows: [row({ article_number: 'A-DUP' })],
       update_duplicates: false,
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(200)
     expect(body.data.skipped).toBe(1)
@@ -173,7 +187,7 @@ describe('POST /api/import/articles/execute', () => {
       rows: [row({ article_number: 'A-1', revenue_account: '3999' })],
       update_duplicates: false,
     }))
-    const { status, body } = await parseJsonResponse(res)
+    const { status, body } = await parseJsonResponse<ExecuteResponseBody>(res)
 
     expect(status).toBe(200)
     expect(body.data.created).toBe(1)

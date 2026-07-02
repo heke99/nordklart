@@ -50,7 +50,9 @@ import {
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
-function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
+function makeFlexibleSupabase(
+  byTable: Record<string, { data?: unknown; error?: unknown; count?: number | null }>,
+) {
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {

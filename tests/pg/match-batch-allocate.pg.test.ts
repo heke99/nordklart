@@ -134,6 +134,7 @@ interface RpcResult {
     paid_amount: number
     remaining_amount: number
     amount: number
+    cross_currency?: boolean
   }>
   total_allocated?: number
   leftover?: number

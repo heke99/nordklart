@@ -5,6 +5,7 @@ import type { Transaction } from '@/types'
 
 function makeTx(overrides: Partial<Transaction> = {}): Transaction {
   return {
+    cash_account_id: null,
     id: 'tx-1',
     user_id: 'user-1',
     company_id: 'company-1',
