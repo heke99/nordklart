@@ -5,6 +5,8 @@ import {
   formatPeriodLabel,
 } from '@/lib/reports/vat-declaration'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import {
   reportToWorkbook,
   textColumn,
@@ -33,6 +35,11 @@ export async function GET(request: Request) {
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  // Commercial feature gate — same policy the JSON counterparts get via
+  // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
+  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
+  if (featureError) return featureError
 
   const { searchParams } = new URL(request.url)
   const periodType = searchParams.get('periodType') as VatPeriodType | null

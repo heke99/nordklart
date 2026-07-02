@@ -3,11 +3,13 @@
   "rawRouteAuth": {
     "count": 171,
     "files": [
-      "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
+      "app/api/agency/clients/route.ts",
+      "app/api/agency/staff/invite/route.ts",
       "app/api/agent/composer/route.ts",
       "app/api/agent/conversations/[id]/route.ts",
       "app/api/agent/conversations/route.ts",
+      "app/api/agent/faq/route.ts",
       "app/api/agent/invoke/route.ts",
       "app/api/agent/memory/[id]/route.ts",
       "app/api/agent/memory/route.ts",
@@ -39,7 +41,9 @@
       "app/api/bookkeeping/voucher-gaps/route.ts",
       "app/api/calendar/feed/route.ts",
       "app/api/cash-accounts/route.ts",
-      "app/api/company/check-org-number/route.ts",
+      "app/api/company/access-requests/[id]/approve/route.ts",
+      "app/api/company/access-requests/[id]/reject/route.ts",
+      "app/api/company/access-requests/route.ts",
       "app/api/company/current/route.ts",
       "app/api/company/members/[id]/route.ts",
       "app/api/company/members/invite/[id]/route.ts",
@@ -68,7 +72,6 @@
       "app/api/invoices/[id]/convert/route.ts",
       "app/api/invoices/[id]/mark-sent/route.ts",
       "app/api/invoices/[id]/pdf/route.ts",
-      "app/api/invoices/[id]/route.ts",
       "app/api/invoices/preview-pdf/route.ts",
       "app/api/kpi/preferences/route.ts",
       "app/api/mcp-oauth/authorize/route.ts",
@@ -142,7 +145,6 @@
       "app/api/salary/runs/[id]/payslips/send/route.ts",
       "app/api/salary/runs/[id]/preview/route.ts",
       "app/api/salary/runs/[id]/review/route.ts",
-      "app/api/salary/runs/[id]/route.ts",
       "app/api/salary/tax-tables/lookup/route.ts",
       "app/api/salary/tax-tables/status/route.ts",
       "app/api/settings/api-keys/[id]/route.ts",
@@ -163,7 +165,6 @@
       "app/api/supplier-invoices/[id]/uncredit/route.ts",
       "app/api/support/contact/route.ts",
       "app/api/tax-deadlines/generate/route.ts",
-      "app/api/team/accept/route.ts",
       "app/api/team/members/route.ts",
       "app/api/transactions/[id]/attach-document/route.ts",
       "app/api/transactions/[id]/book/route.ts",
@@ -171,12 +172,11 @@
       "app/api/transactions/[id]/uncategorize/route.ts",
       "app/api/transactions/batch-match-invoices/route.ts",
       "app/api/transactions/create-from-document/route.ts",
-      "app/api/transactions/route.ts",
       "app/api/transactions/suggest-categories/route.ts",
       "app/api/vat/validate/route.ts"
     ]
   },
   "naiveOreRound": {
-    "count": 661
+    "count": 670
   }
 }

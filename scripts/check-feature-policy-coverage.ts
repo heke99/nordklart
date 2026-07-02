@@ -26,13 +26,35 @@ function walk(dir: string): string[] {
   })
 }
 
+// Routes under protected segments that are deliberately NOT feature-gated.
+// Every entry needs a reason — this list is reviewed, not a dumping ground.
+const EXEMPT_ROUTES = new Set<string>([
+  // Public endpoint: customers respond to reminder emails via a signed token.
+  // No session, no company context — gating on the company's plan would break
+  // the customer-facing action link.
+  'invoices/reminders/action/route.ts',
+  // Platform-admin diagnostics (requirePlatformRole) — internal ops tooling,
+  // not a user-facing commercial surface.
+  'skatteverket/sysorg/status/route.ts',
+  'skatteverket/sysorg/token-test/route.ts',
+  // Static BAS reference lookup (no company data). Supports dialogs inside
+  // bookkeeping surfaces that are themselves feature-gated.
+  'bookkeeping/accounts/bas-lookup/route.ts',
+])
+
 function routeLooksProtected(file: string): boolean {
   const normalized = relative(API_ROOT, file).replaceAll('\\', '/')
+  if (EXEMPT_ROUTES.has(normalized)) return false
   return PROTECTED_SEGMENTS.some((segment) => normalized.startsWith(`${segment}/`) || normalized === `${segment}/route.ts`)
 }
 
 function hasServerSideFeatureCheck(source: string): boolean {
-  return source.includes('withRouteContext(')
+  // withRouteContext may carry a generics parameter (withRouteContext<{...}>()),
+  // so match the identifier, not the literal call syntax. withCronContext
+  // routes are CRON_SECRET-gated system jobs — not user-facing feature
+  // surfaces — and count as covered.
+  return source.includes('withRouteContext')
+    || source.includes('withCronContext')
     || source.includes('requireCompanyFeatureResponse(')
     || source.includes('checkFeatureAccess(')
     || source.includes('featureAccessError(')

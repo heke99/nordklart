@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
@@ -42,6 +44,11 @@ export async function GET(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  // Commercial feature gate — same policy the JSON counterparts get via
+  // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
+  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureError) return featureError
 
   const { data: agi } = await supabase
     .from('agi_declarations')
