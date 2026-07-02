@@ -53,7 +53,9 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
   // Anthropic caches the tools list with the system prompt so a stable
   // whitelist costs nothing per turn after first warm-up.
   tools: [
-    // Knowledge + memory
+    // Knowledge + memory. FAQ first: nordklart_faq_search hits the curated
+    // 450-entry Swedish knowledge base before any skill atom is loaded.
+    'nordklart_faq_search',
     'nordklart_search_tools',
     'nordklart_list_skills',
     'nordklart_load_skill',
@@ -87,6 +89,7 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
     'nordklart_list_unmatched_documents',
     'nordklart_list_voucher_gaps',
     'nordklart_explain_voucher_gap',
+    'nordklart_explain_transaction_match',
     'nordklart_get_inbox_item',
     'nordklart_get_document_content',
     'nordklart_get_counterparty_templates',
@@ -115,6 +118,8 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
     lines.push('Användaren öppnade ditt fönster med "Fråga min assistent". Inget specifikt ärende ännu.')
     lines.push('')
     lines.push(renderAgentGroundRules())
+    lines.push('')
+    lines.push('SÖKORDNING FÖR KUNSKAPSFRÅGOR: För produkt- och hur-gör-jag-frågor ("hur kopplar jag banken?", "varför matchades inte transaktionen?", "hur skickar jag AGI?") — anropa ALLTID nordklart_faq_search FÖRST. FAQ:n innehåller 450 kurerade svenska svar om Nordklarts arbetsflöden och vanliga regelfrågor. Träff med hög säkerhet: svara utifrån FAQ-svaret och nämn relaterad vy. Låg säkerhet eller ingen träff: gå vidare till skill-atomerna (nordklart_load_skill). Hitta aldrig på ett svar när båda källorna saknar underlag — säg det ärligt.')
     lines.push('')
     lines.push('Härifrån kan du (använd verktygen — citera siffrorna):')
     lines.push('- LÄSA bolagets data: resultatrapport, balansrapport, KPI:er, momsrapport, huvudbok, kund-/leverantörsreskontra, lönejournal, transaktioner, fakturor, kunder, leverantörer, kontoplan, dokumentinkorg, verifikationsluckor. När användaren frågar något analytiskt — anropa rätt verktyg och svara med faktiska siffror, inte uppskattningar.')

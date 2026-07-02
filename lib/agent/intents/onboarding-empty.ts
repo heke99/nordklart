@@ -35,6 +35,7 @@ export const onboardingEmpty = defineAgentIntent<OnboardingEmptyArgs, CapturedOn
   },
 
   tools: [
+    'nordklart_faq_search',
     'nordklart_search_tools',
     'nordklart_list_skills',
     'nordklart_load_skill',

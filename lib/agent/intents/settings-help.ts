@@ -29,6 +29,7 @@ export const settingsHelp = defineAgentIntent<SettingsHelpArgs, CapturedSettings
   },
 
   tools: [
+    'nordklart_faq_search',
     'nordklart_search_tools',
     'nordklart_list_skills',
     'nordklart_load_skill',

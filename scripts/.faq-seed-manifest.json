@@ -1,0 +1,5 @@
+{
+  "hash": "ff526b2777b699c4ceb53fc0115bee6e50fbfbb459e725cf443b17bc48007436",
+  "entryCount": 450,
+  "migration": "20260707120001_seed_assistant_faq_entries.sql"
+}

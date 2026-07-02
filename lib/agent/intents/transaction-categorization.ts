@@ -66,6 +66,7 @@ export const transactionCategorization = defineAgentIntent<
     'nordklart_categorize_transaction',
     'nordklart_query_journal',
     'nordklart_match_transaction_to_invoice',
+    'nordklart_explain_transaction_match',
     'nordklart_get_document_content',
     'nordklart_load_skill',
     'nordklart_search_tools',
