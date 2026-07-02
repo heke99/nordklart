@@ -36,7 +36,7 @@ import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { markInvoicePaid } from '@/lib/invoices/mark-paid-service'
 import { planInvoiceCustomerPayment } from '@/lib/invoices/customer-payment-allocation'
-import type { EntityType, Invoice } from '@/types'
+import type { Invoice } from '@/types'
 
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
@@ -240,8 +240,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .maybeSingle()
     const accountingMethod =
       (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
-    const entityType = ((settings as { entity_type?: string } | null)?.entity_type ??
-      'enskild_firma') as EntityType
 
     // The JE shape is driven by the invoice's actual booking state, not the
     // company's current accounting_method. An invoice that was booked at send
@@ -270,12 +268,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       overpaymentAmount,
       newPaidAmount,
       newRemaining,
-      isFullyPaid,
       newStatus,
     } = allocation
 
     const isPartial = newStatus === 'partially_paid'
-    const useCashEntry = useCashEntryCandidate && isFullyPaid && overpaymentAmount === 0
 
     if (overpaymentAmount > 0 && customLines) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
