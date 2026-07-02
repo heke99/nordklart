@@ -63,7 +63,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    await saveMappings(supabase, user.id, mappings)
+    // COMPANY-scoped, not user-scoped: two companies under the same user can
+    // hold different mappings for the same source account. Passing user.id
+    // here used to store the rows under the wrong tenant key, making them
+    // invisible to GET/parse/execute (which read by company_id).
+    await saveMappings(supabase, companyId, mappings)
     return NextResponse.json({ success: true })
   } catch (error) {
     return NextResponse.json(
@@ -113,7 +117,10 @@ export async function PUT(request: Request) {
       confidence: 1.0,
       match_type: 'manual',
     }, {
-      onConflict: 'user_id,source_account',
+      // Uniqueness is company-scoped since 20260330130000 — the old
+      // user_id,source_account conflict target no longer matches a
+      // constraint and made every PUT fail at runtime.
+      onConflict: 'company_id,source_account',
     })
     .select()
     .single()

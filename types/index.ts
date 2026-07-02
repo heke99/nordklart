@@ -1472,6 +1472,12 @@ export interface JournalEntryLine {
   tax_code: string | null
   cost_center: string | null
   project: string | null
+  /**
+   * SIE dimension→objektkod map preserved from import ({"1":"100","6":"P1"}).
+   * Dimensions 1/6 are also denormalized into cost_center/project. Optional —
+   * only set on lines imported from SIE files carrying object lists.
+   */
+  dimensions?: Record<string, string> | null
   sort_order: number
   created_at: string
 }

@@ -488,6 +488,8 @@ function SIEImportWizard() {
       setParsed({
         header: data.parsed.header,
         accounts: data.parsed.accounts,
+        dimensions: data.parsed.dimensions ?? [],
+        objects: data.parsed.objects ?? [],
         openingBalances: [],
         closingBalances: [],
         resultBalances: [],

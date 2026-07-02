@@ -9,7 +9,7 @@ let results: Array<{ data?: unknown; error?: unknown }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'order', 'range', 'lt', 'lte', 'gte', 'gt', 'limit']) {
+  for (const m of ['select', 'eq', 'neq', 'in', 'order', 'range', 'lt', 'lte', 'gte', 'gt', 'limit']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
@@ -29,6 +29,7 @@ function makeClient() {
 }
 
 import { generateSIEExport } from '../sie-export'
+import { parseSIEFile } from '@/lib/import/sie-parser'
 
 let supabase: ReturnType<typeof makeClient>
 
@@ -422,5 +423,114 @@ describe('generateSIEExport', () => {
     expect(output).toContain('#IB 0 2440 -12000.00')
     expect(output).toContain('#UB 0 1930 12000.00')
     expect(output).toContain('#UB 0 2440 -12000.00')
+  })
+
+  it('emits #KTYP derived from the BAS class', async () => {
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      {
+        data: [
+          { account_number: '1930', account_name: 'Företagskonto', sru_code: null },
+          { account_number: '2440', account_name: 'Leverantörsskulder', sru_code: null },
+          { account_number: '3001', account_name: 'Försäljning', sru_code: null },
+          { account_number: '5010', account_name: 'Lokalhyra', sru_code: null },
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // journal_entries
+      { data: [], error: null }, // cost_centers
+      { data: [], error: null }, // projects
+      { data: [], error: null }, // RPC fallback
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#KTYP 1930 T')
+    expect(output).toContain('#KTYP 2440 S')
+    expect(output).toContain('#KTYP 3001 I')
+    expect(output).toContain('#KTYP 5010 K')
+  })
+
+  it('emits #UB -1 / #RES -1 when a prior period exists, and the export reparses cleanly', async () => {
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      // prevPeriod exists → #RAR -1 + prior balances
+      { data: { id: 'period-0', period_start: '2023-01-01', period_end: '2023-12-31' }, error: null },
+      {
+        data: [{ account_number: '1930', account_name: 'Företagskonto', sru_code: null }],
+        error: null,
+      },
+      // journal_entries current period — one voucher with non-standard dim 8
+      {
+        data: [
+          {
+            id: 'je-1',
+            voucher_series: 'A',
+            voucher_number: 1,
+            entry_date: '2024-02-15',
+            description: 'Hyra',
+            lines: [
+              {
+                account_number: '5010',
+                debit_amount: 1000,
+                credit_amount: 0,
+                line_description: null,
+                cost_center: '100',
+                project: 'P1',
+                dimensions: { '1': '100', '6': 'P1', '8': 'E7' },
+              },
+              {
+                account_number: '1930',
+                debit_amount: 0,
+                credit_amount: 1000,
+                line_description: null,
+                cost_center: null,
+                project: null,
+                dimensions: null,
+              },
+            ],
+          },
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // cost_centers
+      { data: [], error: null }, // projects
+      // compute_prior_opening_balances RPC → IB 0 (= UB -1 by continuity)
+      { data: [{ account_number: '1930', debit: 5000, credit: 0 }], error: null },
+      // prior-period journal entries for #RES -1
+      {
+        data: [
+          {
+            id: 'je-prev',
+            lines: [
+              { account_number: '3001', debit_amount: 0, credit_amount: 8000 },
+              { account_number: '1930', debit_amount: 8000, credit_amount: 0 },
+            ],
+          },
+        ],
+        error: null,
+      },
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#RAR -1 20230101 20231231')
+    expect(output).toContain('#UB -1 1930 5000.00')
+    expect(output).toContain('#RES -1 3001 -8000.00')
+    // The full dimension list (incl. non-standard dim 8) survives export.
+    expect(output).toContain('{1 "100" 6 "P1" 8 "E7"}')
+
+    // Roundtrip: the exported file parses without errors and preserves the
+    // dimension pairs on the voucher line.
+    const reparsed = parseSIEFile(output)
+    expect(reparsed.issues.filter((i) => i.severity === 'error')).toEqual([])
+    expect(reparsed.vouchers).toHaveLength(1)
+    expect(reparsed.vouchers[0].lines[0].objectList).toEqual([
+      { dimension: '1', code: '100' },
+      { dimension: '6', code: 'P1' },
+      { dimension: '8', code: 'E7' },
+    ])
+    expect(reparsed.header.fiscalYears).toHaveLength(2)
   })
 })

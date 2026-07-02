@@ -38,7 +38,7 @@ export async function generateSIEExport(
   // Fetch previous fiscal year for #RAR -1 (per SIE spec, both years should be present)
   const { data: prevPeriod } = await supabase
     .from('fiscal_periods')
-    .select('period_start, period_end')
+    .select('id, period_start, period_end')
     .eq('company_id', companyId)
     .lt('period_end', period.period_start)
     .order('period_end', { ascending: false })
@@ -136,6 +136,13 @@ export async function generateSIEExport(
   for (const account of (accounts as BASAccount[]) || []) {
     lines.push(`#KONTO ${account.account_number} "${escapeQuotes(account.account_name)}"`)
 
+    // #KTYP derived from BAS class: 1 = Tillgång, 2 = Skuld/Eget kapital,
+    // 3 = Intäkt, 4–8 = Kostnad.
+    const ktyp = accountTypeFromNumber(account.account_number)
+    if (ktyp) {
+      lines.push(`#KTYP ${account.account_number} ${ktyp}`)
+    }
+
     // #SRU records from chart_of_accounts.sru_code
     if (account.sru_code) {
       lines.push(`#SRU ${account.account_number} ${account.sru_code}`)
@@ -182,13 +189,25 @@ export async function generateSIEExport(
         ? ` "${escapeQuotes(line.line_description)}"`
         : ''
 
-      // Build dimension object list for #TRANS line
+      // Build dimension object list for #TRANS line. Dimensions 1/6 come
+      // from the denormalized columns; any other imported dimensions are
+      // preserved via the jsonb map (round-trip fidelity for SIE files with
+      // non-standard dimensions).
       const dimParts: string[] = []
       if (line.cost_center) {
         dimParts.push(`1 "${escapeQuotes(line.cost_center)}"`)
       }
       if (line.project) {
         dimParts.push(`6 "${escapeQuotes(line.project)}"`)
+      }
+      const extraDims = (line as JournalEntryLine & { dimensions?: Record<string, string> | null }).dimensions
+      if (extraDims) {
+        for (const [dim, code] of Object.entries(extraDims)) {
+          if (dim === '1' || dim === '6') continue // already covered by columns
+          if (typeof code === 'string' && code.length > 0) {
+            dimParts.push(`${dim} "${escapeQuotes(code)}"`)
+          }
+        }
       }
       const objList = dimParts.length > 0 ? `{${dimParts.join(' ')}}` : '{}'
 
@@ -223,7 +242,58 @@ export async function generateSIEExport(
     }
   }
 
+  // === Prior-year balances (#UB -1 / #RES -1) ===
+  // #RAR -1 was emitted above whenever a prior period exists — a conforming
+  // file must then also carry the prior year's balances:
+  //   * #UB -1 equals the current year's #IB 0 by the SIE continuity
+  //     invariant (IB(0) = UB(-1)).
+  //   * #RES -1 is computed from the prior period's posted P&L movements.
+  if (prevPeriod) {
+    for (const [accountNumber, amount] of [...openingBalancesByAccount.entries()].sort(
+      ([a], [b]) => a.localeCompare(b),
+    )) {
+      if (parseInt(accountNumber[0]) <= 2) {
+        lines.push(`#UB -1 ${accountNumber} ${formatAmount(amount)}`)
+      }
+    }
+
+    try {
+      const { data: prevEntries } = await supabase
+        .from('journal_entries')
+        .select('id, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', (prevPeriod as { id: string }).id)
+        .in('status', ['posted', 'reversed'])
+        .neq('source_type', 'year_end')
+      const prevMovements = calculateBalances((prevEntries ?? []) as JournalEntry[])
+      for (const [accountNumber, movement] of [...prevMovements.entries()].sort(([a], [b]) =>
+        a.localeCompare(b),
+      )) {
+        if (parseInt(accountNumber[0]) >= 3 && movement !== 0) {
+          lines.push(`#RES -1 ${accountNumber} ${formatAmount(movement)}`)
+        }
+      }
+    } catch {
+      // Prior-year RES is best-effort — the UB continuity rows above are the
+      // critical part for importing systems.
+    }
+  }
+
   return lines.join('\r\n') + '\r\n'
+}
+
+/**
+ * Derive the SIE #KTYP account type from the BAS class digit:
+ * 1 → T (Tillgång), 2 → S (Skuld/Eget kapital), 3 → I (Intäkt),
+ * 4–8 → K (Kostnad). Unknown/other → null (record omitted).
+ */
+function accountTypeFromNumber(accountNumber: string): 'T' | 'S' | 'I' | 'K' | null {
+  const cls = parseInt(accountNumber?.charAt(0) ?? '', 10)
+  if (cls === 1) return 'T'
+  if (cls === 2) return 'S'
+  if (cls === 3) return 'I'
+  if (cls >= 4 && cls <= 8) return 'K'
+  return null
 }
 
 /**

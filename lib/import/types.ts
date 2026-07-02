@@ -41,6 +41,8 @@ export interface SIEHeader {
   fiscalYears: FiscalYearInfo[]    // #RAR
   currency: string                 // #VALUTA (default SEK)
   kontoPlanType: string | null     // #KPTYP (e.g. 'BAS95', 'BAS96', 'EUBAS')
+  /** #KSUMMA checksum value when the file carries one (not validated). */
+  ksumma: string | null
 }
 
 /**
@@ -60,6 +62,32 @@ export interface SIEAccount {
   name: string
   sruCode?: string                 // #SRU mapping
   accountType?: string             // #KTYP
+}
+
+/**
+ * Dimension definition from #DIM tag.
+ * Dimension 1 = kostnadsställe, 6 = projekt per the SIE standard.
+ */
+export interface SIEDimension {
+  number: string
+  name: string
+}
+
+/**
+ * Object definition from #OBJEKT tag (a value within a dimension).
+ */
+export interface SIEObject {
+  dimension: string
+  code: string
+  name: string
+}
+
+/**
+ * One dimension/object pair from a #TRANS object list, e.g. {1 "100" 6 "P1"}.
+ */
+export interface SIEObjectRef {
+  dimension: string
+  code: string
 }
 
 /**
@@ -84,6 +112,8 @@ export interface SIETransactionLine {
   quantity?: number
   signature?: string
   objectId?: string
+  /** Parsed dimension/object pairs from the #TRANS object list. */
+  objectList?: SIEObjectRef[]
 }
 
 /**
@@ -118,6 +148,10 @@ export interface ParsedSIEFile {
 
   // Chart of accounts
   accounts: SIEAccount[]
+
+  // Dimensions and objects (#DIM / #OBJEKT)
+  dimensions: SIEDimension[]
+  objects: SIEObject[]
 
   // Balances
   openingBalances: SIEBalance[]    // #IB

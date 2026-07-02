@@ -85,12 +85,15 @@ function makeParsedFile(overrides?: Partial<ParsedSIEFile>): ParsedSIEFile {
       ],
       currency: 'SEK',
       kontoPlanType: null,
+      ksumma: null,
     },
     accounts: [
       { number: '1930', name: 'Företagskonto' },
       { number: '2010', name: 'Eget kapital' },
     ],
     // Issue #675 shape: no #IB 0 at all — only prior-year IB/UB and current UB.
+    dimensions: [],
+    objects: [],
     openingBalances: [{ yearIndex: -1, account: '1930', amount: 9483.08 }],
     closingBalances: [
       { yearIndex: -1, account: '1930', amount: 37400.78 },

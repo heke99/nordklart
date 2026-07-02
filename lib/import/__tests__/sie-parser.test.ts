@@ -6,6 +6,7 @@ import {
   decodeBuffer,
   getEffectiveOpeningBalances,
   hasOpeningBalanceVoucherCandidate,
+  parseObjectList,
 } from '../sie-parser'
 
 // --- SIE content fixtures ---
@@ -1287,5 +1288,74 @@ describe('getEffectiveOpeningBalances — derive IB from #UB -1 (issue #675)', (
 
       expect(validation.warnings.join(' ')).not.toMatch(/härleds från föregående års utgående balans/i)
     })
+  })
+})
+
+describe('parseSIEFile — dimensions, objects and KSUMMA', () => {
+  const SIE_WITH_DIMS = [
+    '#FLAGGA 0',
+    '#KSUMMA',
+    '#SIETYP 4',
+    '#RAR 0 20240101 20241231',
+    '#DIM 1 "Kostnadsställe"',
+    '#DIM 6 "Projekt"',
+    '#DIM 8 "Anställd"',
+    '#OBJEKT 1 "100" "Stockholm"',
+    '#OBJEKT 6 "P1" "Projekt Alfa"',
+    '#OBJEKT 8 "E7" "Anna"',
+    '#KONTO 1930 "Företagskonto"',
+    '#KONTO 5010 "Lokalhyra"',
+    '#VER A 1 20240215 "Hyra februari"',
+    '{',
+    '\t#TRANS 5010 {1 "100" 6 "P1" 8 "E7"} 10000.00',
+    '\t#TRANS 1930 {} -10000.00',
+    '}',
+    '#KSUMMA 123456789',
+  ].join('\n')
+
+  it('parses #DIM and #OBJEKT into structured lists', () => {
+    const parsed = parseSIEFile(SIE_WITH_DIMS)
+
+    expect(parsed.dimensions).toEqual([
+      { number: '1', name: 'Kostnadsställe' },
+      { number: '6', name: 'Projekt' },
+      { number: '8', name: 'Anställd' },
+    ])
+    expect(parsed.objects).toEqual([
+      { dimension: '1', code: '100', name: 'Stockholm' },
+      { dimension: '6', code: 'P1', name: 'Projekt Alfa' },
+      { dimension: '8', code: 'E7', name: 'Anna' },
+    ])
+  })
+
+  it('parses #TRANS object lists into dimension/code pairs (nothing discarded)', () => {
+    const parsed = parseSIEFile(SIE_WITH_DIMS)
+    const voucher = parsed.vouchers[0]
+
+    expect(voucher.lines[0].objectList).toEqual([
+      { dimension: '1', code: '100' },
+      { dimension: '6', code: 'P1' },
+      { dimension: '8', code: 'E7' },
+    ])
+    // Empty object list stays absent.
+    expect(voucher.lines[1].objectList).toBeUndefined()
+    // Amounts are unaffected by object-list parsing.
+    expect(voucher.lines[0].amount).toBe(10000)
+    expect(voucher.lines[1].amount).toBe(-10000)
+  })
+
+  it('records the #KSUMMA value without failing the parse', () => {
+    const parsed = parseSIEFile(SIE_WITH_DIMS)
+    expect(parsed.header.ksumma).toBe('123456789')
+    expect(parsed.issues.filter((i) => i.severity === 'error')).toEqual([])
+  })
+
+  it('parseObjectList handles quoted codes with spaces', () => {
+    expect(parseObjectList('{1 "KS 100" 6 "Projekt A"}')).toEqual([
+      { dimension: '1', code: 'KS 100' },
+      { dimension: '6', code: 'Projekt A' },
+    ])
+    expect(parseObjectList('{}')).toEqual([])
+    expect(parseObjectList('')).toEqual([])
   })
 })

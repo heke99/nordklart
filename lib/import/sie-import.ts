@@ -937,7 +937,18 @@ export async function importVouchers(
     // 'import' for ordinary migrated vouchers; 'opening_balance' for a #VER that
     // is really the year's ingående balans (see isLikelyOpeningBalance below).
     sourceType: 'import' | 'opening_balance'
-    lines: { account_number: string; debit_amount: number; credit_amount: number; line_description: string | null }[]
+    lines: {
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+      line_description: string | null
+      // SIE dimension 1 (kostnadsställe) / 6 (projekt) object codes.
+      cost_center: string | null
+      project: string | null
+      // Full dimension→code map from the #TRANS object list, preserved for
+      // round-trip fidelity incl. non-standard dimensions.
+      dimensions: Record<string, string> | null
+    }[]
   }
 
   const preparedVouchers: PreparedVoucher[] = []
@@ -978,6 +989,21 @@ export async function importVouchers(
         continue
       }
 
+      // SIE dimensions: 1 = kostnadsställe → cost_center, 6 = projekt →
+      // project. All pairs (incl. non-standard dimensions) are preserved in
+      // the dimensions map so nothing from the source file is discarded.
+      let costCenter: string | null = null
+      let project: string | null = null
+      let dimensionsMap: Record<string, string> | null = null
+      if (line.objectList && line.objectList.length > 0) {
+        dimensionsMap = {}
+        for (const ref of line.objectList) {
+          dimensionsMap[ref.dimension] = ref.code
+          if (ref.dimension === '1') costCenter = ref.code
+          if (ref.dimension === '6') project = ref.code
+        }
+      }
+
       // In SIE, amount is positive for debit, negative for credit
       if (line.amount > 0) {
         lines.push({
@@ -985,6 +1011,9 @@ export async function importVouchers(
           debit_amount: Math.round(line.amount * 100) / 100,
           credit_amount: 0,
           line_description: line.description || null,
+          cost_center: costCenter,
+          project,
+          dimensions: dimensionsMap,
         })
       } else if (line.amount < 0) {
         lines.push({
@@ -992,6 +1021,9 @@ export async function importVouchers(
           debit_amount: 0,
           credit_amount: Math.round(Math.abs(line.amount) * 100) / 100,
           line_description: line.description || null,
+          cost_center: costCenter,
+          project,
+          dimensions: dimensionsMap,
         })
       }
       // Note: lines with amount === 0 are silently dropped
@@ -1074,6 +1106,9 @@ export async function importVouchers(
           debit_amount: 0,
           credit_amount: Math.abs(roundedDiff),
           line_description: 'Öresutjämning',
+          cost_center: null,
+          project: null,
+          dimensions: null,
         })
       } else {
         lines.push({
@@ -1081,6 +1116,9 @@ export async function importVouchers(
           debit_amount: Math.abs(roundedDiff),
           credit_amount: 0,
           line_description: 'Öresutjämning',
+          cost_center: null,
+          project: null,
+          dimensions: null,
         })
       }
     }
@@ -1259,6 +1297,9 @@ export async function importVouchers(
       currency: string
       line_description: string | null
       sort_order: number
+      cost_center: string | null
+      project: string | null
+      dimensions: Record<string, string> | null
     }[] = []
 
     for (let i = 0; i < batch.length; i++) {
@@ -1277,6 +1318,9 @@ export async function importVouchers(
           currency: 'SEK',
           line_description: line.line_description,
           sort_order: lineIndex,
+          cost_center: line.cost_center,
+          project: line.project,
+          dimensions: line.dimensions,
         })
       })
 
@@ -1849,6 +1893,67 @@ export async function loadMappings(supabase: SupabaseClient, companyId: string):
  * When false, accounts are created with BAS default names and existing
  * accounts are left untouched (the pre-2026-06 behavior).
  */
+/**
+ * Upsert SIE dimension objects into the dimension registers:
+ * dimension 1 (kostnadsställe) → cost_centers, dimension 6 (projekt) →
+ * projects. Codes referenced on voucher lines but missing a #OBJEKT
+ * definition are registered with the code as name. Idempotent on
+ * (company_id, code).
+ */
+export async function syncDimensionRegisters(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  parsed: ParsedSIEFile,
+): Promise<void> {
+  const costCenterNames = new Map<string, string>()
+  const projectNames = new Map<string, string>()
+
+  for (const obj of parsed.objects ?? []) {
+    if (obj.dimension === '1') costCenterNames.set(obj.code, obj.name || obj.code)
+    if (obj.dimension === '6') projectNames.set(obj.code, obj.name || obj.code)
+  }
+
+  for (const voucher of parsed.vouchers) {
+    for (const line of voucher.lines) {
+      for (const ref of line.objectList ?? []) {
+        if (ref.dimension === '1' && !costCenterNames.has(ref.code)) {
+          costCenterNames.set(ref.code, ref.code)
+        }
+        if (ref.dimension === '6' && !projectNames.has(ref.code)) {
+          projectNames.set(ref.code, ref.code)
+        }
+      }
+    }
+  }
+
+  if (costCenterNames.size > 0) {
+    await supabase.from('cost_centers').upsert(
+      Array.from(costCenterNames.entries()).map(([code, name]) => ({
+        user_id: userId,
+        company_id: companyId,
+        code,
+        name,
+        is_active: true,
+      })),
+      { onConflict: 'company_id,code', ignoreDuplicates: true },
+    )
+  }
+
+  if (projectNames.size > 0) {
+    await supabase.from('projects').upsert(
+      Array.from(projectNames.entries()).map(([code, name]) => ({
+        user_id: userId,
+        company_id: companyId,
+        code,
+        name,
+        is_active: true,
+      })),
+      { onConflict: 'company_id,code', ignoreDuplicates: true },
+    )
+  }
+}
+
 export async function executeSIEImport(
   supabase: SupabaseClient,
   companyId: string,
@@ -2272,6 +2377,41 @@ export async function executeSIEImport(
 
       // Ensure öresutjämning account 3741 exists in the user's chart
       await ensureAccountExists(supabase, companyId, userId, '3741', 'Öresutjämning vid import')
+
+      // Bank-transaction overlap: imported bank rows in the same date range
+      // very likely correspond to vouchers in this file. The bank-side
+      // automation blocks category auto-booking on SIE overlap (see
+      // lib/automation/sie-overlap.ts); this warning is the SIE-side signal
+      // so the user reviews reconciliation instead of booking twice.
+      if (fiscalYearStart && fiscalYearEnd) {
+        try {
+          const { count: overlappingTx } = await supabase
+            .from('transactions')
+            .select('id', { count: 'exact', head: true })
+            .eq('company_id', companyId)
+            .gte('date', fiscalYearStart)
+            .lte('date', fiscalYearEnd)
+          if ((overlappingTx ?? 0) > 0) {
+            result.warnings.push(
+              `${overlappingTx} banktransaktioner finns redan i perioden ${fiscalYearStart}–${fiscalYearEnd}. ` +
+              `Automatisk bokföring av dessa blockeras för att undvika dubbelbokning — använd Bankavstämning för att koppla dem mot de importerade verifikationerna.`
+            )
+          }
+        } catch {
+          // Non-critical — the bank-side overlap guard still applies.
+        }
+      }
+
+      // Register SIE dimension objects: dim 1 → cost_centers, dim 6 →
+      // projects, so imported line references resolve in the dimension
+      // registers. Idempotent upserts on (company_id, code).
+      try {
+        await syncDimensionRegisters(supabase, companyId, userId, parsed)
+      } catch (dimErr) {
+        result.warnings.push(
+          `Dimensionsregister kunde inte synkas: ${dimErr instanceof Error ? dimErr.message : 'okänt fel'} — dimensionskoder finns ändå kvar på verifikationsraderna.`
+        )
+      }
 
       const voucherResults = await importVouchers(
         supabase,

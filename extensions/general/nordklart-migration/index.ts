@@ -859,7 +859,9 @@ export const nordklartMigrationExtension: Extension = {
           // Account creation (and #KONTO renames) happen inside
           // executeSIEImport via syncMappedAccounts — the auto-activate block
           // that used to live here was a duplicate of that logic.
-          await saveMappings(supabase, user.id, mappings)
+          // COMPANY-scoped: saveMappings writes company_id; passing user.id
+          // stored rows under the wrong tenant key.
+          await saveMappings(supabase, companyId, mappings)
 
           const result = await executeSIEImport(supabase, companyId, user.id, parsed, mappings, {
             filename: `migration-sie-${Date.now()}.se`,

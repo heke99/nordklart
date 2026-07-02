@@ -30,12 +30,15 @@ function makeParsedFile(overrides?: Partial<ParsedSIEFile>): ParsedSIEFile {
       fiscalYears: [{ yearIndex: 0, start: '2024-01-01', end: '2024-12-31' }],
       currency: 'SEK',
       kontoPlanType: null,
+      ksumma: null,
     },
     accounts: [
       { number: '1510', name: 'Kundfordringar' },
       { number: '1930', name: 'Företagskonto' },
       { number: '2440', name: 'Leverantörsskulder' },
     ],
+    dimensions: [],
+    objects: [],
     openingBalances: [
       { yearIndex: 0, account: '1510', amount: 50000 },
       { yearIndex: 0, account: '1930', amount: 100000 },

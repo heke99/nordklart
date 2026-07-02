@@ -18,6 +18,9 @@ import type {
   SIEBalance,
   SIEVoucher,
   SIETransactionLine,
+  SIEDimension,
+  SIEObject,
+  SIEObjectRef,
   ParsedSIEFile,
   ParseIssue,
   ParseIssueSeverity,
@@ -344,6 +347,32 @@ function splitSIELine(line: string): string[] {
 }
 
 /**
+ * Parse a #TRANS object list field like `{1 "100" 6 "PROJ A"}` into
+ * dimension/code pairs. Returns [] for an empty list `{}` or malformed input.
+ */
+export function parseObjectList(field: string): SIEObjectRef[] {
+  if (!field || !field.startsWith('{')) return []
+  const inner = field.slice(1, field.endsWith('}') ? -1 : undefined).trim()
+  if (!inner) return []
+
+  // Tokenize: quoted strings or bare tokens.
+  const tokens: string[] = []
+  const re = /"((?:[^"\\]|\\.)*)"|(\S+)/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(inner)) !== null) {
+    tokens.push(match[1] !== undefined ? match[1].replace(/\\"/g, '"') : match[2])
+  }
+
+  const refs: SIEObjectRef[] = []
+  for (let i = 0; i + 1 < tokens.length; i += 2) {
+    const dimension = tokens[i]
+    const code = tokens[i + 1]
+    if (dimension && code) refs.push({ dimension, code })
+  }
+  return refs
+}
+
+/**
  * Add an issue to the issues list
  */
 function addIssue(
@@ -378,9 +407,12 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     fiscalYears: [],
     currency: 'SEK',
     kontoPlanType: null,
+    ksumma: null,
   }
 
   const accounts: SIEAccount[] = []
+  const dimensions: SIEDimension[] = []
+  const objects: SIEObject[] = []
   const openingBalances: SIEBalance[] = []
   const closingBalances: SIEBalance[] = []
   const resultBalances: SIEBalance[] = []
@@ -533,6 +565,39 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           break
         }
 
+        case 'DIM': {
+          // #DIM number "name" — dimension definition (1 = kostnadsställe,
+          // 6 = projekt per the SIE standard).
+          const dimNumber = parseStringField(fields[1])
+          const dimName = parseStringField(fields[2])
+          if (dimNumber) {
+            dimensions.push({ number: dimNumber, name: dimName || '' })
+          }
+          break
+        }
+
+        case 'OBJEKT': {
+          // #OBJEKT dimension code "name" — object within a dimension.
+          const objDimension = parseStringField(fields[1])
+          const objCode = parseStringField(fields[2])
+          const objName = parseStringField(fields[3])
+          if (objDimension && objCode) {
+            objects.push({ dimension: objDimension, code: objCode, name: objName || '' })
+          }
+          break
+        }
+
+        case 'KSUMMA': {
+          // #KSUMMA [crc] — the first (empty) marker starts the checksum
+          // scope; the trailing record carries the CRC-32 value. Recorded for
+          // information; Nordklart does not validate the checksum (many
+          // exporters emit non-conforming values).
+          if (fields[1]) {
+            header.ksumma = parseStringField(fields[1])
+          }
+          break
+        }
+
         case 'IB': {
           // #IB yearIndex accountNumber amount [quantity]
           const yearIndex = parseInt(fields[1], 10)
@@ -644,12 +709,17 @@ export function parseSIEFile(content: string): ParsedSIEFile {
             break
           }
 
-          // Parse account and skip object list (in braces)
+          // Parse account and the object list (in braces)
           let fieldIndex = 1
           const account = parseStringField(fields[fieldIndex++])
 
-          // Skip object list if present (now a single field thanks to brace-aware splitting)
+          // Parse the object list if present (a single field thanks to
+          // brace-aware splitting). Dimension 1 = kostnadsställe and
+          // 6 = projekt map to journal-entry line columns at import; other
+          // dimensions are preserved as metadata.
+          let objectList: SIEObjectRef[] = []
           if (fields[fieldIndex]?.startsWith('{')) {
+            objectList = parseObjectList(fields[fieldIndex])
             fieldIndex++
           }
 
@@ -664,6 +734,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           const transLine: SIETransactionLine = {
             account,
             amount,
+            ...(objectList.length > 0 ? { objectList } : {}),
           }
 
           // Optional fields
@@ -686,7 +757,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
 
         default:
           // Unknown tag - add info issue for notable ones
-          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'DIM', 'OBJEKT', 'OIB', 'OUB', 'PBUDGET', 'PSALDO'].includes(tag)) {
+          if (!['BKOD', 'TAXAR', 'OMFATTN', 'OIB', 'OUB', 'PBUDGET', 'PSALDO', 'UNDERDIM'].includes(tag)) {
             addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag} — ignoreras`, tag)
           }
       }
@@ -762,6 +833,8 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   return {
     header,
     accounts,
+    dimensions,
+    objects,
     openingBalances,
     closingBalances,
     resultBalances,
