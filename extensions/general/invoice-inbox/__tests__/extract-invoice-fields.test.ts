@@ -144,15 +144,47 @@ describe('extractInvoiceFields', () => {
     expect(data.supplier.name).toBeNull()
   })
 
-  it('returns empty result when OCR worker throws', async () => {
-    mockRunOcr.mockRejectedValueOnce(new Error('worker down'))
-    const { data, rawText } = await extractInvoiceFields({
-      buffer: Buffer.from('%PDF'),
-      mimeType: 'application/pdf',
-      fileName: 'f.pdf',
-    })
-    expect(rawText).toBeNull()
-    expect(data.totals.total).toBeNull()
+  it('returns empty result when the OCR worker fails on every retry attempt', async () => {
+    vi.useFakeTimers()
+    try {
+      mockRunOcr.mockRejectedValue(new Error('worker down'))
+      const promise = extractInvoiceFields({
+        buffer: Buffer.from('%PDF'),
+        mimeType: 'application/pdf',
+        fileName: 'f.pdf',
+      })
+      // Exhaust the 1s + 3s backoff delays.
+      await vi.advanceTimersByTimeAsync(5000)
+      const { data, rawText } = await promise
+      expect(rawText).toBeNull()
+      expect(data.totals.total).toBeNull()
+      // Initial attempt + 2 backoff retries.
+      expect(mockRunOcr).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries a transient OCR failure with backoff and succeeds', async () => {
+    vi.useFakeTimers()
+    try {
+      mockRunOcr
+        .mockRejectedValueOnce(new Error('ECONNRESET'))
+        .mockResolvedValueOnce({ status: 'succeeded', text: 'ok', markdown: 'ok' })
+      mockParse.mockReturnValueOnce({ data: VALID_RESULT, rawText: 'ok' })
+
+      const promise = extractInvoiceFields({
+        buffer: Buffer.from('%PDF'),
+        mimeType: 'application/pdf',
+        fileName: 'f.pdf',
+      })
+      await vi.advanceTimersByTimeAsync(1000)
+      const { rawText } = await promise
+      expect(rawText).toBe('ok')
+      expect(mockRunOcr).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('forces accountSuggestion to null even if the parser returns a value', async () => {

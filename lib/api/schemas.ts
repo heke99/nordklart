@@ -626,6 +626,10 @@ export const CreateSupplierInvoiceSchema = z.object({
   // For paid_with_private_funds: the date the owner paid out-of-pocket.
   // Defaults to invoice_date (common for kvitto where the two coincide).
   payment_date: isoDate.optional(),
+  // Acknowledge the duplicate-payment-reference guard: another open invoice
+  // from the same supplier already carries this OCR/reference. The user has
+  // reviewed both and confirmed they are genuinely distinct invoices.
+  allow_duplicate_reference: z.boolean().optional(),
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 

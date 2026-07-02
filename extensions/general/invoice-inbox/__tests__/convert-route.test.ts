@@ -174,6 +174,67 @@ describe('POST /items/:id/convert', () => {
     expect(body.error.details).not.toHaveProperty('supplierInvoiceNumber')
   })
 
+  it('returns 409 when another invoice from the same supplier carries the same OCR/reference', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    // Reference-twin lookup finds an open invoice with the same OCR.
+    enqueue({
+      data: [
+        {
+          id: 'twin-1',
+          supplier_invoice_number: 'F-2024-099',
+          payment_reference: '1234 5678',
+          status: 'approved',
+          total: 12500,
+        },
+      ],
+    })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: { ...VALID_CONVERT_BODY, payment_reference: '12345678' },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status, body } = await parseJsonResponse<{
+      code: string
+      details: { existing: { id: string } }
+    }>(res)
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('SI_CREATE_DUPLICATE_PAYMENT_REFERENCE')
+    expect(body.details.existing.id).toBe('twin-1')
+  })
+
+  it('proceeds past the OCR-duplicate guard when allow_duplicate_reference is acknowledged', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    // No twin lookup — guard skipped entirely on acknowledgment.
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-ack', status: 'registered' } })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
+    enqueue({ data: null, error: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: {
+        ...VALID_CONVERT_BODY,
+        payment_reference: '12345678',
+        allow_duplicate_reference: true,
+      },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+  })
+
   it('successfully converts inbox item to supplier invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inboxItem = makeInvoiceInboxItem({ status: 'received', document_id: 'doc-1' })

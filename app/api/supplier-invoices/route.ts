@@ -81,6 +81,40 @@ export const POST = withRouteContext(
       return errorResponseFromCode('SUPPLIER_NOT_FOUND', log, { requestId })
     }
 
+    // Duplicate OCR/reference guard: another non-credited invoice from the
+    // SAME supplier already carries this payment reference — a strong
+    // double-registration signal the invoice-number unique index misses when
+    // the number was typed differently. Blocked unless explicitly
+    // acknowledged via allow_duplicate_reference.
+    const normalizedRef = (body.payment_reference || '').replace(/\D/g, '')
+    if (normalizedRef.length >= 4 && body.allow_duplicate_reference !== true) {
+      const { data: refTwins } = await supabase
+        .from('supplier_invoices')
+        .select('id, supplier_invoice_number, payment_reference, status')
+        .eq('company_id', companyId)
+        .eq('supplier_id', body.supplier_id)
+        .not('status', 'in', '("credited","reversed")')
+        .not('payment_reference', 'is', null)
+        .limit(50)
+      const twin = (refTwins ?? []).find(
+        (row) =>
+          ((row as { payment_reference?: string | null }).payment_reference || '')
+            .replace(/\D/g, '') === normalizedRef,
+      )
+      if (twin) {
+        return errorResponseFromCode('SI_CREATE_DUPLICATE_PAYMENT_REFERENCE', log, {
+          requestId,
+          details: {
+            existing: {
+              id: (twin as { id: string }).id,
+              supplier_invoice_number: (twin as { supplier_invoice_number: string }).supplier_invoice_number,
+              status: (twin as { status: string }).status,
+            },
+          },
+        })
+      }
+    }
+
     // Entity type drives the credit account for privately-paid invoices:
     // AB → 2893 (skuld till aktieägare), EF → 2018 (egen insättning). Loaded
     // up front so we can fail early if the company row is missing.

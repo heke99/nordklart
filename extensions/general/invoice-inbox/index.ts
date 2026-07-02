@@ -1654,6 +1654,46 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
         }
 
+        // Duplicate OCR/reference guard: another non-credited invoice from the
+        // SAME supplier already carries this payment reference. That is a
+        // strong double-registration signal (the invoice-number unique index
+        // does not catch it when the number was typed differently). Blocked
+        // unless the caller explicitly acknowledges via
+        // allow_duplicate_reference.
+        const normalizedRef = (body.payment_reference || '').replace(/\D/g, '')
+        if (normalizedRef.length >= 4 && body.allow_duplicate_reference !== true) {
+          const { data: refTwins } = await ctx.supabase
+            .from('supplier_invoices')
+            .select('id, supplier_invoice_number, payment_reference, status, total')
+            .eq('company_id', ctx.companyId)
+            .eq('supplier_id', body.supplier_id)
+            .not('status', 'in', '("credited","reversed")')
+            .not('payment_reference', 'is', null)
+            .limit(50)
+          const twin = (refTwins ?? []).find(
+            (row) =>
+              ((row as { payment_reference?: string | null }).payment_reference || '')
+                .replace(/\D/g, '') === normalizedRef,
+          )
+          if (twin) {
+            return NextResponse.json(
+              {
+                error:
+                  'En annan leverantörsfaktura från samma leverantör har redan samma OCR/betalningsreferens. Kontrollera att det inte är en dubblett innan du fortsätter.',
+                code: 'SI_CREATE_DUPLICATE_PAYMENT_REFERENCE',
+                details: {
+                  existing: {
+                    id: (twin as { id: string }).id,
+                    supplier_invoice_number: (twin as { supplier_invoice_number: string }).supplier_invoice_number,
+                    status: (twin as { status: string }).status,
+                  },
+                },
+              },
+              { status: 409 },
+            )
+          }
+        }
+
         const { data: arrivalNum, error: arrivalError } = await ctx.supabase
           .rpc('get_next_arrival_number', { p_company_id: ctx.companyId })
 
@@ -1688,7 +1728,21 @@ export const invoiceInboxExtension: Extension = {
         const totalVat = items.reduce((sum, i) => sum + i.vat_amount, 0)
         const total = Math.round((subtotal + totalVat) * 100) / 100
 
-        const exchangeRate = body.exchange_rate || null
+        // FX: prefer the caller-supplied rate (from the invoice document);
+        // otherwise fetch the Riksbanken rate for the INVOICE date
+        // (ML 8 kap 21–23 §§) instead of silently storing null.
+        let exchangeRate = body.exchange_rate || null
+        const bodyCurrency = body.currency || 'SEK'
+        if (!exchangeRate && bodyCurrency !== 'SEK') {
+          try {
+            const { fetchExchangeRate } = await import('@/lib/currency/riksbanken')
+            const rateData = await fetchExchangeRate(bodyCurrency, new Date(body.invoice_date))
+            if (rateData) exchangeRate = rateData.rate
+          } catch {
+            // Rate lookup failed — leave null; SEK columns stay null and the
+            // registration entry falls back to nominal amounts for review.
+          }
+        }
         const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
         const vatAmountSek = exchangeRate ? Math.round(totalVat * exchangeRate * 100) / 100 : null
         const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null

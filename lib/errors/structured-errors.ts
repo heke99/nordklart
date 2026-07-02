@@ -1532,6 +1532,13 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'En leverantörsfaktura med samma nummer finns redan.',
     message_en: 'A supplier invoice with that number already exists.',
   },
+  SI_CREATE_DUPLICATE_PAYMENT_REFERENCE: {
+    httpStatus: 409,
+    message_sv:
+      'En annan leverantörsfaktura från samma leverantör har redan samma OCR/betalningsreferens. Kontrollera att det inte är en dubblett.',
+    message_en:
+      'Another supplier invoice from the same supplier already carries this OCR/payment reference. Verify it is not a duplicate.',
+  },
   SI_CREATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Leverantörsfakturan kunde inte skapas.',

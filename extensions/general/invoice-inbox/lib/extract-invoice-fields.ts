@@ -104,10 +104,19 @@ function fileNameHash(fileName: string): string {
   return createHash('sha256').update(fileName).digest('hex').slice(0, 12)
 }
 
+/** Backoff delays for transient OCR-worker failures (network, 5xx, timeouts). */
+const OCR_RETRY_DELAYS_MS = [1000, 3000]
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /**
  * Extract invoice fields via OpenDataLoader OCR + Nordklart deterministic
- * parser. Never throws on extraction failure; the caller receives an empty
- * result and can let the user fill fields manually.
+ * parser. Transient OCR-worker failures are retried with backoff (1s, 3s)
+ * before giving up. Never throws on extraction failure; the caller receives
+ * an empty result and can let the user fill fields manually (or hit the
+ * explicit retry-extraction endpoint later).
  */
 export async function extractInvoiceFields(input: ExtractionInput): Promise<ExtractionOutput> {
   if (!SUPPORTED_MEDIA_TYPES.has(input.mimeType)) {
@@ -118,21 +127,33 @@ export async function extractInvoiceFields(input: ExtractionInput): Promise<Extr
     return { data: emptyResult(), rawText: null }
   }
 
-  let ocr: Awaited<ReturnType<typeof runOpenDataLoaderOcr>>
-  try {
-    ocr = await runOpenDataLoaderOcr({
-      buffer: input.buffer,
-      mimeType: input.mimeType,
-      fileName: input.fileName,
-      documentId: input.documentId,
-      companyId: input.companyId,
-    })
-  } catch (err) {
-    log.warn('OCR worker failed for invoice extraction', {
-      file_name_hash: fileNameHash(input.fileName),
-      mimeType: input.mimeType,
-      error: err instanceof Error ? err.message : String(err),
-    })
+  let ocr: Awaited<ReturnType<typeof runOpenDataLoaderOcr>> | null = null
+  for (let attempt = 0; attempt <= OCR_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      ocr = await runOpenDataLoaderOcr({
+        buffer: input.buffer,
+        mimeType: input.mimeType,
+        fileName: input.fileName,
+        documentId: input.documentId,
+        companyId: input.companyId,
+      })
+      break
+    } catch (err) {
+      const isLastAttempt = attempt === OCR_RETRY_DELAYS_MS.length
+      log.warn('OCR worker failed for invoice extraction', {
+        file_name_hash: fileNameHash(input.fileName),
+        mimeType: input.mimeType,
+        attempt: attempt + 1,
+        willRetry: !isLastAttempt,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      if (isLastAttempt) {
+        return { data: emptyResult(), rawText: null }
+      }
+      await sleep(OCR_RETRY_DELAYS_MS[attempt])
+    }
+  }
+  if (!ocr) {
     return { data: emptyResult(), rawText: null }
   }
 
