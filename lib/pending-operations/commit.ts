@@ -2371,8 +2371,19 @@ async function commitCreditInvoice(
     unit: item.unit,
     unit_price: item.unit_price,
     line_total: -Math.abs(item.line_total),
-    vat_rate: item.vat_rate ?? 0,
-    vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
+    // Credit-note VAT must mirror the ORIGINAL invoice's VAT (ML 17 kap
+    // 24 §). Legacy items without a per-line rate inherit the invoice-level
+    // rate — never a blind 0%.
+    vat_rate: item.vat_rate ?? (original as { vat_rate?: number | null }).vat_rate ?? 0,
+    vat_amount: -(
+      item.vat_amount != null
+        ? Math.abs(item.vat_amount)
+        : Math.round(
+            Math.abs(item.line_total) *
+              (((item.vat_rate ?? (original as { vat_rate?: number | null }).vat_rate ?? 0) as number) / 100) *
+              100,
+          ) / 100
+    ),
     // Reverse to the SAME account the original credited (e.g. 3041, not the
     // VAT-derived 3001) so the override account doesn't keep a dangling balance.
     revenue_account: item.revenue_account ?? null,

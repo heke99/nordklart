@@ -337,8 +337,18 @@ async function createCreditNote(
     unit: item.unit,
     unit_price: item.unit_price,
     line_total: -Math.abs(item.line_total),
-    vat_rate: item.vat_rate ?? 0,
-    vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
+    // Credit-note VAT must mirror the ORIGINAL invoice's VAT (ML 17 kap
+    // 24 § — a kreditfaktura reverses the original tax). Items missing a
+    // per-line rate (legacy rows) inherit the invoice-level rate — never a
+    // blind 0% which would leave output VAT standing on the reversed sale.
+    vat_rate: item.vat_rate ?? originalInvoice.vat_rate ?? 0,
+    vat_amount: -(
+      item.vat_amount != null
+        ? Math.abs(item.vat_amount)
+        : Math.round(
+            Math.abs(item.line_total) * ((item.vat_rate ?? originalInvoice.vat_rate ?? 0) / 100) * 100,
+          ) / 100
+    ),
     // Carry the original's per-line revenue-account override so the reversal
     // hits the SAME account it originally credited (e.g. 3041, not the
     // VAT-derived 3001) — otherwise the override account keeps a dangling

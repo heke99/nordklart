@@ -255,8 +255,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       unit: item.unit,
       unit_price: item.unit_price,
       line_total: -Math.abs(item.line_total),
-      vat_rate: item.vat_rate ?? 0,
-      vat_amount: -Math.abs(item.vat_amount ?? 0),
+      // Credit-note VAT must mirror the ORIGINAL invoice's VAT (ML 17 kap
+      // 24 §). Legacy items without a per-line rate inherit the invoice-level
+      // rate — never a blind 0%.
+      vat_rate: item.vat_rate ?? original.vat_rate ?? 0,
+      vat_amount: -(
+        item.vat_amount != null
+          ? Math.abs(item.vat_amount)
+          : Math.round(
+              Math.abs(item.line_total) * ((item.vat_rate ?? original.vat_rate ?? 0) / 100) * 100,
+            ) / 100
+      ),
     }))
 
     // Fetch settings for accounting method + entity type.
