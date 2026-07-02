@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
+import { AutomationInfoBadge } from './AutomationInfoBadge'
 import {
   ArrowUpRight,
   ArrowDownRight,
@@ -371,6 +372,16 @@ function BankHistoryRow({
         <span className="tabular-nums">{formatDate(transaction.date)}</span>
         <DataListMetaSeparator />
         {statusBadge}
+        {transaction.automation_status && transaction.automation_status !== 'not_evaluated' && (
+          <>
+            <DataListMetaSeparator />
+            <AutomationInfoBadge
+              transactionId={transaction.id}
+              status={transaction.automation_status}
+              confidence={transaction.automation_confidence ?? null}
+            />
+          </>
+        )}
         {categoryLabel && (
           <>
             <DataListMetaSeparator />

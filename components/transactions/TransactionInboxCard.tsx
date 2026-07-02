@@ -42,6 +42,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 // upload functional but drop the "AI:n läser dokumentet" promise.
 const HAS_AI_EXTRACTION = ENABLED_EXTENSION_IDS.has('document-extraction')
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
+import { AutomationInfoBadge } from './AutomationInfoBadge'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
 
 interface TransactionInboxCardProps {
@@ -407,6 +408,16 @@ export default function TransactionInboxCard({
                 <AlertCircle className="h-3 w-3" />
                 Möjlig 1930↔1630
               </Badge>
+            </>
+          )}
+          {transaction.automation_status && transaction.automation_status !== 'not_evaluated' && (
+            <>
+              <DataListMetaSeparator />
+              <AutomationInfoBadge
+                transactionId={transaction.id}
+                status={transaction.automation_status}
+                confidence={transaction.automation_confidence ?? null}
+              />
             </>
           )}
         </DataListMeta>

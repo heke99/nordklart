@@ -7,6 +7,7 @@ import { SalarySettingsContent } from './SalarySettingsContent'
 import { InvoicingSettingsContent } from './InvoicingSettingsContent'
 import { TemplatesSettingsContent } from './TemplatesSettingsContent'
 import { BankingSettingsContent } from './BankingSettingsContent'
+import { AutomationSettingsContent } from './AutomationSettingsContent'
 import { AssistantSettingsContent } from './AssistantSettingsContent'
 import { ApiSettingsContent } from './ApiSettingsContent'
 
@@ -26,6 +27,7 @@ export const SETTINGS_SECTIONS: Record<string, ComponentType> = {
   invoicing: InvoicingSettingsContent,
   templates: TemplatesSettingsContent,
   banking: BankingSettingsContent,
+  automation: AutomationSettingsContent,
   assistant: AssistantSettingsContent,
   api: ApiSettingsContent,
 }

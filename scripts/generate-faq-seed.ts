@@ -175,7 +175,7 @@ async function timestampName(): Promise<string> {
     .sort()
   const latest = existing[existing.length - 1]
   if (latest && wallClock <= latest) {
-    return String(BigInt(latest) + 1n).padStart(14, '0')
+    return String(BigInt(latest) + BigInt(1)).padStart(14, '0')
   }
   return wallClock
 }

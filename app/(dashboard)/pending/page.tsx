@@ -59,6 +59,7 @@ import type {
 } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
+import { translateReasonCodes } from '@/lib/automation/reason-codes'
 
 const OPERATION_LABEL_KEYS: Record<string, { labelKey: string; icon: typeof ArrowLeftRight; variant: 'default' | 'secondary' | 'outline' }> = {
   categorize_transaction: { labelKey: 'type_categorize_transaction', icon: ArrowLeftRight, variant: 'default' },
@@ -434,10 +435,42 @@ function renderPrimitive(value: unknown): string {
   return String(value)
 }
 
+// Why-did-automation-stage-this panel (Batch 11 transparency). Bank
+// automation stamps reason_codes + confidence on preview_data when it stages
+// an operation; render them in Swedish so the reviewer sees exactly why the
+// engine stopped short of auto-booking.
+function AutomationReasonsPanel({ data }: { data: Record<string, unknown> }) {
+  const rawCodes = data.reason_codes
+  if (!Array.isArray(rawCodes) || rawCodes.length === 0) return null
+  const reasons = translateReasonCodes(rawCodes.filter((c): c is string => typeof c === 'string'))
+  const confidence = typeof data.confidence === 'number' ? data.confidence : null
+  return (
+    <div className="mb-3 rounded-md border border-border bg-secondary/30 p-3">
+      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Automatikens bedömning
+        {confidence != null ? ` — träffsäkerhet ${Math.round(confidence * 100)} %` : ''}
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {reasons.map((r) => (
+          <li key={r.code} className="flex gap-2 text-xs">
+            <span className="text-muted-foreground">•</span>
+            <span>{r.explanation_sv}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function GenericPreview({ data }: { data: Record<string, unknown> }) {
   // Skip period_status here — it's surfaced in the dedicated banner, not the
   // generic key-value dump (otherwise the approver sees the same fact twice).
-  const entries = Object.entries(data).filter(([k, v]) => v != null && v !== '' && k !== 'period_status')
+  // reason_codes/confidence are rendered by AutomationReasonsPanel above the
+  // preview, so keep them out of the raw dump too.
+  const entries = Object.entries(data).filter(
+    ([k, v]) =>
+      v != null && v !== '' && k !== 'period_status' && k !== 'reason_codes' && k !== 'confidence',
+  )
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
       {entries.map(([key, value]) => (
@@ -506,13 +539,14 @@ function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
   )
 }
 
-type SourceFilter = 'all' | 'agent' | 'high_risk'
+type SourceFilter = 'all' | 'agent' | 'automation' | 'high_risk'
 
 const sourceFilterLabels = (
   t: (key: string) => string,
 ): Record<SourceFilter, string> => ({
   all: t('tab_all'),
   agent: t('tab_agent'),
+  automation: 'Bankautomation',
   high_risk: t('tab_high_risk'),
 })
 
@@ -534,7 +568,12 @@ export default function PendingOperationsPage() {
     committed: null,
     rejected: null,
   })
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  // ?operation=<id> deep link (from the transaction automation badge) —
+  // pre-expand that operation so the reviewer lands directly on its preview.
+  const [expandedId, setExpandedId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null
+    return new URL(window.location.href).searchParams.get('operation')
+  })
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
@@ -733,6 +772,8 @@ export default function PendingOperationsPage() {
     switch (sourceFilter) {
       case 'agent':
         return op.actor_type === 'api_key' || op.actor_type === 'mcp_oauth' || op.actor_type === 'cron'
+      case 'automation':
+        return op.actor_type === 'automation'
       case 'high_risk':
         return op.risk_level === 'high'
       case 'all':
@@ -1052,6 +1093,7 @@ export default function PendingOperationsPage() {
                         <PeriodLockBanner period={period} />
                       </div>
                     )}
+                    <AutomationReasonsPanel data={op.preview_data} />
                     <OperationPreview op={op} />
                   </>
                 }

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AgentTool } from './types'
 import { agentToolRegistry } from './registry'
+import { translateReasonCodes } from '@/lib/automation/reason-codes'
 
 // nordklart_explain_transaction_match — lets the assistant answer "varför
 // matchades inte transaktionen?" from real data instead of speculation.
@@ -12,53 +13,9 @@ import { agentToolRegistry } from './registry'
 // Read-only; company scoping is enforced twice — explicit company_id filters
 // here plus RLS on the underlying tables via the user-scoped client.
 
-// Swedish translations for every reason/blocking code the bank automation
-// engine emits (lib/automation/bank-transaction-automation.ts). Unknown codes
-// pass through verbatim so new codes degrade gracefully.
-const REASON_CODE_SV: Record<string, string> = {
-  // candidate signals
-  own_account_transfer_detected: 'Transaktionen ser ut som en överföring mellan företagets egna konton',
-  bank_fee_pattern: 'Texten och beloppet matchar mönstret för en bankavgift',
-  tax_payment_pattern: 'Mottagaren matchar Skatteverkets bankgiro (skattekontobetalning)',
-  mapping_rule_match: 'En egen bokföringsregel matchade transaktionen',
-  booking_template_match: 'En bokningsmall matchade transaktionen',
-  counterparty_template_match: 'Motparten har bokförts tidigare — historiken gav ett förslag',
-  no_confident_mapping: 'Ingen regel eller historik gav en tillräckligt säker kontering',
-  mapping_requires_review: 'Konteringsförslaget kräver manuell granskning (t.ex. oklar moms)',
-  exact_amount: 'Beloppet stämmer exakt med fakturans restbelopp',
-  partial_or_over_payment: 'Beloppet avviker från fakturans restbelopp (del- eller överbetalning)',
-  cross_currency: 'Transaktionen och fakturan har olika valutor',
-  already_linked: 'Transaktionen är redan kopplad till en verifikation',
-  auto_guards_passed: 'Alla säkerhetsspärrar passerade',
-  // blocking guards
-  after_sync_mode_blocks_auto: 'Företagets automationsläge tillåter inte automatisk bokföring efter synk',
-  below_auto_confidence: 'Träffsäkerheten låg under företagets tröskel för automatisk bokföring',
-  ambiguous_candidates: 'Flera kandidater låg för nära varandra i poäng — automatiken vägrar gissa',
-  amount_over_auto_cap: 'Beloppet överstiger företagets maxgräns för automatisk bokföring',
-  invoice_auto_settlement_disabled: 'Automatisk avräkning av kundfakturor är avstängd i inställningarna',
-  not_exact_payment: 'Betalningen är inte exakt lika med fakturabeloppet',
-  invoice_disputed: 'Fakturan är markerad som bestriden',
-  supplier_auto_link_disabled: 'Automatisk leverantörsavräkning är avstängd i inställningarna',
-  bank_fee_auto_disabled: 'Automatisk bokföring av bankavgifter är avstängd',
-  bank_fee_amount_unsafe: 'Beloppet är för stort för att säkert vara en bankavgift',
-  vat_treatment_unclear: 'Momsbehandlingen är oklar — kräver manuellt val',
-  bank_mode_blocks_auto: 'Bankautomationens läge tillåter inte automatisk bokföring',
-  fx_transfer_requires_review: 'Valutaöverföring kräver manuell granskning',
-  tax_payment_auto_disabled: 'Automatisk bokföring av skattebetalningar är avstängd',
-  salary_auto_disabled: 'Automatisk lönekoppling är avstängd',
-  category_auto_disabled: 'Automatisk kategoribokning är avstängd',
-  no_actionable_candidate: 'Ingen kandidat var tillräckligt konkret för att agera på',
-  sie_import_overlap: 'En SIE-import täcker samma period — auto-bokföring spärrad för att undvika dubbelbokning',
-  period_locked: 'Bokföringsperioden är stängd eller låst',
-  period_status_unknown: 'Periodens status kunde inte fastställas — automatiken avstod',
-}
-
-function translateCodes(codes: string[]): Array<{ code: string; explanation_sv: string }> {
-  return codes.map((code) => ({
-    code,
-    explanation_sv: REASON_CODE_SV[code] ?? code,
-  }))
-}
+// Reason-code → Swedish dictionary lives in lib/automation/reason-codes.ts,
+// shared with the transactions and pending-operations UIs so every surface
+// explains automation decisions with the same wording.
 
 export const explainTransactionMatchTool: AgentTool = {
   name: 'nordklart_explain_transaction_match',
@@ -149,7 +106,7 @@ export const explainTransactionMatchTool: AgentTool = {
         risk_level: d.risk_level,
         decided_at: d.decided_at,
         applied_journal_entry_id: d.applied_journal_entry_id,
-        reasons: translateCodes(d.reason_codes ?? []),
+        reasons: translateReasonCodes(d.reason_codes ?? []),
       })),
       match_log: logRows.map((l) => ({
         action: l.action,

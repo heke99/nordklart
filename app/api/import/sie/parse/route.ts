@@ -118,6 +118,25 @@ export const POST = withRouteContext(
       preview.excludedSystemAccounts = excludedSystemAccounts
       preview.accountCount = bookkeepingAccounts.length
 
+      // Preflight bank-overlap check: bank transactions already imported in
+      // the file's fiscal-year range mean double-booking risk. The execute
+      // step warns post-import; surfacing the count here lets the user see
+      // it BEFORE committing anything.
+      if (parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
+        try {
+          const { count } = await supabase
+            .from('transactions')
+            .select('id', { count: 'exact', head: true })
+            .eq('company_id', companyId)
+            .gte('date', parsed.stats.fiscalYearStart)
+            .lte('date', parsed.stats.fiscalYearEnd)
+          preview.bankTransactionOverlapCount = count ?? 0
+        } catch {
+          // Non-critical — the execute-time warning and the bank-side
+          // automation guard still apply.
+        }
+      }
+
       const fileHash = await calculateFileHash(content)
 
       return NextResponse.json({
@@ -127,6 +146,8 @@ export const POST = withRouteContext(
         parsed: {
           header: parsed.header,
           accounts: parsed.accounts,
+          dimensions: parsed.dimensions,
+          objects: parsed.objects,
           stats: parsed.stats,
           issues: parsed.issues,
         },

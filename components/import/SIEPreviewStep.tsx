@@ -136,6 +136,56 @@ export default function SIEPreviewStep({
         </Card>
       </div>
 
+      {/* Bank-transaction overlap — double-booking risk shown BEFORE import */}
+      {(preview.bankTransactionOverlapCount ?? 0) > 0 && (
+        <Card className="border-warning/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-warning" />
+              Banktransaktioner i samma period
+            </CardTitle>
+            <CardDescription>
+              {preview.bankTransactionOverlapCount} banktransaktioner är redan importerade inom
+              räkenskapsåret {preview.fiscalYearStart}–{preview.fiscalYearEnd}. Verifikationerna i
+              SIE-filen täcker sannolikt samma affärshändelser — automatisk bokföring av dessa
+              transaktioner spärras efter importen för att undvika dubbelbokning. Använd
+              bankavstämningen för att koppla transaktionerna mot de importerade verifikationerna.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
+      {/* Dimensions/objects detected in the file */}
+      {(preview.dimensions?.length ?? 0) > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5" />
+              Dimensioner och objekt
+            </CardTitle>
+            <CardDescription>
+              Dimension 1 importeras som kostnadsställen och dimension 6 som projekt. Övriga
+              dimensioner bevaras som metadata på verifikationsraderna.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {preview.dimensions!.map((dim) => (
+                <div key={dim.number} className="flex items-center gap-3 text-sm">
+                  <Badge variant="secondary" className="font-mono">
+                    {dim.number}
+                  </Badge>
+                  <span className="font-medium">{dim.name}</span>
+                  <span className="ml-auto text-muted-foreground">
+                    {dim.objectCount} objekt
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Trial balance check */}
       <Card className={preview.trialBalance.isBalanced ? 'border-success/50' : 'border-warning/50'}>
         <CardHeader>

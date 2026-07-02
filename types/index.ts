@@ -1881,7 +1881,13 @@ export type PendingOperationType =
   | 'submit_agi'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
-export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
+export type PendingOperationActorType =
+  | 'user'
+  | 'api_key'
+  | 'mcp_oauth'
+  | 'cron'
+  | 'agent_chat'
+  | 'automation'
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'
 
 export interface PendingOperationAgentMetadata {

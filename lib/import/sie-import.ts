@@ -72,6 +72,14 @@ export function generateImportPreview(
 
   const mappingStats = getMappingStats(mappings)
 
+  // Dimension registers from #DIM/#OBJEKT — surfaced in the preview so the
+  // user sees that cost centers/projects survive the import.
+  const dimensions = (parsed.dimensions ?? []).map((dim) => ({
+    number: dim.number,
+    name: dim.name,
+    objectCount: (parsed.objects ?? []).filter((o) => o.dimension === dim.number).length,
+  }))
+
   return {
     companyName: parsed.header.companyName,
     orgNumber: parsed.header.orgNumber,
@@ -93,6 +101,7 @@ export function generateImportPreview(
       lowConfidence: mappingStats.lowConfidence,
     },
     excludedSystemAccounts: [],
+    dimensions,
     issues: derivedFromPriorYearUB
       ? [
           ...parsed.issues,

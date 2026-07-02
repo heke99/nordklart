@@ -389,6 +389,18 @@ export interface ImportPreview {
   // Source-system accounts excluded from import (e.g. Fortnox 0099)
   excludedSystemAccounts: { number: string; name: string }[]
 
+  // Dimensions declared in the file (#DIM) with their object counts (#OBJEKT).
+  // Dim 1 maps to cost centers, dim 6 to projects; others are preserved as
+  // line metadata. Shown in the preview so the user knows dimension data
+  // survives the import.
+  dimensions?: { number: string; name: string; objectCount: number }[]
+
+  // Bank transactions already imported inside the file's fiscal-year range.
+  // > 0 means double-booking risk: the bank-side automation blocks category
+  // auto-booking on SIE overlap, and the preview warns the user up front
+  // (not only in the post-import result).
+  bankTransactionOverlapCount?: number
+
   // Issues to review
   issues: ParseIssue[]
 }
