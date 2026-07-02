@@ -7,6 +7,7 @@ import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { BANK_FILE_FORMAT_IDS } from '@/lib/import/bank-file/types'
 import type { ParsedBankTransaction, BankFileFormatId } from '@/lib/import/bank-file/types'
 import type { Transaction } from '@/types'
 
@@ -57,6 +58,20 @@ export const POST = withRouteContext(
       return errorResponseFromCode('BANK_FILE_NO_TRANSACTIONS', log, { requestId })
     }
 
+    if (!format || !BANK_FILE_FORMAT_IDS.includes(format)) {
+      return errorResponseFromCode('BANK_FILE_FORMAT_UNKNOWN', log, {
+        requestId,
+        details: { format: String(format ?? ''), accepted: BANK_FILE_FORMAT_IDS },
+      })
+    }
+
+    if (typeof file_hash !== 'string' || !/^[a-f0-9]{16,64}$/i.test(file_hash)) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        details: { field: 'file_hash', message: 'Ogiltig filsignatur — kör om förhandsgranskningen.' },
+      })
+    }
+
     const opLog = log.child({ filename, fileHash: file_hash, txCount: transactions.length })
 
     try {
@@ -72,7 +87,10 @@ export const POST = withRouteContext(
           status: 'processing',
           date_from: transactions.map((t) => t.date).sort()[0] || null,
           date_to: transactions.map((t) => t.date).sort().reverse()[0] || null,
-        }, { onConflict: 'user_id,file_hash' })
+          // Dedup is company-scoped (20260706130000): one import row per
+          // company and content hash — the same file CAN legitimately be
+          // imported into two different companies.
+        }, { onConflict: 'company_id,file_hash' })
         .select()
         .single()
 

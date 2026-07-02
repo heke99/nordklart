@@ -339,7 +339,10 @@ export const enableBankingExtension: Extension = {
               toDate,
             })
           }
-          const results = await Promise.all(
+          // Per-account isolation: one failing account must not abort the
+          // others. Failed accounts are reported back with a structured
+          // error entry instead of failing the whole request.
+          const settled = await Promise.allSettled(
             accounts.map(account => syncAccountTransactions(
               supabase,
               companyId,
@@ -352,6 +355,23 @@ export const enableBankingExtension: Extension = {
               syncOptions
             ))
           )
+
+          const results = settled.flatMap(s => (s.status === 'fulfilled' ? [s.value] : []))
+          const failedAccounts = settled.flatMap((s, i) =>
+            s.status === 'rejected'
+              ? [{
+                  account_uid: accounts[i]?.uid ?? null,
+                  account_name: accounts[i]?.name ?? null,
+                  error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+                }]
+              : [],
+          )
+          if (failedAccounts.length > 0) {
+            log.error('[enable-banking] Per-account sync failures', {
+              connection_id: connection.id,
+              failed: failedAccounts,
+            })
+          }
 
           const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
           const totalDuplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
@@ -384,6 +404,13 @@ export const enableBankingExtension: Extension = {
             .update({
               accounts_data: allAccounts,
               last_synced_at: syncedAt,
+              // Structured per-account error state: cleared on a fully
+              // successful sync, populated when some account failed.
+              error_message: failedAccounts.length > 0
+                ? `Delvis synk: ${failedAccounts.length} konto(n) misslyckades — ${failedAccounts
+                    .map(f => f.account_name || f.account_uid || 'okänt konto')
+                    .join(', ')}`
+                : null,
             })
             .eq('id', connection.id)
 
@@ -410,6 +437,7 @@ export const enableBankingExtension: Extension = {
             imported: totalImported,
             duplicates: totalDuplicates,
             last_synced_at: syncedAt,
+            ...(failedAccounts.length > 0 ? { failed_accounts: failedAccounts } : {}),
           })
         } catch (error) {
           log.error('[enable-banking] Sync handler error', {

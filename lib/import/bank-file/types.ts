@@ -41,20 +41,24 @@ export interface BankFileParseIssue {
   severity: 'warning' | 'error'
 }
 
+/** Supported bank file format identifiers (canonical runtime list). */
+export const BANK_FILE_FORMAT_IDS = [
+  'nordea',
+  'nordea_business',
+  'seb',
+  'swedbank',
+  'handelsbanken',
+  'lansforsakringar',
+  'ica_banken',
+  'skandia',
+  'lunar',
+  'northmill',
+  'generic_csv',
+  'camt053',
+] as const
+
 /** Supported bank file format identifiers */
-export type BankFileFormatId =
-  | 'nordea'
-  | 'nordea_business'
-  | 'seb'
-  | 'swedbank'
-  | 'handelsbanken'
-  | 'lansforsakringar'
-  | 'ica_banken'
-  | 'skandia'
-  | 'lunar'
-  | 'northmill'
-  | 'generic_csv'
-  | 'camt053'
+export type BankFileFormatId = (typeof BANK_FILE_FORMAT_IDS)[number]
 
 /** Format definition with detection and parsing capability */
 export interface BankFileFormat {

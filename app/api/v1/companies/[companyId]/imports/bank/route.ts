@@ -36,7 +36,12 @@ import {
   generateExternalId,
 } from '@/lib/import/bank-file/parser'
 import { ingestTransactions, type RawTransaction } from '@/lib/transactions/ingest'
+import { eventBus } from '@/lib/events'
+import { ensureInitialized } from '@/lib/init'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+import type { Transaction } from '@/types'
+
+ensureInitialized()
 
 const BankImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -199,57 +204,40 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     )
 
     try {
-      // Cross-company collision pre-check. The `bank_file_imports` unique
-      // constraint is `(user_id, file_hash)` — set when the table was
-      // designed for the single-tenant single-company-per-user world. If
-      // the same user is a member of two companies and uploads the same
-      // file to both, a naive upsert with onConflict='user_id,file_hash'
-      // would silently overwrite the first company's row with the second
-      // company_id. Pre-check for that case and surface a structured
-      // error so an agent sees the explicit conflict instead of a
-      // silently-stolen row.
-      //
-      // A migration to widen the unique constraint to (user_id, file_hash,
-      // company_id) is the proper fix; that's an engine-PR concern.
+      // Duplicate-import guard: dedup is company-scoped (20260706130000) —
+      // one completed import per (company_id, file_hash). The same file CAN
+      // legitimately be imported into two different companies; a re-import
+      // into the SAME company is rejected here.
       const { data: existingImport } = await ctx.supabase
         .from('bank_file_imports')
-        .select('id, company_id, filename, imported_at, status')
-        .eq('user_id', ctx.userId)
+        .select('id, status, imported_count, created_at')
+        .eq('company_id', ctx.companyId!)
         .eq('file_hash', fileHash)
         .maybeSingle()
-      if (existingImport && (existingImport as { company_id: string }).company_id !== ctx.companyId) {
-        // Log the cross-tenant collision details server-side for operator
-        // investigation (CC7.2 — audit trail), but do NOT echo the other
-        // company's id or the other import's id back to the caller. Doing
-        // so would be a cross-tenant enumeration vector (V8.2.1 / CC6.1).
-        // The caller sees a fixed error code + a generic message; the
-        // server log carries enough context to debug.
-        ctx.log.warn('bank import: cross-company file-hash collision', {
-          fileHash,
-          attemptedCompanyId: ctx.companyId,
-          existingCompanyId: (existingImport as { company_id: string }).company_id,
-          existingImportId: (existingImport as { id: string }).id,
-        })
+      if (existingImport && (existingImport as { status: string }).status === 'completed') {
         await failOperation(
           ctx.supabase,
           {
             id: op.id,
             error: {
-              code: 'BANK_IMPORT_DUPLICATE_OTHER_COMPANY',
-              message: 'This file has already been imported into another company by this user.',
+              code: 'BANK_FILE_DUPLICATE',
+              message: 'This file has already been imported into this company.',
             },
           },
           ctx.log,
         )
-        return v1ErrorResponseFromCode('BANK_IMPORT_DUPLICATE_OTHER_COMPANY', ctx.log, {
+        return v1ErrorResponseFromCode('BANK_FILE_DUPLICATE', ctx.log, {
           requestId: ctx.requestId,
-          // Deliberately empty details — see comment above.
+          details: {
+            import_id: (existingImport as { id: string }).id,
+            imported_count: (existingImport as { imported_count: number }).imported_count,
+          },
         })
       }
 
       // Record the import row so the dashboard's "bank file imports" tab
-      // shows v1 imports too. `upsert` on (user_id, file_hash) gives
-      // duplicate-rerun protection for the same-company case.
+      // shows v1 imports too. `upsert` on (company_id, file_hash) gives
+      // duplicate-rerun protection for retried/failed imports.
       await ctx.supabase
         .from('bank_file_imports')
         .upsert(
@@ -264,7 +252,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
             date_from: parseResult.date_from,
             date_to: parseResult.date_to,
           },
-          { onConflict: 'user_id,file_hash' },
+          { onConflict: 'company_id,file_hash' },
         )
 
       // Convert parsed transactions to the RawTransaction shape that
@@ -281,29 +269,56 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         source: 'bank_file',
       }))
 
+      // Optional settlement account override (e.g. importing to 1931) —
+      // mirrors the dashboard execute route so cash_account scoping is
+      // identical between the two entry points.
+      const settlementAccount = formData.get('settlement_account')
       const ingestResult = await ingestTransactions(
         ctx.supabase,
         ctx.companyId!,
         ctx.userId,
         raw,
+        typeof settlementAccount === 'string' && /^19\d{2}$/.test(settlementAccount)
+          ? { settlementAccount }
+          : undefined,
       )
 
-      // Mark the bank_file_imports row complete. Scope by all three
-      // identifying fields — `(user_id, file_hash)` is the unique
-      // constraint today but adding `company_id` is defense in depth:
-      // even if a concurrent same-user same-hash import in a different
-      // company slipped past the pre-check, this update can never
-      // overwrite the wrong company's status row.
+      // Mark the bank_file_imports row complete — keyed by the
+      // company-scoped unique constraint.
       await ctx.supabase
         .from('bank_file_imports')
         .update({
           status: 'completed',
           imported_at: new Date().toISOString(),
-          transaction_count: ingestResult.imported,
+          imported_count: ingestResult.imported,
+          duplicate_count: ingestResult.duplicates,
+          matched_count: ingestResult.auto_matched_invoices,
         })
         .eq('file_hash', fileHash)
-        .eq('user_id', ctx.userId)
         .eq('company_id', ctx.companyId!)
+
+      // Emit transaction.synced so event subscribers (extensions, webhooks)
+      // see v1 imports exactly like dashboard imports.
+      if (ingestResult.imported > 0 && ingestResult.transaction_ids.length > 0) {
+        try {
+          const { data: importedTransactions } = await ctx.supabase
+            .from('transactions')
+            .select('*')
+            .in('id', ingestResult.transaction_ids)
+          if (importedTransactions && importedTransactions.length > 0) {
+            await eventBus.emit({
+              type: 'transaction.synced',
+              payload: {
+                transactions: importedTransactions as Transaction[],
+                userId: ctx.userId,
+                companyId: ctx.companyId!,
+              },
+            })
+          }
+        } catch (err) {
+          ctx.log.warn('transaction.synced event emission failed', err as Error)
+        }
+      }
 
       await completeOperation(
         ctx.supabase,

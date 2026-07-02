@@ -3,6 +3,7 @@ import { parseBankFile, generateFileHash, detectFileFormat } from '@/lib/import/
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { BANK_FILE_FORMAT_IDS } from '@/lib/import/bank-file/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
 /**
@@ -18,7 +19,19 @@ export const POST = withRouteContext(
 
     const formData = await request.formData()
     const file = formData.get('file') as File | null
-    const formatOverride = formData.get('format') as BankFileFormatId | null
+    const rawFormat = formData.get('format')
+    // Validate the caller-supplied format against the canonical enum before
+    // it reaches the parser modules.
+    let formatOverride: BankFileFormatId | null = null
+    if (typeof rawFormat === 'string' && rawFormat.length > 0) {
+      if (!(BANK_FILE_FORMAT_IDS as readonly string[]).includes(rawFormat)) {
+        return errorResponseFromCode('BANK_FILE_FORMAT_UNKNOWN', log, {
+          requestId,
+          details: { format: rawFormat, accepted: BANK_FILE_FORMAT_IDS },
+        })
+      }
+      formatOverride = rawFormat as BankFileFormatId
+    }
 
     if (!file) {
       return errorResponseFromCode('BANK_FILE_NO_FILE', log, { requestId })
