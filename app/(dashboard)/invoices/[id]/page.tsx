@@ -34,6 +34,7 @@ import {
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import InvoiceFinancingDialog from '@/components/invoices/InvoiceFinancingDialog'
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
 import {
   Dialog,
@@ -110,6 +111,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [isSendingEInvoice, setIsSendingEInvoice] = useState(false)
+  const [showFinancingDialog, setShowFinancingDialog] = useState(false)
 
   async function sendAsEInvoice() {
     setIsSendingEInvoice(true)
@@ -643,6 +645,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             >
               {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('mark_as_paid')}
+            </Button>
+          )}
+          {/* Invoice financing: sell/pledge a sent unpaid SEK invoice to a
+              financing partner. The dialog runs the eligibility check and
+              shows offer/accept/cancel states. */}
+          {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice &&
+            invoice.currency === 'SEK' && (
+            <Button
+              variant="outline"
+              onClick={() => setShowFinancingDialog(true)}
+            >
+              <ReceiptText className="mr-2 h-4 w-4" />
+              {t('offer_financing')}
             </Button>
           )}
           {/* Peppol e-invoice: only when the customer has an electronic
@@ -1423,6 +1438,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           onSuccess={() => fetchInvoice()}
         />
       )}
+      <InvoiceFinancingDialog
+        invoiceId={id}
+        open={showFinancingDialog}
+        onOpenChange={setShowFinancingDialog}
+        canWrite={canWrite}
+      />
     </div>
   )
 }

@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `118`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `123`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -27,6 +27,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/employees/:id",
   "GET /api/v1/companies/:companyId/events",
   "GET /api/v1/companies/:companyId/fiscal-periods",
+  "GET /api/v1/companies/:companyId/invoice-financing/applications",
+  "GET /api/v1/companies/:companyId/invoice-financing/applications/:id",
   "GET /api/v1/companies/:companyId/invoices",
   "GET /api/v1/companies/:companyId/invoices/:id",
   "GET /api/v1/companies/:companyId/invoices/:id/pdf",
@@ -85,6 +87,9 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/year-end",
   "POST /api/v1/companies/:companyId/imports/bank",
   "POST /api/v1/companies/:companyId/imports/sie",
+  "POST /api/v1/companies/:companyId/invoice-financing/applications",
+  "POST /api/v1/companies/:companyId/invoice-financing/applications/:id/accept",
+  "POST /api/v1/companies/:companyId/invoice-financing/applications/:id/cancel",
   "POST /api/v1/companies/:companyId/invoices",
   "POST /api/v1/companies/:companyId/invoices/:id/credit",
   "POST /api/v1/companies/:companyId/invoices/:id/mark-paid",
@@ -141,6 +146,8 @@ exports[`v1 spec snapshot > matches the recorded scope catalogue > endpoint-scop
   "documents:read",
   "documents:write",
   "events:read",
+  "financing:read",
+  "financing:write",
   "invoices:read",
   "invoices:write",
   "operations:read",

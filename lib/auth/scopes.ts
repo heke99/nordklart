@@ -210,6 +210,13 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/bank-connections': 'bank:read',
   'GET /api/v1/companies/:companyId/audit-logs': 'audit:read',
   'GET /api/v1/companies/:companyId/documents': 'documents:read',
+
+  // Production-completion batch 9 — invoice financing/factoring.
+  'GET /api/v1/companies/:companyId/invoice-financing/applications': 'financing:read',
+  'GET /api/v1/companies/:companyId/invoice-financing/applications/:id': 'financing:read',
+  'POST /api/v1/companies/:companyId/invoice-financing/applications': 'financing:write',
+  'POST /api/v1/companies/:companyId/invoice-financing/applications/:id/accept': 'financing:write',
+  'POST /api/v1/companies/:companyId/invoice-financing/applications/:id/cancel': 'financing:write',
 }
 
 interface CompiledRoute {

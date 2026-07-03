@@ -144,4 +144,10 @@ import '@/app/api/v1/companies/[companyId]/bank-connections/route'
 import '@/app/api/v1/companies/[companyId]/audit-logs/route'
 import '@/app/api/v1/companies/[companyId]/events/route'
 
+// Production-completion batch 9 — invoice financing/factoring.
+import '@/app/api/v1/companies/[companyId]/invoice-financing/applications/route'
+import '@/app/api/v1/companies/[companyId]/invoice-financing/applications/[id]/route'
+import '@/app/api/v1/companies/[companyId]/invoice-financing/applications/[id]/accept/route'
+import '@/app/api/v1/companies/[companyId]/invoice-financing/applications/[id]/cancel/route'
+
 export {}

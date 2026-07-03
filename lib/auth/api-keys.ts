@@ -42,6 +42,8 @@ export const API_KEY_SCOPES = {
   'articles:write':    { label: 'Artiklar — skriv',       description: 'Skapa, uppdatera och arkivera artiklar' },
   'bank:read':         { label: 'Bankkopplingar — läs',   description: 'Läsa bankkopplingar, synkstatus och synkhistorik' },
   'audit:read':        { label: 'Granskningslogg — läs',  description: 'Läsa granskningsloggen (audit_log) för företaget' },
+  'financing:read':    { label: 'Fakturafinansiering — läs',  description: 'Läsa finansieringsansökningar, erbjudanden och utbetalningar' },
+  'financing:write':   { label: 'Fakturafinansiering — skriv', description: 'Skapa, acceptera och avbryta finansieringsansökningar via API' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -98,6 +100,7 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
   'articles:read',
   'bank:read',
   'audit:read',
+  'financing:read',
 ]
 
 /**
@@ -171,6 +174,7 @@ export const SCOPE_GROUPS = [
   { domain: 'articles',            label: 'Artiklar',             read: 'articles:read' as const,            write: 'articles:write' as const },
   { domain: 'bank',                label: 'Bankkopplingar',       read: 'bank:read' as const,                write: null },
   { domain: 'audit',               label: 'Granskningslogg',      read: 'audit:read' as const,               write: null },
+  { domain: 'financing',           label: 'Fakturafinansiering',  read: 'financing:read' as const,           write: 'financing:write' as const },
 ] as const
 
 /** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */
