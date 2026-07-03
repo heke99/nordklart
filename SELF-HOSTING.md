@@ -264,6 +264,36 @@ Companies without any Skatteverket connection can still import their
 skattekonto statement manually (paste from Mina sidor) — see
 Skattekonto → "Importera kontoutdrag".
 
+### Provider migration (Fortnox/Visma/Bokio/Briox/Björn Lundén)
+
+```bash
+# OAuth providers:
+FORTNOX_CLIENT_ID=...                     # Fortnox developer portal
+FORTNOX_CLIENT_SECRET=...
+FORTNOX_REDIRECT_URI=...                  # optional redirect override (dev)
+VISMA_CLIENT_ID=...
+VISMA_CLIENT_SECRET=...
+VISMA_REDIRECT_URI=...                    # optional redirect override (dev)
+# Token/credential providers:
+BRIOX_CLIENT_ID=...                       # Briox integration client
+BJORN_LUNDEN_CLIENT_ID=...                # Björn Lundén app credentials
+BJORN_LUNDEN_CLIENT_SECRET=...
+# At-rest encryption for stored provider tokens (recommended in production).
+# Legacy plaintext rows keep working and are re-encrypted on next use.
+PROVIDER_TOKEN_ENCRYPTION_KEY=...
+```
+
+### Invoice financing (fakturafinansiering)
+
+```bash
+INVOICE_FINANCING_PROVIDER=sandbox        # 'sandbox' (default outside prod) or 'none'
+INVOICE_FINANCING_WEBHOOK_SECRET=...      # shared secret for provider status pushes
+```
+
+Production factoring requires an agreement with a financing partner — the
+sandbox provider exists so the full flow (eligibility → offer → accept →
+payout → booking) can be tested end to end.
+
 ## Storage Buckets
 
 Migration 024 automatically creates the `documents` storage bucket (private, 50 MB limit, WORM — no update/delete).

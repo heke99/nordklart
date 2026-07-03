@@ -17,7 +17,7 @@ import type { ProviderName } from '@/lib/providers/types'
 import { detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
 import { createLogger } from '@/lib/logger'
 
-const log = createLogger('extensions/arcim-migration/sie-fetcher')
+const log = createLogger('extensions/nordklart-migration/sie-fetcher')
 
 /**
  * Fiscal years we support importing — the current year and the two before it.

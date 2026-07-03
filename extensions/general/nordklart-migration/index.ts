@@ -12,7 +12,10 @@ import {
   deleteConsent,
   resolveConsent,
   fetchCompanyInfoDirect,
+  ProviderTokenInvalidError,
+  ConsentNotFoundError,
 } from './lib/provider-client'
+import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
@@ -22,18 +25,12 @@ import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
 import { loadMappings, generateImportPreview, executeSIEImport, saveMappings } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
-import { FortnoxClient } from '@/lib/providers/fortnox/client'
 import type { ProviderName } from '@/lib/providers/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { createLogger } from '@/lib/logger'
 
 const moduleLog = createLogger('extensions/nordklart-migration')
-
-/** Fiscal years we support importing — older data is not needed */
-const ALLOWED_FISCAL_YEARS = new Set([2024, 2025, 2026])
-
-const fortnoxClient = new FortnoxClient()
 
 /**
  * Map known OAuth error codes from providers (Fortnox, Visma) to actionable
@@ -56,6 +53,40 @@ function translateOAuthError(error: string, description: string | null): string 
   }
 
   return description ? `${error}: ${description}` : error
+}
+
+/**
+ * Build a provider OAuth authorization URL bound to an EXISTING consent id.
+ * Used by both first-time connect and reconnect (token revival): the callback
+ * runs exchangeAuthToken(consentId, …) which upserts the fresh tokens keyed by
+ * consent_id, so re-running OAuth against the same consent overwrites a dead
+ * refresh-token pair in place — no disconnect/recreate needed.
+ */
+async function buildNordklartOAuthUrl(consentId: string, provider: NordklartProvider): Promise<string> {
+  const otc = await generateOtc(consentId)
+
+  // Prefer a provider-specific redirect override (e.g. VISMA_REDIRECT_URI) when
+  // set — lets dev environments route through a single registered URI rather
+  // than registering every ngrok URL on the OAuth client. Falls back to
+  // NEXT_PUBLIC_APP_URL + the canonical callback path.
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || ''
+  const providerRedirectEnv =
+    provider === 'visma'
+      ? process.env.VISMA_REDIRECT_URI
+      : provider === 'fortnox'
+        ? process.env.FORTNOX_REDIRECT_URI
+        : undefined
+  const callbackUrl =
+    providerRedirectEnv && providerRedirectEnv.trim().length > 0
+      ? providerRedirectEnv
+      : `${appUrl}/api/extensions/ext/nordklart-migration/callback`
+
+  // Encode consentId + provider in state so the callback rebinds to this consent
+  const statePayload = JSON.stringify({ otc: otc.code, consentId, provider })
+  const stateEncoded = Buffer.from(statePayload).toString('base64url')
+
+  const { url } = await getAuthUrl(provider, stateEncoded, callbackUrl)
+  return url
 }
 
 /**
@@ -161,10 +192,11 @@ export const nordklartMigrationExtension: Extension = {
 
         const companyId = ctx?.companyId ?? user.id
 
-        const { provider, companyName, orgNumber } = await request.json() as {
+        const { provider, companyName, orgNumber, reconnect } = await request.json() as {
           provider: NordklartProvider
           companyName?: string
           orgNumber?: string
+          reconnect?: boolean
         }
 
         if (!provider) {
@@ -183,8 +215,43 @@ export const nordklartMigrationExtension: Extension = {
         try {
           const { createServiceClient: createSvc } = await import('@/lib/supabase/server')
 
-          // Reuse existing accepted consent if one exists for this provider
           const existingConsents = await listConsents(companyId)
+
+          // Reconnect: an existing connection's stored tokens are dead (refresh
+          // failed → PROVIDER_AUTH_EXPIRED). Re-run auth against the SAME consent
+          // so fresh tokens overwrite the dead pair in place — no disconnect, no
+          // duplicate consent, import history preserved. Bypasses the
+          // alreadyConnected short-circuit below (which would otherwise skip the
+          // auth that's the whole point here).
+          if (reconnect) {
+            const stale = existingConsents.find(
+              c => c.provider === provider && (c.status === 0 || c.status === 1),
+            )
+            if (stale) {
+              if (ctx?.settings) {
+                await ctx.settings.set('consent_id', stale.id)
+                await ctx.settings.set('provider', provider)
+              }
+              if (providerInfo.authType === 'oauth') {
+                const authUrl = await buildNordklartOAuthUrl(stale.id, provider)
+                return NextResponse.json({
+                  consentId: stale.id,
+                  authType: 'oauth',
+                  authUrl,
+                  reconnect: true,
+                })
+              }
+              // Token-based providers re-authorize by re-entering credentials
+              return NextResponse.json({
+                consentId: stale.id,
+                authType: 'token',
+                reconnect: true,
+              })
+            }
+            // No existing consent to revive — fall through to a normal connect.
+          }
+
+          // Reuse existing accepted consent if one exists for this provider
           const accepted = existingConsents.find(c => c.provider === provider && c.status === 1)
 
           if (accepted) {
@@ -208,7 +275,11 @@ export const nordklartMigrationExtension: Extension = {
             for (const p of pending) {
               const { data: tokens } = await svc
                 .from('provider_consent_tokens')
-                .select('id')
+                // consent_id is the PK — there is no `id` column. Selecting `id`
+                // errors silently (only `data` is read), so `tokens` was always
+                // null and the reuse branch below never fired, deleting valid
+                // status-0 consents as "abandoned".
+                .select('consent_id')
                 .eq('consent_id', p.id)
                 .limit(1)
               if (tokens && tokens.length > 0) {
@@ -245,37 +316,12 @@ export const nordklartMigrationExtension: Extension = {
           }
 
           if (providerInfo.authType === 'oauth') {
-            // Generate OTC for OAuth flow
-            const otc = await generateOtc(consent.id)
-
-            // Build the OAuth callback URL. Prefer a provider-specific override
-            // (e.g. VISMA_REDIRECT_URI) when set — this lets dev environments
-            // route through a single registered URI (production) rather than
-            // requiring every ngrok URL to be registered on the OAuth client.
-            // Falls back to NEXT_PUBLIC_APP_URL + the canonical callback path.
-            const appUrl = process.env.NEXT_PUBLIC_APP_URL || ''
-            const providerRedirectEnv =
-              provider === 'visma'
-                ? process.env.VISMA_REDIRECT_URI
-                : provider === 'fortnox'
-                  ? process.env.FORTNOX_REDIRECT_URI
-                  : undefined
-            const callbackUrl =
-              providerRedirectEnv && providerRedirectEnv.trim().length > 0
-                ? providerRedirectEnv
-                : `${appUrl}/api/extensions/ext/nordklart-migration/callback`
-
-            // Encode consentId + provider in state
-            const statePayload = JSON.stringify({ otc: otc.code, consentId: consent.id, provider })
-            const stateEncoded = Buffer.from(statePayload).toString('base64url')
-
-            const { url } = await getAuthUrl(provider, stateEncoded, callbackUrl)
+            const authUrl = await buildNordklartOAuthUrl(consent.id, provider)
 
             return NextResponse.json({
               consentId: consent.id,
               authType: 'oauth',
-              authUrl: url,
-              otcCode: otc.code,
+              authUrl,
             })
           } else {
             // Token-based providers: consent is ready for direct use
@@ -306,7 +352,12 @@ export const nordklartMigrationExtension: Extension = {
           return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
-        const { consentId, provider, apiToken, companyId } = await request.json() as {
+        // The caller's tenant — NOT the provider-side company id below.
+        const ownerCompanyId = ctx?.companyId ?? user.id
+
+        // `companyId` in the body is the PROVIDER-side company identifier
+        // (BL User-Key / Briox account ID / Bokio company GUID).
+        const { consentId, provider, apiToken, companyId: providerCompanyId } = await request.json() as {
           consentId: string
           provider: NordklartProvider
           apiToken: string
@@ -326,17 +377,38 @@ export const nordklartMigrationExtension: Extension = {
           })
         }
 
-        if ((provider === 'bokio' || provider === 'bjornlunden') && !companyId) {
+        // Briox needs the account ID (the /token clientid param) alongside
+        // the application token; Bokio/BL need their company GUID.
+        if ((provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox') && !providerCompanyId) {
           return errorResponseFromCode('PROVIDER_COMPANY_ID_REQUIRED', moduleLog, {
             details: { provider },
           })
         }
 
         try {
-          await submitProviderToken(consentId, provider, apiToken || 'client_credentials', companyId)
+          await submitProviderToken(
+            consentId,
+            provider,
+            apiToken || 'client_credentials',
+            providerCompanyId,
+            ownerCompanyId,
+          )
           return NextResponse.json({ success: true, consentId })
         } catch (error) {
           log.error('nordklart submit-token failed', error as Error, { provider })
+          // Consent missing or owned by another company — same 404 either way.
+          if (error instanceof ConsentNotFoundError) {
+            return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', moduleLog, {
+              details: { consentId },
+            })
+          }
+          // Wrong credentials (provider actively rejected them) — tell the
+          // user to re-check the pasted values instead of a generic 500.
+          if (error instanceof ProviderTokenInvalidError) {
+            return errorResponseFromCode('PROVIDER_TOKEN_INVALID', moduleLog, {
+              details: { provider, reason: error.message },
+            })
+          }
           return errorResponseFromCode('PROVIDER_TOKEN_SUBMIT_FAILED', moduleLog, {
             details: { reason: error instanceof Error ? error.message : 'unknown' },
           })
@@ -513,46 +585,27 @@ export const nordklartMigrationExtension: Extension = {
             log.info('Company info fetch failed:', err instanceof Error ? err.message : String(err))
           }
 
-          // Try to fetch SIE data (Fortnox has native SIE export)
+          // Try to fetch SIE data (Fortnox and Briox serve SIE over the API)
           let sieAvailable = false
           let sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] } | null = null
 
-          if (provider === 'fortnox') {
+          if (providerSupportsSie(provider)) {
             try {
-              log.info(`Fetching SIE export from Fortnox for consent ${consentId}...`)
-              // Fortnox SIE export endpoint: /3/sie/{type}?financialyear={id}
-              // First get financial years
-              const fyResponse = await fortnoxClient.get<Record<string, unknown>>(
+              log.info(`Fetching SIE export from ${provider} for consent ${consentId}...`)
+              // Fetch SIE type 4 for the most recent allowed year to get stats
+              const { files, availableYears } = await fetchProviderSieFiles(
+                provider,
                 resolved.accessToken,
-                '/financialyears'
+                resolved.providerCompanyId,
+                { latestOnly: true },
               )
-              const years = (fyResponse['FinancialYears'] as Record<string, unknown>[] | undefined) ?? []
-              const allowedYears = years
-                .map(fy => ({
-                  id: fy['Id'] as number,
-                  fromDate: fy['FromDate'] as string,
-                  toDate: fy['ToDate'] as string,
-                }))
-                .filter(fy => {
-                  const year = new Date(fy.fromDate).getFullYear()
-                  return ALLOWED_FISCAL_YEARS.has(year)
-                })
-
-              if (allowedYears.length > 0) {
-                // Fetch SIE type 4 for the most recent allowed year to get stats
-                const latestYear = allowedYears[allowedYears.length - 1]
-                const sieContent = await fortnoxClient.getText(
-                  resolved.accessToken,
-                  `/sie/4?financialyear=${latestYear.id}`
-                )
-                if (sieContent) {
-                  const parsed = parseSIEFile(sieContent)
-                  sieAvailable = true
-                  sieStats = {
-                    accountCount: parsed.accounts.length,
-                    transactionCount: parsed.vouchers.length,
-                    fiscalYears: allowedYears.map(fy => new Date(fy.fromDate).getFullYear()),
-                  }
+              if (files.length > 0) {
+                const parsed = parseSIEFile(files[files.length - 1].rawContent)
+                sieAvailable = true
+                sieStats = {
+                  accountCount: parsed.accounts.length,
+                  transactionCount: parsed.vouchers.length,
+                  fiscalYears: availableYears,
                 }
               }
             } catch (err) {
@@ -621,54 +674,30 @@ export const nordklartMigrationExtension: Extension = {
           const resolved = await resolveConsent(companyId, consentId)
           const provider = resolved.consent.provider as ProviderName
 
-          if (provider !== 'fortnox') {
-            return errorResponseFromCode('PROVIDER_SIE_ONLY_FORTNOX', moduleLog, {
+          if (!providerSupportsSie(provider)) {
+            return errorResponseFromCode('PROVIDER_SIE_NOT_SUPPORTED', moduleLog, {
               details: { provider },
             })
           }
 
-          // Fetch financial years from Fortnox
-          const fyResponse = await fortnoxClient.get<Record<string, unknown>>(
+          // Fetch SIE type 4 for each allowed fiscal year
+          const { files: sieFiles, failedYears } = await fetchProviderSieFiles(
+            provider,
             resolved.accessToken,
-            '/financialyears'
+            resolved.providerCompanyId,
           )
-          const years = (fyResponse['FinancialYears'] as Record<string, unknown>[] | undefined) ?? []
-          const allowedYears = years
-            .map(fy => ({
-              id: fy['Id'] as number,
-              fromDate: fy['FromDate'] as string,
-              toDate: fy['ToDate'] as string,
-            }))
-            .filter(fy => {
-              const year = new Date(fy.fromDate).getFullYear()
-              return ALLOWED_FISCAL_YEARS.has(year)
-            })
-
-          if (allowedYears.length === 0) {
-            return errorResponseFromCode('PROVIDER_SIE_NO_YEARS', moduleLog)
-          }
-
-          // Fetch SIE type 4 for each allowed year
-          const sieFiles: { fiscalYear: number; rawContent: string }[] = []
-          for (const fy of allowedYears) {
-            try {
-              const sieContent = await fortnoxClient.getText(
-                resolved.accessToken,
-                `/sie/4?financialyear=${fy.id}`
-              )
-              if (sieContent) {
-                sieFiles.push({
-                  fiscalYear: new Date(fy.fromDate).getFullYear(),
-                  rawContent: sieContent,
-                })
-              }
-            } catch (err) {
-              log.info(`Failed to fetch SIE for year ${fy.id}:`, err instanceof Error ? err.message : String(err))
-            }
-          }
 
           if (sieFiles.length === 0) {
-            return errorResponseFromCode('PROVIDER_SIE_NO_YEARS', moduleLog)
+            // The allowed window is rolling (current year and the two before
+            // it) — interpolate the actual range instead of the static
+            // registry message so the text never goes stale.
+            const allowedYears = [...getAllowedFiscalYears()].sort((a, b) => a - b)
+            const range = `${allowedYears[0]}–${allowedYears[allowedYears.length - 1]}`
+            return errorResponseFromCode('PROVIDER_SIE_NO_YEARS', moduleLog, {
+              messageSv: `Inga räkenskapsår ${range} hittades hos leverantören.`,
+              messageEn: `No fiscal years available for ${range}.`,
+              ...(failedYears.length > 0 ? { details: { failedYears } } : {}),
+            })
           }
 
           // Parse most recent file for preview/validation
@@ -677,6 +706,10 @@ export const nordklartMigrationExtension: Extension = {
           const validation = validateSIEFile(parsed)
 
           if (!validation.valid) {
+            log.warn(
+              `nordklart sie-data validation failed for ${provider} fiscal year ${sieFile.fiscalYear}: ` +
+              `${validation.errors.length} error(s) — ${validation.errors.slice(0, 3).join(' | ')}`,
+            )
             return NextResponse.json({
               error: 'validation',
               message: 'SIE file validation failed',
@@ -725,7 +758,7 @@ export const nordklartMigrationExtension: Extension = {
           const preview = generateImportPreview(parsed, mappings)
 
           // Detect prior imports by *fiscal period overlap*, not file hash.
-          // Fortnox embeds the export-time #GEN date in every SIE export so
+          // Providers embed the export-time #GEN date in every SIE export so
           // the hash always changes between syncs; only the period stays
           // stable. A re-sync replaces the prior import for the same period.
           const fileStatuses: {
@@ -794,6 +827,9 @@ export const nordklartMigrationExtension: Extension = {
             allImported: false,
             newFileCount: fileStatuses.length - replacedFileCount,
             replacedFileCount,
+            // Allowed years whose provider export failed — the wizard warns
+            // the user before proceeding so an IB/UB gap cannot slip through.
+            failedYears,
             basAccounts: BAS_REFERENCE,
           })
         } catch (error) {
@@ -873,7 +909,7 @@ export const nordklartMigrationExtension: Extension = {
             // Default ON: re-syncs keep account names current with the source
             // system (idempotent — equal names are a no-op in the rename pass).
             updateAccountNames: options.updateAccountNames ?? true,
-            // Fortnox re-sync semantics: a prior completed import for the
+            // Provider re-sync semantics: a prior completed import for the
             // same fiscal year is automatically replaced (its imported
             // entries are cancelled) so the user can pull updated data
             // without manual cleanup. Manual SIE upload keeps default
@@ -925,6 +961,7 @@ export const nordklartMigrationExtension: Extension = {
           importSalesInvoices = true,
           importSupplierInvoices = true,
           reconcileVouchers = true,
+          dryRun = false,
         } = await request.json() as {
           consentId: string
           importCompanyInfo?: boolean
@@ -933,6 +970,8 @@ export const nordklartMigrationExtension: Extension = {
           importSalesInvoices?: boolean
           importSupplierInvoices?: boolean
           reconcileVouchers?: boolean
+          /** Preview the import plan (counts + skip reasons) without writing. */
+          dryRun?: boolean
         }
 
         if (!consentId) {
@@ -948,15 +987,19 @@ export const nordklartMigrationExtension: Extension = {
           }
 
           // ── Guard: a completed SIE import is required before entity import ──
-          // Every provider except Fortnox exposes ONLY entity data (customers,
-          // suppliers, invoices) via API — never the general ledger. Fortnox pulls
-          // the GL itself via SIE-over-API. Importing entities without the
-          // SIE-derived ledger (kontoplan, ingående balanser, verifikationer)
-          // would leave an incomplete bokföring under BFL: a subledger with no
-          // chart of accounts and no opening balances, so every subsequent posting
-          // and balance is wrong. The wizard surfaces this as an advisory banner,
-          // but it must be enforced here so the rule cannot be bypassed by a direct
-          // API call, a skipped wizard step, or a stale client.
+          // Most providers expose ONLY entity data (customers, suppliers,
+          // invoices) via API — never the general ledger. Fortnox pulls the GL
+          // itself via SIE-over-API and is exempt. Briox and Björn Lundén also
+          // serve SIE over the API, but the wizard runs /import-sie before
+          // /migrate, so this guard stays satisfied — and keeps protecting
+          // against a skipped SIE step. Importing entities without the
+          // SIE-derived ledger (kontoplan,
+          // ingående balanser, verifikationer) would leave an incomplete
+          // bokföring under BFL: a subledger with no chart of accounts and no
+          // opening balances, so every subsequent posting and balance is wrong.
+          // The wizard surfaces this as an advisory banner, but it must be
+          // enforced here so the rule cannot be bypassed by a direct API call,
+          // a skipped wizard step, or a stale client.
           if (consent.provider !== 'fortnox') {
             const { count: completedSieImports } = await supabase
               .from('sie_imports')
@@ -971,7 +1014,7 @@ export const nordklartMigrationExtension: Extension = {
             }
           }
 
-          log.info(`Starting migration for user ${user.id} from ${consent.provider}`)
+          log.info(`Starting migration for user ${user.id} from ${consent.provider}${dryRun ? ' (dry run)' : ''}`)
 
           const results = await executeMigration({
             consentId,
@@ -984,14 +1027,18 @@ export const nordklartMigrationExtension: Extension = {
             importSalesInvoices,
             importSupplierInvoices,
             reconcileVouchers,
+            dryRun,
           })
 
           log.info('Migration completed:', results)
 
-          // Mark consent as fully accepted now that data has been imported
-          await acceptConsent(consentId)
+          // Mark consent as fully accepted now that data has been imported.
+          // A dry run imports nothing — leave the consent status untouched.
+          if (!dryRun) {
+            await acceptConsent(consentId)
+          }
 
-          return NextResponse.json({ success: true, results })
+          return NextResponse.json({ success: true, dryRun, results })
         } catch (error) {
           log.error('nordklart migration failed', error as Error)
           const classified = classifyProviderError(error)
