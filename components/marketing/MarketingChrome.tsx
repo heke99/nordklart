@@ -37,10 +37,12 @@ const footerGroups = [
     title: 'Juridik',
     links: [
       { label: 'Allmänna villkor', href: '/allmanna-villkor' },
+      { label: 'Prisvillkor', href: '/prisvillkor' },
       { label: 'Integritetspolicy', href: '/integritetspolicy' },
       { label: 'Personuppgifter', href: '/personuppgifter' },
       { label: 'Personuppgiftsbiträdesavtal', href: '/personuppgiftsbitradesavtal' },
       { label: 'Ångerrätt', href: '/angerratt' },
+      { label: 'Systemdokumentation', href: '/systemdokumentation' },
       { label: 'Cookies', href: '/cookies' },
     ],
   },

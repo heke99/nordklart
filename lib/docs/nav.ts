@@ -39,6 +39,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: 'Run payroll and generate AGI', href: '/docs/api/cookbook/run-payroll-and-agi', summary: 'Calculate, approve, mark paid, book, generate AGI XML for manual Skatteverket upload.' },
       { label: 'Set up webhooks and verify signatures', href: '/docs/api/cookbook/webhooks', summary: 'Subscribe to events, verify HMAC, handle retries idempotently.' },
       { label: 'Year-end closing', href: '/docs/api/cookbook/year-end-closing', summary: 'Lock periods, run year-end, set opening balances.' },
+      { label: 'Offer an invoice for financing', href: '/docs/api/cookbook/invoice-financing', summary: 'Eligibility, offer, accept, payout bookkeeping — sandbox end to end.' },
     ],
   },
   {

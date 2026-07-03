@@ -18,6 +18,7 @@ import { COOKBOOK_INGEST_BANK_MD } from './ingest-bank-transactions'
 import { COOKBOOK_VAT_DECLARATION_MD } from './file-vat-declaration'
 import { COOKBOOK_PAYROLL_AGI_MD } from './run-payroll-and-agi'
 import { COOKBOOK_YEAR_END_MD } from './year-end-closing'
+import { COOKBOOK_INVOICE_FINANCING_MD } from './invoice-financing'
 
 interface CookbookEntry {
   slug: string
@@ -77,6 +78,12 @@ export const COOKBOOK: CookbookEntry[] = [
     title: 'Year-end closing',
     markdown: COOKBOOK_YEAR_END_MD,
     description: 'Lock periods, run year-end procedures, set opening balances. IB/UB continuity per BFL 5 kap.',
+  },
+  {
+    slug: 'invoice-financing',
+    title: 'Offer an invoice for financing',
+    markdown: COOKBOOK_INVOICE_FINANCING_MD,
+    description: 'Eligibility → application → offer → accept → payout bookkeeping (fakturaförsäljning/fakturabelåning), sandbox end to end.',
   },
 ]
 

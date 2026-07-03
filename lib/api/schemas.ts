@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { validateBankgiro, validatePlusgiro, validateIban, validateBic } from '@/lib/validation/swedish'
 
 // ============================================================
 // Shared primitives
@@ -1055,8 +1056,12 @@ export const UpdateSettingsSchema = z.object({
   bank_name: z.string().max(100, 'Banknamn får vara max 100 tecken').optional(),
   clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4-5 siffror').optional().or(z.literal('')),
   account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').optional().or(z.literal('')),
-  bankgiro: z.string().regex(/^(\d{3,4}-\d{4}|\d{7,8})$/, 'Ogiltigt bankgironummer (7-8 siffror)').nullable().optional().or(z.literal('')),
-  plusgiro: z.string().regex(/^\d{1,7}-\d{1}$/, 'Ogiltigt plusgironummer').nullable().optional().or(z.literal('')),
+  bankgiro: z.string()
+    .refine((v) => validateBankgiro(v).ok, 'Ogiltigt bankgironummer — 7–8 siffror med korrekt kontrollsiffra, t.ex. 5402-9681.')
+    .nullable().optional().or(z.literal('')),
+  plusgiro: z.string()
+    .refine((v) => validatePlusgiro(v).ok, 'Ogiltigt plusgironummer — kontrollsiffran stämmer inte, t.ex. 4158-2.')
+    .nullable().optional().or(z.literal('')),
   swish: z.string()
     .transform(normaliseSwish)
     .pipe(
@@ -1067,8 +1072,12 @@ export const UpdateSettingsSchema = z.object({
     )
     .nullable()
     .optional(),
-  iban: z.string().optional(),
-  bic: z.string().optional(),
+  iban: z.string()
+    .refine((v) => validateIban(v).ok, 'Ogiltigt IBAN — kontrollera landskod, längd och kontrollsiffror (mod-97).')
+    .optional().or(z.literal('')),
+  bic: z.string()
+    .refine((v) => validateBic(v).ok, 'Ogiltig BIC — 8 eller 11 tecken, t.ex. NDEASESS.')
+    .optional().or(z.literal('')),
   accounting_method: AccountingMethodSchema.optional(),
   invoice_prefix: z.string().nullable().optional(),
   next_invoice_number: z.number().int().positive().optional(),
