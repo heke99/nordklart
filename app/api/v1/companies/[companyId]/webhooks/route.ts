@@ -19,57 +19,18 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { generateWebhookSecret } from '@/lib/webhooks/signing'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
+import { SUBSCRIBABLE_WEBHOOK_EVENTS } from '@/lib/webhooks/event-catalog'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { hasScope } from '@/lib/auth/api-keys'
 
-const WEBHOOK_EVENT_TYPES = z.enum([
-  'invoice.created',
-  'invoice.sent',
-  'invoice.paid',
-  'credit_note.created',
-  'customer.created',
-  'supplier.created',
-  'supplier_invoice.registered',
-  'supplier_invoice.approved',
-  'supplier_invoice.paid',
-  'supplier_invoice.credited',
-  'supplier_invoice.uncredited',
-  'transaction.categorized',
-  'transaction.reconciled',
-  'journal_entry.committed',
-  'journal_entry.reversed',
-  'journal_entry.corrected',
-  'period.locked',
-  'period.unlocked',
-  'period.year_closed',
-  'salary_run.created',
-  'salary_run.approved',
-  'salary_run.booked',
-  'agi.generated',
-  'document.uploaded',
-  'company.activated',
-  'agency.created',
-  'agency.client_added',
-  'subscription.started',
-  'subscription.changed',
-  'one_time_purchase.created',
-  'year_end.started',
-  'year_end.ready_for_review',
-  'year_end.completed',
-  'bank_connection.created',
-  'bank_connection.expired',
-  'bank_transaction.imported',
-  'bank_transaction.auto_booked',
-  'bank_transaction.needs_review',
-  'supplier_invoice.matched',
-  'vat_return.ready',
-  'vat_return.submitted',
-  'skatteverket.submission.failed',
-  'bankgiro_application.submitted',
-  'bankgiro_application.approved',
-  'bankgiro_application.rejected',
-  'payment_provider.activated',
-])
+// Subscribable event types derive from the SINGLE catalog in
+// lib/webhooks/event-catalog.ts — the same source the delivery handler and
+// the /webhook-events endpoint read, so the surfaces can never drift.
+const WEBHOOK_EVENT_TYPES = z
+  .string()
+  .refine((v) => SUBSCRIBABLE_WEBHOOK_EVENTS.includes(v), {
+    message: 'Unknown event_type — see GET /api/v1/companies/{companyId}/webhook-events for the catalog.',
+  })
 
 const CreateWebhookSchema = z.object({
   event_type: WEBHOOK_EVENT_TYPES,

@@ -195,6 +195,7 @@
     "account": "Account",
     "api": "API",
     "bankid": "BankID",
+    "webhooks": "Webhooks",
     "group_account": "Account",
     "group_company": "Company",
     "group_accounting": "Accounting & tax",

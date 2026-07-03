@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { eventBus } from '@/lib/events/bus'
 
 /**
  * Unified tax-submission pipeline (tax_submissions + tax_submission_events).
@@ -139,6 +140,44 @@ export async function transitionTaxSubmission(
       payload: args.payload ?? {},
       created_by: args.userId,
     })
+
+    // Webhook-facing bus events for the externally interesting transitions.
+    // Best-effort like everything else in this pipeline.
+    try {
+      const base = {
+        submissionId,
+        submissionType: args.submissionType as string,
+        periodKey: args.periodKey,
+        userId: args.userId ?? '',
+        companyId: args.companyId,
+      }
+      if (args.status === 'prepared' && args.submissionType === 'vat_return') {
+        await eventBus.emit({
+          type: 'vat_report.generated',
+          payload: {
+            submissionId,
+            periodKey: args.periodKey,
+            amount: args.amount ?? null,
+            userId: args.userId ?? '',
+            companyId: args.companyId,
+          },
+        })
+      } else if (args.status === 'waiting_for_signature') {
+        await eventBus.emit({ type: 'tax_submission.waiting_for_signature', payload: base })
+      } else if (args.status === 'signed_submitted') {
+        await eventBus.emit({
+          type: 'tax_submission.submitted',
+          payload: { ...base, skatteverketReference: args.skatteverketReference ?? null },
+        })
+      } else if (args.status === 'failed') {
+        await eventBus.emit({
+          type: 'tax_submission.failed',
+          payload: { ...base, errorMessage: args.errorMessage ?? null },
+        })
+      }
+    } catch {
+      // Never break the SKV flow over event emission.
+    }
 
     return submissionId
   } catch {

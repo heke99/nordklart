@@ -38,6 +38,10 @@ export const API_KEY_SCOPES = {
   'bankgiro:read':     { label: 'Bankgiro — läs',        description: 'Läsa Bankgiro/Autogiro-ansökningar, mandat, collections och avstämning' },
   'bankgiro:write':    { label: 'Bankgiro — skriv',      description: 'Skapa Bankgiro/Autogiro-ansökningar och providerstatus via API' },
   'webhook_events:read': { label: 'Webhook-events — läs', description: 'Läsa Nordklarts webhook-eventkatalog' },
+  'articles:read':     { label: 'Artiklar — läs',         description: 'Lista och läsa artikelregistret' },
+  'articles:write':    { label: 'Artiklar — skriv',       description: 'Skapa, uppdatera och arkivera artiklar' },
+  'bank:read':         { label: 'Bankkopplingar — läs',   description: 'Läsa bankkopplingar, synkstatus och synkhistorik' },
+  'audit:read':        { label: 'Granskningslogg — läs',  description: 'Läsa granskningsloggen (audit_log) för företaget' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -91,6 +95,9 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
   'tax:read',
   'bankgiro:read',
   'webhook_events:read',
+  'articles:read',
+  'bank:read',
+  'audit:read',
 ]
 
 /**
@@ -127,6 +134,7 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   'year_end:write',
   'tax:write',
   'bankgiro:write',
+  'articles:write',
 ]
 
 /**
@@ -160,6 +168,9 @@ export const SCOPE_GROUPS = [
   { domain: 'tax',                 label: 'Skatteverket',         read: 'tax:read' as const,                 write: 'tax:write' as const },
   { domain: 'bankgiro',            label: 'Bankgiro',             read: 'bankgiro:read' as const,            write: 'bankgiro:write' as const },
   { domain: 'webhook_events',      label: 'Webhook-events',       read: 'webhook_events:read' as const,      write: null },
+  { domain: 'articles',            label: 'Artiklar',             read: 'articles:read' as const,            write: 'articles:write' as const },
+  { domain: 'bank',                label: 'Bankkopplingar',       read: 'bank:read' as const,                write: null },
+  { domain: 'audit',               label: 'Granskningslogg',      read: 'audit:read' as const,               write: null },
 ] as const
 
 /** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */

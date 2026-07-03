@@ -1,27 +1,9 @@
-export const NORDKLART_WEBHOOK_EVENTS = [
-  'company.created',
-  'company.activated',
-  'agency.created',
-  'agency.client_added',
-  'subscription.started',
-  'subscription.changed',
-  'one_time_purchase.created',
-  'year_end.started',
-  'year_end.ready_for_review',
-  'year_end.completed',
-  'bank_connection.created',
-  'bank_connection.expired',
-  'bank_transaction.imported',
-  'bank_transaction.auto_booked',
-  'bank_transaction.needs_review',
-  'journal_entry.created',
-  'invoice.paid',
-  'supplier_invoice.matched',
-  'vat_return.ready',
-  'vat_return.submitted',
-  'skatteverket.submission.failed',
-  'bankgiro_application.submitted',
-  'bankgiro_application.approved',
-  'bankgiro_application.rejected',
-  'payment_provider.activated',
-] as const
+import { WEBHOOK_EVENT_CATALOG } from '@/lib/webhooks/event-catalog'
+
+/**
+ * Back-compat export — the canonical catalog now lives in
+ * lib/webhooks/event-catalog.ts (single source of truth for the delivery
+ * handler, registration validation and the /webhook-events endpoint).
+ */
+export const NORDKLART_WEBHOOK_EVENTS: readonly string[] =
+  WEBHOOK_EVENT_CATALOG.map((e) => e.type)

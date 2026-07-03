@@ -283,6 +283,94 @@ export type CoreEvent =
       userId: string
       companyId: string
     }}
+  // Async v1 operations (the `operations` table). Emitted when an operation
+  // reaches a terminal state so webhook subscribers can stop polling.
+  | { type: 'operation.completed'; payload: {
+      operationId: string
+      operationType: string
+      userId: string
+      companyId: string
+    }}
+  | { type: 'operation.failed'; payload: {
+      operationId: string
+      operationType: string
+      errorCode: string | null
+      errorMessage: string | null
+      userId: string
+      companyId: string
+    }}
+  // Unified Skatteverket submission pipeline (tax_submissions). Emitted on
+  // the externally-interesting transitions. `submissionType` is vat_return |
+  // agi | income_tax | ....
+  | { type: 'vat_report.generated'; payload: {
+      submissionId: string | null
+      periodKey: string
+      amount: number | null
+      userId: string
+      companyId: string
+    }}
+  | { type: 'tax_submission.waiting_for_signature'; payload: {
+      submissionId: string | null
+      submissionType: string
+      periodKey: string
+      userId: string
+      companyId: string
+    }}
+  | { type: 'tax_submission.submitted'; payload: {
+      submissionId: string | null
+      submissionType: string
+      periodKey: string
+      skatteverketReference: string | null
+      userId: string
+      companyId: string
+    }}
+  | { type: 'tax_submission.failed'; payload: {
+      submissionId: string | null
+      submissionType: string
+      periodKey: string
+      errorMessage: string | null
+      userId: string
+      companyId: string
+    }}
+  // Document extraction finished (invoice inbox / document-extraction).
+  | { type: 'document.extracted'; payload: {
+      documentId: string
+      inboxItemId: string | null
+      succeeded: boolean
+      likelyDuplicate: boolean
+      userId: string
+      companyId: string
+    }}
+  // Peppol e-invoicing (Batch 8). Emitted by the e-invoice provider layer.
+  | { type: 'peppol_invoice.sent'; payload: {
+      invoiceId: string
+      deliveryId: string
+      participantId: string | null
+      status: string
+      userId: string
+      companyId: string
+    }}
+  | { type: 'peppol_invoice.received'; payload: {
+      deliveryId: string
+      supplierName: string | null
+      userId: string
+      companyId: string
+    }}
+  // Invoice financing (Batch 9).
+  | { type: 'invoice_financing.offer_created'; payload: {
+      applicationId: string
+      invoiceId: string
+      offeredAmount: number | null
+      userId: string
+      companyId: string
+    }}
+  | { type: 'invoice_financing.paid_out'; payload: {
+      applicationId: string
+      invoiceId: string
+      paidOutAmount: number | null
+      userId: string
+      companyId: string
+    }}
 
 // ============================================================
 // Helper Types

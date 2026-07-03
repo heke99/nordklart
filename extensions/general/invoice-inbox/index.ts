@@ -383,6 +383,26 @@ async function uploadAndExtract(
     console.error('[invoice-inbox] Failed to append DocumentExtractionAttempted:', err)
   }
 
+  // Webhook-facing event: extraction finished (document.extracted). Emitted
+  // even when extraction was skipped (succeeded=false) so integrators can
+  // route the document to their own extraction. Best-effort.
+  try {
+    const { eventBus } = await import('@/lib/events/bus')
+    await eventBus.emit({
+      type: 'document.extracted',
+      payload: {
+        documentId: doc.id,
+        inboxItemId: inbox.id,
+        succeeded: !skipExtraction && rawText != null && rawText.length > 0,
+        likelyDuplicate: duplicateReason !== null,
+        userId,
+        companyId,
+      },
+    })
+  } catch (err) {
+    console.error('[invoice-inbox] Failed to emit document.extracted:', err)
+  }
+
   return {
     document_id: doc.id,
     inbox_item_id: inbox.id,

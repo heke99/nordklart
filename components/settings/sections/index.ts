@@ -11,6 +11,7 @@ import { AutomationSettingsContent } from './AutomationSettingsContent'
 import { AssistantSettingsContent } from './AssistantSettingsContent'
 import { ApiSettingsContent } from './ApiSettingsContent'
 import { BankIdSettingsContent } from './BankIdSettingsContent'
+import { WebhooksSettingsContent } from './WebhooksSettingsContent'
 
 /**
  * Single source of truth mapping a settings section id to the component that
@@ -32,6 +33,7 @@ export const SETTINGS_SECTIONS: Record<string, ComponentType> = {
   assistant: AssistantSettingsContent,
   api: ApiSettingsContent,
   bankid: BankIdSettingsContent,
+  webhooks: WebhooksSettingsContent,
 }
 
 export type SettingsSectionId = keyof typeof SETTINGS_SECTIONS

@@ -195,6 +195,7 @@
     "account": "Konto",
     "api": "API",
     "bankid": "BankID",
+    "webhooks": "Webhooks",
     "group_account": "Konto",
     "group_company": "Företag",
     "group_accounting": "Bokföring & skatt",
