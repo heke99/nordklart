@@ -60,6 +60,7 @@ export const POST = withRouteContext(
         vat_number: body.vat_number,
         language: body.language || 'sv',
         default_payment_terms: body.default_payment_terms || 30,
+        peppol_id: body.peppol_id ?? null,
         notes: body.notes,
       })
       .select()

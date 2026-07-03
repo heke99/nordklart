@@ -69,6 +69,7 @@ export const PATCH = withRouteContext(
     if (body.vat_number !== undefined) updateData.vat_number = body.vat_number
     if (body.language !== undefined) updateData.language = body.language
     if (body.default_payment_terms !== undefined) updateData.default_payment_terms = body.default_payment_terms
+    if (body.peppol_id !== undefined) updateData.peppol_id = body.peppol_id
     if (body.notes !== undefined) updateData.notes = body.notes
 
     const { data, error } = await supabase

@@ -109,6 +109,35 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
+  const [isSendingEInvoice, setIsSendingEInvoice] = useState(false)
+
+  async function sendAsEInvoice() {
+    setIsSendingEInvoice(true)
+    try {
+      const res = await fetch(`/api/invoices/${id}/send-einvoice`, { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok) {
+        toast({ title: t('einvoice_failed'), description: json?.error?.message || json?.error, variant: 'destructive' })
+        return
+      }
+      const outcome = json.data as { status: string; message_sv: string; issues?: Array<{ message_sv: string }> }
+      if (outcome.status === 'sent' || outcome.status === 'delivered') {
+        toast({ title: t('einvoice_sent'), description: outcome.message_sv })
+      } else {
+        toast({
+          title: t('einvoice_not_sent'),
+          description: outcome.issues?.length
+            ? `${outcome.message_sv} ${outcome.issues.map((i) => i.message_sv).join(' ')}`
+            : outcome.message_sv,
+          variant: 'destructive',
+        })
+      }
+    } catch {
+      toast({ title: t('einvoice_failed'), variant: 'destructive' })
+    } finally {
+      setIsSendingEInvoice(false)
+    }
+  }
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
@@ -614,6 +643,25 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             >
               {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('mark_as_paid')}
+            </Button>
+          )}
+          {/* Peppol e-invoice: only when the customer has an electronic
+              address and the invoice is issued. Falls back to PDF/email —
+              non-blocking outcomes surface as toasts with Swedish guidance. */}
+          {isRealInvoice && invoice.invoice_number && invoice.status !== 'draft' &&
+            !!(invoice.customer as { peppol_id?: string | null } | undefined)?.peppol_id && (
+            <Button
+              variant="outline"
+              onClick={sendAsEInvoice}
+              disabled={isSendingEInvoice || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isSendingEInvoice ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="mr-2 h-4 w-4" />
+              )}
+              {t('send_einvoice')}
             </Button>
           )}
           {/* No own PDF for a received self-billing invoice — the verifikationsunderlag is the document the customer sent us. */}

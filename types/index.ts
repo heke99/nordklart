@@ -647,6 +647,10 @@ export interface Customer {
   // Language for customer-facing invoice PDF and email
   language: 'sv' | 'en'
 
+  // Peppol participant identifier (elektronisk adress) för e-faktura,
+  // e.g. '0007:5566778899'. NULL = customer does not receive e-invoices.
+  peppol_id?: string | null
+
   // Payment
   default_payment_terms: number  // Days
 
@@ -1175,6 +1179,7 @@ export interface CreateCustomerInput {
   personal_number?: string
   language?: 'sv' | 'en'
   default_payment_terms?: number
+  peppol_id?: string | null
   notes?: string
 }
 

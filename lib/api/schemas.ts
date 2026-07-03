@@ -536,6 +536,14 @@ export const CreateCustomerSchema = z.object({
     .nullable(),
   language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
+  // Peppol participant identifier (elektronisk adress) för e-faktura,
+  // t.ex. 0007:5566778899 (0007 = svenskt organisationsnummer-schema).
+  peppol_id: z
+    .string()
+    .regex(/^\d{4}:[A-Za-z0-9][A-Za-z0-9\-.]{1,48}$/, 'Ogiltig Peppol-adress. Förväntat format: 0007:5566778899')
+    .nullable()
+    .optional()
+    .or(z.literal('').transform(() => null)),
   notes: z.string().optional(),
 })
 

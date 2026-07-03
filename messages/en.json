@@ -677,6 +677,9 @@
     "vat_failed_default": "The VAT number could not be verified",
     "vat_error_title": "Could not verify VAT number",
     "payment_terms_label": "Payment terms (days)",
+    "peppol_label": "Peppol address (e-invoice)",
+    "peppol_hint": "Electronic address for Peppol e-invoicing, e.g. 0007:5566778899. Leave empty if the customer does not receive e-invoices.",
+    "peppol_invalid": "Invalid Peppol address. Expected format: 0007:5566778899",
     "language_label": "Invoice language",
     "language_sv": "Swedish",
     "language_en": "English",
@@ -2373,7 +2376,11 @@
     "paid_toast_description": "Invoice {number} has been marked as paid and posted",
     "status_disputed": "Disputed",
     "status_collection_ready": "Ready for collection",
-    "status_written_off": "Written off"
+    "status_written_off": "Written off",
+    "send_einvoice": "Send as e-invoice",
+    "einvoice_sent": "E-invoice sent",
+    "einvoice_not_sent": "E-invoice could not be sent",
+    "einvoice_failed": "E-invoice flow failed"
   },
   "invoice_credit": {
     "back": "Back",

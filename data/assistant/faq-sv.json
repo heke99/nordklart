@@ -4048,7 +4048,7 @@
       "Fakturautskick?"
     ],
     "short_answer_sv": "Skicka via e-post direkt från systemet (PDF bifogas), eller ladda ner och skicka själv — statusen blir \"skickad\".",
-    "answer_sv": "Knappen Skicka mejlar fakturan som PDF till kundens e-post med spårning; alternativt laddar du ner PDF:en och markerar fakturan som skickad. I båda fallen bokförs fakturan (Dr 1510 / Kr 30xx + moms under fakturametoden) och hamnar i kundreskontran. E-faktura via Peppol finns för kunder som kräver det.",
+    "answer_sv": "Knappen Skicka mejlar fakturan som PDF till kundens e-post med spårning; alternativt laddar du ner PDF:en och markerar fakturan som skickad. I båda fallen bokförs fakturan (Dr 1510 / Kr 30xx + moms under fakturametoden) och hamnar i kundreskontran. E-faktura via Peppol är förberett för kunder som kräver det — skarp avsändning kräver avtal med en Peppol-accesspunkt.",
     "sources": [],
     "required_permissions": [],
     "related_routes": [
@@ -4424,8 +4424,8 @@
       "Kommunen kräver e-faktura?",
       "Peppol BIS Billing?"
     ],
-    "short_answer_sv": "Ja — offentliga kunder ska ha e-faktura (Peppol BIS Billing 3.0); aktivera e-faktura på kundkortet.",
-    "answer_sv": "Sedan 2019 måste leverantörer till offentlig sektor skicka e-faktura (lag 2018:1277). Nordklart skickar Peppol BIS Billing 3.0 till kundens Peppol-adress (elektronisk adress anges på kundkortet). Fakturans innehållskrav (F-skatt, bankgiro enligt svenska CIUS-regler) valideras innan avsändning.",
+    "short_answer_sv": "Nordklart är tekniskt förberett för Peppol BIS Billing 3.0 — skarp avsändning kräver ett avtal med en Peppol-accesspunkt.",
+    "answer_sv": "Sedan 2019 måste leverantörer till offentlig sektor skicka e-faktura (lag 2018:1277). Nordklart genererar och validerar Peppol BIS Billing 3.0 (inkl. svenska CIUS-regler som F-skatt-text och bankgiro) och skickar till kundens Peppol-adress som anges på kundkortet. Observera: skarp avsändning kräver ett avtal med en certifierad Peppol-accesspunkt (t.ex. Pagero, InExchange eller Qvalia) — kontakta supporten för att aktivera. Tills dess skickas fakturan som PDF via e-post, och e-fakturaflödet kan testas i sandbox-läge.",
     "sources": [
       "Lag (2018:1277) om elektroniska fakturor"
     ],
@@ -4909,7 +4909,7 @@
       "Fel e-postadress på fakturan?"
     ],
     "short_answer_sv": "Kontrollera adressen på kundkortet och skicka om — utskickshistoriken visar leveransstatus.",
-    "answer_sv": "Fakturans historik visar om e-posten levererades eller studsade. Vid studs: rätta kundens e-postadress och använd Skicka igen. Fakturan räknas som utställd från första skicket (bokföringen påverkas inte). För viktiga kunder kan du aktivera e-faktura via Peppol som kvitterar mottagning.",
+    "answer_sv": "Fakturans historik visar om e-posten levererades eller studsade. Vid studs: rätta kundens e-postadress och använd Skicka igen. Fakturan räknas som utställd från första skicket (bokföringen påverkas inte). För viktiga kunder kan e-faktura via Peppol (som kvitterar mottagning) användas när ett accesspunktsavtal är aktiverat.",
     "sources": [],
     "required_permissions": [],
     "related_routes": [

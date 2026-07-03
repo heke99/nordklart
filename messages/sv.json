@@ -677,6 +677,9 @@
     "vat_failed_default": "VAT-numret kunde inte verifieras",
     "vat_error_title": "Kunde inte verifiera VAT-nummer",
     "payment_terms_label": "Betalningsvillkor (dagar)",
+    "peppol_label": "Peppol-adress (e-faktura)",
+    "peppol_hint": "Elektronisk adress för e-faktura via Peppol, t.ex. 0007:5566778899. Lämna tomt om kunden inte tar emot e-faktura.",
+    "peppol_invalid": "Ogiltig Peppol-adress. Förväntat format: 0007:5566778899",
     "language_label": "Fakturaspråk",
     "language_sv": "Svenska",
     "language_en": "Engelska",
@@ -2373,7 +2376,11 @@
     "paid_toast_description": "Faktura {number} har markerats som betald och bokförts",
     "status_disputed": "Tvist",
     "status_collection_ready": "Inkassoklar",
-    "status_written_off": "Avskriven"
+    "status_written_off": "Avskriven",
+    "send_einvoice": "Skicka som e-faktura",
+    "einvoice_sent": "E-fakturan har skickats",
+    "einvoice_not_sent": "E-fakturan kunde inte skickas",
+    "einvoice_failed": "E-fakturaflödet misslyckades"
   },
   "invoice_credit": {
     "back": "Tillbaka",
