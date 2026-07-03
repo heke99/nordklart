@@ -57,6 +57,7 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     { id: 'automation', href: '/settings/automation', label: t('automation'), group: 'tools', show: hasCompany },
     { id: 'assistant', href: '/settings/assistant', label: t('assistant'), group: 'tools', show: hasCompany && identity.isVerified },
     { id: 'api', href: '/settings/api', label: t('api'), group: 'tools', show: hasCompany && hasMcpExtension },
+    { id: 'bankid', href: '/settings/bankid', label: t('bankid'), group: 'tools', show: hasCompany },
   ]
 
   const items: SettingsNavItem[] = defs

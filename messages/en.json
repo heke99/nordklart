@@ -194,6 +194,7 @@
     "backup": "Backup",
     "account": "Account",
     "api": "API",
+    "bankid": "BankID",
     "group_account": "Account",
     "group_company": "Company",
     "group_accounting": "Accounting & tax",

@@ -28,12 +28,20 @@ import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-typ
 import type { BankIdCompleteRequest } from './lib/bankid-types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { hashPersonalNumber, encryptPersonalNumber } from '@/lib/auth/bankid'
+import { registerBankIdProvider } from '@/lib/auth/bankid-provider'
+import { ticBankIdProvider } from './lib/bankid-provider'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 
 const log = createLogger('tic/bankid')
+
+// Register TIC as the BankID provider for consent/signing flows. Module-level
+// side effect: runs when the extension loads via ensureInitialized(). Core
+// resolves the provider through getBankIdProvider() and never imports this
+// module directly.
+registerBankIdProvider(ticBankIdProvider)
 
 /**
  * Request SPAR + CompanyRoles enrichment for a completed BankID session and
