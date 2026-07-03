@@ -21,6 +21,7 @@ import {
   type AgiUnderlagPrep,
 } from './lib/declaration-prep'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
+import { transitionTaxSubmission } from '@/lib/skatteverket/submission-pipeline'
 import type { SkvSubmitResult } from '@/lib/pending-operations/skatteverket-commit'
 import {
   agiPostUnderlag,
@@ -35,7 +36,8 @@ import {
   agiKontrolleraHU,
   agiKontrolleraIU,
 } from './lib/agi-client'
-import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
+import { syncSkattekonto, computeDedupKey, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
+import { parseSkattekontoStatement } from './lib/skattekonto-manual-import'
 import { bokforSkattekontoTransaction, SkattekontoBookingError } from './lib/skattekonto-booking'
 import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
 import {
@@ -470,6 +472,19 @@ export const skatteverketExtension: Extension = {
           }
 
           const data = await response.json()
+
+          // Unified pipeline: validated against SKV's kontroller.
+          await transitionTaxSubmission(ctx.supabase, {
+            companyId: ctx.companyId,
+            userId: ctx.userId,
+            submissionType: 'vat_return',
+            periodKey: redovisningsperiod,
+            status: 'prepared',
+            eventType: 'moms.validated',
+            amount: momsuppgift.summaMoms ?? null,
+            payload: { kontrollresultat: data?.kontrollresultat ?? null },
+          })
+
           return NextResponse.json({ data })
         } catch (err) {
           return handleSkvError(err)
@@ -528,6 +543,18 @@ export const skatteverketExtension: Extension = {
               updatedAt: new Date().toISOString(),
             })
           )
+
+          // Unified pipeline: utkast uppladdat till eget utrymme.
+          await transitionTaxSubmission(ctx.supabase, {
+            companyId: ctx.companyId,
+            userId: ctx.userId,
+            submissionType: 'vat_return',
+            periodKey: redovisningsperiod,
+            status: 'sent_to_skatteverket',
+            eventType: 'moms.draft_saved',
+            amount: momsuppgift.summaMoms ?? null,
+            payload: { kontrollresultat: data?.kontrollresultat ?? null },
+          })
 
           return NextResponse.json({ data })
         } catch (err) {
@@ -603,6 +630,17 @@ export const skatteverketExtension: Extension = {
           }
 
           await ctx.settings.clear(`submission_${redovisningsperiod}`)
+
+          // Unified pipeline: utkast raderat.
+          await transitionTaxSubmission(ctx.supabase, {
+            companyId: ctx.companyId,
+            userId: ctx.userId,
+            submissionType: 'vat_return',
+            periodKey: redovisningsperiod,
+            status: 'cancelled',
+            eventType: 'moms.draft_deleted',
+          })
+
           return NextResponse.json({ success: true })
         } catch (err) {
           return handleSkvError(err)
@@ -698,6 +736,18 @@ export const skatteverketExtension: Extension = {
             })
           )
 
+          // Unified pipeline: låst för signering — nästa steg sker hos SKV.
+          await transitionTaxSubmission(ctx.supabase, {
+            companyId: ctx.companyId,
+            userId: ctx.userId,
+            submissionType: 'vat_return',
+            periodKey: redovisningsperiod,
+            status: 'waiting_for_signature',
+            eventType: 'moms.draft_locked',
+            message: 'Utkastet är låst. Signering sker med BankID hos Skatteverket.',
+            payload: { signeringsLank: data.signeringsLank ?? null },
+          })
+
           return NextResponse.json({ data })
         } catch (err) {
           return handleSkvError(err)
@@ -742,6 +792,16 @@ export const skatteverketExtension: Extension = {
             })
           )
 
+          // Unified pipeline: upplåst — tillbaka till uppladdat utkast.
+          await transitionTaxSubmission(ctx.supabase, {
+            companyId: ctx.companyId,
+            userId: ctx.userId,
+            submissionType: 'vat_return',
+            periodKey: redovisningsperiod,
+            status: 'sent_to_skatteverket',
+            eventType: 'moms.draft_unlocked',
+          })
+
           return NextResponse.json({ success: true })
         } catch (err) {
           return handleSkvError(err)
@@ -781,6 +841,21 @@ export const skatteverketExtension: Extension = {
           }
 
           const data = await response.json()
+
+          // Unified pipeline: SKV bekräftar att deklarationen är inlämnad.
+          if (data) {
+            await transitionTaxSubmission(ctx.supabase, {
+              companyId: ctx.companyId,
+              userId: ctx.userId,
+              submissionType: 'vat_return',
+              periodKey: redovisningsperiod,
+              status: 'signed_submitted',
+              eventType: 'moms.submitted_confirmed',
+              skatteverketReference: (data as { kvittensnummer?: string }).kvittensnummer ?? null,
+              payload: { inlamnat: data },
+            })
+          }
+
           return NextResponse.json({ data })
         } catch (err) {
           return handleSkvError(err)
@@ -820,6 +895,20 @@ export const skatteverketExtension: Extension = {
           }
 
           const data = await response.json()
+
+          // Unified pipeline: beslut hämtat — kvittens/decision received.
+          if (data) {
+            await transitionTaxSubmission(ctx.supabase, {
+              companyId: ctx.companyId,
+              userId: ctx.userId,
+              submissionType: 'vat_return',
+              periodKey: redovisningsperiod,
+              status: 'receipt_received',
+              eventType: 'moms.decision_received',
+              receiptPayload: data as Record<string, unknown>,
+            })
+          }
+
           return NextResponse.json({ data })
         } catch (err) {
           return handleSkvError(err)
@@ -878,6 +967,17 @@ export const skatteverketExtension: Extension = {
             }),
           )
 
+          // Unified pipeline: AGI-underlag inskickat till SKV för kontroll.
+          await transitionTaxSubmission(ctx.supabase, {
+            companyId: ctx.companyId,
+            userId: ctx.userId,
+            submissionType: 'agi',
+            periodKey: period,
+            status: 'sent_to_skatteverket',
+            eventType: 'agi.underlag_submitted',
+            payload: { inlamningId: result.data.inlamningId, salaryRunId },
+          })
+
           // Don't flip agi_declarations.status to 'exported' here. SKV's
           // kontrollresultat may still come back DONE_REJECTED, in which case
           // nothing landed in Eget utrymme. The transition belongs in
@@ -929,7 +1029,7 @@ export const skatteverketExtension: Extension = {
             // (the alternative would be guessing which declaration to mark).
             const { data: rows } = await ctx.supabase
               .from('extension_data')
-              .select('value')
+              .select('key, value')
               .eq('company_id', ctx.companyId)
               .eq('extension_id', 'skatteverket')
               .like('key', 'agi_submission_%')
@@ -945,6 +1045,19 @@ export const skatteverketExtension: Extension = {
                     .eq('salary_run_id', v.salaryRunId)
                     .eq('company_id', ctx.companyId)
                     .in('status', ['generated', 'pending_signature', 'exported'])
+
+                  // Unified pipeline: kontrollresultat avvisade underlaget.
+                  const periodKey = (row as { key: string }).key.replace('agi_submission_', '')
+                  await transitionTaxSubmission(ctx.supabase, {
+                    companyId: ctx.companyId,
+                    userId: ctx.userId,
+                    submissionType: 'agi',
+                    periodKey,
+                    status: 'failed',
+                    eventType: 'agi.kontrollresultat_rejected',
+                    errorMessage: `Skatteverkets kontroll avvisade underlaget (${result.data.status}).`,
+                    payload: { inlamningId, kontrollresultat: result.data },
+                  })
                   break
                 }
               } catch { /* skip malformed */ }
@@ -1230,6 +1343,18 @@ export const skatteverketExtension: Extension = {
               .eq('period_year', periodYear)
               .eq('period_month', periodMonth)
               .in('status', ['generated', 'rejected'])
+
+            // Unified pipeline: granskningsunderlag klart — väntar på signering.
+            await transitionTaxSubmission(ctx.supabase, {
+              companyId: ctx.companyId,
+              userId: ctx.userId,
+              submissionType: 'agi',
+              periodKey: period,
+              status: 'waiting_for_signature',
+              eventType: 'agi.awaiting_signature',
+              message: 'Granskningsunderlaget är klart. Signering sker med BankID hos Skatteverket.',
+              payload: { signeringslank: result.data.link ?? null, tillstand: result.data.tillstand },
+            })
           }
 
           return NextResponse.json({ data: result.data })
@@ -1350,6 +1475,23 @@ export const skatteverketExtension: Extension = {
                   .eq('company_id', ctx.companyId)
               }
             }
+
+            // Unified pipeline: kvittens observerad — AGI:n är inlämnad och
+            // signerad hos Skatteverket.
+            await transitionTaxSubmission(ctx.supabase, {
+              companyId: ctx.companyId,
+              userId: ctx.userId,
+              submissionType: 'agi',
+              periodKey: period,
+              status: 'receipt_received',
+              eventType: 'agi.kvittens_received',
+              receiptReference: kvittens.uuidKvittens,
+              receiptPayload: {
+                signeradAv: kvittens.signeradAv ?? null,
+                signeradTid: kvittens.signeradTid ?? null,
+                uuidKvittens: kvittens.uuidKvittens,
+              },
+            })
           }
 
           return NextResponse.json({ data: result.data })
@@ -1771,6 +1913,86 @@ export const skatteverketExtension: Extension = {
         try {
           const result = await syncSkattekonto(ctx)
           return NextResponse.json({ data: result })
+        } catch (err) {
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // ── Manual statement import (API fallback) ─────────────────────
+    // Body: { content: string } — kontoutdrag rows pasted from Mina sidor.
+    // For companies WITHOUT the Skattekonto API connection: parses the pasted
+    // statement and upserts rows with the same dedup logic the API sync uses,
+    // so a later API connection doesn't duplicate anything. Matching/bokför
+    // flows work identically on imported rows.
+    {
+      method: 'POST',
+      path: '/skattekonto/import',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        try {
+          const body = (await request.json()) as { content?: string }
+          if (!body.content || body.content.trim().length === 0) {
+            return NextResponse.json(
+              { error: 'Klistra in kontoutdragets rader från Skatteverkets Mina sidor.' },
+              { status: 400 },
+            )
+          }
+
+          const parsed = parseSkattekontoStatement(body.content)
+          if (parsed.rows.length === 0) {
+            return NextResponse.json(
+              {
+                error:
+                  'Inga rader kunde tolkas. Kopiera raderna från kontoutdraget (datum, text, belopp) och försök igen.',
+                issues: parsed.issues,
+              },
+              { status: 400 },
+            )
+          }
+
+          const rows = parsed.rows.map((row) => ({
+            company_id: ctx.companyId,
+            transaktionsidentitet: null,
+            dedup_key: computeDedupKey({
+              transaktionsdatum: row.transaktionsdatum,
+              beloppSkatteverket: row.belopp,
+              transaktionstext: row.transaktionstext,
+            }),
+            transaktionsdatum: row.transaktionsdatum,
+            forfallodatum: null,
+            ranteberakningsdatum: null,
+            transaktionstext: row.transaktionstext,
+            belopp_skatteverket: row.belopp,
+            belopp_kronofogden: 0,
+            status: 'booked',
+          }))
+
+          const { error } = await ctx.supabase
+            .from('skattekonto_transactions')
+            .upsert(rows, { onConflict: 'company_id,dedup_key', ignoreDuplicates: true })
+
+          if (error) {
+            return NextResponse.json(
+              { error: `Kunde inte spara transaktionerna: ${error.message}` },
+              { status: 500 },
+            )
+          }
+
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'skattekonto/import',
+            outcome: 'ok',
+            responseStatus: 200,
+          })
+
+          return NextResponse.json({
+            data: {
+              imported: rows.length,
+              issues: parsed.issues,
+            },
+          })
         } catch (err) {
           return handleSkvError(err)
         }

@@ -216,6 +216,54 @@ NEXT_PUBLIC_SENTRY_DSN=https://...@sentry.io/...
 
 Sentry is disabled if these are not set. No errors are thrown.
 
+### Skatteverket (Swedish Tax Agency)
+
+The Skatteverket integration has two auth tracks. Both default to
+**Skatteverket's test environment** (`api.test.skatteverket.se`) — production
+requires API credentials issued by Skatteverket (an external agreement) and,
+for the sysorg track, an organisation certificate from an approved issuer
+(e.g. Expisoft). **Never commit certificates or keys to the repository.**
+
+**Track 1 — per-user BankID OAuth (the `skatteverket` extension):** the user
+connects their own Skatteverket access with BankID; filings are signed by the
+user in Skatteverket's own service (Mina sidor). Nordklart prepares, uploads
+and tracks — it never submits on the user's behalf.
+
+```bash
+SKATTEVERKET_ENABLED=true                 # master switch for the extension routes
+SKATTEVERKET_OAUTH2_CLIENT_ID=...         # OAuth client from Skatteverket's API portal
+SKATTEVERKET_OAUTH2_CLIENT_SECRET=...
+SKATTEVERKET_APIGW_CLIENT_ID=...          # API gateway subscription credentials
+SKATTEVERKET_APIGW_CLIENT_SECRET=...
+SKATTEVERKET_TOKEN_ENCRYPTION_KEY=...     # 32-byte key for encrypting stored OAuth tokens
+# Optional overrides (default: Skatteverket TEST environment):
+SKATTEVERKET_OAUTH_BASE_URL=...
+SKATTEVERKET_API_BASE_URL=...
+SKATTEVERKET_AGD_API_BASE_URL=...
+SKATTEVERKET_AGD_PERIOD_API_BASE_URL=...
+SKATTEVERKET_SKATTEKONTO_API_BASE_URL=...
+SKATTEVERKET_DISABLED=true                # kill switch (overrides everything)
+```
+
+**Track 2 — system-to-system (sysorg, client-credentials + org certificate):**
+
+```bash
+SKV_ENV=test                              # 'test' (default) or 'prod'
+SKV_SYSORG_ENABLED=true                   # master switch for the sysorg track
+SKV_OAUTH_CLIENT_ID=...                   # CCG client (alias: SKATTEVERKET_OAUTH2_CLIENT_ID)
+SKV_OAUTH_CLIENT_SECRET=...
+SKV_APIGW_CLIENT_ID=...
+SKV_APIGW_CLIENT_SECRET=...
+SKV_ORG_CERT_P12_BASE64=...               # base64-encoded .p12 organisation certificate
+SKV_ORG_CERT_PIN=...                      # certificate PIN
+# Optional per-service URL overrides: SKV_MOMS_API_BASE_URL,
+# SKV_AGD_API_BASE_URL, SKV_INK1_API_BASE_URL, SKV_INKFORETAG_API_BASE_URL
+```
+
+Companies without any Skatteverket connection can still import their
+skattekonto statement manually (paste from Mina sidor) — see
+Skattekonto → "Importera kontoutdrag".
+
 ## Storage Buckets
 
 Migration 024 automatically creates the `documents` storage bucket (private, 50 MB limit, WORM — no update/delete).

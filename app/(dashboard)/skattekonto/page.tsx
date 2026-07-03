@@ -71,6 +71,7 @@ export default function SkattekontoPage() {
   const [matchCandidates, setMatchCandidates] = useState<MatchCandidate[] | null>(null)
   const [matchLoading, setMatchLoading] = useState(false)
   const [matchSubmitting, setMatchSubmitting] = useState<string | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -80,13 +81,15 @@ export default function SkattekontoPage() {
         fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner'),
       ])
 
+      // Saldo requires the Skattekonto API connection — but the local
+      // transaction ledger works without it (manually imported statements).
+      // 401 on saldo therefore does NOT abort the transactions load.
       if (saldoRes.status === 401) {
         setNotConnected(true)
-        return
+      } else {
+        const saldoJson = (await saldoRes.json()) as SaldoEnvelope
+        setSaldo(saldoJson)
       }
-
-      const saldoJson = (await saldoRes.json()) as SaldoEnvelope
-      setSaldo(saldoJson)
 
       if (txRes.ok) {
         const txJson = (await txRes.json()) as TransaktionerEnvelope
@@ -222,7 +225,10 @@ export default function SkattekontoPage() {
       .catch(() => {})
   }
 
-  if (notConnected) {
+  const hasLocalRows =
+    (tx?.booked?.length ?? 0) + (tx?.overdue?.length ?? 0) + (tx?.upcoming?.length ?? 0) > 0
+
+  if (notConnected && !hasLocalRows) {
     return (
       <div className="space-y-6">
         <PageHeading />
@@ -232,16 +238,27 @@ export default function SkattekontoPage() {
             <p className="mb-1 font-medium">Skatteverket är inte anslutet</p>
             <p className="mb-4 max-w-md text-sm text-muted-foreground">
               För att se saldo och transaktioner på skattekontot behöver du
-              ansluta med BankID i inställningarna.
+              ansluta med BankID i inställningarna — eller importera
+              kontoutdraget manuellt från Skatteverkets Mina sidor.
             </p>
-            <Button asChild>
-              <Link href="/settings/tax">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                Anslut Skatteverket
-              </Link>
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button asChild>
+                <Link href="/settings/tax">
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Anslut Skatteverket
+                </Link>
+              </Button>
+              <Button variant="outline" onClick={() => setImportOpen(true)}>
+                Importera kontoutdrag
+              </Button>
+            </div>
           </CardContent>
         </Card>
+        <ManualImportDialog
+          open={importOpen}
+          onClose={() => setImportOpen(false)}
+          onImported={reload}
+        />
       </div>
     )
   }
@@ -250,14 +267,27 @@ export default function SkattekontoPage() {
     <div className="space-y-6">
       <PageHeading
         right={
-          <Button onClick={syncNow} disabled={syncing}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              Importera kontoutdrag
+            </Button>
+            {!notConnected && (
+              <Button onClick={syncNow} disabled={syncing}>
+                <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
+              </Button>
+            )}
+          </div>
         }
       />
 
-      <BalanceHero saldo={saldo} loading={loading} onCopyOcr={copyOcr} />
+      {!notConnected && <BalanceHero saldo={saldo} loading={loading} onCopyOcr={copyOcr} />}
+
+      <ManualImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={reload}
+      />
 
       <Card>
         <CardHeader>
@@ -684,6 +714,82 @@ function MatchDialog({
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
             Avbryt
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ManualImportDialog({
+  open,
+  onClose,
+  onImported,
+}: {
+  open: boolean
+  onClose: () => void
+  onImported: () => Promise<void> | void
+}) {
+  const { toast } = useToast()
+  const [content, setContent] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleImport() {
+    setSubmitting(true)
+    try {
+      const res = await fetch('/api/extensions/ext/skatteverket/skattekonto/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        toast({
+          title: 'Importen misslyckades',
+          description: json.error,
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({
+        title: 'Kontoutdrag importerat',
+        description: `${json.data.imported} transaktioner importerade${
+          json.data.issues?.length ? ` — ${json.data.issues.length} rader kunde inte tolkas` : ''
+        }.`,
+      })
+      setContent('')
+      onClose()
+      await onImported()
+    } catch {
+      toast({ title: 'Importen misslyckades', variant: 'destructive' })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Importera kontoutdrag manuellt</DialogTitle>
+          <DialogDescription>
+            Kopiera raderna från Skatteverkets Mina sidor (Skattekonto →
+            Kontoutdrag) och klistra in här. Formatet är datum, text och
+            belopp per rad — dubbletter hoppas över automatiskt.
+          </DialogDescription>
+        </DialogHeader>
+        <textarea
+          className="min-h-[200px] w-full rounded-md border border-border bg-background p-3 font-mono text-xs"
+          placeholder={'2026-06-12\tInbetalning bokförd 260612\t14 380\n2026-06-14\tMoms feb-mars 2026\t-14 380'}
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+        />
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Avbryt
+          </Button>
+          <Button onClick={handleImport} disabled={submitting || content.trim().length === 0}>
+            {submitting ? 'Importerar…' : 'Importera'}
           </Button>
         </DialogFooter>
       </DialogContent>
