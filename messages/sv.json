@@ -366,6 +366,11 @@
   "supplier_invoices": {
     "title": "Leverantörsfakturor",
     "register_invoice": "Registrera faktura",
+    "payment_file_button": "Skapa betalfil ({count})",
+    "payment_file_tooltip": "Skapar en pain.001-betalfil (leverantörsbetalningar) för alla attesterade obetalda fakturor i SEK. Filen laddas upp i internetbanken.",
+    "payment_file_created": "Betalfilen har skapats",
+    "payment_file_created_description": "{count} betalningar ingår. Ladda upp filen i internetbanken och läs in bankens statusrapport (pain.002) under Betalfiler.",
+    "payment_file_failed": "Betalfilen kunde inte skapas",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
     "tab_all": "Alla",
     "tab_registered": "Registrerade",

@@ -366,6 +366,11 @@
   "supplier_invoices": {
     "title": "Supplier invoices",
     "register_invoice": "Register invoice",
+    "payment_file_button": "Create payment file ({count})",
+    "payment_file_tooltip": "Creates a pain.001 payment file (supplier payments) for all approved unpaid SEK invoices. Upload the file in your bank portal.",
+    "payment_file_created": "Payment file created",
+    "payment_file_created_description": "{count} payments included. Upload the file in your bank portal and import the bank's status report (pain.002) under Payment files.",
+    "payment_file_failed": "Could not create the payment file",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
     "tab_all": "All",
     "tab_registered": "Registered",
