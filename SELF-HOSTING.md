@@ -294,6 +294,22 @@ Production factoring requires an agreement with a financing partner — the
 sandbox provider exists so the full flow (eligibility → offer → accept →
 payout → booking) can be tested end to end.
 
+### Operations
+
+```bash
+MAINTENANCE_MODE=off                      # 'off' (default), 'banner' or 'read_only'
+MAINTENANCE_MESSAGE=...                   # optional banner text override (Swedish)
+```
+
+- `banner` shows an incident banner in the dashboard; everything keeps working.
+- `read_only` also rejects all mutating dashboard requests with a clear
+  Swedish 503 message — use during database maintenance or incidents.
+
+Deep health for monitoring: `GET /api/health/deep` with
+`Authorization: Bearer $CRON_SECRET` (checks database, schema freshness,
+storage, webhook backlog, cron freshness and integration readiness).
+Go-live status per integration: `/platform/integrations` (platform role).
+
 ## Storage Buckets
 
 Migration 024 automatically creates the `documents` storage bucket (private, 50 MB limit, WORM — no update/delete).

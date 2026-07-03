@@ -98,6 +98,12 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingen aktiv företagskontext. Välj ett företag och försök igen.',
     message_en: 'No active company context resolved for the request.',
   },
+  MAINTENANCE_READ_ONLY: {
+    httpStatus: 503,
+    message_sv:
+      'Systemet är tillfälligt i läsläge på grund av underhåll — ändringar kan inte sparas just nu. Försök igen om en stund.',
+    message_en: 'The system is temporarily read-only for maintenance. Try again shortly.',
+  },
   IDEMPOTENCY_KEY_REUSE: {
     httpStatus: 409,
     message_sv: 'Idempotensnyckeln har redan använts med en annan begäran.',

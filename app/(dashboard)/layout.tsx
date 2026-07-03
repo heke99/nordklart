@@ -10,6 +10,8 @@ import AgentTrigger from '@/components/agent/AgentTrigger'
 import CommandPalette from '@/components/common/CommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
+import { MaintenanceBanner } from '@/components/dashboard/MaintenanceBanner'
+import { getMaintenanceMode, getMaintenanceMessage } from '@/lib/ops/maintenance'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
 import { getActiveCompanyId, getUserCompanies } from '@/lib/company/context'
@@ -235,7 +237,7 @@ export default async function DashboardLayout({
     supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
     supabase.from('user_preferences').select('active_workspace_type, active_agency_id').eq('user_id', user.id).maybeSingle(),
     supabase.from('platform_roles').select('role').eq('user_id', user.id).in('role', PLATFORM_ROLES).is('revoked_at', null).limit(1).maybeSingle(),
-    supabase.from('agency_members').select('agency_id, role').eq('user_id', user.id).in('role', ['agency_owner', 'agency_admin', 'accountant', 'reviewer']).limit(1).maybeSingle(),
+    supabase.from('agency_members').select('agency_id, role').eq('user_id', user.id).in('role', ['agency_owner', 'agency_admin', 'accountant', 'payroll', 'reviewer']).limit(1).maybeSingle(),
   ])
 
   // If onboarding incomplete, still render the dashboard — the page component
@@ -325,6 +327,12 @@ export default async function DashboardLayout({
           >
             Hoppa till innehåll
           </a>
+          {getMaintenanceMode() !== 'off' && (
+            <MaintenanceBanner
+              message={getMaintenanceMessage()}
+              readOnly={getMaintenanceMode() === 'read_only'}
+            />
+          )}
           {isSandbox && <SandboxBanner />}
           <DashboardNav
             companyName={settings?.company_name || 'Min verksamhet'}

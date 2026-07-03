@@ -39,6 +39,7 @@ function roleLabel(role: string | null) {
     case 'owner': return 'Bolagsägare'
     case 'admin': return 'Bolagsadmin'
     case 'accountant': return 'Redovisning'
+    case 'payroll': return 'Lön'
     case 'auditor': return 'Revisor'
     case 'viewer': return 'Läsbehörighet'
     case 'member': return 'Medlem'

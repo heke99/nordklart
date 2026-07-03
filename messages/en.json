@@ -200,7 +200,8 @@
     "group_company": "Company",
     "group_accounting": "Accounting & tax",
     "group_sales": "Sales",
-    "group_tools": "Tools & integrations"
+    "group_tools": "Tools & integrations",
+    "integrations": "Integrations"
   },
   "settings_modal": {
     "title": "Settings",

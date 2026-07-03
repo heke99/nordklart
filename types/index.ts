@@ -73,7 +73,7 @@ export interface UserPreferences {
 
 // Nordklart platform and agency access model
 export type PlatformRole = 'platform_admin' | 'platform_support' | 'platform_auditor'
-export type AgencyRole = 'agency_owner' | 'agency_admin' | 'accountant' | 'reviewer' | 'read_only'
+export type AgencyRole = 'agency_owner' | 'agency_admin' | 'accountant' | 'payroll' | 'reviewer' | 'read_only'
 export type AgencyStatus = 'active' | 'paused' | 'archived'
 export type AgencyClientStatus = 'active' | 'paused' | 'ended'
 

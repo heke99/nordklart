@@ -60,7 +60,16 @@ export default async function PlatformCompanyDetailPage({ params, searchParams }
       eyebrow="Superadmin · bolagskort"
       title={company.name}
       description="Granska bolagets användare, byråkoppling, åtkomst, abonnemang, bokslut, Bankgiro och bokföringskontroller. Alla ändringar sker via kontrollerade server actions och audit-loggas."
-      actions={<Button asChild variant="secondary"><Link href="/platform/companies"><ArrowLeft className="mr-2 h-4 w-4" />Alla bolag</Link></Button>}
+      actions={
+        <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <a href={`/api/platform/companies/${company.id}/troubleshooting`} download>
+              Felsökningsrapport
+            </a>
+          </Button>
+          <Button asChild variant="secondary"><Link href="/platform/companies"><ArrowLeft className="mr-2 h-4 w-4" />Alla bolag</Link></Button>
+        </div>
+      }
     >
       {query.notice ? <div className="rounded-2xl border border-success/30 bg-success/10 px-5 py-4 text-sm text-success">{query.notice}</div> : null}
       {query.error ? <div className="rounded-2xl border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm text-destructive">{query.error}</div> : null}
