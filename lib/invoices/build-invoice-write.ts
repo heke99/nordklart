@@ -62,6 +62,8 @@ export interface InvoiceWriteInput {
   due_date: string
   delivery_date?: string | null
   currency: Currency
+  /** Goods vs services — routes zero-rated sales to 3108/3105 vs 3308/3305. */
+  sale_type?: 'goods' | 'services'
   your_reference?: string
   our_reference?: string
   notes?: string
@@ -93,6 +95,7 @@ export type InvoiceWriteFields = {
   vat_treatment: string
   vat_rate: number | null
   moms_ruta: string | null
+  sale_type: 'goods' | 'services'
   reverse_charge_text: string | null
   your_reference: string | null | undefined
   our_reference: string | null | undefined
@@ -143,10 +146,24 @@ export async function buildInvoiceWriteData(params: {
 }): Promise<BuildInvoiceWriteResult> {
   const { supabase, companyId, customer, documentType, input } = params
   const items = input.items
+  const saleType = input.sale_type ?? 'services'
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, saleType)
   const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
   const allowedRates = new Set(availableRates.map((r) => r.rate))
+
+  // Reverse charge requires the BUYER's VAT number on the invoice (ML 17 kap
+  // 24 § p.4 — "köparens registreringsnummer till mervärdesskatt" is a
+  // mandatory invoice field when the buyer is liable for the tax). The
+  // vat_number_validated flag alone is not enough: the number may have been
+  // cleared after validation. Never issue an RC invoice without it.
+  if (vatRules.treatment === 'reverse_charge' && !customer.vat_number?.trim()) {
+    return {
+      ok: false,
+      code: 'INVOICE_CREATE_RC_VAT_NUMBER_MISSING',
+      details: { customerId: customer.id, customerType: customer.customer_type },
+    }
+  }
 
   // VAT registration gate (defense in depth — the invoice form already hides
   // the Moms column when vat_registered is false). A non-momsregistrerad
@@ -337,6 +354,7 @@ export async function buildInvoiceWriteData(params: {
     vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
     vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
     moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
+    sale_type: saleType,
     reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
     your_reference: input.your_reference,
     our_reference: input.our_reference,

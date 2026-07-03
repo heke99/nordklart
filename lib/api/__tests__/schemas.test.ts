@@ -286,15 +286,33 @@ describe('CreateInvoiceSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  it('accepts invoice with per-line VAT rates', () => {
+  it('accepts invoice with per-line VAT rates (integer percent)', () => {
     const result = CreateInvoiceSchema.safeParse(validInvoice({
       items: [
-        validInvoiceItem({ vat_rate: 0.25 }),
-        validInvoiceItem({ description: 'Food', vat_rate: 0.12 }),
-        validInvoiceItem({ description: 'Books', vat_rate: 0.06 }),
+        validInvoiceItem({ vat_rate: 25 }),
+        validInvoiceItem({ description: 'Food', vat_rate: 12 }),
+        validInvoiceItem({ description: 'Books', vat_rate: 6 }),
       ],
     }))
     expect(result.success).toBe(true)
+  })
+
+  it('rejects fractional vat_rate (0.25 means 0.25%, not 25%)', () => {
+    const result = CreateInvoiceSchema.safeParse(validInvoice({
+      items: [validInvoiceItem({ vat_rate: 0.25 })],
+    }))
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects non-statutory vat_rate with Swedish error (ML 9 kap)', () => {
+    const result = CreateInvoiceSchema.safeParse(validInvoice({
+      items: [validInvoiceItem({ vat_rate: 18 })],
+    }))
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.path.includes('vat_rate'))
+      expect(issue?.message).toContain('Momssatsen måste vara 0, 6, 12 eller 25')
+    }
   })
 
   it('rejects missing customer_id', () => {
@@ -384,7 +402,7 @@ describe('CreateInvoiceSchema', () => {
 
 describe('CreateInvoiceItemSchema', () => {
   it('accepts valid item with all fields', () => {
-    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ vat_rate: 0.25 }))
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ vat_rate: 25 }))
     expect(result.success).toBe(true)
   })
 

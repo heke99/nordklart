@@ -3,6 +3,9 @@ import {
   getVatRate,
   generateSalesVatLines,
   generateReverseChargeLines,
+  generateReverseChargeBasisLines,
+  generateImportVatLines,
+  generateImportBasisLines,
   generateInputVatLine,
   extractNetAmount,
   extractVatAmount,
@@ -166,12 +169,17 @@ describe('generateReverseChargeLines — domestic (isDomestic=true, ML 16 kap)',
 })
 
 describe('generateReverseChargeLines — defaults & invariants', () => {
-  it('defaults to vatRate=0.25 and isDomestic=false when omitted', () => {
-    const lines = generateReverseChargeLines(1000)
+  it('books 2645/2614 for explicit 25% non-domestic RC', () => {
+    const lines = generateReverseChargeLines(1000, 0.25)
     expect(lines[0].account_number).toBe('2645')
     expect(lines[1].account_number).toBe('2614')
     expect(lines[0].debit_amount).toBe(250)
     expect(lines[1].credit_amount).toBe(250)
+  })
+
+  it('throws on non-statutory rates instead of silently falling back to 2614', () => {
+    expect(() => generateReverseChargeLines(1000, 0.18)).toThrow(/Ogiltig momssats/)
+    expect(() => generateReverseChargeLines(1000, 0)).toThrow(/Ogiltig momssats/)
   })
 
   it('keeps debit-credit pair balanced for every rate × isDomestic combination', () => {
@@ -183,6 +191,78 @@ describe('generateReverseChargeLines — defaults & invariants', () => {
         expect(lines[1].debit_amount).toBe(0)
       }
     }
+  })
+})
+
+describe('generateReverseChargeBasisLines — reverse_charge_type routing', () => {
+  it('routes eu_goods to 4515/4516/4517 (ruta 20)', () => {
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'eu_business', 'eu_goods')[0].account_number).toBe('4515')
+    expect(generateReverseChargeBasisLines(1000, 0.12, 'eu_business', 'eu_goods')[0].account_number).toBe('4516')
+    expect(generateReverseChargeBasisLines(1000, 0.06, 'eu_business', 'eu_goods')[0].account_number).toBe('4517')
+  })
+
+  it('routes eu_services to 4535-series (ruta 21)', () => {
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'eu_business', 'eu_services')[0].account_number).toBe('4535')
+  })
+
+  it('routes construction to 4425-series (ruta 24, ML 16 kap 13 §)', () => {
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'swedish_business', 'construction')[0].account_number).toBe('4425')
+  })
+
+  it('routes electronics to 4415-series (ruta 23, ML 16 kap 17 §)', () => {
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'swedish_business', 'electronics')[0].account_number).toBe('4415')
+  })
+
+  it('emits no basis lines for import (handled by the importmoms path)', () => {
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'non_eu_business', 'import')).toHaveLength(0)
+  })
+
+  it('explicit type overrides supplier-country inference', () => {
+    // A Swedish supplier selling EU goods classification: type wins.
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'swedish_business', 'eu_goods')[0].account_number).toBe('4515')
+  })
+
+  it('falls back to supplier-country inference (services) without a type', () => {
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'eu_business')[0].account_number).toBe('4535')
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'non_eu_business')[0].account_number).toBe('4531')
+    expect(generateReverseChargeBasisLines(1000, 0.25, 'swedish_business')[0].account_number).toBe('4425')
+  })
+
+  it('always nets to zero via 4598 motkonto', () => {
+    const lines = generateReverseChargeBasisLines(1000, 0.25, 'eu_business', 'eu_goods')
+    expect(lines[1].account_number).toBe('4598')
+    expect(lines[0].debit_amount).toBe(lines[1].credit_amount)
+  })
+})
+
+describe('generateImportVatLines / generateImportBasisLines', () => {
+  it('books 2645 debit + 2615 credit for 25% import', () => {
+    const lines = generateImportVatLines(10000, 0.25)
+    expect(lines[0]).toMatchObject({ account_number: '2645', debit_amount: 2500 })
+    expect(lines[1]).toMatchObject({ account_number: '2615', credit_amount: 2500 })
+  })
+
+  it('books 2625/2635 for reduced import rates', () => {
+    expect(generateImportVatLines(10000, 0.12)[1].account_number).toBe('2625')
+    expect(generateImportVatLines(10000, 0.06)[1].account_number).toBe('2635')
+  })
+
+  it('throws on non-statutory import rate', () => {
+    expect(() => generateImportVatLines(10000, 0.2)).toThrow(/Ogiltig momssats/)
+  })
+
+  it('books beskattningsunderlag on 4545-4547 + 4598 motkonto (ruta 50)', () => {
+    const lines = generateImportBasisLines(10000, 0.25)
+    expect(lines[0]).toMatchObject({ account_number: '4545', debit_amount: 10000 })
+    expect(lines[1]).toMatchObject({ account_number: '4598', credit_amount: 10000 })
+    expect(generateImportBasisLines(10000, 0.12)[0].account_number).toBe('4546')
+    expect(generateImportBasisLines(10000, 0.06)[0].account_number).toBe('4547')
+  })
+
+  it('SKV cross-validation invariant: ruta 60 ≈ ruta 50 × rate', () => {
+    const vat = generateImportVatLines(12345.67, 0.25)
+    const basis = generateImportBasisLines(12345.67, 0.25)
+    expect(vat[1].credit_amount).toBeCloseTo(basis[0].debit_amount * 0.25, 2)
   })
 })
 

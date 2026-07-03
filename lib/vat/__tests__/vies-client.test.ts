@@ -97,17 +97,17 @@ describe('validateVatNumber', () => {
     vi.restoreAllMocks()
   })
 
-  it('returns error for non-EU prefix', async () => {
+  it('returns Swedish error for non-EU prefix', async () => {
     const result = await validateVatNumber('US123456789')
     expect(result.valid).toBe(false)
-    expect(result.error).toContain('non-EU')
+    expect(result.error).toContain('icke-EU-landsprefix')
   })
 
-  it('returns error for invalid format without calling VIES', async () => {
+  it('returns Swedish error for invalid format without calling VIES', async () => {
     const fetchSpy = vi.spyOn(global, 'fetch')
     const result = await validateVatNumber('DE12345') // too short for DE
     expect(result.valid).toBe(false)
-    expect(result.error).toContain('format')
+    expect(result.error).toContain('fel format')
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
@@ -138,22 +138,22 @@ describe('validateVatNumber', () => {
     expect(result.country_code).toBe('DE')
   })
 
-  it('handles VIES service unavailable (non-200)', async () => {
+  it('handles VIES service unavailable (non-200) with Swedish message', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValueOnce(
       new Response('Service Unavailable', { status: 503 })
     )
 
     const result = await validateVatNumber('DE123456789')
     expect(result.valid).toBe(false)
-    expect(result.error).toContain('unavailable')
+    expect(result.error).toContain('tillfälligt otillgänglig')
   })
 
-  it('handles network error gracefully', async () => {
+  it('handles network error gracefully with Swedish message', async () => {
     vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('Network error'))
 
     const result = await validateVatNumber('DE123456789')
     expect(result.valid).toBe(false)
-    expect(result.error).toContain('unavailable')
+    expect(result.error).toContain('tillfälligt otillgänglig')
   })
 
   it('handles GR→EL mapping in API call', async () => {

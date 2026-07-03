@@ -11,6 +11,8 @@ import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { linkSourceDocumentToJournalEntry } from '@/lib/bookkeeping/source-integrity'
+import { capRepresentationVat, isRepresentationAccount } from '@/lib/vat/representation'
+import { roundOre } from '@/lib/money'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 ensureInitialized()
@@ -174,6 +176,54 @@ export const POST = withRouteContext(
       }
     })
 
+    // Representation (BAS 6070–6079): ingående moms is only deductible on a
+    // base of at most 300 kr/person (ML 13 kap 27 §), and the income-tax
+    // deduction was abolished in 2017 (IL 16 kap 2 §).
+    //
+    // When the caller supplies `representation_persons` we ENFORCE the cap:
+    // each representation line's deductible VAT is limited to
+    // persons × 300 × rate; the excess is moved into the line cost (the
+    // non-deductible VAT is part of the cost). Without a participant count
+    // we cannot compute the cap — surface a review warning instead.
+    const warnings: Array<{ code: string; message: string }> = []
+    const repPersons = body.representation_persons
+    let repVatMovedToCost = 0
+    const repItems = items.filter(i => isRepresentationAccount(i.account_number))
+    if (repItems.length > 0 && !body.reverse_charge) {
+      if (repPersons != null && repPersons > 0) {
+        for (const item of repItems) {
+          if (item.vat_rate <= 0 || item.vat_amount <= 0) continue
+          const { deductible, excess } = capRepresentationVat({
+            vatAmount: item.vat_amount,
+            participantCount: repPersons,
+            vatRate: item.vat_rate,
+          })
+          if (excess > 0) {
+            item.vat_amount = deductible
+            item.line_total = roundOre(item.line_total + excess)
+            repVatMovedToCost = roundOre(repVatMovedToCost + excess)
+          }
+        }
+        if (repVatMovedToCost > 0) {
+          warnings.push({
+            code: 'REPRESENTATION_VAT_CAPPED',
+            message:
+              `Momsavdraget för representation har begränsats till 300 kr/person i underlag ` +
+              `(ML 13 kap 27 §). ${repVatMovedToCost.toFixed(2)} kr moms har flyttats till kostnaden.`,
+          })
+        }
+      } else {
+        warnings.push({
+          code: 'REPRESENTATION_VAT_CAP',
+          message:
+            'Representation (konto 6070–6079): ingående moms är endast avdragsgill ' +
+            'upp till 300 kr/person i underlag (ML 13 kap 27 §) och kostnaden är inte ' +
+            'inkomstskattemässigt avdragsgill (IL 16 kap 2 §). Ange antal deltagare ' +
+            '(representation_persons) så begränsas avdraget automatiskt.',
+        })
+      }
+    }
+
     const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
     const vatAmount = items.reduce((sum, i) => sum + i.vat_amount, 0)
     // Reverse charge: supplier never invoices VAT, so the payable total equals
@@ -181,27 +231,6 @@ export const POST = withRouteContext(
     // and books fiktiv 2614/2645 in the engine, but neither side moves cash.
     const payableVat = body.reverse_charge ? 0 : vatAmount
     const total = Math.round((subtotal + payableVat) * 100) / 100
-
-    // Representation (BAS 6070–6079): ingående moms is only deductible up to
-    // 300 SEK base/person per ML 8 kap. 1 §, and the income-tax deduction was
-    // abolished in 2017 (IL 16 kap. 2 §). The engine debits 2641 for the full
-    // VAT; we surface a non-blocking warning so the user can adjust manually.
-    // Only emit on the new private-funds path for now — other AP paths share
-    // the flaw and are tracked separately.
-    const warnings: Array<{ code: string; message: string }> = []
-    if (paidPrivately) {
-      const repItems = items.filter(i => /^607\d$/.test(i.account_number))
-      if (repItems.length > 0) {
-        warnings.push({
-          code: 'REPRESENTATION_VAT_CAP',
-          message:
-            'Representation (konto 6070–6079): ingående moms är endast avdragsgill ' +
-            'upp till 300 kr/person (ML 8 kap. 1 §) och kostnaden är inte ' +
-            'inkomstskattemässigt avdragsgill (IL 16 kap. 2 §). Justera bokföringen ' +
-            'manuellt om beloppet överstiger gränsen.',
-        })
-      }
-    }
 
     const exchangeRate = body.exchange_rate || null
     const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
@@ -225,6 +254,7 @@ export const POST = withRouteContext(
         exchange_rate: exchangeRate,
         vat_treatment: body.vat_treatment || 'standard_25',
         reverse_charge: body.reverse_charge || false,
+        reverse_charge_type: body.reverse_charge ? (body.reverse_charge_type ?? null) : null,
         payment_reference: body.payment_reference || null,
         paid_with_private_funds: paidPrivately,
         subtotal: Math.round(subtotal * 100) / 100,

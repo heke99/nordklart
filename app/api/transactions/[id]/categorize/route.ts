@@ -146,12 +146,17 @@ export const POST = withRouteContext(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('entity_type, fiscal_year_start_month')
+      .select('entity_type, fiscal_year_start_month, vat_deduction_percent')
       .eq('company_id', companyId)
       .single()
 
     const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
     const fiscalYearStartMonth: number = settings?.fiscal_year_start_month ?? 1
+    const rawVatDeduction = Number(settings?.vat_deduction_percent)
+    const vatDeductionPercent = Number.isFinite(rawVatDeduction) &&
+      rawVatDeduction >= 0 && rawVatDeduction <= 100
+      ? rawVatDeduction
+      : 100
 
     let finalCategory: TransactionCategory
     if (body.template_id) {
@@ -223,6 +228,8 @@ export const POST = withRouteContext(
         is_business,
         entityType,
         body.vat_treatment,
+        undefined,
+        vatDeductionPercent,
       )
     }
 

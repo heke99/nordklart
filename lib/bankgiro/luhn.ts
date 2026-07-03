@@ -77,3 +77,25 @@ export function validateOcrReference(ocr: string): boolean {
   if (ocr.length < 2 || ocr.length > 25) return false
   return luhnValidate(ocr)
 }
+
+/**
+ * Generate an OCR reference for a CREDIT NOTE.
+ *
+ * A credit note number like "KR-F2026001" strips to the same digits as the
+ * original invoice "F2026001", so the plain generateOcrReference would emit
+ * an IDENTICAL OCR for both documents — a payment against the credit note
+ * would auto-match the original invoice during bank reconciliation.
+ *
+ * We prefix the digit 9 to the numeric payload before appending the Luhn
+ * check digit, guaranteeing a distinct OCR (regular invoice numbers produce
+ * OCR ≤ their own digits; the 9-prefix namespace never collides as long as
+ * invoice numbers don't start with 9 followed by another invoice's number —
+ * which sequential F-series numbers never do).
+ */
+export function generateCreditNoteOcrReference(creditNoteNumber: string): string {
+  const digits = creditNoteNumber.replace(/\D/g, '')
+  if (digits.length === 0 || digits.length > 23) return creditNoteNumber
+  const payload = '9' + digits
+  const checkDigit = luhnCheckDigit(payload)
+  return payload + checkDigit.toString()
+}

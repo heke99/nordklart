@@ -13,6 +13,7 @@ import type {
   Invoice,
   InvoiceItem,
   JournalEntry,
+  SaleType,
   VatTreatment,
 } from '@/types'
 
@@ -56,7 +57,8 @@ function generatePerRateLines(
   entityType: EntityType,
   invoiceTagText: string,
   currency?: string | null,
-  exchangeRate?: number | null
+  exchangeRate?: number | null,
+  saleType: SaleType = 'services',
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = currency != null && currency !== 'SEK'
@@ -75,7 +77,7 @@ function generatePerRateLines(
 
   if (!hasPerLineVat) {
     // Legacy fallback: single rate from invoice level
-    const revenueAccount = getRevenueAccount(invoiceVatTreatment, entityType)
+    const revenueAccount = getRevenueAccount(invoiceVatTreatment, entityType, saleType)
     const subtotal = items.reduce((sum, item) => sum + item.line_total, 0)
     const subtotalSek = toSek(subtotal)
     lines.push({
@@ -119,7 +121,7 @@ function generatePerRateLines(
     const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
       ? invoiceVatTreatment
       : getVatTreatmentForRate(rate)
-    const revenueAccount = getRevenueAccount(treatment, entityType)
+    const revenueAccount = getRevenueAccount(treatment, entityType, saleType)
     const bookingAccount = treatment === 'reverse_charge' || treatment === 'export'
       ? revenueAccount
       : resolveBookingAccount('revenue', item, revenueAccount)
@@ -268,11 +270,11 @@ export async function createInvoiceJournalEntry(
   if (invoice.items && invoice.items.length > 0) {
     creditLines.push(...generatePerRateLines(
       invoice.items, invoice.vat_treatment, entityType, tag,
-      invoice.currency, invoice.exchange_rate
+      invoice.currency, invoice.exchange_rate, invoice.sale_type ?? 'services'
     ))
   } else {
     // Fallback: no items available, use invoice-level amounts
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
+    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.sale_type ?? 'services')
     const subtotalSek = resolveSekAmount(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
 
     creditLines.push({
@@ -494,7 +496,7 @@ export async function createCreditNoteJournalEntry(
     // Use absolute items for generatePerRateLines, then swap debit/credit
     const creditLines = generatePerRateLines(
       creditNote.items, creditNote.vat_treatment, entityType, tag,
-      creditNote.currency, creditNote.exchange_rate
+      creditNote.currency, creditNote.exchange_rate, creditNote.sale_type ?? 'services'
     )
     for (const line of creditLines) {
       debitLines.push({
@@ -506,7 +508,7 @@ export async function createCreditNoteJournalEntry(
     }
   } else {
     // Fallback: invoice-level amounts
-    const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType)
+    const revenueAccount = getRevenueAccount(creditNote.vat_treatment, entityType, creditNote.sale_type ?? 'services')
     const absSubtotal = Math.abs(resolveSekAmount(creditNote.subtotal, creditNote.subtotal_sek, creditNote.currency, creditNote.exchange_rate))
     const absVat = Math.abs(resolveSekAmount(creditNote.vat_amount, creditNote.vat_amount_sek, creditNote.currency, creditNote.exchange_rate))
 
@@ -587,11 +589,11 @@ export async function createInvoiceCashEntry(
   if (invoice.items && invoice.items.length > 0) {
     creditLines.push(...generatePerRateLines(
       invoice.items, invoice.vat_treatment, entityType, tag,
-      invoice.currency, invoice.exchange_rate
+      invoice.currency, invoice.exchange_rate, invoice.sale_type ?? 'services'
     ))
   } else {
     // Fallback: invoice-level amounts
-    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
+    const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType, invoice.sale_type ?? 'services')
     const subtotalSek = resolveSekAmount(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
 
     creditLines.push({
@@ -651,12 +653,23 @@ export async function createInvoiceCashEntry(
 }
 
 /**
- * Get the appropriate revenue account based on VAT treatment
+ * Get the appropriate revenue account based on VAT treatment.
  *
  * For 'exempt': AB uses 3004 (Försäljning inom Sverige, momsfri),
  * EF uses 3100 (Momsfria intäkter, mapped to R2 in NE engine).
+ *
+ * Zero-rated sales discriminate goods vs services (ML 6 kap):
+ *   reverse_charge + goods    → 3108 (Försäljning varor EU, ruta 35)
+ *   reverse_charge + services → 3308 (Försäljning tjänster EU, ruta 39)
+ *   export + goods            → 3105 (Försäljning varor export, ruta 36)
+ *   export + services         → 3305 (Försäljning tjänster export, ruta 40)
+ * Default 'services' preserves the historical booking for legacy rows.
  */
-export function getRevenueAccount(vatTreatment: VatTreatment, entityType: EntityType = 'enskild_firma'): string {
+export function getRevenueAccount(
+  vatTreatment: VatTreatment,
+  entityType: EntityType = 'enskild_firma',
+  saleType: SaleType = 'services',
+): string {
   switch (vatTreatment) {
     case 'standard_25':
       return '3001' // Försäljning 25%
@@ -665,9 +678,9 @@ export function getRevenueAccount(vatTreatment: VatTreatment, entityType: Entity
     case 'reduced_6':
       return '3003' // Försäljning 6%
     case 'reverse_charge':
-      return '3308' // Försäljning tjänst EU
+      return saleType === 'goods' ? '3108' : '3308' // Varor EU (ruta 35) / Tjänster EU (ruta 39)
     case 'export':
-      return '3305' // Försäljning tjänst Export
+      return saleType === 'goods' ? '3105' : '3305' // Varor export (ruta 36) / Tjänster export (ruta 40)
     case 'exempt':
       return entityType === 'aktiebolag' ? '3004' : '3100'
     default:

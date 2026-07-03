@@ -253,7 +253,9 @@ export function buildMappingResultFromCounterpartyTemplate(
   if (isExpense && tmpl.vat_treatment) {
     const vatTreatment = tmpl.vat_treatment as VatTreatment
     if (vatTreatment === 'reverse_charge') {
-      const rcLines = generateReverseChargeLines(absAmount)
+      // Counterparty templates carry no per-line rate — self-assess at the
+      // 25% huvudregel (ML 6 kap 34 §), explicitly.
+      const rcLines = generateReverseChargeLines(absAmount, 0.25)
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,

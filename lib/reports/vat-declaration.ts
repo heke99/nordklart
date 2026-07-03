@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type {
   VatDeclaration,
+  VatDeclarationReconciliation,
   VatDeclarationRutor,
   VatPeriodType,
   AccountingMethod,
@@ -250,7 +251,11 @@ export async function calculateVatDeclaration(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
-  // Fetch all posted journal entry lines on VAT-relevant accounts for the period
+  // Fetch all posted journal entry lines on VAT-relevant accounts for the
+  // period. The account filter is the ruta-mapped set PLUS the entire 26xx
+  // class: an unmapped 26xx account (e.g. a manual booking to 2617) would
+  // silently be excluded from the declaration — the reconciliation block
+  // below surfaces exactly that case.
   const lines = await fetchAllRows<{
     account_number: string
     debit_amount: number
@@ -264,7 +269,7 @@ export async function calculateVatDeclaration(
         credit_amount,
         journal_entries!inner (company_id, entry_date, status)
       `)
-      .in('account_number', VAT_ACCOUNTS)
+      .or(`account_number.in.(${VAT_ACCOUNTS.join(',')}),account_number.like.26*`)
       .eq('journal_entries.company_id', companyId)
       .in('journal_entries.status', ['posted', 'reversed'])
       .gte('journal_entries.entry_date', start)
@@ -340,6 +345,34 @@ export async function calculateVatDeclaration(
     else if (e.source_type === 'bank_transaction') transactionCount++
   }
 
+  // GL reconciliation block. The rutor are a pure GL projection over the
+  // MAPPED accounts — the remaining risk is a 26xx account that maps to no
+  // ruta (manual verifikat on 2617, an imported SIE with exotic subaccounts,
+  // …). Any such balance means the momsdeklaration does NOT tie to the
+  // ledger, so we surface every 26xx balance plus a rutor_match_gl flag the
+  // UI/submission flow must respect before locking the declaration.
+  const glBalances: Record<string, number> = {}
+  const unmappedAccounts: Array<{ account: string; balance: number }> = []
+  for (const [account, t] of totals) {
+    if (!account.startsWith('26')) continue
+    const mapping = ACCOUNT_RUTA[account]
+    // Natural side: credit-balance for output VAT (261x-263x), debit for
+    // input VAT (264x). Unmapped accounts report credit − debit.
+    const balance = round(
+      mapping?.side === 'debit' ? t.debit - t.credit : t.credit - t.debit
+    )
+    glBalances[account] = balance
+    if (!mapping && Math.abs(balance) > 0.5) {
+      unmappedAccounts.push({ account, balance })
+    }
+  }
+  unmappedAccounts.sort((a, b) => a.account.localeCompare(b.account))
+  const reconciliation: VatDeclarationReconciliation = {
+    gl_balances: glBalances,
+    unmapped_accounts: unmappedAccounts,
+    rutor_match_gl: unmappedAccounts.length === 0,
+  }
+
   return {
     period: { type: periodType, year, period, start, end },
     rutor,
@@ -372,6 +405,7 @@ export async function calculateVatDeclaration(
         ruta32: rutor.ruta32,
       },
     },
+    reconciliation,
   }
 }
 

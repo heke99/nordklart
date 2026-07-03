@@ -1713,3 +1713,193 @@ describe('createSupplierInvoicePrivatelyPaidEntry', () => {
     expect(debit6110[0].debit_amount).toBe(600)
   })
 })
+
+// ============================================================
+// Batch 1 — blandad verksamhet, reverse_charge_type, import
+// ============================================================
+
+/** Mock client whose company_settings read returns a deduction percentage. */
+function makeSettingsClient(vatDeductionPercent: number) {
+  return {
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { vat_deduction_percent: vatDeductionPercent },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  } as never
+}
+
+describe('blandad verksamhet — proportionell avdragsrätt (ML 13 kap 29 §)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('splits 2641 into deductible share + cost line at 60% avdragsrätt', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 8000, vat_amount: 2000, total: 10000 })
+    const items = [makeItem({ line_total: 8000, account_number: '6200', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      makeSettingsClient(60), 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // 2000 × 60% = 1200 deductible → 2641
+    const debit2641 = findByAccount(input.lines, '2641')
+    expect(debit2641).toHaveLength(1)
+    expect(debit2641[0].debit_amount).toBe(1200)
+
+    // 800 non-deductible → cost line on the (largest) expense account
+    const costLines = findByAccount(input.lines, '6200')
+    const nonDeductible = costLines.find((l) => l.line_description?.includes('Ej avdragsgill'))
+    expect(nonDeductible).toBeDefined()
+    expect(nonDeductible!.debit_amount).toBe(800)
+
+    // Supplier is still owed the FULL total including VAT
+    const credit2440 = findByAccount(input.lines, '2440')
+    expect(credit2440[0].credit_amount).toBe(10000)
+
+    assertBalanced(input)
+  })
+
+  it('keeps 100% behaviour byte-identical (no cost line, full 2641)', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 8000, vat_amount: 2000, total: 10000 })
+    const items = [makeItem({ line_total: 8000, account_number: '6200', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      makeSettingsClient(100), 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2641')[0].debit_amount).toBe(2000)
+    expect(input.lines.some((l: CreateJournalEntryLineInput) => l.line_description?.includes('Ej avdragsgill'))).toBe(false)
+    assertBalanced(input)
+  })
+
+  it('splits the fiktiv-moms input side on reverse charge (output stays full)', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000, vat_amount: 0, total: 10000, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 10000, account_number: '6540', vat_rate: 0, reverse_charge_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      makeSettingsClient(50), 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // Output fiktiv moms reported in FULL (2500 credit on 2614)
+    const credit2614 = findByAccount(input.lines, '2614')
+    expect(credit2614[0].credit_amount).toBe(2500)
+
+    // Input side: 50% deductible on 2645, rest on cost
+    const debit2645 = findByAccount(input.lines, '2645')
+    expect(debit2645[0].debit_amount).toBe(1250)
+    const nonDeductible = input.lines.find(
+      (l: CreateJournalEntryLineInput) => l.line_description?.includes('Ej avdragsgill')
+    )
+    expect(nonDeductible!.debit_amount).toBe(1250)
+
+    assertBalanced(input)
+  })
+})
+
+describe('reverse_charge_type — forwarded to basis-line routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('passes reverse_charge_type through to generateReverseChargeBasisLines', async () => {
+    const { generateReverseChargeBasisLines } = await import('../vat-entries')
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000, vat_amount: 0, total: 10000,
+      reverse_charge: true, reverse_charge_type: 'eu_goods',
+    })
+    const items = [makeItem({ line_total: 10000, account_number: '4000', vat_rate: 0, reverse_charge_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    expect(vi.mocked(generateReverseChargeBasisLines)).toHaveBeenCalledWith(
+      10000, 0.25, 'eu_business', 'eu_goods',
+    )
+  })
+
+  it('books domestic RC input to 2647 when classified as construction, regardless of supplier country', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000, vat_amount: 0, total: 10000,
+      reverse_charge: true, reverse_charge_type: 'construction',
+    })
+    const items = [makeItem({ line_total: 10000, account_number: '4010', vat_rate: 0, reverse_charge_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2647')).toHaveLength(1)
+    expect(findByAccount(input.lines, '2645')).toHaveLength(0)
+  })
+})
+
+describe('import — importmoms path (reverse_charge_type=import)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('books 2645/2615 + 4545/4598 basis instead of the fiktiv-moms RC pair', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000, vat_amount: 0, total: 10000,
+      reverse_charge: true, reverse_charge_type: 'import',
+    })
+    const items = [makeItem({ line_total: 10000, account_number: '4000', vat_rate: 0, reverse_charge_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'non_eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // Importmoms pair: 2645 debit / 2615 credit (ruta 48 + 60)
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '2615')[0].credit_amount).toBe(2500)
+    // NO fiktiv-moms RC output (2614)
+    expect(findByAccount(input.lines, '2614')).toHaveLength(0)
+    // Beskattningsunderlag (ruta 50): 4545 debit + 4598 motkonto
+    expect(findByAccount(input.lines, '4545')[0].debit_amount).toBe(10000)
+    expect(findByAccount(input.lines, '4598')[0].credit_amount).toBe(10000)
+    // Supplier owed the net only
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(10000)
+
+    assertBalanced(input)
+  })
+
+  it('reverses the import pair + basis on supplier credit note', async () => {
+    const creditNote = makeSupplierInvoice({
+      subtotal: -10000, vat_amount: 0, total: -10000,
+      reverse_charge: true, reverse_charge_type: 'import', is_credit_note: true,
+    })
+    const items = [makeItem({ line_total: -10000, account_number: '4000', vat_rate: 0, reverse_charge_rate: 0.25 })]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'non_eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // Swapped sides vs registration
+    expect(findByAccount(input.lines, '2645')[0].credit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '2615')[0].debit_amount).toBe(2500)
+    expect(findByAccount(input.lines, '4545')[0].credit_amount).toBe(10000)
+    expect(findByAccount(input.lines, '4598')[0].debit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+})

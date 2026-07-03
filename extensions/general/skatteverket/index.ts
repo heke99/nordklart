@@ -16,6 +16,7 @@ import { skvAuthCodeToStructured } from './lib/error-map'
 import {
   buildMomsuppgift,
   buildAgiUnderlag,
+  checkVatDeclarationLockBlockers,
   type VatDeclarationPrep,
   type AgiUnderlagPrep,
 } from './lib/declaration-prep'
@@ -612,6 +613,11 @@ export const skatteverketExtension: Extension = {
     // ── Lock draft for signing ──────────────────────────────────────
     // Returns a signeringslänk (deep link) that the user opens
     // in a new tab to sign with BankID on Skatteverket's site.
+    //
+    // Guard: when the caller supplies period_type/year/period the local
+    // pre-flight checks + GL reconciliation are re-run and any ERROR-level
+    // finding BLOCKS the lock (409) unless force=true is passed — a locked
+    // declaration that disagrees with the ledger must never happen silently.
     {
       method: 'PUT',
       path: '/declaration/lock',
@@ -622,6 +628,47 @@ export const skatteverketExtension: Extension = {
 
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
+
+          const url = new URL(request.url)
+          const guardPeriodType = url.searchParams.get('period_type')
+          const guardYear = Number(url.searchParams.get('year'))
+          const guardPeriod = Number(url.searchParams.get('period'))
+          const force = url.searchParams.get('force') === 'true'
+          if (
+            (guardPeriodType === 'monthly' || guardPeriodType === 'quarterly' || guardPeriodType === 'yearly') &&
+            Number.isInteger(guardYear) && Number.isInteger(guardPeriod) && guardPeriod >= 1
+          ) {
+            const blockers = await checkVatDeclarationLockBlockers(ctx.supabase, ctx.companyId, {
+              periodType: guardPeriodType,
+              year: guardYear,
+              period: guardPeriod,
+            })
+            if (blockers.length > 0 && !force) {
+              await writeSkatteverketAudit(ctx, {
+                endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod,
+                outcome: 'validation_error', responseStatus: 409,
+                errorMessage: `Låsning blockerad av lokala kontroller: ${blockers.map((b) => b.code).join(', ')}`,
+              })
+              return NextResponse.json(
+                {
+                  error:
+                    'Deklarationen kan inte låsas: den stämmer inte mot huvudboken eller ' +
+                    'faller på lokala kontroller. Åtgärda punkterna nedan, eller lås ändå ' +
+                    'om du har granskat och tar ansvar för avvikelsen.',
+                  blockers,
+                  can_force: true,
+                },
+                { status: 409 }
+              )
+            }
+            if (blockers.length > 0 && force) {
+              await writeSkatteverketAudit(ctx, {
+                endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod,
+                outcome: 'ok', responseStatus: 200,
+                errorMessage: `Användaren låste trots lokala kontrollfel (force=true): ${blockers.map((b) => b.code).join(', ')}`,
+              })
+            }
+          }
 
           const response = await skvRequest(
             ctx.supabase,

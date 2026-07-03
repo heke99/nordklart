@@ -579,6 +579,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Momssatsen är inte tillåten för denna kundtyp.',
     message_en: 'The VAT rate is not allowed for this customer type.',
   },
+  INVOICE_CREATE_RC_VAT_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturor med omvänd skattskyldighet kräver köparens momsregistreringsnummer (ML 17 kap 24 §). Lägg till kundens VAT-nummer på kundkortet och försök igen.',
+    message_en:
+      'Reverse-charge invoices require the buyer VAT registration number (ML 17 kap 24 §). Add the customer VAT number and try again.',
+  },
   INVOICE_CREATE_ROT_RUT_VALIDATION: {
     httpStatus: 400,
     message_sv: 'ROT/RUT-avdraget kunde inte valideras. Kontrollera personnummer och fastighetsbeteckning.',

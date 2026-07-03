@@ -252,7 +252,13 @@ export const CreateInvoiceItemSchema = z
     quantity: z.number(),
     unit: z.string(),
     unit_price: z.number(),
-    vat_rate: z.number().min(0).max(100).optional(),
+    // Statutory Swedish VAT rates only (ML 9 kap): 25, 12, 6 or 0.
+    vat_rate: z
+      .number()
+      .refine((r) => r === 0 || r === 6 || r === 12 || r === 25, {
+        message: 'Momssatsen måste vara 0, 6, 12 eller 25 procent (ML 9 kap).',
+      })
+      .optional(),
     // Artikelregister + optional BAS class-3 revenue override.
     article_id: uuid.nullable().optional(),
     revenue_account: revenueAccount.nullable().optional(),
@@ -314,6 +320,10 @@ export const CreateInvoiceSchema = z.object({
   delivery_date: optionalIsoDate,
   currency: CurrencySchema,
   document_type: InvoiceDocumentTypeSchema.optional(),
+  // Goods vs services — drives revenue account + momsdeklaration ruta for
+  // zero-rated sales (reverse charge 3108/ruta 35 vs 3308/ruta 39; export
+  // 3105/ruta 36 vs 3305/ruta 40). Defaults to services (huvudregeln).
+  sale_type: z.enum(['goods', 'services']).optional(),
   your_reference: z.string().optional(),
   our_reference: z.string().optional(),
   notes: z.string().optional(),
@@ -617,6 +627,15 @@ export const CreateSupplierInvoiceSchema = z.object({
   exchange_rate: z.number().positive().optional(),
   vat_treatment: VatTreatmentSchema.optional(),
   reverse_charge: z.boolean().optional(),
+  // Why the purchase is reverse charged. Drives the basbelopp account series
+  // for momsdeklaration ruta 20-24 (eu_goods → 4515x/ruta 20, eu_services →
+  // 4535x/ruta 21, construction → 4425x/ruta 24, electronics → 4415x/ruta 23,
+  // import → importmoms path 4545x + 2615x). Omitted → inferred from the
+  // supplier's country (services assumed — the historical behaviour).
+  reverse_charge_type: z
+    .enum(['eu_goods', 'eu_services', 'construction', 'electronics', 'import'])
+    .nullable()
+    .optional(),
   payment_reference: z.string().optional(),
   notes: z.string().optional(),
   // Optional source document from the WORM document archive. When present, the
@@ -630,6 +649,11 @@ export const CreateSupplierInvoiceSchema = z.object({
   // from the same supplier already carries this OCR/reference. The user has
   // reviewed both and confirmed they are genuinely distinct invoices.
   allow_duplicate_reference: z.boolean().optional(),
+  // Number of participants for representation (BAS 6070-6079) items. When
+  // provided, the input-VAT deduction is capped at 300 kr/person underlag
+  // (ML 13 kap 27 §) — the excess VAT books as a cost. When omitted and
+  // representation items exist, a review warning is returned instead.
+  representation_persons: z.number().int().positive().max(10000).optional(),
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
@@ -1005,6 +1029,15 @@ export const UpdateSettingsSchema = z.object({
   vat_registered: z.boolean().optional(),
   vat_number: z.string().regex(/^SE\d{12}$/, 'Momsregistreringsnummer måste vara SE följt av 12 siffror').nullable().optional(),
   moms_period: MomsPeriodSchema.nullable().optional(),
+  // Blandad verksamhet — proportionell avdragsrätt för ingående moms
+  // (ML 13 kap 29 §). 100 = full avdragsrätt (default).
+  vat_deduction_percent: z
+    .number()
+    .min(0, 'Avdragsrätten måste vara mellan 0 och 100 procent')
+    .max(100, 'Avdragsrätten måste vara mellan 0 och 100 procent')
+    .optional(),
+  // Frivillig beskattning för lokaluthyrning (ML 12 kap).
+  voluntary_vat_rental: z.boolean().optional(),
   periodisk_sammanstallning_period: PsPeriodTypeSchema.optional(),
   tax_contact_name: z.string().max(200).nullable().optional(),
   tax_contact_phone: z.string().max(40).nullable().optional(),

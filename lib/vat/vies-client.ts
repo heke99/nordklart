@@ -91,7 +91,7 @@ export async function validateVatNumber(rawVatNumber: string): Promise<VatValida
   const parsed = parseVatNumber(rawVatNumber)
 
   if (!parsed) {
-    return { valid: false, error: 'Invalid or non-EU country prefix' }
+    return { valid: false, error: 'Ogiltigt eller icke-EU-landsprefix. Momsnumret ska börja med en EU-landskod, t.ex. SE, DE eller FI.' }
   }
 
   const { viesPrefix, vatNumber } = parsed
@@ -101,7 +101,7 @@ export async function validateVatNumber(rawVatNumber: string): Promise<VatValida
       valid: false,
       country_code: viesPrefix,
       vat_number: `${viesPrefix}${vatNumber}`,
-      error: 'Invalid VAT number format',
+      error: 'Momsnumret har fel format för landet. Kontrollera numret och försök igen.',
     }
   }
 
@@ -123,7 +123,7 @@ export async function validateVatNumber(rawVatNumber: string): Promise<VatValida
     if (!response.ok) {
       return {
         valid: false,
-        error: 'VAT validation service unavailable. Please try again later.',
+        error: 'Momsnummerkontrollen (VIES) är tillfälligt otillgänglig. Försök igen om en stund.',
       }
     }
 
@@ -141,7 +141,7 @@ export async function validateVatNumber(rawVatNumber: string): Promise<VatValida
     log.error('VIES API error:', error)
     return {
       valid: false,
-      error: 'Could not verify VAT number. Service temporarily unavailable.',
+      error: 'Momsnumret kunde inte verifieras just nu. Tjänsten (VIES) är tillfälligt otillgänglig — försök igen om en stund.',
     }
   }
 }

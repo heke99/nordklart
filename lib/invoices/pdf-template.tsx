@@ -7,7 +7,7 @@ import {
   StyleSheet,
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
-import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import { generateOcrReference, generateCreditNoteOcrReference } from '@/lib/bankgiro/luhn'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 
 type PdfLang = 'sv' | 'en'
@@ -1052,7 +1052,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             {(company.invoice_show_ocr ?? true) && (company.bankgiro || company.plusgiro) && lang === 'sv' && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.ocr}</Text>
-                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number ? generateOcrReference(invoice.invoice_number) : '—'}</Text>
+                {/* Credit notes get a 9-prefixed OCR so a payment against the
+                    kreditfaktura can never auto-match the original invoice
+                    (KR-F2026001 strips to the same digits as F2026001). */}
+                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number ? (invoice.credited_invoice_id ? generateCreditNoteOcrReference(invoice.invoice_number) : generateOcrReference(invoice.invoice_number)) : '—'}</Text>
               </View>
             )}
             {lang !== 'sv' && invoice.invoice_number && (

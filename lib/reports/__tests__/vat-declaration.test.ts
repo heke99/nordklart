@@ -95,6 +95,7 @@ describe('formatPeriodLabel', () => {
 describe('getVatDeclarationSummary', () => {
   const emptyRc = { ruta20: 0, ruta21: 0, ruta22: 0, ruta23: 0, ruta24: 0, ruta30: 0, ruta31: 0, ruta32: 0 }
   const zeroExtras = { ruta08: 0, ruta35: 0, ruta36: 0, ruta37: 0, ruta38: 0, ruta41: 0, ruta42: 0, ruta50: 0, ruta60: 0, ruta61: 0, ruta62: 0 }
+  const emptyReconciliation = { gl_balances: {}, unmapped_accounts: [], rutor_match_gl: true }
 
   it('calculates totals and detects payment', () => {
     const declaration: VatDeclaration = {
@@ -116,6 +117,7 @@ describe('getVatDeclarationSummary', () => {
         receipts: { ruta48: 0 },
         reverseCharge: emptyRc,
       },
+      reconciliation: emptyReconciliation,
     }
 
     const summary = getVatDeclarationSummary(declaration)
@@ -145,6 +147,7 @@ describe('getVatDeclarationSummary', () => {
         receipts: { ruta48: 0 },
         reverseCharge: emptyRc,
       },
+      reconciliation: emptyReconciliation,
     }
 
     const summary = getVatDeclarationSummary(declaration)
@@ -172,6 +175,7 @@ describe('getVatDeclarationSummary', () => {
         receipts: { ruta48: 0 },
         reverseCharge: { ruta20: 0, ruta21: 5000, ruta22: 0, ruta23: 0, ruta24: 0, ruta30: 1250, ruta31: 0, ruta32: 0 },
       },
+      reconciliation: emptyReconciliation,
     }
 
     const summary = getVatDeclarationSummary(declaration)
@@ -272,6 +276,65 @@ describe('calculateVatDeclaration', () => {
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
 
     expect(result.rutor.ruta48).toBe(700)
+  })
+
+  it('reconciliation: rutor_match_gl is true when every 26xx balance maps to a ruta', async () => {
+    results = [
+      {
+        data: [
+          { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
+          { account_number: '2641', debit_amount: 250, credit_amount: 0 },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.reconciliation.rutor_match_gl).toBe(true)
+    expect(result.reconciliation.unmapped_accounts).toEqual([])
+    expect(result.reconciliation.gl_balances['2611']).toBe(2500)
+    expect(result.reconciliation.gl_balances['2641']).toBe(250)
+  })
+
+  it('reconciliation: flags a 26xx account outside the ruta mapping (declaration ≠ GL)', async () => {
+    results = [
+      {
+        data: [
+          { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
+          // 2617 is NOT in ACCOUNT_RUTA — a manual booking here would be
+          // silently missing from the declaration without the check.
+          { account_number: '2617', debit_amount: 0, credit_amount: 800 },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.reconciliation.rutor_match_gl).toBe(false)
+    expect(result.reconciliation.unmapped_accounts).toEqual([
+      { account: '2617', balance: 800 },
+    ])
+    // The unmapped balance must NOT leak into any ruta
+    expect(result.rutor.ruta10).toBe(2500)
+  })
+
+  it('reconciliation: ignores sub-0.5 SEK rounding noise on unmapped accounts', async () => {
+    results = [
+      {
+        data: [
+          { account_number: '2617', debit_amount: 0, credit_amount: 0.3 },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+    expect(result.reconciliation.rutor_match_gl).toBe(true)
   })
 
   it('maps EU/export revenue to ruta39/ruta40', async () => {

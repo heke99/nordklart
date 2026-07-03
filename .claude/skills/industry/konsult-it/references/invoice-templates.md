@@ -9,7 +9,7 @@
 ```
 Omvänd betalningsskyldighet — Reverse charge
 Artikel 44 och 196 i rådets direktiv 2006/112/EG
-VAT to be nordklart for by the recipient under Article 196 of Directive 2006/112/EC
+VAT to be accounted for by the recipient under Article 196 of Directive 2006/112/EC
 
 Buyer VAT-ID: DE123456789
 ```

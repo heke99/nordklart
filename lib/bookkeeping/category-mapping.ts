@@ -1,5 +1,6 @@
 import type { TransactionCategory, MappingResult, VatJournalLine, Transaction, EntityType, VatTreatment } from '@/types'
 import { getVatRate, generateReverseChargeLines } from './vat-entries'
+import { splitDeductibleVat } from '@/lib/vat/deduction'
 
 /**
  * Maps TransactionCategory to BAS accounts for journal entry creation
@@ -212,7 +213,15 @@ export function buildMappingResultFromCategory(
   isBusiness: boolean,
   entityType: EntityType = 'enskild_firma',
   vatTreatment?: VatTreatment,
-  overrideVatAmount?: number
+  overrideVatAmount?: number,
+  /**
+   * Blandad verksamhet — proportionell avdragsrätt (ML 13 kap 29 §).
+   * Only the deductible share of input VAT books to 2641; the remainder
+   * stays on the expense account (transaction-entries derives the expense
+   * as gross − 2641, so reducing the VAT line is sufficient). 100 = full
+   * deduction (default, unchanged behaviour).
+   */
+  vatDeductionPercent: number = 100,
 ): MappingResult {
   const mapping = getCategoryAccountMapping(category, transaction.amount, isBusiness, entityType, vatTreatment)
 
@@ -223,9 +232,11 @@ export function buildMappingResultFromCategory(
   if (isBusiness && treatment) {
     const vatRate = getVatRate(treatment)
     if (treatment === 'reverse_charge' && transaction.amount < 0) {
-      // EU reverse charge: fiktiv moms (offsetting entries)
+      // EU reverse charge: fiktiv moms (offsetting entries). Bank-transaction
+      // categorization carries no per-line rate, so we self-assess at the 25%
+      // huvudregel (ML 6 kap 34 §) — explicit here, never a silent fallback.
       const absAmount = Math.abs(transaction.amount)
-      const rcLines = generateReverseChargeLines(absAmount)
+      const rcLines = generateReverseChargeLines(absAmount, 0.25)
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,
@@ -241,13 +252,20 @@ export function buildMappingResultFromCategory(
         : Math.round((grossAmount * vatRate / (1 + vatRate)) * 100) / 100
 
       if (transaction.amount < 0 && mapping.vatDebitAccount) {
-        // Expense: Ingående moms (deductible VAT)
-        vatLines.push({
-          account_number: mapping.vatDebitAccount,
-          debit_amount: vatAmount,
-          credit_amount: 0,
-          description: `Ingående moms ${vatRate * 100}%`,
-        })
+        // Expense: Ingående moms (deductible VAT). In a blandad verksamhet
+        // only the deductible share hits 2641 — the rest stays in the cost
+        // (transaction-entries computes expense = gross − 2641-debit).
+        const { deductible } = splitDeductibleVat(vatAmount, vatDeductionPercent)
+        if (deductible > 0) {
+          vatLines.push({
+            account_number: mapping.vatDebitAccount,
+            debit_amount: deductible,
+            credit_amount: 0,
+            description: vatDeductionPercent < 100
+              ? `Ingående moms ${vatRate * 100}% (avdragsrätt ${vatDeductionPercent}%)`
+              : `Ingående moms ${vatRate * 100}%`,
+          })
+        }
       } else if (transaction.amount > 0 && mapping.vatCreditAccount) {
         // Income: Utgående moms (output VAT)
         vatLines.push({

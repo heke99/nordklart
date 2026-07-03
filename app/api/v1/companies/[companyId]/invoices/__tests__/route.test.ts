@@ -520,7 +520,7 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     expect(body.error.code).toBe('INVOICE_CUSTOMER_NOT_FOUND')
   })
 
-  it('rejects a per-item vat_rate not allowed for the customer', async () => {
+  it('rejects a non-statutory vat_rate at schema level (ML 9 kap)', async () => {
     withInvoiceWriteScope()
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -535,7 +535,8 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
         invoice_date: '2026-05-12',
         due_date: '2026-06-11',
         currency: 'SEK',
-        // 17 % is not a valid Swedish VAT rate.
+        // 17 % is not a valid Swedish VAT rate — rejected by the Zod schema
+        // before the route ever consults customer VAT rules.
         items: [{ description: 'x', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 17 }],
       }),
       companyParams(COMPANY_ID),
@@ -543,8 +544,41 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
 
     expect(res.status).toBe(400)
     const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    const issue = (body.error.details.issues as Array<{ field: string; message: string }>)
+      .find((i) => i.field.includes('vat_rate'))
+    expect(issue?.message).toContain('Momssatsen måste vara 0, 6, 12 eller 25')
+  })
+
+  it('rejects a statutory vat_rate not allowed for the customer type', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // Non-EU business → export rules: only 0% allowed.
+        customers: {
+          data: { ...SWEDISH_BUSINESS_CUSTOMER, customer_type: 'non_eu_business' },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        // 25 % is statutory but not allowed on an export invoice.
+        items: [{ description: 'x', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25 }],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
     expect(body.error.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
-    expect(body.error.details.attempted_rate).toBe(17)
+    expect(body.error.details.attempted_rate).toBe(25)
     expect(Array.isArray(body.error.details.allowed_rates)).toBe(true)
   })
 
