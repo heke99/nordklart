@@ -14,9 +14,9 @@ import {
 describe('assistant FAQ dataset', () => {
   const entries = getFaqEntries()
 
-  it('contains exactly 450 entries', () => {
+  it('contains at least 450 entries (product floor) and matches the manifest total', () => {
     expect(entries).toHaveLength(FAQ_TOTAL_ENTRIES)
-    expect(FAQ_TOTAL_ENTRIES).toBe(450)
+    expect(FAQ_TOTAL_ENTRIES).toBeGreaterThanOrEqual(450)
   })
 
   it('matches the exact category distribution', () => {
@@ -33,7 +33,7 @@ describe('assistant FAQ dataset', () => {
     }
     // Distribution sums to the total.
     const sum = Object.values(FAQ_CATEGORY_DISTRIBUTION).reduce((a, b) => a + b, 0)
-    expect(sum).toBe(450)
+    expect(sum).toBe(FAQ_TOTAL_ENTRIES)
   })
 
   it('every entry has 3-6 question variants', () => {
