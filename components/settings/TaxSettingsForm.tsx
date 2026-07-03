@@ -18,6 +18,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
   const [fSkatt, setFSkatt] = useState(settings.f_skatt ?? true)
   const [paysSalaries, setPaysSalaries] = useState(settings.pays_salaries ?? false)
+  const [voluntaryVatRental, setVoluntaryVatRental] = useState(settings.voluntary_vat_rental ?? false)
 
   const isEnskildFirma = settings.entity_type === 'enskild_firma'
 
@@ -133,6 +134,39 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
                 <p className="text-xs text-muted-foreground">
                   {t('periodisk_help')}
                 </p>
+              </div>
+
+              <div className="max-w-xs space-y-2">
+                <Label htmlFor="vat_deduction_percent">{t('vat_deduction_percent_label')}</Label>
+                <Input
+                  id="vat_deduction_percent"
+                  name="vat_deduction_percent"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  defaultValue={settings.vat_deduction_percent ?? 100}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t('vat_deduction_percent_help')}
+                </p>
+              </div>
+
+              <div className="flex items-start space-x-3">
+                <Checkbox
+                  id="voluntary_vat_rental"
+                  checked={voluntaryVatRental}
+                  onCheckedChange={(v) => setVoluntaryVatRental(v === true)}
+                />
+                <input type="hidden" name="voluntary_vat_rental" value={voluntaryVatRental ? 'true' : 'false'} />
+                <div className="space-y-1">
+                  <Label htmlFor="voluntary_vat_rental" className="cursor-pointer">
+                    {t('voluntary_vat_rental_label')}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {t('voluntary_vat_rental_help')}
+                  </p>
+                </div>
               </div>
             </div>
           )}

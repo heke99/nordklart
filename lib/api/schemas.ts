@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { validateBankgiro, validatePlusgiro, validateIban, validateBic } from '@/lib/validation/swedish'
 
 // ============================================================
 // Shared primitives
@@ -252,7 +253,13 @@ export const CreateInvoiceItemSchema = z
     quantity: z.number(),
     unit: z.string(),
     unit_price: z.number(),
-    vat_rate: z.number().min(0).max(100).optional(),
+    // Statutory Swedish VAT rates only (ML 9 kap): 25, 12, 6 or 0.
+    vat_rate: z
+      .number()
+      .refine((r) => r === 0 || r === 6 || r === 12 || r === 25, {
+        message: 'Momssatsen måste vara 0, 6, 12 eller 25 procent (ML 9 kap).',
+      })
+      .optional(),
     // Artikelregister + optional BAS class-3 revenue override.
     article_id: uuid.nullable().optional(),
     revenue_account: revenueAccount.nullable().optional(),
@@ -314,6 +321,10 @@ export const CreateInvoiceSchema = z.object({
   delivery_date: optionalIsoDate,
   currency: CurrencySchema,
   document_type: InvoiceDocumentTypeSchema.optional(),
+  // Goods vs services — drives revenue account + momsdeklaration ruta for
+  // zero-rated sales (reverse charge 3108/ruta 35 vs 3308/ruta 39; export
+  // 3105/ruta 36 vs 3305/ruta 40). Defaults to services (huvudregeln).
+  sale_type: z.enum(['goods', 'services']).optional(),
   your_reference: z.string().optional(),
   our_reference: z.string().optional(),
   notes: z.string().optional(),
@@ -526,6 +537,14 @@ export const CreateCustomerSchema = z.object({
     .nullable(),
   language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
+  // Peppol participant identifier (elektronisk adress) för e-faktura,
+  // t.ex. 0007:5566778899 (0007 = svenskt organisationsnummer-schema).
+  peppol_id: z
+    .string()
+    .regex(/^\d{4}:[A-Za-z0-9][A-Za-z0-9\-.]{1,48}$/, 'Ogiltig Peppol-adress. Förväntat format: 0007:5566778899')
+    .nullable()
+    .optional()
+    .or(z.literal('').transform(() => null)),
   notes: z.string().optional(),
 })
 
@@ -617,6 +636,15 @@ export const CreateSupplierInvoiceSchema = z.object({
   exchange_rate: z.number().positive().optional(),
   vat_treatment: VatTreatmentSchema.optional(),
   reverse_charge: z.boolean().optional(),
+  // Why the purchase is reverse charged. Drives the basbelopp account series
+  // for momsdeklaration ruta 20-24 (eu_goods → 4515x/ruta 20, eu_services →
+  // 4535x/ruta 21, construction → 4425x/ruta 24, electronics → 4415x/ruta 23,
+  // import → importmoms path 4545x + 2615x). Omitted → inferred from the
+  // supplier's country (services assumed — the historical behaviour).
+  reverse_charge_type: z
+    .enum(['eu_goods', 'eu_services', 'construction', 'electronics', 'import'])
+    .nullable()
+    .optional(),
   payment_reference: z.string().optional(),
   notes: z.string().optional(),
   // Optional source document from the WORM document archive. When present, the
@@ -630,6 +658,11 @@ export const CreateSupplierInvoiceSchema = z.object({
   // from the same supplier already carries this OCR/reference. The user has
   // reviewed both and confirmed they are genuinely distinct invoices.
   allow_duplicate_reference: z.boolean().optional(),
+  // Number of participants for representation (BAS 6070-6079) items. When
+  // provided, the input-VAT deduction is capped at 300 kr/person underlag
+  // (ML 13 kap 27 §) — the excess VAT books as a cost. When omitted and
+  // representation items exist, a review warning is returned instead.
+  representation_persons: z.number().int().positive().max(10000).optional(),
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
@@ -1005,6 +1038,15 @@ export const UpdateSettingsSchema = z.object({
   vat_registered: z.boolean().optional(),
   vat_number: z.string().regex(/^SE\d{12}$/, 'Momsregistreringsnummer måste vara SE följt av 12 siffror').nullable().optional(),
   moms_period: MomsPeriodSchema.nullable().optional(),
+  // Blandad verksamhet — proportionell avdragsrätt för ingående moms
+  // (ML 13 kap 29 §). 100 = full avdragsrätt (default).
+  vat_deduction_percent: z
+    .number()
+    .min(0, 'Avdragsrätten måste vara mellan 0 och 100 procent')
+    .max(100, 'Avdragsrätten måste vara mellan 0 och 100 procent')
+    .optional(),
+  // Frivillig beskattning för lokaluthyrning (ML 12 kap).
+  voluntary_vat_rental: z.boolean().optional(),
   periodisk_sammanstallning_period: PsPeriodTypeSchema.optional(),
   tax_contact_name: z.string().max(200).nullable().optional(),
   tax_contact_phone: z.string().max(40).nullable().optional(),
@@ -1014,8 +1056,12 @@ export const UpdateSettingsSchema = z.object({
   bank_name: z.string().max(100, 'Banknamn får vara max 100 tecken').optional(),
   clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4-5 siffror').optional().or(z.literal('')),
   account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').optional().or(z.literal('')),
-  bankgiro: z.string().regex(/^(\d{3,4}-\d{4}|\d{7,8})$/, 'Ogiltigt bankgironummer (7-8 siffror)').nullable().optional().or(z.literal('')),
-  plusgiro: z.string().regex(/^\d{1,7}-\d{1}$/, 'Ogiltigt plusgironummer').nullable().optional().or(z.literal('')),
+  bankgiro: z.string()
+    .refine((v) => validateBankgiro(v).ok, 'Ogiltigt bankgironummer — 7–8 siffror med korrekt kontrollsiffra, t.ex. 5402-9681.')
+    .nullable().optional().or(z.literal('')),
+  plusgiro: z.string()
+    .refine((v) => validatePlusgiro(v).ok, 'Ogiltigt plusgironummer — kontrollsiffran stämmer inte, t.ex. 4158-2.')
+    .nullable().optional().or(z.literal('')),
   swish: z.string()
     .transform(normaliseSwish)
     .pipe(
@@ -1026,8 +1072,12 @@ export const UpdateSettingsSchema = z.object({
     )
     .nullable()
     .optional(),
-  iban: z.string().optional(),
-  bic: z.string().optional(),
+  iban: z.string()
+    .refine((v) => validateIban(v).ok, 'Ogiltigt IBAN — kontrollera landskod, längd och kontrollsiffror (mod-97).')
+    .optional().or(z.literal('')),
+  bic: z.string()
+    .refine((v) => validateBic(v).ok, 'Ogiltig BIC — 8 eller 11 tecken, t.ex. NDEASESS.')
+    .optional().or(z.literal('')),
   accounting_method: AccountingMethodSchema.optional(),
   invoice_prefix: z.string().nullable().optional(),
   next_invoice_number: z.number().int().positive().optional(),

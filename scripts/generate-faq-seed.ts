@@ -86,8 +86,10 @@ function loadManifest(): Manifest | null {
 }
 
 function validate(entries: FaqEntry[]): void {
-  if (entries.length !== 450) {
-    throw new Error(`Dataset must contain exactly 450 entries, found ${entries.length}`)
+  // Product floor: the assistant ships with AT LEAST 450 curated entries.
+  // New modules append — the dataset is allowed to grow past 450.
+  if (entries.length < 450) {
+    throw new Error(`Dataset must contain at least 450 entries, found ${entries.length}`)
   }
   const ids = new Set<string>()
   for (const e of entries) {

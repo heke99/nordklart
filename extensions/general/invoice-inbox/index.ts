@@ -262,6 +262,71 @@ async function uploadAndExtract(
     if (s) matchedSupplierId = s.id
   }
 
+  // Duplicate signal at intake (never blocks — the document is archived
+  // regardless per BFL; the flag warns before double-registration):
+  //   1) a non-credited supplier invoice with the same extracted invoice
+  //      number or OCR reference,
+  //   2) another open inbox item with the same extracted invoice number.
+  let duplicateOfSupplierInvoiceId: string | null = null
+  let duplicateOfInboxItemId: string | null = null
+  let duplicateReason: 'invoice_number_match' | 'ocr_match' | null = null
+  const extractedInvoiceNumber = extracted.invoice.invoiceNumber?.trim() || null
+  const extractedOcr = (extracted.invoice.paymentReference || '').replace(/\D/g, '')
+  try {
+    if (extractedInvoiceNumber) {
+      let dupQuery = supabase
+        .from('supplier_invoices')
+        .select('id, supplier_invoice_number')
+        .eq('company_id', companyId)
+        .eq('supplier_invoice_number', extractedInvoiceNumber)
+        .not('status', 'in', '("credited","reversed")')
+        .limit(1)
+      if (matchedSupplierId) dupQuery = dupQuery.eq('supplier_id', matchedSupplierId)
+      const { data: dupInvoice } = await dupQuery.maybeSingle()
+      if (dupInvoice) {
+        duplicateOfSupplierInvoiceId = (dupInvoice as { id: string }).id
+        duplicateReason = 'invoice_number_match'
+      }
+    }
+    if (!duplicateReason && extractedOcr.length >= 4 && matchedSupplierId) {
+      const { data: refTwins } = await supabase
+        .from('supplier_invoices')
+        .select('id, payment_reference')
+        .eq('company_id', companyId)
+        .eq('supplier_id', matchedSupplierId)
+        .not('status', 'in', '("credited","reversed")')
+        .not('payment_reference', 'is', null)
+        .limit(50)
+      const twin = (refTwins ?? []).find(
+        (row) => ((row as { payment_reference?: string | null }).payment_reference || '')
+          .replace(/\D/g, '') === extractedOcr,
+      )
+      if (twin) {
+        duplicateOfSupplierInvoiceId = (twin as { id: string }).id
+        duplicateReason = 'ocr_match'
+      }
+    }
+    if (!duplicateReason && extractedInvoiceNumber) {
+      const { data: openItems } = await supabase
+        .from('invoice_inbox_items')
+        .select('id, extracted_data')
+        .eq('company_id', companyId)
+        .is('created_supplier_invoice_id', null)
+        .order('created_at', { ascending: false })
+        .limit(100)
+      const twinItem = (openItems ?? []).find((row) => {
+        const data = (row as { extracted_data?: { invoice?: { invoiceNumber?: string | null } } }).extracted_data
+        return data?.invoice?.invoiceNumber?.trim() === extractedInvoiceNumber
+      })
+      if (twinItem) {
+        duplicateOfInboxItemId = (twinItem as { id: string }).id
+        duplicateReason = 'invoice_number_match'
+      }
+    }
+  } catch {
+    // Duplicate detection is best-effort — never block intake over it.
+  }
+
   const { data: inbox, error: inboxError } = await supabase
     .from('invoice_inbox_items')
     .insert({
@@ -273,6 +338,9 @@ async function uploadAndExtract(
       extracted_data: extracted as unknown as Record<string, unknown>,
       extraction_skipped: skipExtraction,
       matched_supplier_id: matchedSupplierId,
+      duplicate_of_supplier_invoice_id: duplicateOfSupplierInvoiceId,
+      duplicate_of_inbox_item_id: duplicateOfInboxItemId,
+      duplicate_reason: duplicateReason,
       email_from: emailMeta?.from || null,
       email_subject: emailMeta?.subject || null,
       email_received_at: emailMeta?.receivedAt || null,
@@ -313,6 +381,26 @@ async function uploadAndExtract(
     })
   } catch (err) {
     console.error('[invoice-inbox] Failed to append DocumentExtractionAttempted:', err)
+  }
+
+  // Webhook-facing event: extraction finished (document.extracted). Emitted
+  // even when extraction was skipped (succeeded=false) so integrators can
+  // route the document to their own extraction. Best-effort.
+  try {
+    const { eventBus } = await import('@/lib/events/bus')
+    await eventBus.emit({
+      type: 'document.extracted',
+      payload: {
+        documentId: doc.id,
+        inboxItemId: inbox.id,
+        succeeded: !skipExtraction && rawText != null && rawText.length > 0,
+        likelyDuplicate: duplicateReason !== null,
+        userId,
+        companyId,
+      },
+    })
+  } catch (err) {
+    console.error('[invoice-inbox] Failed to emit document.extracted:', err)
   }
 
   return {

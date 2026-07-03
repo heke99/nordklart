@@ -16,6 +16,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
+import { ConsentSigningDialog } from '@/components/bankid/ConsentSigningDialog'
 
 export default function ArsredovisningPage() {
   const router = useRouter()
@@ -25,6 +26,7 @@ export default function ArsredovisningPage() {
 
   const [data, setData] = useState<ArsredovisningData | null>(null)
   const [signatures, setSignatures] = useState<SignatureRequest[]>([])
+  const [bankIdSignFor, setBankIdSignFor] = useState<SignatureRequest | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -585,9 +587,11 @@ export default function ArsredovisningPage() {
         <CardHeader>
           <CardTitle className="text-base">Underskrifter</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Lägg till varje styrelseledamot + VD som ska skriva under. BankID-signering
-            kommer i en kommande version — för nu visas slottar och status här, och
-            själva underskriften görs på pappret.
+            Lägg till varje styrelseledamot + VD som ska skriva under. Signera
+            digitalt med BankID, eller markera som signerad om underskriften
+            gjorts på papper. Observera: digital inlämning till Bolagsverket
+            kräver deras egen signeringstjänst — BankID-signeringen här
+            dokumenterar styrelsens fastställelse i Nordklart.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -613,6 +617,9 @@ export default function ArsredovisningPage() {
                 ) : (
                   <>
                     <Badge variant="outline">Väntar på underskrift</Badge>
+                    <Button size="sm" onClick={() => setBankIdSignFor(sig)}>
+                      Signera med BankID
+                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
@@ -625,6 +632,35 @@ export default function ArsredovisningPage() {
               </div>
             </div>
           ))}
+          {bankIdSignFor && (
+            <ConsentSigningDialog
+              open={!!bankIdSignFor}
+              onClose={() => setBankIdSignFor(null)}
+              consentType="arsredovisning_signature"
+              title={`Underskrift av årsredovisning — ${bankIdSignFor.signer_name}`}
+              consentText={
+                `Jag, ${bankIdSignFor.signer_name} (${bankIdSignFor.role}), intygar att ` +
+                `årsredovisningen har upprättats och fastställts, och skriver under den ` +
+                `digitalt via BankID i Nordklart.`
+              }
+              context={{
+                kind: 'arsredovisning_signature',
+                signature_request_id: bankIdSignFor.id,
+                fiscal_period_id: periodId,
+              }}
+              onSigned={() => {
+                setBankIdSignFor(null)
+                setSignatures((prev) =>
+                  prev.map((s) =>
+                    s.id === bankIdSignFor.id
+                      ? { ...s, status: 'signed', signed_at: new Date().toISOString() }
+                      : s,
+                  ),
+                )
+                toast({ title: 'Underskrift signerad med BankID' })
+              }}
+            />
+          )}
           <div className="flex flex-wrap gap-2 items-end pt-2">
             <div className="space-y-1">
               <Label htmlFor="signer-role" className="text-xs">

@@ -4,6 +4,7 @@ import {
   validateBankgiroNumber,
   formatBankgiroNumber,
   generateOcrReference,
+  generateCreditNoteOcrReference,
   validateOcrReference,
 } from '../luhn'
 
@@ -128,6 +129,31 @@ describe('generateOcrReference', () => {
     const ocr = generateOcrReference('7')
     expect(ocr.length).toBe(2)
     expect(validateOcrReference(ocr)).toBe(true)
+  })
+})
+
+describe('generateCreditNoteOcrReference', () => {
+  it('never collides with the original invoice OCR (IC10)', () => {
+    // KR-F2026001 strips to the same digits as F2026001 — the plain
+    // generator would emit identical OCR for both documents.
+    const originalOcr = generateOcrReference('F2026001')
+    const creditOcr = generateCreditNoteOcrReference('KR-F2026001')
+    expect(creditOcr).not.toBe(originalOcr)
+    expect(creditOcr.startsWith('9')).toBe(true)
+  })
+
+  it('produces a Luhn-valid OCR', () => {
+    const ocr = generateCreditNoteOcrReference('KR-F2026042')
+    expect(validateOcrReference(ocr)).toBe(true)
+  })
+
+  it('returns the input unchanged when no digits exist', () => {
+    expect(generateCreditNoteOcrReference('KR-ABC')).toBe('KR-ABC')
+  })
+
+  it('returns the input unchanged when the payload would exceed 25 digits', () => {
+    const long = 'KR-' + '1'.repeat(24)
+    expect(generateCreditNoteOcrReference(long)).toBe(long)
   })
 })
 

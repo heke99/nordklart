@@ -15,7 +15,7 @@ type AgencyMembershipRow = {
 }
 
 export const AGENCY_ADMIN_ROLES = ['agency_owner', 'agency_admin'] as const
-export const AGENCY_WORK_ROLES = ['agency_owner', 'agency_admin', 'accountant', 'reviewer'] as const
+export const AGENCY_WORK_ROLES = ['agency_owner', 'agency_admin', 'accountant', 'payroll', 'reviewer'] as const
 
 export async function resolveManageableAgency(
   supabase: SupabaseClient,

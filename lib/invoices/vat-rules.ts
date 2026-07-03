@@ -1,4 +1,5 @@
-import type { CustomerType, VatTreatment } from '@/types'
+import type { CustomerType, SaleType, VatTreatment } from '@/types'
+import { BOX_LABELS, type MomsBox } from '@/lib/vat/moms-box-mapping'
 
 export interface VatRateOption {
   rate: number
@@ -67,13 +68,16 @@ export interface VatRule {
 }
 
 /**
- * Determine VAT treatment based on customer type and VAT validation status.
+ * Determine VAT treatment based on customer type, VAT validation status,
+ * and whether the sale is goods or services.
  *
  * Rules:
  * - Swedish customers: 25% VAT, moms ruta 05
- * - EU business with validated VAT: 0% reverse charge, moms ruta 39
+ * - EU business with validated VAT: 0% reverse charge —
+ *     services → ruta 39 (Art. 196, huvudregeln), goods → ruta 35
+ *     (unionsintern försäljning, Art. 138)
  * - EU business without validated VAT: 25% VAT, moms ruta 05
- * - Non-EU business: 0% export, moms ruta 40
+ * - Non-EU business: 0% export — services → ruta 40, goods → ruta 36
  *
  * Independent of the seller's VAT registration status. A non-momsregistrerad
  * seller who charges VAT still owes it under ML 16 kap. 23 § (faktureringsmoms),
@@ -82,6 +86,7 @@ export interface VatRule {
 export function getVatRules(
   customerType: CustomerType,
   vatNumberValidated: boolean = false,
+  saleType: SaleType = 'services',
 ): VatRule {
   switch (customerType) {
     case 'individual':
@@ -97,8 +102,10 @@ export function getVatRules(
         return {
           treatment: 'reverse_charge',
           rate: 0,
-          momsRuta: '39',
-          reverseChargeText: 'Omvänd skattskyldighet / Reverse charge - VAT to be nordklart for by the recipient as per Article 196, Council Directive 2006/112/EC',
+          momsRuta: saleType === 'goods' ? '35' : '39',
+          reverseChargeText: saleType === 'goods'
+            ? 'Omvänd skattskyldighet / Intra-Community supply of goods, exempt per Article 138, Council Directive 2006/112/EC'
+            : 'Omvänd skattskyldighet / Reverse charge - VAT to be accounted for by the recipient as per Article 196, Council Directive 2006/112/EC',
         }
       }
       // EU business without validated VAT number must be charged Swedish VAT
@@ -112,7 +119,7 @@ export function getVatRules(
       return {
         treatment: 'export',
         rate: 0,
-        momsRuta: '40',
+        momsRuta: saleType === 'goods' ? '36' : '40',
         reverseChargeText: 'Omsättning utanför EU, ML 10 kap.',
       }
 
@@ -195,15 +202,12 @@ export function getVatSummaryFromItems(
 }
 
 /**
- * Get moms ruta description
+ * Get the Swedish label for a momsdeklaration ruta (SKV 4700).
+ *
+ * Delegates to the canonical BOX_LABELS map in lib/vat/moms-box-mapping.ts.
+ * Ruta 05/06/07 are TAXABLE SALES BASES (momspliktig försäljning / uttag /
+ * vinstmarginalbeskattning) — output VAT lives on ruta 10/11/12.
  */
 export function getMomsRutaDescription(ruta: string): string {
-  const descriptions: Record<string, string> = {
-    '05': 'Utgående moms 25%',
-    '06': 'Utgående moms 12%',
-    '07': 'Utgående moms 6%',
-    '39': 'Försäljning av tjänster till annat EU-land',
-    '40': 'Export utanför EU',
-  }
-  return descriptions[ruta] || ruta
+  return BOX_LABELS[ruta as MomsBox] || ruta
 }

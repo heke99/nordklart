@@ -129,4 +129,25 @@ import '@/app/api/v1/webhook-deliveries/[id]/retry/route'
 // Phase 6 PR-3 — webhook secret rotation.
 import '@/app/api/v1/companies/[companyId]/webhooks/[id]/rotate-secret/route'
 
+// Batch 8-11 routes that existed at runtime but were missing from the
+// OpenAPI registry (docs/spec drift — now registered).
+import '@/app/api/v1/companies/[companyId]/tax-submissions/route'
+import '@/app/api/v1/companies/[companyId]/bankgiro-applications/route'
+import '@/app/api/v1/companies/[companyId]/year-end/projects/route'
+import '@/app/api/v1/companies/[companyId]/webhook-events/route'
+
+// Production-completion batch 7 — registry/API-surface completion.
+import '@/app/api/v1/companies/[companyId]/route'
+import '@/app/api/v1/companies/[companyId]/articles/route'
+import '@/app/api/v1/companies/[companyId]/articles/[id]/route'
+import '@/app/api/v1/companies/[companyId]/bank-connections/route'
+import '@/app/api/v1/companies/[companyId]/audit-logs/route'
+import '@/app/api/v1/companies/[companyId]/events/route'
+
+// Production-completion batch 9 — invoice financing/factoring.
+import '@/app/api/v1/companies/[companyId]/invoice-financing/applications/route'
+import '@/app/api/v1/companies/[companyId]/invoice-financing/applications/[id]/route'
+import '@/app/api/v1/companies/[companyId]/invoice-financing/applications/[id]/accept/route'
+import '@/app/api/v1/companies/[companyId]/invoice-financing/applications/[id]/cancel/route'
+
 export {}

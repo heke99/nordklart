@@ -52,6 +52,12 @@ export interface MigrationOptions {
   importSupplierInvoices?: boolean
   /** Auto-link imported supplier invoices to GL payment vouchers. Default true. */
   reconcileVouchers?: boolean
+  /**
+   * Dry run: fetch from the provider and run the full dedup/mapping pipeline,
+   * but write NOTHING. Result counters show what a real run would import and
+   * skip (incl. skip reasons) so the user can review the plan first.
+   */
+  dryRun?: boolean
   onProgress?: (progress: MigrationProgress) => void
 }
 
@@ -83,7 +89,12 @@ function getOrgNumberFromParty(party: PartyDto): string | null {
 
 export async function executeMigration(options: MigrationOptions): Promise<MigrationResults> {
   const { consentId, companyId, userId, supabase } = options
+  const dryRun = options.dryRun === true
   const results: MigrationResults = {}
+  // Synthetic-id counter for dry runs: downstream steps need ids in the
+  // customer/supplier maps to resolve invoices, but nothing is inserted.
+  let dryRunIdSeq = 0
+  const nextDryRunId = () => `dryrun-${++dryRunIdSeq}`
 
   // Resolve consent to get access token and provider
   const resolved = await resolveConsent(companyId, consentId)
@@ -121,7 +132,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           if (mapped.phone) updates.phone = mapped.phone
           if (mapped.email) updates.email = mapped.email
 
-          if (Object.keys(updates).length > 0) {
+          if (Object.keys(updates).length > 0 && !dryRun) {
             await supabase.from('company_settings').update(updates).eq('company_id', companyId)
           }
           results.companyInfo = { imported: true }
@@ -187,30 +198,42 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           pending.push({ dto: customer, row: mapCustomer(customer, userId, companyId) })
         }
 
-        for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
-          const rows = batch.map((p) => p.row)
-          const { data: inserted, error } = await supabase
-            .from('customers')
-            .insert(rows)
-            .select('id, org_number, name')
-
-          if (error) {
-            console.error(`[migration] Customer batch insert failed (${batch.length} rows):`, error.message)
-            skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
-            skipped += batch.length
-            continue
-          }
-
-          // PostgREST returns inserted rows in the same order as supplied,
-          // so we can pair them up by index to recover the provider id.
-          const insertedRows = inserted ?? []
-          for (let i = 0; i < batch.length && i < insertedRows.length; i++) {
-            const providerId = batch[i].dto.id
-            const newId = insertedRows[i].id
-            customerIdMap.set(providerId, newId)
-            if (insertedRows[i].org_number) orgNumberToCustomerId.set(insertedRows[i].org_number!, newId)
-            if (insertedRows[i].name) nameToCustomerId.set(insertedRows[i].name!, newId)
+        if (dryRun) {
+          for (const p of pending) {
+            const syntheticId = nextDryRunId()
+            customerIdMap.set(p.dto.id, syntheticId)
+            const orgNumber = p.row.org_number as string | null
+            const name = p.row.name as string | null
+            if (orgNumber) orgNumberToCustomerId.set(orgNumber, syntheticId)
+            if (name) nameToCustomerId.set(name, syntheticId)
             imported++
+          }
+        } else {
+          for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
+            const rows = batch.map((p) => p.row)
+            const { data: inserted, error } = await supabase
+              .from('customers')
+              .insert(rows)
+              .select('id, org_number, name')
+
+            if (error) {
+              console.error(`[migration] Customer batch insert failed (${batch.length} rows):`, error.message)
+              skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
+              skipped += batch.length
+              continue
+            }
+
+            // PostgREST returns inserted rows in the same order as supplied,
+            // so we can pair them up by index to recover the provider id.
+            const insertedRows = inserted ?? []
+            for (let i = 0; i < batch.length && i < insertedRows.length; i++) {
+              const providerId = batch[i].dto.id
+              const newId = insertedRows[i].id
+              customerIdMap.set(providerId, newId)
+              if (insertedRows[i].org_number) orgNumberToCustomerId.set(insertedRows[i].org_number!, newId)
+              if (insertedRows[i].name) nameToCustomerId.set(insertedRows[i].name!, newId)
+              imported++
+            }
           }
         }
 
@@ -268,28 +291,40 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           pending.push({ dto: supplier, row: mapSupplier(supplier, userId, companyId) })
         }
 
-        for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
-          const rows = batch.map((p) => p.row)
-          const { data: inserted, error } = await supabase
-            .from('suppliers')
-            .insert(rows)
-            .select('id, org_number, name')
-
-          if (error) {
-            console.error(`[migration] Supplier batch insert failed (${batch.length} rows):`, error.message)
-            skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
-            skipped += batch.length
-            continue
-          }
-
-          const insertedRows = inserted ?? []
-          for (let i = 0; i < batch.length && i < insertedRows.length; i++) {
-            const providerId = batch[i].dto.id
-            const newId = insertedRows[i].id
-            supplierIdMap.set(providerId, newId)
-            if (insertedRows[i].org_number) orgNumberToSupplierId.set(insertedRows[i].org_number!, newId)
-            if (insertedRows[i].name) nameToSupplierId.set(insertedRows[i].name!, newId)
+        if (dryRun) {
+          for (const p of pending) {
+            const syntheticId = nextDryRunId()
+            supplierIdMap.set(p.dto.id, syntheticId)
+            const orgNumber = p.row.org_number as string | null
+            const name = p.row.name as string | null
+            if (orgNumber) orgNumberToSupplierId.set(orgNumber, syntheticId)
+            if (name) nameToSupplierId.set(name, syntheticId)
             imported++
+          }
+        } else {
+          for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
+            const rows = batch.map((p) => p.row)
+            const { data: inserted, error } = await supabase
+              .from('suppliers')
+              .insert(rows)
+              .select('id, org_number, name')
+
+            if (error) {
+              console.error(`[migration] Supplier batch insert failed (${batch.length} rows):`, error.message)
+              skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
+              skipped += batch.length
+              continue
+            }
+
+            const insertedRows = inserted ?? []
+            for (let i = 0; i < batch.length && i < insertedRows.length; i++) {
+              const providerId = batch[i].dto.id
+              const newId = insertedRows[i].id
+              supplierIdMap.set(providerId, newId)
+              if (insertedRows[i].org_number) orgNumberToSupplierId.set(insertedRows[i].org_number!, newId)
+              if (insertedRows[i].name) nameToSupplierId.set(insertedRows[i].name!, newId)
+              imported++
+            }
           }
         }
 
@@ -385,7 +420,18 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         }
 
         // Phase B: insert any missing customer stubs in chunks.
-        if (stubByKey.size > 0) {
+        if (stubByKey.size > 0 && dryRun) {
+          for (const stub of stubByKey.values()) {
+            const syntheticId = nextDryRunId()
+            const orgNumber = stub.row.org_number as string | null
+            const name = stub.row.name as string | null
+            if (orgNumber) orgNumberToCustomerId.set(orgNumber, syntheticId)
+            if (name) nameToCustomerId.set(name, syntheticId)
+            for (const idx of stub.waitingInvoiceIndices) {
+              resolved[idx] = { ...resolved[idx], customerId: syntheticId }
+            }
+          }
+        } else if (stubByKey.size > 0) {
           const stubList = [...stubByKey.values()]
           for (const batch of chunk(stubList, INSERT_CHUNK_SIZE)) {
             const { data: inserted, error } = await supabase
@@ -430,39 +476,43 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         })
 
         // Phase C: chunk-insert invoices + their line items.
-        for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
-          const mappedBatch = batch.map((r) => ({
-            ...mapSalesInvoice(r.dto, userId, companyId, r.customerId),
-            dto: r.dto,
-          }))
+        if (dryRun) {
+          imported += ready.length
+        } else {
+          for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
+            const mappedBatch = batch.map((r) => ({
+              ...mapSalesInvoice(r.dto, userId, companyId, r.customerId),
+              dto: r.dto,
+            }))
 
-          const { data: insertedInvoices, error: invErr } = await supabase
-            .from('invoices')
-            .insert(mappedBatch.map((m) => m.invoice))
-            .select('id')
+            const { data: insertedInvoices, error: invErr } = await supabase
+              .from('invoices')
+              .insert(mappedBatch.map((m) => m.invoice))
+              .select('id')
 
-          if (invErr) {
-            console.error(`[migration] Sales invoice batch insert failed (${batch.length}):`, invErr.message)
-            skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
-            skipped += batch.length
-            continue
-          }
-
-          const invoiceRows = insertedInvoices ?? []
-          const allItems: Record<string, unknown>[] = []
-          for (let i = 0; i < mappedBatch.length && i < invoiceRows.length; i++) {
-            const invoiceId = invoiceRows[i].id
-            for (const item of mappedBatch[i].items) {
-              allItems.push({ ...item, invoice_id: invoiceId })
+            if (invErr) {
+              console.error(`[migration] Sales invoice batch insert failed (${batch.length}):`, invErr.message)
+              skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
+              skipped += batch.length
+              continue
             }
-            imported++
-          }
 
-          if (allItems.length > 0) {
-            for (const itemBatch of chunk(allItems, INSERT_CHUNK_SIZE)) {
-              const { error: itemErr } = await supabase.from('invoice_items').insert(itemBatch)
-              if (itemErr) {
-                console.error(`[migration] Sales invoice items insert failed (${itemBatch.length}):`, itemErr.message)
+            const invoiceRows = insertedInvoices ?? []
+            const allItems: Record<string, unknown>[] = []
+            for (let i = 0; i < mappedBatch.length && i < invoiceRows.length; i++) {
+              const invoiceId = invoiceRows[i].id
+              for (const item of mappedBatch[i].items) {
+                allItems.push({ ...item, invoice_id: invoiceId })
+              }
+              imported++
+            }
+
+            if (allItems.length > 0) {
+              for (const itemBatch of chunk(allItems, INSERT_CHUNK_SIZE)) {
+                const { error: itemErr } = await supabase.from('invoice_items').insert(itemBatch)
+                if (itemErr) {
+                  console.error(`[migration] Sales invoice items insert failed (${itemBatch.length}):`, itemErr.message)
+                }
               }
             }
           }
@@ -570,7 +620,18 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           stub.waitingInvoiceIndices.push(placeholderIndex)
         }
 
-        if (stubByKey.size > 0) {
+        if (stubByKey.size > 0 && dryRun) {
+          for (const stub of stubByKey.values()) {
+            const syntheticId = nextDryRunId()
+            const orgNumber = stub.row.org_number as string | null
+            const name = stub.row.name as string | null
+            if (orgNumber) orgNumberToSupplierId.set(orgNumber, syntheticId)
+            if (name) nameToSupplierId.set(name, syntheticId)
+            for (const idx of stub.waitingInvoiceIndices) {
+              resolved[idx] = { ...resolved[idx], supplierId: syntheticId }
+            }
+          }
+        } else if (stubByKey.size > 0) {
           const stubList = [...stubByKey.values()]
           for (const batch of chunk(stubList, INSERT_CHUNK_SIZE)) {
             const { data: inserted, error } = await supabase
@@ -622,42 +683,46 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           return true
         })
 
-        for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
-          const mappedBatch = batch.map((r) => {
-            const { invoice, items } = mapSupplierInvoice(r.dto, userId, companyId, r.supplierId)
-            invoice.arrival_number = nextArrivalNumber++
-            return { invoice, items, dto: r.dto }
-          })
+        if (dryRun) {
+          imported += ready.length
+        } else {
+          for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
+            const mappedBatch = batch.map((r) => {
+              const { invoice, items } = mapSupplierInvoice(r.dto, userId, companyId, r.supplierId)
+              invoice.arrival_number = nextArrivalNumber++
+              return { invoice, items, dto: r.dto }
+            })
 
-          const { data: insertedInvoices, error: invErr } = await supabase
-            .from('supplier_invoices')
-            .insert(mappedBatch.map((m) => m.invoice))
-            .select('id')
+            const { data: insertedInvoices, error: invErr } = await supabase
+              .from('supplier_invoices')
+              .insert(mappedBatch.map((m) => m.invoice))
+              .select('id')
 
-          if (invErr) {
-            console.error(`[migration] Supplier invoice batch insert failed (${batch.length}):`, invErr.message)
-            skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
-            skipped += batch.length
-            // Roll the counter back so we don't leave a huge gap on retry.
-            nextArrivalNumber -= batch.length
-            continue
-          }
-
-          const invoiceRows = insertedInvoices ?? []
-          const allItems: Record<string, unknown>[] = []
-          for (let i = 0; i < mappedBatch.length && i < invoiceRows.length; i++) {
-            const invoiceId = invoiceRows[i].id
-            for (const item of mappedBatch[i].items) {
-              allItems.push({ ...item, supplier_invoice_id: invoiceId })
+            if (invErr) {
+              console.error(`[migration] Supplier invoice batch insert failed (${batch.length}):`, invErr.message)
+              skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
+              skipped += batch.length
+              // Roll the counter back so we don't leave a huge gap on retry.
+              nextArrivalNumber -= batch.length
+              continue
             }
-            imported++
-          }
 
-          if (allItems.length > 0) {
-            for (const itemBatch of chunk(allItems, INSERT_CHUNK_SIZE)) {
-              const { error: itemErr } = await supabase.from('supplier_invoice_items').insert(itemBatch)
-              if (itemErr) {
-                console.error(`[migration] Supplier invoice items insert failed (${itemBatch.length}):`, itemErr.message)
+            const invoiceRows = insertedInvoices ?? []
+            const allItems: Record<string, unknown>[] = []
+            for (let i = 0; i < mappedBatch.length && i < invoiceRows.length; i++) {
+              const invoiceId = invoiceRows[i].id
+              for (const item of mappedBatch[i].items) {
+                allItems.push({ ...item, supplier_invoice_id: invoiceId })
+              }
+              imported++
+            }
+
+            if (allItems.length > 0) {
+              for (const itemBatch of chunk(allItems, INSERT_CHUNK_SIZE)) {
+                const { error: itemErr } = await supabase.from('supplier_invoice_items').insert(itemBatch)
+                if (itemErr) {
+                  console.error(`[migration] Supplier invoice items insert failed (${itemBatch.length}):`, itemErr.message)
+                }
               }
             }
           }
@@ -678,7 +743,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.reconcileVouchers !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Stämmer av betalningar mot verifikationer...', progress: 95 })
       try {
-        const recon = await reconcileSupplierInvoiceVouchers({ supabase, companyId, userId })
+        const recon = await reconcileSupplierInvoiceVouchers({ supabase, companyId, userId, dryRun })
         results.reconciliation = {
           scanned: recon.scanned,
           autoLinked: recon.autoLinked,

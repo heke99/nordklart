@@ -200,6 +200,23 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/bankgiro-applications': 'bankgiro:read',
   'POST /api/v1/companies/:companyId/bankgiro-applications': 'bankgiro:write',
   'GET /api/v1/companies/:companyId/webhook-events': 'webhook_events:read',
+
+  // Production-completion batch 7 — registry/API-surface completion.
+  'GET /api/v1/companies/:companyId/articles': 'articles:read',
+  'GET /api/v1/companies/:companyId/articles/:id': 'articles:read',
+  'POST /api/v1/companies/:companyId/articles': 'articles:write',
+  'PATCH /api/v1/companies/:companyId/articles/:id': 'articles:write',
+  'DELETE /api/v1/companies/:companyId/articles/:id': 'articles:write',
+  'GET /api/v1/companies/:companyId/bank-connections': 'bank:read',
+  'GET /api/v1/companies/:companyId/audit-logs': 'audit:read',
+  'GET /api/v1/companies/:companyId/documents': 'documents:read',
+
+  // Production-completion batch 9 — invoice financing/factoring.
+  'GET /api/v1/companies/:companyId/invoice-financing/applications': 'financing:read',
+  'GET /api/v1/companies/:companyId/invoice-financing/applications/:id': 'financing:read',
+  'POST /api/v1/companies/:companyId/invoice-financing/applications': 'financing:write',
+  'POST /api/v1/companies/:companyId/invoice-financing/applications/:id/accept': 'financing:write',
+  'POST /api/v1/companies/:companyId/invoice-financing/applications/:id/cancel': 'financing:write',
 }
 
 interface CompiledRoute {

@@ -133,6 +133,8 @@ export default function DashboardNav({
             { href: '/platform/skatteverket', label: 'Skatteverket', icon: Send },
             { href: '/platform/bankgiro', label: 'Bankgiro', icon: Banknote },
             { href: '/platform/api-webhooks', label: 'API & webhooks', icon: Plug },
+            { href: '/platform/integrations', label: 'Integrationer', icon: Plug },
+            { href: '/platform/company-operations', label: 'Företagsoperationer', icon: ClipboardCheck },
           ],
         },
       ]
@@ -186,7 +188,7 @@ export default function DashboardNav({
       {
         label: 'Inställningar',
         items: [
-          { href: '/bank-automation', label: 'Automatisering', icon: Sparkles, requiresCompany: true },
+          { href: '/automation', label: 'Automatisering', icon: Sparkles, requiresCompany: true },
           { href: '/chat', label: 'Bokföringsassistent', icon: Sparkles, requiresCompany: true },
           ...(canManageAgency ? [{ href: '/agency', label: 'Redovisningsbyrå', icon: Users } as NavItem] : []),
           ...(canManagePlatform ? [{ href: '/platform', label: 'Plattform', icon: ShieldCheck } as NavItem] : []),

@@ -73,7 +73,7 @@ export interface UserPreferences {
 
 // Nordklart platform and agency access model
 export type PlatformRole = 'platform_admin' | 'platform_support' | 'platform_auditor'
-export type AgencyRole = 'agency_owner' | 'agency_admin' | 'accountant' | 'reviewer' | 'read_only'
+export type AgencyRole = 'agency_owner' | 'agency_admin' | 'accountant' | 'payroll' | 'reviewer' | 'read_only'
 export type AgencyStatus = 'active' | 'paused' | 'archived'
 export type AgencyClientStatus = 'active' | 'paused' | 'ended'
 
@@ -191,6 +191,26 @@ export type VatTreatment =
   | 'export'            // Non-EU export (0%)
   | 'exempt'            // VAT exempt
 
+// Goods vs services discrimination for zero-rated sales. Determines the
+// revenue account + momsdeklaration ruta for reverse charge and export:
+//   goods:    3108 → ruta 35 (EU) / 3105 → ruta 36 (export)
+//   services: 3308 → ruta 39 (EU) / 3305 → ruta 40 (export)
+export type SaleType = 'goods' | 'services'
+
+// Why a purchase is reverse charged (ML 2023:200). Drives the basbelopp
+// account series on the buyer's side (momsdeklaration ruta 20-24):
+//   eu_goods      → 4515/4516/4517 (ruta 20, unionsinternt förvärv av varor)
+//   eu_services   → 4535/4536/4537 (ruta 21, tjänster EU huvudregeln)
+//   construction  → 4425/4426/4427 (ruta 24, byggtjänster ML 16 kap 13 §)
+//   electronics   → 4415/4416/4417 (ruta 23, ML 16 kap 17 §)
+//   import        → importmoms path (basis 4545-4547, output 2615/2625/2635)
+export type ReverseChargeType =
+  | 'eu_goods'
+  | 'eu_services'
+  | 'construction'
+  | 'electronics'
+  | 'import'
+
 // Accounting method (bokföringsmetod)
 export type AccountingMethod = 'accrual' | 'cash'
 
@@ -285,6 +305,12 @@ export interface CompanySettings {
   vat_number: string | null
   moms_period: MomsPeriod | null
   periodisk_sammanstallning_period: 'monthly' | 'quarterly'
+  // Blandad verksamhet — proportionell avdragsrätt för ingående moms
+  // (ML 13 kap 29 §). 100 = full avdragsrätt. Optional in TS for legacy
+  // fixtures; DB default is 100.
+  vat_deduction_percent?: number
+  // Frivillig beskattning för lokaluthyrning (ML 12 kap).
+  voluntary_vat_rental?: boolean
 
   // Tax contact (SKV-filings, periodisk sammanställning, AGI, etc.)
   tax_contact_name: string | null
@@ -621,6 +647,10 @@ export interface Customer {
   // Language for customer-facing invoice PDF and email
   language: 'sv' | 'en'
 
+  // Peppol participant identifier (elektronisk adress) för e-faktura,
+  // e.g. '0007:5566778899'. NULL = customer does not receive e-invoices.
+  peppol_id?: string | null
+
   // Payment
   default_payment_terms: number  // Days
 
@@ -738,6 +768,9 @@ export interface SupplierInvoice {
 
   vat_treatment: VatTreatment
   reverse_charge: boolean
+  // Classifies WHY the invoice is reverse charged (see ReverseChargeType).
+  // NULL keeps the legacy inference from the supplier's country.
+  reverse_charge_type?: ReverseChargeType | null
 
   payment_reference: string | null
   paid_at: string | null
@@ -934,6 +967,10 @@ export interface Invoice {
   vat_treatment: VatTreatment
   vat_rate: number
   moms_ruta: string | null  // For Swedish VAT reporting (05, 39, 40, etc.)
+
+  // Goods vs services (zero-rated sales routing — see SaleType). Optional in
+  // TypeScript for legacy fixtures; the DB default is 'services'.
+  sale_type?: SaleType
 
   // Reference
   your_reference: string | null
@@ -1142,6 +1179,7 @@ export interface CreateCustomerInput {
   personal_number?: string
   language?: 'sv' | 'en'
   default_payment_terms?: number
+  peppol_id?: string | null
   notes?: string
 }
 
@@ -2564,6 +2602,20 @@ export interface VatDeclaration {
       ruta32: number
     }
   }
+  // GL reconciliation: per-account 26xx balances for the period plus a check
+  // that every VAT account balance is captured by a ruta. `rutor_match_gl`
+  // is false when some 26xx account outside the ruta mapping carries a
+  // non-zero balance — the declaration would then NOT reflect the ledger.
+  reconciliation: VatDeclarationReconciliation
+}
+
+export interface VatDeclarationReconciliation {
+  /** Period balances per 26xx account (signed by the account's natural side). */
+  gl_balances: Record<string, number>
+  /** 26xx accounts with a non-zero period balance that map to NO ruta. */
+  unmapped_accounts: Array<{ account: string; balance: number }>
+  /** True when every 26xx GL balance in the period ties to a declaration ruta. */
+  rutor_match_gl: boolean
 }
 
 // VAT declaration request parameters

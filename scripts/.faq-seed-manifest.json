@@ -1,5 +1,5 @@
 {
-  "hash": "ff526b2777b699c4ceb53fc0115bee6e50fbfbb459e725cf443b17bc48007436",
-  "entryCount": 450,
-  "migration": "20260707120001_seed_assistant_faq_entries.sql"
+  "hash": "024e7a85f18c521a90e56ad5492f660c99ffe6185ffaa1837e9d3fb3d5c71ea7",
+  "entryCount": 460,
+  "migration": "20260713120001_seed_assistant_faq_entries.sql"
 }

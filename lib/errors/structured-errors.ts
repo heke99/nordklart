@@ -98,6 +98,12 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingen aktiv företagskontext. Välj ett företag och försök igen.',
     message_en: 'No active company context resolved for the request.',
   },
+  MAINTENANCE_READ_ONLY: {
+    httpStatus: 503,
+    message_sv:
+      'Systemet är tillfälligt i läsläge på grund av underhåll — ändringar kan inte sparas just nu. Försök igen om en stund.',
+    message_en: 'The system is temporarily read-only for maintenance. Try again shortly.',
+  },
   IDEMPOTENCY_KEY_REUSE: {
     httpStatus: 409,
     message_sv: 'Idempotensnyckeln har redan använts med en annan begäran.',
@@ -578,6 +584,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Momssatsen är inte tillåten för denna kundtyp.',
     message_en: 'The VAT rate is not allowed for this customer type.',
+  },
+  INVOICE_CREATE_RC_VAT_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturor med omvänd skattskyldighet kräver köparens momsregistreringsnummer (ML 17 kap 24 §). Lägg till kundens VAT-nummer på kundkortet och försök igen.',
+    message_en:
+      'Reverse-charge invoices require the buyer VAT registration number (ML 17 kap 24 §). Add the customer VAT number and try again.',
   },
   INVOICE_CREATE_ROT_RUT_VALIDATION: {
     httpStatus: 400,
@@ -1308,6 +1321,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Tokensubmissionen misslyckades.',
     message_en: 'Failed to submit provider token.',
   },
+  PROVIDER_TOKEN_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Leverantören avvisade uppgifterna. Kontrollera att API-nyckeln och företags-id:t är rätt inklistrade och försök igen.',
+    message_en:
+      'The provider rejected the credentials. Check the pasted API token and company id and try again.',
+  },
   PROVIDER_PREVIEW_FAILED: {
     httpStatus: 500,
     message_sv: 'Förhandsgranskningen från leverantören misslyckades.',
@@ -1323,10 +1343,12 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Inga räkenskapsår 2024–2026 hittades hos leverantören.',
     message_en: 'No fiscal years available for 2024–2026.',
   },
-  PROVIDER_SIE_ONLY_FORTNOX: {
+  PROVIDER_SIE_NOT_SUPPORTED: {
     httpStatus: 400,
-    message_sv: 'SIE-export stöds för närvarande endast för Fortnox.',
-    message_en: 'SIE export is currently only supported for Fortnox.',
+    message_sv:
+      'Leverantören kan inte exportera bokföringen (SIE) via API. Ladda upp en SIE-fil manuellt i stället.',
+    message_en:
+      'This provider does not serve its general ledger as SIE over the API. Upload a SIE file manually instead.',
   },
   PROVIDER_SIE_IMPORT_REQUIRED: {
     httpStatus: 409,
@@ -1531,6 +1553,41 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'En leverantörsfaktura med samma nummer finns redan.',
     message_en: 'A supplier invoice with that number already exists.',
+  },
+  PAYMENT_FILE_NO_INVOICES: {
+    httpStatus: 400,
+    message_sv: 'Inga betalbara leverantörsfakturor valda. Endast attesterade, obetalda fakturor i SEK kan ingå i en betalfil.',
+    message_en: 'No payable supplier invoices selected. Only approved, unpaid SEK invoices can be included in a payment file.',
+  },
+  PAYMENT_FILE_COMPANY_BANK_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Företaget saknar IBAN och BIC i inställningarna. Lägg till dem under Inställningar → Företag innan du skapar en betalfil.',
+    message_en: 'The company is missing IBAN and BIC in settings. Add them under Settings → Company before creating a payment file.',
+  },
+  PAYMENT_FILE_SUPPLIER_BANK_MISSING: {
+    httpStatus: 400,
+    message_sv: 'En eller flera leverantörer saknar betalningsuppgifter (bankgiro, plusgiro eller IBAN). Komplettera leverantörskorten först.',
+    message_en: 'One or more suppliers are missing payment details (bankgiro, plusgiro or IBAN). Complete the supplier records first.',
+  },
+  PAYMENT_FILE_CURRENCY_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv: 'Betalfiler stödjer endast fakturor i SEK. Utlandsbetalningar görs direkt i internetbanken.',
+    message_en: 'Payment files only support SEK invoices. Foreign payments are made directly in the bank portal.',
+  },
+  PAYMENT_INITIATION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Betalfilen kunde inte hittas.',
+    message_en: 'Payment initiation not found.',
+  },
+  PAIN002_PARSE_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Statusrapporten (pain.002) kunde inte tolkas. Kontrollera att rätt fil laddades upp.',
+    message_en: 'The pain.002 status report could not be parsed. Check that the correct file was uploaded.',
+  },
+  PAIN002_MESSAGE_ID_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Statusrapporten avser en annan betalfil (OrgnlMsgId matchar inte).',
+    message_en: 'The status report refers to a different payment file (OrgnlMsgId does not match).',
   },
   SI_CREATE_DUPLICATE_PAYMENT_REFERENCE: {
     httpStatus: 409,

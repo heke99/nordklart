@@ -25,22 +25,25 @@ export interface FaqEntry {
   updated_at: string
 }
 
-// The exact category distribution the dataset must satisfy (Batch 10 spec).
+// The exact category distribution the dataset must satisfy. The original
+// Batch 10 spec shipped 450 entries; the production-completion batches
+// appended coverage for new modules (fakturafinansiering, betalfiler,
+// BankID-samtycken, migrering Briox/BL, automationscentret, läsläge).
 export const FAQ_CATEGORY_DISTRIBUTION: Record<string, number> = {
   'Kom igång & onboarding': 35,
-  'Bankkoppling & transaktioner': 45,
+  'Bankkoppling & transaktioner': 46,
   'Bokföring, verifikationer & BAS-konton': 55,
   'Moms, VAT & periodisk sammanställning': 55,
-  'Fakturering, kundreskontra & Bankgiro': 45,
-  'Leverantörsfakturor, kvitton & OCR': 35,
+  'Fakturering, kundreskontra & Bankgiro': 48,
+  'Leverantörsfakturor, kvitton & OCR': 36,
   'Lön, AGI & F-skatt': 40,
   'Bokslut, årsredovisning, INK2, NE & SRU': 55,
-  'Import/export, SIE, API & webhooks': 35,
-  'Byrå, plattform, behörigheter & säkerhet': 35,
-  'Felsökning & vanliga fel': 15,
+  'Import/export, SIE, API & webhooks': 37,
+  'Byrå, plattform, behörigheter & säkerhet': 37,
+  'Felsökning & vanliga fel': 16,
 }
 
-export const FAQ_TOTAL_ENTRIES = 450
+export const FAQ_TOTAL_ENTRIES = 460
 
 const entries = faqData as FaqEntry[]
 

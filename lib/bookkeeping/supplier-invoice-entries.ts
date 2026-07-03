@@ -3,12 +3,19 @@ import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import {
   generateReverseChargeLines,
   generateReverseChargeBasisLines,
+  generateImportVatLines,
+  generateImportBasisLines,
   isReverseChargeBasisAccount,
   resolveReverseChargeRate,
 } from './vat-entries'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { resolveBookingAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import {
+  getVatDeductionPercent,
+  splitDeductibleVat,
+  buildNonDeductibleVatLine,
+} from '@/lib/vat/deduction'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -31,6 +38,48 @@ function buildSupplierDescription(
     ? `${prefix} ${invoiceNumber}, ${supplierName}`
     : `${prefix} ${invoiceNumber}`
   return suffix ? `${base} ${suffix}` : base
+}
+
+/**
+ * The expense account carrying the largest amount — where the non-deductible
+ * VAT portion books in a blandad verksamhet (IL 16 kap 16 §: the
+ * non-deductible VAT is part of the acquisition cost).
+ */
+function largestExpenseAccount(expenseByAccount: Map<string, number>): string {
+  let best = '6991'
+  let bestAmount = -Infinity
+  for (const [account, amount] of expenseByAccount) {
+    if (amount > bestAmount) {
+      best = account
+      bestAmount = amount
+    }
+  }
+  return best
+}
+
+/**
+ * Apply proportionell avdragsrätt (blandad verksamhet) to the input side of
+ * a fiktiv-moms/importmoms pair. The debit (input VAT) line is split into the
+ * deductible part (stays on 2645/2647) and a cost line for the rest. Output
+ * VAT is always reported in full — only the DEDUCTION is proportional.
+ */
+function applyInputVatDeduction(
+  vatLines: CreateJournalEntryLineInput[],
+  deductionPercent: number,
+  costAccount: string,
+): CreateJournalEntryLineInput[] {
+  if (deductionPercent >= 100) return vatLines
+  const out: CreateJournalEntryLineInput[] = []
+  for (const line of vatLines) {
+    if (line.debit_amount > 0) {
+      const { deductible, nonDeductible } = splitDeductibleVat(line.debit_amount, deductionPercent)
+      if (deductible > 0) out.push({ ...line, debit_amount: deductible })
+      if (nonDeductible > 0) out.push(buildNonDeductibleVatLine(nonDeductible, costAccount, deductionPercent))
+    } else {
+      out.push(line)
+    }
+  }
+  return out
 }
 
 /**
@@ -90,10 +139,35 @@ export async function createSupplierInvoiceRegistrationEntry(
   }
   lines.push(...debitLines)
 
-  const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
-  const isDomesticRC = supplierType === 'swedish_business' && invoice.reverse_charge
+  const rcType = invoice.reverse_charge_type ?? null
+  const isImport = invoice.reverse_charge && rcType === 'import'
+  const isReverseCharge = !isImport && (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
+  // Domestic RC input VAT books to 2647 — either inferred from a Swedish
+  // supplier or explicitly classified (byggtjänster/elektronik).
+  const isDomesticRC = invoice.reverse_charge &&
+    (supplierType === 'swedish_business' || rcType === 'construction' || rcType === 'electronics')
 
-  if (isReverseCharge) {
+  // Blandad verksamhet: proportionell avdragsrätt (ML 13 kap 29 §). 100 for
+  // ordinary companies — no behaviour change. Fetched only when VAT applies.
+  const vatDeductionPercent = (invoice.reverse_charge || invoice.vat_amount > 0)
+    ? await getVatDeductionPercent(supabase, companyId)
+    : 100
+  const nonDeductibleCostAccount = largestExpenseAccount(expenseByAccount)
+
+  if (isImport) {
+    // Import (införsel från land utanför EU): importmoms declared via the
+    // momsdeklaration (ruta 50 basis + ruta 60-62 output + ruta 48 input).
+    //   Debit 2645 / Credit 2615-2635 per rate, plus 4545-4547/4598 basis.
+    const baseByRate = groupBaseByRate(items, invoice.currency, invoice.exchange_rate)
+    for (const [rate, baseAmount] of baseByRate) {
+      if (rate > 0 && baseAmount > 0) {
+        lines.push(...applyInputVatDeduction(
+          generateImportVatLines(baseAmount, rate), vatDeductionPercent, nonDeductibleCostAccount,
+        ))
+        lines.push(...generateImportBasisLines(baseAmount, rate))
+      }
+    }
+  } else if (isReverseCharge) {
     // Reverse charge: fiktiv moms entries per rate group
     // Domestic (byggtjänster etc.): 2647/26x4, EU/non-EU: 2645/26x4
     //
@@ -121,25 +195,33 @@ export async function createSupplierInvoiceRegistrationEntry(
     for (const [rate, baseAmount] of baseByRate) {
       if (rate > 0 && baseAmount > 0) {
         const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
-        lines.push(...rcLines)
+        lines.push(...applyInputVatDeduction(rcLines, vatDeductionPercent, nonDeductibleCostAccount))
         const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
         if (nonBasisBase > 0) {
-          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
+          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType, rcType)
           lines.push(...basisLines)
         }
       }
     }
   } else if (invoice.vat_amount > 0) {
-    // Domestic standard: Debit ingående moms per rate group
+    // Domestic standard: Debit ingående moms per rate group. In a blandad
+    // verksamhet only the deductible share books to 2641 — the rest is a
+    // cost (IL 16 kap 16 §).
     const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
-        lines.push({
-          account_number: '2641',
-          debit_amount: Math.round(amount * 100) / 100,
-          credit_amount: 0,
-          line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
-        })
+        const { deductible, nonDeductible } = splitDeductibleVat(amount, vatDeductionPercent)
+        if (deductible > 0) {
+          lines.push({
+            account_number: '2641',
+            debit_amount: deductible,
+            credit_amount: 0,
+            line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
+          })
+        }
+        if (nonDeductible > 0) {
+          lines.push(buildNonDeductibleVatLine(nonDeductible, nonDeductibleCostAccount, vatDeductionPercent))
+        }
       }
     }
   }
@@ -341,10 +423,30 @@ export async function createSupplierInvoiceCashEntry(
     expenseLines.push(line)
   }
 
-  const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
-  const isDomesticRC = supplierType === 'swedish_business' && invoice.reverse_charge
+  const rcType = invoice.reverse_charge_type ?? null
+  const isImport = invoice.reverse_charge && rcType === 'import'
+  const isReverseCharge = !isImport && (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
+  const isDomesticRC = invoice.reverse_charge &&
+    (supplierType === 'swedish_business' || rcType === 'construction' || rcType === 'electronics')
 
-  if (isReverseCharge) {
+  // Blandad verksamhet: proportionell avdragsrätt (ML 13 kap 29 §).
+  const vatDeductionPercent = (invoice.reverse_charge || invoice.vat_amount > 0)
+    ? await getVatDeductionPercent(supabase, companyId)
+    : 100
+  const nonDeductibleCostAccount = largestExpenseAccount(expenseByAccount)
+
+  if (isImport) {
+    // Import: importmoms via momsdeklaration (ruta 50 + 60-62 + 48).
+    const baseByRate = groupBaseByRate(items, invoice.currency, effectiveRate)
+    for (const [rate, baseAmount] of baseByRate) {
+      if (rate > 0 && baseAmount > 0) {
+        lines.push(...applyInputVatDeduction(
+          generateImportVatLines(baseAmount, rate), vatDeductionPercent, nonDeductibleCostAccount,
+        ))
+        lines.push(...generateImportBasisLines(baseAmount, rate))
+      }
+    }
+  } else if (isReverseCharge) {
     // Reverse charge: fiktiv moms entries per rate group
     // Domestic (byggtjänster etc.): 2647/26x4, EU/non-EU: 2645/26x4
     //
@@ -364,10 +466,10 @@ export async function createSupplierInvoiceCashEntry(
     for (const [rate, baseAmount] of baseByRate) {
       if (rate > 0 && baseAmount > 0) {
         const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
-        lines.push(...rcLines)
+        lines.push(...applyInputVatDeduction(rcLines, vatDeductionPercent, nonDeductibleCostAccount))
         const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
         if (nonBasisBase > 0) {
-          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
+          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType, rcType)
           lines.push(...basisLines)
         }
       }
@@ -375,15 +477,22 @@ export async function createSupplierInvoiceCashEntry(
   } else if (invoice.vat_amount > 0) {
     // Domestic standard: Debit ingående moms per rate group (at the payment-
     // date rate when settling a foreign invoice — see effectiveRate above).
+    // Blandad verksamhet: only the deductible share books to 2641.
     const vatByRate = groupVatByRate(items, invoice.currency, effectiveRate)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
-        lines.push({
-          account_number: '2641',
-          debit_amount: Math.round(amount * 100) / 100,
-          credit_amount: 0,
-          line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
-        })
+        const { deductible, nonDeductible } = splitDeductibleVat(amount, vatDeductionPercent)
+        if (deductible > 0) {
+          lines.push({
+            account_number: '2641',
+            debit_amount: deductible,
+            credit_amount: 0,
+            line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
+          })
+        }
+        if (nonDeductible > 0) {
+          lines.push(buildNonDeductibleVatLine(nonDeductible, nonDeductibleCostAccount, vatDeductionPercent))
+        }
       }
     }
   }
@@ -480,17 +589,26 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
     })
   }
 
-  // Debit: Ingående moms per rate group (mixed-rate kvitto support)
+  // Debit: Ingående moms per rate group (mixed-rate kvitto support).
+  // Blandad verksamhet: only the deductible share books to 2641.
   if (invoice.vat_amount > 0) {
+    const vatDeductionPercent = await getVatDeductionPercent(supabase, companyId)
+    const nonDeductibleCostAccount = largestExpenseAccount(expenseByAccount)
     const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
-        lines.push({
-          account_number: '2641',
-          debit_amount: Math.round(amount * 100) / 100,
-          credit_amount: 0,
-          line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
-        })
+        const { deductible, nonDeductible } = splitDeductibleVat(amount, vatDeductionPercent)
+        if (deductible > 0) {
+          lines.push({
+            account_number: '2641',
+            debit_amount: deductible,
+            credit_amount: 0,
+            line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
+          })
+        }
+        if (nonDeductible > 0) {
+          lines.push(buildNonDeductibleVatLine(nonDeductible, nonDeductibleCostAccount, vatDeductionPercent))
+        }
       }
     }
   }
@@ -560,10 +678,28 @@ export async function createSupplierCreditNoteEntry(
     })
   }
 
-  const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && creditNote.reverse_charge
-  const isDomesticRC = supplierType === 'swedish_business' && creditNote.reverse_charge
+  const rcType = creditNote.reverse_charge_type ?? null
+  const isImport = creditNote.reverse_charge && rcType === 'import'
+  const isReverseCharge = !isImport && (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && creditNote.reverse_charge
+  const isDomesticRC = creditNote.reverse_charge &&
+    (supplierType === 'swedish_business' || rcType === 'construction' || rcType === 'electronics')
 
-  if (isReverseCharge) {
+  if (isImport) {
+    // Reverse the importmoms pair + basis lines (swap debit/credit).
+    const baseByRate = groupBaseByRate(items, creditNote.currency, creditNote.exchange_rate, true)
+    for (const [rate, baseAmount] of baseByRate) {
+      if (rate > 0 && baseAmount > 0) {
+        for (const line of [...generateImportVatLines(baseAmount, rate), ...generateImportBasisLines(baseAmount, rate)]) {
+          lines.push({
+            account_number: line.account_number,
+            debit_amount: line.credit_amount,
+            credit_amount: line.debit_amount,
+            line_description: line.line_description,
+          })
+        }
+      }
+    }
+  } else if (isReverseCharge) {
     // Reverse the fiktiv moms per rate group (swap debit/credit from registration)
     // Input VAT account: 2647 for domestic RC, 2645 for EU/non-EU
     // Drive iteration off the basis — fiktiv moms is always statutory base × rate.
@@ -604,7 +740,7 @@ export async function createSupplierCreditNoteEntry(
           // credit note would only undo the VAT amounts (ruta 30-32 + 48) but
           // leave ruta 20-24 still showing the original basbelopp — exactly
           // the same FK004-style mismatch the registration fix prevents.
-          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
+          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType, rcType)
           // Swap debit/credit on every basis line so the credit note nets
           // against the original registration verifikat.
           for (const line of basisLines) {

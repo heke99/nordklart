@@ -21,6 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
+import { eventBus } from '@/lib/events/bus'
 
 export type OperationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
@@ -106,7 +107,7 @@ export async function completeOperation(
   args: { id: string; result: unknown; finalProgress?: OperationProgress },
   log: Logger,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('operations')
     .update({
       status: 'succeeded',
@@ -115,8 +116,30 @@ export async function completeOperation(
       ...(args.finalProgress ? { progress: args.finalProgress } : {}),
     })
     .eq('id', args.id)
+    .select('company_id, user_id, operation_type')
+    .maybeSingle()
   if (error) {
     log.warn('completeOperation update failed', { operationId: args.id, errorCode: error.code })
+    return
+  }
+
+  // The 202 envelope promises `webhook_event: 'operation.completed'` — emit
+  // it so subscribers can stop polling. Best-effort.
+  const row = data as { company_id: string; user_id: string; operation_type: string } | null
+  if (row) {
+    try {
+      await eventBus.emit({
+        type: 'operation.completed',
+        payload: {
+          operationId: args.id,
+          operationType: row.operation_type,
+          userId: row.user_id,
+          companyId: row.company_id,
+        },
+      })
+    } catch (err) {
+      log.warn('operation.completed emit failed', { operationId: args.id, error: (err as Error).message })
+    }
   }
 }
 
@@ -134,7 +157,7 @@ export async function failOperation(
   },
   log: Logger,
 ): Promise<void> {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('operations')
     .update({
       status: 'failed',
@@ -143,8 +166,30 @@ export async function failOperation(
       ...(args.finalProgress ? { progress: args.finalProgress } : {}),
     })
     .eq('id', args.id)
+    .select('company_id, user_id, operation_type')
+    .maybeSingle()
   if (error) {
     log.warn('failOperation update failed', { operationId: args.id, errorCode: error.code })
+    return
+  }
+
+  const row = data as { company_id: string; user_id: string; operation_type: string } | null
+  if (row) {
+    try {
+      await eventBus.emit({
+        type: 'operation.failed',
+        payload: {
+          operationId: args.id,
+          operationType: row.operation_type,
+          errorCode: args.error.code ?? null,
+          errorMessage: args.error.message ?? null,
+          userId: row.user_id,
+          companyId: row.company_id,
+        },
+      })
+    } catch (err) {
+      log.warn('operation.failed emit failed', { operationId: args.id, error: (err as Error).message })
+    }
   }
 }
 

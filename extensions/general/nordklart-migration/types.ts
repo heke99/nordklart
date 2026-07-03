@@ -34,12 +34,16 @@ export type { CustomerType as NordklartCustomerType } from '@/lib/providers/dto'
 
 export type NordklartProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden'
 
-export const NORDKLART_PROVIDERS: { id: NordklartProvider; name: string; authType: 'oauth' | 'token' }[] = [
-  { id: 'fortnox', name: 'Fortnox', authType: 'oauth' },
-  { id: 'visma', name: 'Visma eEkonomi', authType: 'oauth' },
-  { id: 'bokio', name: 'Bokio', authType: 'token' },
-  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token' },
-  { id: 'briox', name: 'Briox', authType: 'token' },
+// `sieViaApi`: the provider serves its general ledger as SIE over the API, so
+// the wizard imports bookkeeping automatically — no manual SIE upload needed.
+// Mirrored in NordklartMigrationWorkspace.tsx (deliberate duplication: core code
+// must not import from @/extensions/ — CI enforces it). Keep both in sync.
+export const NORDKLART_PROVIDERS: { id: NordklartProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
+  { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
+  { id: 'visma', name: 'Visma eEkonomi', authType: 'oauth', sieViaApi: false },
+  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
+  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
+  { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
 ]
 
 // ── Migration state ─────────────────────────────────────────────────

@@ -8,9 +8,10 @@ import { Button } from '@/components/ui/button'
 import { DataList, DataListEmpty } from '@/components/ui/data-list'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Plus, FileInput, Lock } from 'lucide-react'
+import { Plus, FileInput, Lock, FileDown } from 'lucide-react'
 import Link from 'next/link'
 import { PageHeader } from '@/components/ui/page-header'
+import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import type { SupplierInvoice } from '@/types'
@@ -44,9 +45,11 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
   const { canWrite } = useCanWrite()
+  const { toast } = useToast()
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('all')
+  const [isGeneratingFile, setIsGeneratingFile] = useState(false)
 
   async function fetchInvoices() {
     setIsLoading(true)
@@ -70,18 +73,80 @@ export default function SupplierInvoicesPage() {
     }
   })
 
+  // Payable SEK invoices — the set the pain.001 payment file covers.
+  const payableInvoices = invoices.filter(
+    (inv) => (inv.status === 'approved' || inv.status === 'overdue' || inv.status === 'partially_paid')
+      && inv.remaining_amount > 0
+      && inv.currency === 'SEK',
+  )
+
+  async function handleGeneratePaymentFile() {
+    if (payableInvoices.length === 0) return
+    setIsGeneratingFile(true)
+    try {
+      const res = await fetch('/api/supplier-invoices/payment-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          supplier_invoice_ids: payableInvoices.map((inv) => inv.id),
+          payment_date: new Date().toISOString().slice(0, 10),
+        }),
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({
+          title: t('payment_file_failed'),
+          description: result?.error?.message || result?.error || '',
+          variant: 'destructive',
+        })
+        return
+      }
+      // Trigger the download of the generated pain.001 file.
+      const blob = new Blob([result.data.file.content], { type: 'application/xml' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = result.data.file.filename
+      a.click()
+      URL.revokeObjectURL(url)
+      toast({
+        title: t('payment_file_created'),
+        description: t('payment_file_created_description', {
+          count: result.data.initiation.payment_count,
+        }),
+      })
+    } catch {
+      toast({ title: t('payment_file_failed'), variant: 'destructive' })
+    } finally {
+      setIsGeneratingFile(false)
+    }
+  }
+
   return (
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
         action={
           canWrite ? (
-            <Link href="/supplier-invoices/new">
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('register_invoice')}
-              </Button>
-            </Link>
+            <div className="flex items-center gap-2">
+              {payableInvoices.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={handleGeneratePaymentFile}
+                  disabled={isGeneratingFile}
+                  title={t('payment_file_tooltip')}
+                >
+                  <FileDown className="mr-2 h-4 w-4" />
+                  {t('payment_file_button', { count: payableInvoices.length })}
+                </Button>
+              )}
+              <Link href="/supplier-invoices/new">
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  {t('register_invoice')}
+                </Button>
+              </Link>
+            </div>
           ) : (
             <Button
               disabled

@@ -4048,7 +4048,7 @@
       "Fakturautskick?"
     ],
     "short_answer_sv": "Skicka via e-post direkt från systemet (PDF bifogas), eller ladda ner och skicka själv — statusen blir \"skickad\".",
-    "answer_sv": "Knappen Skicka mejlar fakturan som PDF till kundens e-post med spårning; alternativt laddar du ner PDF:en och markerar fakturan som skickad. I båda fallen bokförs fakturan (Dr 1510 / Kr 30xx + moms under fakturametoden) och hamnar i kundreskontran. E-faktura via Peppol finns för kunder som kräver det.",
+    "answer_sv": "Knappen Skicka mejlar fakturan som PDF till kundens e-post med spårning; alternativt laddar du ner PDF:en och markerar fakturan som skickad. I båda fallen bokförs fakturan (Dr 1510 / Kr 30xx + moms under fakturametoden) och hamnar i kundreskontran. E-faktura via Peppol är förberett för kunder som kräver det — skarp avsändning kräver avtal med en Peppol-accesspunkt.",
     "sources": [],
     "required_permissions": [],
     "related_routes": [
@@ -4424,8 +4424,8 @@
       "Kommunen kräver e-faktura?",
       "Peppol BIS Billing?"
     ],
-    "short_answer_sv": "Ja — offentliga kunder ska ha e-faktura (Peppol BIS Billing 3.0); aktivera e-faktura på kundkortet.",
-    "answer_sv": "Sedan 2019 måste leverantörer till offentlig sektor skicka e-faktura (lag 2018:1277). Nordklart skickar Peppol BIS Billing 3.0 till kundens Peppol-adress (elektronisk adress anges på kundkortet). Fakturans innehållskrav (F-skatt, bankgiro enligt svenska CIUS-regler) valideras innan avsändning.",
+    "short_answer_sv": "Nordklart är tekniskt förberett för Peppol BIS Billing 3.0 — skarp avsändning kräver ett avtal med en Peppol-accesspunkt.",
+    "answer_sv": "Sedan 2019 måste leverantörer till offentlig sektor skicka e-faktura (lag 2018:1277). Nordklart genererar och validerar Peppol BIS Billing 3.0 (inkl. svenska CIUS-regler som F-skatt-text och bankgiro) och skickar till kundens Peppol-adress som anges på kundkortet. Observera: skarp avsändning kräver ett avtal med en certifierad Peppol-accesspunkt (t.ex. Pagero, InExchange eller Qvalia) — kontakta supporten för att aktivera. Tills dess skickas fakturan som PDF via e-post, och e-fakturaflödet kan testas i sandbox-läge.",
     "sources": [
       "Lag (2018:1277) om elektroniska fakturor"
     ],
@@ -4909,7 +4909,7 @@
       "Fel e-postadress på fakturan?"
     ],
     "short_answer_sv": "Kontrollera adressen på kundkortet och skicka om — utskickshistoriken visar leveransstatus.",
-    "answer_sv": "Fakturans historik visar om e-posten levererades eller studsade. Vid studs: rätta kundens e-postadress och använd Skicka igen. Fakturan räknas som utställd från första skicket (bokföringen påverkas inte). För viktiga kunder kan du aktivera e-faktura via Peppol som kvitterar mottagning.",
+    "answer_sv": "Fakturans historik visar om e-posten levererades eller studsade. Vid studs: rätta kundens e-postadress och använd Skicka igen. Fakturan räknas som utställd från första skicket (bokföringen påverkas inte). För viktiga kunder kan e-faktura via Peppol (som kvitterar mottagning) användas när ett accesspunktsavtal är aktiverat.",
     "sources": [],
     "required_permissions": [],
     "related_routes": [
@@ -9638,5 +9638,220 @@
     "risk_level": "low",
     "escalation": null,
     "updated_at": "2026-07-02T00:00:00Z"
+  },
+  {
+    "id": "faktura-046",
+    "category": "Fakturering, kundreskontra & Bankgiro",
+    "intent": "erbjud_fakturafinansiering",
+    "user_questions": [
+      "Hur säljer jag en faktura för att få betalt direkt?",
+      "Kan jag belåna mina kundfakturor?",
+      "Hur fungerar fakturafinansiering i Nordklart?",
+      "Var hittar jag factoring?"
+    ],
+    "short_answer_sv": "Öppna en skickad faktura och välj Erbjud fakturafinansiering — systemet kontrollerar villkoren och hämtar ett erbjudande.",
+    "answer_sv": "På en skickad, obetald faktura i SEK finns knappen Erbjud fakturafinansiering. Nordklart kontrollerar först villkoren (fakturan måste vara helt obetald, B2B med organisationsnummer, utan ROT/RUT och inom finansiärens beloppsgränser) och skickar sedan ansökan till finansieringspartnern. Får du ett erbjudande ser du utbetalningsbelopp och avgift innan du accepterar. Observera: fakturafinansiering i produktion kräver ett externt avtal med en finansieringspartner — utan avtal kan hela flödet testas mot sandbox-finansiären.",
+    "sources": [],
+    "required_permissions": [
+      "write"
+    ],
+    "related_routes": [
+      "/invoices"
+    ],
+    "risk_level": "medium",
+    "escalation": "Kräver externt avtal med finansieringspartner för produktion.",
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "faktura-047",
+    "category": "Fakturering, kundreskontra & Bankgiro",
+    "intent": "fakturafinansiering_bokforing",
+    "user_questions": [
+      "Hur bokförs en såld faktura?",
+      "Vad händer i bokföringen när jag accepterar ett finansieringserbjudande?",
+      "Vilka konton används vid factoring?"
+    ],
+    "short_answer_sv": "Vid accept bokförs utbetalningen automatiskt: utan regress säljs fordran (1930/6064 mot 1510), med regress omklassificeras den till belånad fordran (1512) mot factoringkredit (2330).",
+    "answer_sv": "När du accepterar erbjudandet betalar finansiären ut och Nordklart bokför automatiskt. Vid försäljning utan regress: debet 1930 Företagskonto (utbetalningen) och 6064 Factoringavgifter (avgiften), kredit 1510 Kundfordringar (hela fakturabeloppet). Vid belåning med regress: fordran omklassificeras 1510 → 1512 Belånade kundfordringar och krediten bokförs på 2330 Factoringkredit. Momsen påverkas inte — finansieringsavgiften är en momsfri finansiell tjänst och fakturans utgående moms redovisades redan när fakturan ställdes ut. Verifikationen är länkad från ansökan och kan alltid granskas.",
+    "sources": [],
+    "required_permissions": [
+      "write"
+    ],
+    "related_routes": [
+      "/invoices",
+      "/bookkeeping"
+    ],
+    "risk_level": "medium",
+    "escalation": null,
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "faktura-048",
+    "category": "Fakturering, kundreskontra & Bankgiro",
+    "intent": "fakturafinansiering_ej_berattigad",
+    "user_questions": [
+      "Varför kan min faktura inte finansieras?",
+      "Fakturan uppfyller inte villkoren för finansiering — vad betyder det?",
+      "Vilka krav måste en faktura uppfylla för att kunna säljas?"
+    ],
+    "short_answer_sv": "Dialogen listar exakt vilka hinder som finns — vanligast är att fakturan är delbetald, i fel valuta, B2C eller har ROT/RUT-avdrag.",
+    "answer_sv": "Finansieringsdialogen visar varje hinder med en tydlig förklaring: fakturan måste vara skickad och helt obetald, i SEK, till en företagskund (B2B) med organisationsnummer, utan ROT/RUT-avdrag (Skatteverket betalar en del av beloppet), inom finansiärens min-/maxbelopp och med förfallodatum inom acceptabelt fönster (inte mer än 90 dagar fram och inte förfallen sedan mer än 30 dagar). Åtgärda hindren — t.ex. komplettera kundens organisationsnummer på kundkortet — och försök igen.",
+    "sources": [],
+    "required_permissions": [],
+    "related_routes": [
+      "/invoices",
+      "/customers"
+    ],
+    "risk_level": "low",
+    "escalation": null,
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "lev-036",
+    "category": "Leverantörsfakturor, kvitton & OCR",
+    "intent": "skapa_betalfil",
+    "user_questions": [
+      "Hur skapar jag en betalfil för leverantörsfakturor?",
+      "Kan Nordklart skapa pain.001-filer?",
+      "Hur betalar jag flera leverantörsfakturor samtidigt via banken?"
+    ],
+    "short_answer_sv": "Markera attesterade leverantörsfakturor och välj Skapa betalfil — du får en pain.001-fil (ISO 20022) att ladda upp i internetbanken.",
+    "answer_sv": "På leverantörsfakturasidan markerar du fakturor som är attesterade och obetalda och klickar Skapa betalfil. Nordklart genererar en pain.001-fil (ISO 20022) med Bankgiro-, Plusgiro- eller IBAN-uppgifter och OCR/meddelande per faktura. Filen laddas upp i din internetbank som hanterar själva betalningen. När banken svarar med en pain.002-statusrapport kan du ladda upp den i Nordklart så uppdateras betalstatusen per faktura. Betalfilen kräver att företagets och leverantörernas bankuppgifter är kompletta — saknas något får du ett tydligt felmeddelande.",
+    "sources": [],
+    "required_permissions": [
+      "write"
+    ],
+    "related_routes": [
+      "/supplier-invoices"
+    ],
+    "risk_level": "medium",
+    "escalation": null,
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "bank-046",
+    "category": "Bankkoppling & transaktioner",
+    "intent": "bankmedgivande_utgatt",
+    "user_questions": [
+      "Min bankkoppling har slutat synka — varför?",
+      "Vad betyder att bankmedgivandet har gått ut?",
+      "Hur förnyar jag bankkopplingen?"
+    ],
+    "short_answer_sv": "PSD2-medgivanden gäller en begränsad tid — förnya kopplingen under Inställningar → Bank (PSD2) så fortsätter synken där den slutade.",
+    "answer_sv": "Bankmedgivanden enligt PSD2 gäller max 180 dagar, därefter måste du godkänna kopplingen på nytt hos banken. När medgivandet gått ut visar Nordklart status 'medgivande krävs' och automatsynken pausas. Gå till Inställningar → Bank (PSD2) och förnya kopplingen — transaktionshistoriken finns kvar och synken fortsätter där den slutade utan dubbletter. Automationscentret (/automation) visar också en rekommenderad åtgärd när ett medgivande behöver förnyas.",
+    "sources": [],
+    "required_permissions": [
+      "write"
+    ],
+    "related_routes": [
+      "/settings/banking",
+      "/automation"
+    ],
+    "risk_level": "low",
+    "escalation": null,
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "byra-036",
+    "category": "Byrå, plattform, behörigheter & säkerhet",
+    "intent": "bankid_samtycken",
+    "user_questions": [
+      "Var ser jag vilka samtycken jag signerat med BankID?",
+      "Hur återkallar jag ett BankID-samtycke?",
+      "Vad används BankID-signering till i Nordklart?"
+    ],
+    "short_answer_sv": "Under Inställningar → BankID listas alla signerade samtycken, och de kan återkallas där det är rättsligt möjligt.",
+    "answer_sv": "BankID används för att signera samtycken — t.ex. att dela bokföringsdata med en redovisningsbyrå, koppla banken, ansöka om fakturafinansiering eller signera underlag för årsredovisningen. Varje signering sparas med tidsstämpel, maskerat personnummer och signaturreferens och syns under Inställningar → BankID. Där kan du också återkalla samtycken där det är rättsligt möjligt — återkallelsen granskningsloggas. Observera att BankID-signering i produktionsmiljö kräver att plattformen har avtal med en identitetsleverantör; i testläge används en simulerad signering.",
+    "sources": [],
+    "required_permissions": [],
+    "related_routes": [
+      "/settings/bankid"
+    ],
+    "risk_level": "low",
+    "escalation": null,
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "byra-037",
+    "category": "Byrå, plattform, behörigheter & säkerhet",
+    "intent": "byra_lonekonsult_roll",
+    "user_questions": [
+      "Kan jag ge en lönekonsult åtkomst till bara lönearbetet?",
+      "Vilka roller finns för byråpersonal?",
+      "Vad kan rollen payroll göra?"
+    ],
+    "short_answer_sv": "Byråroller är byråägare, byråadmin, redovisningskonsult, lönekonsult (payroll), granskare och läsbehörighet — lönekonsulten kan arbeta i klientbolagen men inte administrera byrån.",
+    "answer_sv": "När du bjuder in byråpersonal väljer du roll: byråägare och byråadmin administrerar byrån och klientkopplingarna, redovisningskonsult och lönekonsult (payroll) arbetar i klientbolagen med skrivbehörighet, granskare kan granska men inte bokföra, och läsbehörighet ser allt utan att kunna ändra. Lönekonsulten kan skapa lönekörningar, generera AGI och bokföra löner i klientbolagen men kan inte hantera byråns inställningar eller klientlista.",
+    "sources": [],
+    "required_permissions": [
+      "admin"
+    ],
+    "related_routes": [
+      "/agency"
+    ],
+    "risk_level": "low",
+    "escalation": null,
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "import-036",
+    "category": "Import/export, SIE, API & webhooks",
+    "intent": "migrera_briox_bl",
+    "user_questions": [
+      "Kan jag migrera från Briox till Nordklart?",
+      "Hur flyttar jag bokföringen från Björn Lundén?",
+      "Hämtar Nordklart bokföringen automatiskt från mitt gamla system?"
+    ],
+    "short_answer_sv": "Ja — Fortnox, Briox och Björn Lundén exporterar bokföringen (SIE) direkt via API:et, så hela migreringen sker automatiskt utan manuell filuppladdning.",
+    "answer_sv": "Under Systemmigration ansluter du ditt gamla system. För Fortnox, Briox och Björn Lundén hämtar Nordklart SIE-exporten (kontoplan, ingående balanser och verifikationer) direkt via API:et för de senaste räkenskapsåren, plus kunder, leverantörer och fakturor. För Visma och Bokio hämtas kunder/leverantörer/fakturor via API medan bokföringen laddas upp som SIE-fil först. Innan importen kan du testköra utan att importera — då ser du exakt vad som skulle importeras och vad som hoppas över som dubbletter. Briox ansluts med applikationstoken + konto-ID, Björn Lundén med företagets User-Key.",
+    "sources": [],
+    "required_permissions": [
+      "write"
+    ],
+    "related_routes": [
+      "/extensions"
+    ],
+    "risk_level": "medium",
+    "escalation": null,
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "import-037",
+    "category": "Import/export, SIE, API & webhooks",
+    "intent": "automationscenter",
+    "user_questions": [
+      "Var ser jag allt systemet gör automatiskt?",
+      "Finns det en översikt över automatisering och integrationer?",
+      "Vad är Automationscentret?"
+    ],
+    "short_answer_sv": "Automationscentret (/automation) samlar banksynk, granskningskö, deklarationsstatus, integrationer och misslyckade jobb med rekommenderade åtgärder.",
+    "answer_sv": "Automationscentret på /automation visar vad systemet gör åt dig och vad det behöver: bankkopplingens status och senaste synk, hur mycket som bokförts automatiskt, vad som väntar på granskning, Skatteverket-status per period, Bankgiro/Peppol/finansieringsstatus samt misslyckade bakgrundsjobb och webhook-leveranser. Överst listas rekommenderade åtgärder i prioritetsordning — t.ex. förnya bankmedgivande eller granska osäkra transaktioner. Företagets integrationsstatus finns även under Inställningar → Integrationer.",
+    "sources": [],
+    "required_permissions": [],
+    "related_routes": [
+      "/automation",
+      "/settings/integrations"
+    ],
+    "risk_level": "low",
+    "escalation": null,
+    "updated_at": "2026-07-03T00:00:00Z"
+  },
+  {
+    "id": "fel-016",
+    "category": "Felsökning & vanliga fel",
+    "intent": "lasläge_underhall",
+    "user_questions": [
+      "Varför kan jag inte spara — systemet säger läsläge?",
+      "Vad betyder att systemet är i läsläge på grund av underhåll?",
+      "Underhållsläge — när kan jag bokföra igen?"
+    ],
+    "short_answer_sv": "Vid underhåll kan systemet tillfälligt sättas i läsläge — allt går att läsa men ändringar sparas inte förrän underhållet är klart.",
+    "answer_sv": "När driftteamet utför underhåll som kräver att inga ändringar sker (t.ex. databasunderhåll) sätts systemet i läsläge. Du ser en banner i gränssnittet och alla försök att spara får ett tydligt felmeddelande. Ingen data går förlorad — vänta tills bannern försvinner och försök igen. Pågår läsläget ovanligt länge, kontakta supporten.",
+    "sources": [],
+    "required_permissions": [],
+    "related_routes": [],
+    "risk_level": "low",
+    "escalation": "Kontakta supporten om läsläget kvarstår längre än aviserat.",
+    "updated_at": "2026-07-03T00:00:00Z"
   }
 ]

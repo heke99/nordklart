@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { VatPeriodType } from '@/types'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
+import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { rutorToMomsuppgift, formatRedovisare, formatRedovisningsperiod } from './mappers'
 import type { SkatteverketMomsuppgift } from '../types'
 
@@ -82,6 +83,50 @@ export async function buildMomsuppgift(
   const momsuppgift = rutorToMomsuppgift(declaration.rutor)
 
   return { redovisare, redovisningsperiod, momsuppgift }
+}
+
+/**
+ * Lock-time guard: a momsdeklaration must not be locked for signing while it
+ * demonstrably disagrees with the general ledger or fails the local SKV
+ * pre-flight checks. Returns blockers the caller must surface; an empty array
+ * means the declaration is clear to lock. The caller may allow an explicit
+ * force-override (the user takes responsibility) but never a silent lock.
+ */
+export async function checkVatDeclarationLockBlockers(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: { periodType: VatPeriodType; year: number; period: number },
+): Promise<Array<{ code: string; message: string }>> {
+  const declaration = await calculateVatDeclaration(
+    supabase,
+    companyId,
+    input.periodType,
+    input.year,
+    input.period,
+  )
+
+  const blockers: Array<{ code: string; message: string }> = []
+
+  for (const finding of runVatDeclarationChecks(declaration.rutor)) {
+    if (finding.status === 'ERROR') {
+      blockers.push({ code: finding.code, message: finding.message })
+    }
+  }
+
+  if (!declaration.reconciliation.rutor_match_gl) {
+    const accounts = declaration.reconciliation.unmapped_accounts
+      .map((a) => `${a.account} (${a.balance.toFixed(2)} kr)`)
+      .join(', ')
+    blockers.push({
+      code: 'GL_RECONCILIATION_MISMATCH',
+      message:
+        `Momsdeklarationen stämmer inte mot huvudboken: momskonton utanför ` +
+        `deklarationens kontomappning har saldo under perioden — ${accounts}. ` +
+        `Flytta beloppen till rätt momskonto eller dokumentera avvikelsen innan låsning.`,
+    })
+  }
+
+  return blockers
 }
 
 /**

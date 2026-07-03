@@ -203,7 +203,7 @@ async function main() {
       total_sek: 85000,
       exchange_rate: null,
       moms_ruta: '35',
-      reverse_charge_text: 'Reverse charge – VAT to be nordklart for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
     // Invoice 2: EUR reverse_charge to Finnish customer (for EU Sales List — services + Currency Receivables)
     {
@@ -227,7 +227,7 @@ async function main() {
       exchange_rate: 11.50,
       exchange_rate_date: daysAgo(15),
       moms_ruta: '39',
-      reverse_charge_text: 'Reverse charge – VAT to be nordklart for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
     // Invoice 3: EUR reverse_charge to Dutch customer — goods (for EU Sales List + Currency Receivables)
     {
@@ -251,7 +251,7 @@ async function main() {
       exchange_rate: 11.50,
       exchange_rate_date: daysAgo(10),
       moms_ruta: '35',
-      reverse_charge_text: 'Reverse charge – VAT to be nordklart for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
     // Invoice 4: USD to Dutch customer — overdue (for Currency Receivables)
     {
@@ -275,7 +275,7 @@ async function main() {
       exchange_rate: 10.80,
       exchange_rate_date: daysAgo(45),
       moms_ruta: '35',
-      reverse_charge_text: 'Reverse charge – VAT to be nordklart for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
     // Invoice 5: Paid SEK reverse_charge to Finnish customer (for EU Sales List history)
     {
@@ -298,7 +298,7 @@ async function main() {
       total_sek: 42000,
       exchange_rate: null,
       moms_ruta: '39',
-      reverse_charge_text: 'Reverse charge – VAT to be nordklart for by the recipient according to article 196 Council Directive 2006/112/EC',
+      reverse_charge_text: 'Reverse charge – VAT to be accounted for by the recipient according to article 196 Council Directive 2006/112/EC',
     },
   ]
 

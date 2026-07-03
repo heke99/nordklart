@@ -61,8 +61,8 @@ describe('GET /api/agent/faq', () => {
     const { status, body } = await parseJsonResponse<StatusBody>(response)
     expect(status).toBe(200)
     expect(body.data?.enabled).toBe(true)
-    expect(body.data?.expected_entries).toBe(450)
-    expect(body.data?.indexed_entries).toBe(450)
+    expect(body.data?.expected_entries).toBe(460)
+    expect(body.data?.indexed_entries).toBe(460)
     expect(body.data?.db_seeded).toBe(false)
   })
 

@@ -53,6 +53,11 @@ interface InboxItem {
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
   error_message: string | null
+  // Duplicate signal set at intake: the extracted invoice number/OCR matched
+  // an existing supplier invoice or another open inbox item. Warn — never block.
+  duplicate_of_supplier_invoice_id?: string | null
+  duplicate_of_inbox_item_id?: string | null
+  duplicate_reason?: 'invoice_number_match' | 'ocr_match' | null
   // True when AI extraction was skipped — either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
   // page-count gate skipped a PDF above the auto-extract limit (issue #553).
@@ -1096,6 +1101,19 @@ function InboxRow({
           ) : item.extraction_skipped ? (
             <span className="flex items-center gap-1.5 min-w-0">
               <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+              <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+            </span>
+          ) : item.duplicate_reason && !item.created_supplier_invoice_id ? (
+            <span className="flex items-center gap-1.5 min-w-0">
+              <Badge
+                variant="outline"
+                className="font-normal border-amber-500/40 text-amber-600"
+                title={item.duplicate_reason === 'ocr_match'
+                  ? 'Samma OCR/betalningsreferens finns redan på en registrerad leverantörsfaktura'
+                  : 'Samma fakturanummer finns redan (registrerad faktura eller annan post i inkorgen)'}
+              >
+                Möjlig dubblett
+              </Badge>
               <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
             </span>
           ) : (

@@ -54,6 +54,11 @@ export default function CustomerForm({
       .or(z.literal('')),
     language: z.enum(['sv', 'en']).optional(),
     default_payment_terms: z.number().min(1).optional(),
+    peppol_id: z
+      .string()
+      .regex(/^\d{4}:[A-Za-z0-9][A-Za-z0-9\-.]{1,48}$/, t('peppol_invalid'))
+      .optional()
+      .or(z.literal('')),
     notes: z.string().optional(),
   }), [t])
 
@@ -81,6 +86,7 @@ export default function CustomerForm({
       personal_number: initialData?.personal_number || '',
       language: initialData?.language || 'sv',
       default_payment_terms: initialData?.default_payment_terms || 30,
+      peppol_id: initialData?.peppol_id || '',
       notes: initialData?.notes || '',
     },
   })
@@ -309,6 +315,20 @@ export default function CustomerForm({
           )}
         </div>
       )}
+
+      {/* Peppol e-invoice address */}
+      <div className="space-y-2">
+        <Label htmlFor="peppol_id">{t('peppol_label')}</Label>
+        <Input
+          id="peppol_id"
+          placeholder="0007:5566778899"
+          {...register('peppol_id')}
+        />
+        {errors.peppol_id && (
+          <p className="text-xs text-destructive">{errors.peppol_id.message}</p>
+        )}
+        <p className="text-xs text-muted-foreground">{t('peppol_hint')}</p>
+      </div>
 
       {/* Payment terms */}
       <div className="space-y-2">

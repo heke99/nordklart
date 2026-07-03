@@ -136,6 +136,23 @@ describe('getRevenueAccount', () => {
     expect(getRevenueAccount('reduced_12', 'aktiebolag')).toBe('3002')
     expect(getRevenueAccount('export', 'aktiebolag')).toBe('3305')
   })
+
+  it('reverse_charge + goods returns 3108 (varuförsäljning EU, ruta 35)', () => {
+    expect(getRevenueAccount('reverse_charge', 'enskild_firma', 'goods')).toBe('3108')
+  })
+
+  it('export + goods returns 3105 (varuexport, ruta 36)', () => {
+    expect(getRevenueAccount('export', 'enskild_firma', 'goods')).toBe('3105')
+  })
+
+  it('sale_type=services preserves the historical accounts', () => {
+    expect(getRevenueAccount('reverse_charge', 'enskild_firma', 'services')).toBe('3308')
+    expect(getRevenueAccount('export', 'enskild_firma', 'services')).toBe('3305')
+  })
+
+  it('sale_type has no effect on taxable domestic sales', () => {
+    expect(getRevenueAccount('standard_25', 'enskild_firma', 'goods')).toBe('3001')
+  })
 })
 
 describe('getOutputVatAccount', () => {

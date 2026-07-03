@@ -19,7 +19,7 @@ const log = createLogger('api/agency/staff/invite')
 const AgencyStaffInviteSchema = z.object({
   agency_id: z.string().uuid().optional(),
   email: z.string().trim().toLowerCase().email(),
-  role: z.enum(['agency_admin', 'accountant', 'reviewer', 'read_only']).default('accountant'),
+  role: z.enum(['agency_admin', 'accountant', 'payroll', 'reviewer', 'read_only']).default('accountant'),
 })
 
 type ExistingProfile = { id: string; email: string | null }

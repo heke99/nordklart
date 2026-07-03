@@ -94,6 +94,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [kontroller, setKontroller] = useState<KontrollResult[]>([])
+  const [lockBlockers, setLockBlockers] = useState<Array<{ code: string; message: string }>>([])
   const [signeringslank, setSigneringslank] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState<{
     kvittensnummer?: string
@@ -336,16 +337,29 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
     }
   }
 
-  const handleLock = async () => {
+  const handleLock = async (force: boolean = false) => {
     setActionLoading('lock')
     setError(null)
+    setLockBlockers([])
     try {
+      // The server re-runs the local checks + GL reconciliation before
+      // locking — a declaration that disagrees with the ledger must never
+      // be locked silently. 409 returns the blockers; the user can force
+      // past them only after explicit review.
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/lock?redovisare=${encodeURIComponent(
           await getRedovisare()
-        )}&redovisningsperiod=${getRedovisningsperiod()}`,
+        )}&redovisningsperiod=${getRedovisningsperiod()}` +
+        `&period_type=${periodType}&year=${year}&period=${period}` +
+        (force ? '&force=true' : ''),
         { method: 'PUT' }
       )
+      if (res.status === 409) {
+        const result = await res.json()
+        setLockBlockers(result?.blockers || [])
+        setError(result?.error || 'Deklarationen kan inte låsas på grund av avvikelser.')
+        return
+      }
       const result = await res.json()
       if (applyApiError(result)) {
         // surfaced + status updated; nothing more to do
@@ -584,6 +598,27 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
           <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
             <span>{error}</span>
+          </div>
+        )}
+        {lockBlockers.length > 0 && (
+          <div className="space-y-2 text-sm bg-destructive/5 rounded-lg p-3">
+            <ul className="space-y-1.5">
+              {lockBlockers.map((b) => (
+                <li key={b.code} className="flex items-start gap-2 text-destructive">
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <span>{b.message}</span>
+                </li>
+              ))}
+            </ul>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleLock(true)}
+              disabled={actionLoading !== null}
+              className="gap-1.5"
+            >
+              Jag har granskat avvikelserna — lås ändå
+            </Button>
           </div>
         )}
         {success && !error && (
@@ -851,7 +886,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
 
           <Button
             size="sm"
-            onClick={handleLock}
+            onClick={() => handleLock()}
             disabled={!hasData || hasErrors || actionLoading !== null}
             className="gap-1.5"
             title={hasErrors ? 'Valideringsfel måste åtgärdas först' : ''}

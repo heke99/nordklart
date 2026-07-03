@@ -156,6 +156,23 @@ describe('getVatRules', () => {
     expect(rules.reverseChargeText).toContain('ML 10 kap')
   })
 
+  it('routes EU goods sales to ruta 35 with Article 138 text (sale_type=goods)', () => {
+    const rules = getVatRules('eu_business', true, 'goods')
+    expect(rules.treatment).toBe('reverse_charge')
+    expect(rules.momsRuta).toBe('35')
+    expect(rules.reverseChargeText).toContain('Article 138')
+  })
+
+  it('routes export goods to ruta 36 (sale_type=goods)', () => {
+    const rules = getVatRules('non_eu_business', false, 'goods')
+    expect(rules.treatment).toBe('export')
+    expect(rules.momsRuta).toBe('36')
+  })
+
+  it('sale_type has no effect on domestic taxable sales', () => {
+    expect(getVatRules('swedish_business', false, 'goods').momsRuta).toBe('05')
+  })
+
   it('defaults to standard_25 for unknown customerType', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rules = getVatRules('unknown_type' as any)
@@ -283,16 +300,39 @@ describe('getVatSummaryFromItems', () => {
 // ============================================================
 
 describe('getMomsRutaDescription', () => {
-  it('maps ruta 05 → "Utgående moms 25%"', () => {
-    expect(getMomsRutaDescription('05')).toBe('Utgående moms 25%')
+  // SKV 4700 semantics: ruta 05/06/07 are TAXABLE SALES BASES, not output
+  // VAT (output VAT is ruta 10/11/12). Labels come from the canonical
+  // BOX_LABELS map in lib/vat/moms-box-mapping.ts.
+  it('maps ruta 05 → "Momspliktig försäljning" (sales base, NOT output VAT)', () => {
+    expect(getMomsRutaDescription('05')).toBe('Momspliktig försäljning')
   })
 
-  it('maps ruta 39 → "Försäljning av tjänster till annat EU-land"', () => {
-    expect(getMomsRutaDescription('39')).toBe('Försäljning av tjänster till annat EU-land')
+  it('maps ruta 06 → "Momspliktiga uttag"', () => {
+    expect(getMomsRutaDescription('06')).toBe('Momspliktiga uttag')
   })
 
-  it('maps ruta 40 → "Export utanför EU"', () => {
-    expect(getMomsRutaDescription('40')).toBe('Export utanför EU')
+  it('maps ruta 07 → "Vinstmarginalbeskattning"', () => {
+    expect(getMomsRutaDescription('07')).toBe('Vinstmarginalbeskattning')
+  })
+
+  it('maps ruta 10 → "Utgående moms 25%"', () => {
+    expect(getMomsRutaDescription('10')).toBe('Utgående moms 25%')
+  })
+
+  it('maps ruta 39 → "Tjänsteförsäljning till EU (huvudregeln)"', () => {
+    expect(getMomsRutaDescription('39')).toBe('Tjänsteförsäljning till EU (huvudregeln)')
+  })
+
+  it('maps ruta 35 → "Varuförsäljning till annat EU-land"', () => {
+    expect(getMomsRutaDescription('35')).toBe('Varuförsäljning till annat EU-land')
+  })
+
+  it('maps ruta 40 → "Övrig försäljning av tjänster utomlands"', () => {
+    expect(getMomsRutaDescription('40')).toBe('Övrig försäljning av tjänster utomlands')
+  })
+
+  it('maps ruta 48 → "Ingående moms att dra av"', () => {
+    expect(getMomsRutaDescription('48')).toBe('Ingående moms att dra av')
   })
 
   it('returns the ruta string itself for unknown rutor', () => {

@@ -30,10 +30,15 @@
  */
 
 import { z } from 'zod'
-import { created } from '@/lib/api/v1/response'
+import { created, paginated } from '@/lib/api/v1/response'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import {
+  decodeDefaultCursor,
+  encodeDefaultCursor,
+  parsePaginationParams,
+} from '@/lib/api/v1/pagination'
 import {
   uploadDocument,
   validateDocumentFile,
@@ -65,6 +70,112 @@ const MultipartBodySchema = z.object({
   journal_entry_id: z.string().uuid().optional(),
   journal_entry_line_id: z.string().uuid().optional(),
 })
+
+const DocumentSummary = z.object({
+  id: z.string().uuid(),
+  file_name: z.string(),
+  mime_type: z.string().nullable(),
+  file_size_bytes: z.number().nullable(),
+  sha256_hash: z.string().nullable(),
+  upload_source: z.string().nullable(),
+  journal_entry_id: z.string().uuid().nullable(),
+  created_at: z.string(),
+})
+
+registerEndpoint({
+  operation: 'documents.list',
+  method: 'GET',
+  path: '/api/v1/companies/:companyId/documents',
+  summary: 'List document attachments (verifikationsunderlag).',
+  description:
+    'Returns document attachments in created-first order with cursor pagination. Filter by ?linked=true|false (whether the document is attached to a journal entry) and ?upload_source. Bytes are fetched via /documents/{id}/download.',
+  useWhen:
+    'Reviewing the document archive, finding unlinked underlag, or syncing document metadata to an external archive.',
+  doNotUseFor:
+    'Downloading file contents (use /documents/{id}/download).',
+  pitfalls: [
+    'Documents linked to posted journal entries are retention-protected (BFL 7 kap) and can never be deleted.',
+    'linked=false surfaces underlag that still need to be attached to a verifikation.',
+  ],
+  example: {
+    response: {
+      data: [
+        {
+          id: 'd0c5…',
+          file_name: 'kvitto-2026-06-01.pdf',
+          mime_type: 'application/pdf',
+          file_size_bytes: 48211,
+          upload_source: 'api',
+          journal_entry_id: null,
+          created_at: '2026-06-01T12:00:00Z',
+        },
+      ],
+      meta: { request_id: 'req_…', api_version: '2026-05-12', next_cursor: null },
+    },
+  },
+  scope: 'documents:read',
+  risk: 'low',
+  idempotent: true,
+  reversible: false,
+  dryRunSupported: false,
+  response: { success: z.object({ documents: z.array(DocumentSummary) }) },
+})
+
+export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
+  'documents.list',
+  async (request, ctx) => {
+    const url = new URL(request.url)
+    const { limit, cursor } = parsePaginationParams(url)
+    const decoded = decodeDefaultCursor(cursor)
+
+    const Filters = z.object({
+      linked: z.enum(['true', 'false']).optional(),
+      upload_source: z.string().max(50).optional(),
+    })
+    const parsed = Filters.safeParse({
+      linked: url.searchParams.get('linked') ?? undefined,
+      upload_source: url.searchParams.get('upload_source') ?? undefined,
+    })
+    if (!parsed.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })),
+        },
+      })
+    }
+
+    let query = ctx.supabase
+      .from('document_attachments')
+      .select('id, file_name, mime_type, file_size_bytes, sha256_hash, upload_source, journal_entry_id, created_at')
+      .eq('company_id', ctx.companyId!)
+      .eq('is_current_version', true)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(limit + 1)
+
+    if (parsed.data.linked === 'true') query = query.not('journal_entry_id', 'is', null)
+    if (parsed.data.linked === 'false') query = query.is('journal_entry_id', null)
+    if (parsed.data.upload_source) query = query.eq('upload_source', parsed.data.upload_source)
+    if (decoded) {
+      query = query.or(
+        `created_at.gt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
+      )
+    }
+
+    const { data, error } = await query
+    if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+
+    type Row = { id: string; created_at: string }
+    const rows = (data ?? []) as unknown as Row[]
+    const hasMore = rows.length > limit
+    const page = hasMore ? rows.slice(0, limit) : rows
+    const last = page[page.length - 1]
+    const nextCursor = hasMore && last ? encodeDefaultCursor(last) : null
+
+    return paginated(page, { requestId: ctx.requestId, nextCursor: nextCursor ?? undefined })
+  },
+)
 
 registerEndpoint({
   operation: 'documents.upload',

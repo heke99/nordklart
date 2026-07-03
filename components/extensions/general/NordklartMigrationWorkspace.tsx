@@ -40,12 +40,17 @@ import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registr
 
 type NordklartProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden'
 
-const NORDKLART_PROVIDERS: { id: NordklartProvider; name: string; authType: 'oauth' | 'token' }[] = [
-  { id: 'fortnox', name: 'Fortnox', authType: 'oauth' },
-  { id: 'visma', name: 'Visma', authType: 'oauth' },
-  { id: 'bokio', name: 'Bokio', authType: 'token' },
-  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token' },
-  { id: 'briox', name: 'Briox', authType: 'token' },
+// `sieViaApi`: the provider serves its general ledger as SIE over the API, so
+// the wizard imports bookkeeping automatically — no manual SIE upload needed.
+// Mirrored in extensions/general/nordklart-migration/types.ts (deliberate
+// duplication: core code must not import from @/extensions/ — CI enforces it).
+// Keep both in sync.
+const NORDKLART_PROVIDERS: { id: NordklartProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
+  { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
+  { id: 'visma', name: 'Visma', authType: 'oauth', sieViaApi: false },
+  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
+  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
+  { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
 ]
 
 interface SkipReasons {
@@ -190,7 +195,9 @@ interface ConnectionStatus {
   }
 }
 
-const COMING_SOON_PROVIDERS = new Set<NordklartProvider>(['bjornlunden', 'briox'])
+// Briox + Björn Lundén are live: both serve SIE over the API (sie-fetcher)
+// and entities via REST. No provider is gated as "coming soon" any more.
+const COMING_SOON_PROVIDERS = new Set<NordklartProvider>()
 
 const PROVIDER_LOGOS: Record<NordklartProvider, string> = {
   fortnox: '/logos/fortnox.svg',
@@ -215,8 +222,9 @@ function ProviderStep({
 }) {
   const activeConsents = connectionStatus?.consents.filter(c => c.status === 1) ?? []
   const hasSieImport = (connectionStatus?.sieImports.filter(i => i.status === 'completed').length ?? 0) > 0
-  const allFortnox = activeConsents.length > 0 && activeConsents.every(c => c.provider === 'fortnox')
-  const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allFortnox
+  const sieViaApiIds = new Set(NORDKLART_PROVIDERS.filter(p => p.sieViaApi).map(p => p.id))
+  const allSieViaApi = activeConsents.length > 0 && activeConsents.every(c => sieViaApiIds.has(c.provider))
+  const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allSieViaApi
 
   return (
     <div className="space-y-4">
@@ -227,7 +235,7 @@ function ProviderStep({
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">SIE-import krävs först</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Bokio, Visma, Björn Lundén och Briox hämtar endast kunder, leverantörer och fakturor via API:et. Bokföringsdata (kontoplan, verifikationer och balanser) måste importeras via SIE-fil först. Gäller inte Fortnox — där hämtar vi SIE direkt via API:et.
+              Bokio och Visma hämtar endast kunder, leverantörer och fakturor via API:et. Bokföringsdata (kontoplan, verifikationer och balanser) måste importeras via SIE-fil först. Gäller inte Fortnox, Briox eller Björn Lundén — där hämtar vi SIE direkt via API:et.
             </p>
             <Link
               href="/import?mode=sie"
@@ -349,13 +357,14 @@ function ProviderStep({
               {NORDKLART_PROVIDERS.map((provider) => {
                 const comingSoon = COMING_SOON_PROVIDERS.has(provider.id)
                 const alreadyConnected = activeConsents.some(c => c.provider === provider.id)
-                // Non-Fortnox providers only expose entity data (customers,
-                // suppliers, invoices) via API — the ledger must arrive via SIE
-                // first. Gate the connection entry until a completed SIE import
-                // exists so users don't authenticate into a flow that can't
-                // import anything yet. The /migrate route enforces this
+                // Providers WITHOUT SIE-over-API only expose entity data
+                // (customers, suppliers, invoices) — the ledger must arrive via
+                // SIE first. Gate the connection entry until a completed SIE
+                // import exists so users don't authenticate into a flow that
+                // can't import anything yet. The /migrate route enforces this
                 // server-side regardless; this is just the matching UX.
-                const needsSieFirst = !hasSieImport && provider.id !== 'fortnox'
+                // Fortnox/Briox/Björn Lundén fetch the SIE themselves.
+                const needsSieFirst = !hasSieImport && !provider.sieViaApi
                 const isDisabled = comingSoon || alreadyConnected || needsSieFirst
                 return (
                   <button
@@ -441,17 +450,21 @@ function ConnectStep({
   // BL uses server-side client credentials — only needs company ID, no API key
   const isClientCredentials = provider === 'bjornlunden'
   const needsApiToken = !isClientCredentials
-  const needsCompanyId = provider === 'bokio' || provider === 'bjornlunden'
+  // Briox: the account ID (clientid) is exchanged together with the
+  // application token for an access/refresh pair at submit.
+  const needsCompanyId = provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox'
 
   const tokenDescription = isClientCredentials
-    ? `Ange ditt företags-ID (GUID) från Björn Lundén. ${branding.appName.toLowerCase()} ansluter automatiskt via sin integrationspartner-åtkomst.`
+    ? `Ange ditt företags User-Key (GUID) från Björn Lundén. ${branding.appName.toLowerCase()} ansluter automatiskt via sin integrationspartner-åtkomst.`
     : `Ange din API-nyckel från ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
 
   const tokenHelpText = isClientCredentials
     ? `Hittas i Björn Lundén under Inställningar \u2192 Företagsinformation (GUID-format).`
     : provider === 'bokio'
       ? `Du hittar din API-nyckel i ${providerName} under Inställningar \u2192 Integrationer \u2192 API. Ditt företags-ID är det GUID som syns i URL:en när du är inloggad, t.ex. https://app.bokio.se/ditt-företags-id/settings-r/private-integrations.`
-      : `Du hittar din applikationstoken i ${providerName} under Administration \u2192 Integrationer.`
+      : provider === 'briox'
+        ? `Du hittar din applikationstoken i ${providerName} under Administration \u2192 Integrationer. Konto-ID är det clientid du loggar in med.`
+        : `Du hittar din applikationstoken i ${providerName} under Administration \u2192 Integrationer.`
 
   const canSubmit = isClientCredentials
     ? !!companyId
@@ -548,13 +561,19 @@ function ConnectStep({
                 {needsCompanyId && (
                   <div>
                     <label htmlFor="companyId" className="text-sm font-medium">
-                      Företags-ID
+                      {provider === 'briox' ? 'Konto-ID (clientid)' : provider === 'bjornlunden' ? 'User-Key (GUID)' : 'Företags-ID'}
                     </label>
                     <Input
                       id="companyId"
                       name="companyId_nocomplete"
                       autoComplete="new-password"
-                      placeholder={isClientCredentials ? 'GUID från företagsinställningar' : 'GUID från URL:en, t.ex. 14ccad83-67f6-49bd-...'}
+                      placeholder={
+                        provider === 'briox'
+                          ? 'Konto-ID:t du loggar in med'
+                          : isClientCredentials
+                            ? 'GUID från företagsinställningar'
+                            : 'GUID från URL:en, t.ex. 14ccad83-67f6-49bd-...'
+                      }
                       value={companyId}
                       onChange={(e) => setCompanyId(e.target.value)}
                     />
@@ -590,12 +609,16 @@ function PreviewStep({
   preview,
   isLoading,
   error,
+  authExpired,
+  onReconnect,
   onContinue,
   onBack,
 }: {
   preview: PreviewData | null
   isLoading: boolean
   error: string | null
+  authExpired: boolean
+  onReconnect: () => void
   onContinue: () => void
   onBack: () => void
 }) {
@@ -621,7 +644,20 @@ function PreviewStep({
             <>
               <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
                 <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-                <p className="text-sm text-muted-foreground">{error}</p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-muted-foreground">{error}</p>
+                  {authExpired && (
+                    <>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Anslutningen till leverantören har gått ut. Anslut igen så ersätts de gamla uppgifterna — importhistoriken behålls.
+                      </p>
+                      <Button size="sm" className="mt-3" onClick={onReconnect}>
+                        <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                        Anslut igen
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
               <FallbackPrompt
                 message="Du kan också importera din bokföringsdata manuellt via en SIE-fil."
@@ -786,6 +822,9 @@ function OptionsStep({
   onChange,
   onStart,
   onBack,
+  onDryRun,
+  isDryRunning,
+  dryRunResults,
 }: {
   options: MigrationOptions
   sieAvailable: boolean
@@ -794,6 +833,9 @@ function OptionsStep({
   onChange: (options: MigrationOptions) => void
   onStart: () => void
   onBack: () => void
+  onDryRun: () => void
+  isDryRunning: boolean
+  dryRunResults: MigrationResults | null
 }) {
   const [showConfirm, setShowConfirm] = useState(false)
 
@@ -929,15 +971,56 @@ function OptionsStep({
         </CardContent>
       </Card>
 
+      {/* Dry-run plan: what a real run would import/skip, without writing. */}
+      {dryRunResults && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Testkörning — så här skulle importen se ut</CardTitle>
+            <CardDescription>Ingenting har importerats ännu. Siffrorna visar planen inklusive dubbletter som hoppas över.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-1 text-sm text-muted-foreground">
+              {dryRunResults.customers && (
+                <li>Kunder: {dryRunResults.customers.imported} importeras, {dryRunResults.customers.skipped} hoppas över</li>
+              )}
+              {dryRunResults.suppliers && (
+                <li>Leverantörer: {dryRunResults.suppliers.imported} importeras, {dryRunResults.suppliers.skipped} hoppas över</li>
+              )}
+              {dryRunResults.salesInvoices && (
+                <li>Kundfakturor: {dryRunResults.salesInvoices.imported} importeras, {dryRunResults.salesInvoices.skipped} hoppas över</li>
+              )}
+              {dryRunResults.supplierInvoices && (
+                <li>Leverantörsfakturor: {dryRunResults.supplierInvoices.imported} importeras, {dryRunResults.supplierInvoices.skipped} hoppas över</li>
+              )}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0}>
-          Starta migrering
-          <ArrowRight className="ml-2 h-4 w-4" />
-        </Button>
+        <div className="flex flex-col-reverse gap-3 sm:flex-row">
+          <Button
+            variant="outline"
+            className="min-h-11"
+            onClick={onDryRun}
+            disabled={isDryRunning || selectedItems.length === 0}
+          >
+            {isDryRunning ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Info className="mr-2 h-4 w-4" />
+            )}
+            Testkör utan att importera
+          </Button>
+          <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0}>
+            Starta migrering
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <ConfirmationDialog
@@ -1568,6 +1651,12 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
   const [selectedProvider, setSelectedProvider] = useState<NordklartProvider | null>(null)
   const [consentId, setConsentId] = useState<string | null>(null)
   const [authUrl, setAuthUrl] = useState<string | null>(null)
+  // Preview failed because the stored provider tokens are dead — show the
+  // reconnect affordance (re-auth against the same consent).
+  const [authExpired, setAuthExpired] = useState(false)
+  // Entity-import dry-run (options step): plan preview without writes.
+  const [isDryRunning, setIsDryRunning] = useState(false)
+  const [dryRunResults, setDryRunResults] = useState<MigrationResults | null>(null)
   const [authType, setAuthType] = useState<'oauth' | 'token' | null>(null)
 
   // Preview state
@@ -1625,12 +1714,21 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
     setStep('preview')
     setIsLoading(true)
     setError(null)
+    setAuthExpired(false)
 
     try {
       const res = await fetch(`/api/extensions/ext/nordklart-migration/preview?consentId=${cId}`)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `HTTP ${res.status}`)
+        // Structured envelope: { error: { code, message } }. Dead tokens
+        // (refresh failed) classify as PROVIDER_AUTH_EXPIRED — surface the
+        // reconnect affordance instead of a dead-end error.
+        const structured = data?.error
+        if (structured && typeof structured === 'object') {
+          if (structured.code === 'PROVIDER_AUTH_EXPIRED') setAuthExpired(true)
+          throw new Error(structured.message || `HTTP ${res.status}`)
+        }
+        throw new Error((typeof data?.error === 'string' ? data.error : null) || `HTTP ${res.status}`)
       }
 
       const data = await res.json()
@@ -1647,6 +1745,38 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
       setIsLoading(false)
     }
   }, [])
+
+  // Reconnect: re-run auth against the SAME consent so fresh tokens replace
+  // the dead pair in place (no disconnect, no duplicate consent, import
+  // history preserved). Backed by /connect { reconnect: true }.
+  const handleReconnect = useCallback(async () => {
+    if (!selectedProvider) return
+    setStep('connect')
+    setIsLoading(true)
+    setError(null)
+    setAuthExpired(false)
+    try {
+      const res = await fetch('/api/extensions/ext/nordklart-migration/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: selectedProvider, reconnect: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(
+          (typeof data?.error === 'object' ? data.error?.message : data?.error) || `HTTP ${res.status}`,
+        )
+      }
+      setConsentId(data.consentId)
+      setAuthType(data.authType)
+      if (data.authType === 'oauth' && data.authUrl) setAuthUrl(data.authUrl)
+      // Token-based providers stay on connect for credential re-entry.
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Kunde inte starta återanslutningen')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [selectedProvider])
 
   const handleSelectProvider = useCallback(async (provider: NordklartProvider) => {
     setSelectedProvider(provider)
@@ -1694,6 +1824,7 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
     setMigrationOptions(DEFAULT_OPTIONS)
     setMigrationResults(null)
     setSieImportResults([])
+    setDryRunResults(null)
     setSieData(null)
     await loadPreview(existingConsentId)
   }, [loadPreview])
@@ -1869,6 +2000,43 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
     } : null)
   }, [sieData])
 
+  // Dry-run the entity import: fetch + dedupe against existing data, write
+  // nothing, show the plan. SIE has its own preview path (mapping step).
+  const handleDryRun = useCallback(async () => {
+    if (!consentId) return
+    setIsDryRunning(true)
+    try {
+      const res = await fetch('/api/extensions/ext/nordklart-migration/migrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          consentId,
+          importCompanyInfo: migrationOptions.importCompanyInfo,
+          importCustomers: migrationOptions.importCustomers,
+          importSuppliers: migrationOptions.importSuppliers,
+          importSalesInvoices: migrationOptions.importSalesInvoices,
+          importSupplierInvoices: migrationOptions.importSupplierInvoices,
+          dryRun: true,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const message = (typeof data?.error === 'object' ? data.error?.message : data?.error) || `HTTP ${res.status}`
+        toast({ title: 'Testkörningen misslyckades', description: message, variant: 'destructive' })
+        return
+      }
+      setDryRunResults(data.results as MigrationResults)
+    } catch (err) {
+      toast({
+        title: 'Testkörningen misslyckades',
+        description: err instanceof Error ? err.message : undefined,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsDryRunning(false)
+    }
+  }, [consentId, migrationOptions, toast])
+
   const handleStartMigration = useCallback(async () => {
     if (!consentId) return
 
@@ -1992,6 +2160,7 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
     setMigrationOptions(DEFAULT_OPTIONS)
     setMigrationResults(null)
     setSieImportResults([])
+    setDryRunResults(null)
     setError(null)
     // Refresh status so provider step shows updated import history
     fetchStatus()
@@ -2060,6 +2229,8 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
           preview={preview}
           isLoading={isLoading}
           error={error}
+          authExpired={authExpired}
+          onReconnect={handleReconnect}
           onContinue={handlePreviewContinue}
           onBack={() => setStep('provider')}
         />
@@ -2085,6 +2256,9 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
           onChange={setMigrationOptions}
           onStart={handleStartMigration}
           onBack={() => preview?.sieAvailable ? setStep('mapping') : setStep('preview')}
+          onDryRun={handleDryRun}
+          isDryRunning={isDryRunning}
+          dryRunResults={dryRunResults}
         />
       )}
 

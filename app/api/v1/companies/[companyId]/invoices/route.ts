@@ -422,7 +422,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // of allowed per-item rates.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('id, customer_type, vat_number_validated')
+      .select('id, customer_type, vat_number, vat_number_validated')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -437,10 +437,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    const saleType = input.sale_type ?? 'services'
     const vatRules = getVatRules(
       customer.customer_type as Parameters<typeof getVatRules>[0],
       customer.vat_number_validated,
+      saleType,
     )
+
+    // ML 17 kap 24 § p.4: reverse-charge invoices must carry the buyer's
+    // VAT registration number. The validated flag alone is insufficient —
+    // the number may have been cleared after validation.
+    if (vatRules.treatment === 'reverse_charge' && !(customer.vat_number as string | null)?.trim()) {
+      return v1ErrorResponseFromCode('INVOICE_CREATE_RC_VAT_NUMBER_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { customer_id: customer.id, customer_type: customer.customer_type },
+      })
+    }
     const availableRates = getAvailableVatRates(
       customer.customer_type as Parameters<typeof getAvailableVatRates>[0],
       customer.vat_number_validated,
@@ -483,7 +495,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     let vatAmountSek: number | null = null
     let totalSek: number | null = null
     if (input.currency !== 'SEK') {
-      const rateData = await fetchExchangeRate(input.currency)
+      // ML 8 kap 21–23 §§: convert at the rate valid on the INVOICE date,
+      // not "today". fetchExchangeRate falls back through the last 7 days
+      // when the date is a weekend/holiday.
+      const rateData = await fetchExchangeRate(input.currency, new Date(input.invoice_date))
       if (rateData) {
         exchangeRate = rateData.rate
         exchangeRateDate = rateData.date
@@ -537,6 +552,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           vat_treatment: vatRules.treatment,
           vat_rate: headerVatRate,
           moms_ruta: vatRules.momsRuta,
+          sale_type: saleType,
           reverse_charge_text: vatRules.reverseChargeText || null,
           your_reference: input.your_reference ?? null,
           our_reference: input.our_reference ?? null,
@@ -584,6 +600,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         vat_treatment: vatRules.treatment,
         vat_rate: headerVatRate,
         moms_ruta: vatRules.momsRuta,
+        sale_type: saleType,
         reverse_charge_text: vatRules.reverseChargeText || null,
         your_reference: input.your_reference,
         our_reference: input.our_reference,

@@ -5,6 +5,12 @@ import { refreshFortnoxToken } from './fortnox/oauth';
 import { refreshVismaToken } from './visma/oauth';
 import { refreshBrioxToken } from './briox/oauth';
 import { refreshBjornLundenToken } from './bjornlunden/oauth';
+import {
+  decryptProviderToken,
+  encryptProviderToken,
+  isProviderTokenEncrypted,
+  providerTokenEncryptionConfigured,
+} from './token-encryption';
 
 export interface ResolvedConsent {
   consent: Record<string, unknown>;
@@ -49,12 +55,39 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
   }
 
   const tokens = tokenRows[0]!;
+  const storedAccessToken = tokens.access_token as string;
+  const storedRefreshToken = tokens.refresh_token as string | null;
+
+  let accessToken: string;
+  let refreshTokenPlain: string | null;
+  try {
+    accessToken = decryptProviderToken(storedAccessToken);
+    refreshTokenPlain = storedRefreshToken ? decryptProviderToken(storedRefreshToken) : null;
+  } catch {
+    throw { status: 401, message: 'Stored provider tokens could not be read — reconnect the provider' };
+  }
+
+  // Lazy at-rest upgrade: a legacy plaintext row + a configured key →
+  // re-write encrypted in place so the migration completes itself on use.
+  if (
+    providerTokenEncryptionConfigured() &&
+    (!isProviderTokenEncrypted(storedAccessToken) ||
+      (storedRefreshToken !== null && !isProviderTokenEncrypted(storedRefreshToken)))
+  ) {
+    await supabase
+      .from('provider_consent_tokens')
+      .update({
+        access_token: encryptProviderToken(accessToken),
+        refresh_token: refreshTokenPlain ? encryptProviderToken(refreshTokenPlain) : null,
+      })
+      .eq('consent_id', consentId);
+  }
 
   // Bokio: private API tokens that don't expire
   if (consent.provider === 'bokio') {
     return {
       consent,
-      accessToken: tokens.access_token as string,
+      accessToken,
       providerCompanyId: tokens.provider_company_id as string | undefined,
     };
   }
@@ -68,7 +101,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       await supabase
         .from('provider_consent_tokens')
         .update({
-          access_token: refreshed.access_token,
+          access_token: encryptProviderToken(refreshed.access_token),
           token_expires_at: newExpiresAt,
         })
         .eq('consent_id', consentId);
@@ -82,14 +115,14 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
 
     return {
       consent,
-      accessToken: tokens.access_token as string,
+      accessToken,
       providerCompanyId: tokens.provider_company_id as string | undefined,
     };
   }
 
   // Check expiry, auto-refresh if needed
   if (tokens.token_expires_at && new Date(tokens.token_expires_at as string) < new Date()) {
-    if (!tokens.refresh_token) {
+    if (!refreshTokenPlain) {
       throw { status: 401, message: 'Access token expired and no refresh token available' };
     }
 
@@ -97,11 +130,11 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     let refreshed: TokenResponse;
 
     if (consent.provider === 'fortnox') {
-      refreshed = await refreshFortnoxToken(config, tokens.refresh_token as string);
+      refreshed = await refreshFortnoxToken(config, refreshTokenPlain);
     } else if (consent.provider === 'briox') {
-      refreshed = await refreshBrioxToken(config.clientId, tokens.refresh_token as string);
+      refreshed = await refreshBrioxToken(config.clientId, refreshTokenPlain);
     } else {
-      refreshed = await refreshVismaToken(config, tokens.refresh_token as string);
+      refreshed = await refreshVismaToken(config, refreshTokenPlain);
     }
 
     const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
@@ -109,14 +142,22 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     await supabase
       .from('provider_consent_tokens')
       .update({
-        access_token: refreshed.access_token,
-        refresh_token: refreshed.refresh_token,
+        access_token: encryptProviderToken(refreshed.access_token),
+        refresh_token: refreshed.refresh_token ? encryptProviderToken(refreshed.refresh_token) : null,
         token_expires_at: newExpiresAt,
       })
       .eq('consent_id', consentId);
 
-    return { consent, accessToken: refreshed.access_token };
+    return {
+      consent,
+      accessToken: refreshed.access_token,
+      providerCompanyId: tokens.provider_company_id as string | undefined,
+    };
   }
 
-  return { consent, accessToken: tokens.access_token as string };
+  return {
+    consent,
+    accessToken,
+    providerCompanyId: tokens.provider_company_id as string | undefined,
+  };
 }

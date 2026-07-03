@@ -59,6 +59,15 @@ export type CoreEvent =
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }
   | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string } }
   | { type: 'bank_connection.revoked'; payload: { connectionId: string; bankName: string | null; userId: string; companyId: string } }
+  // Consent expiry — emitted by the sync cron when a PSD2 consent has lapsed
+  // and the connection flips to 'expired'. Drives the reconnect nudge (email +
+  // webhook) so bank data doesn't silently go stale.
+  | { type: 'bank_connection.expired'; payload: { connectionId: string; bankName: string | null; consentExpiresAt: string | null; userId: string; companyId: string } }
+  // Sync outcome events — one per sync run (manual, cron or initial backfill).
+  // `bank_sync.failed` is the ops signal consumed by webhooks + the platform
+  // integration health view.
+  | { type: 'bank_sync.completed'; payload: { connectionId: string; syncRunId: string | null; accountsSynced: number; transactionsImported: number; partial: boolean; userId: string; companyId: string } }
+  | { type: 'bank_sync.failed'; payload: { connectionId: string; syncRunId: string | null; error: string; userId: string; companyId: string } }
   // Emitted when the PSD2 callback fails to mirror a returned account into
   // cash_accounts. ASVS V16 / ISO 27001 A.8.15 — security-relevant failures
   // must land in a structured audit log (event_log, 30-day TTL) rather than
@@ -271,6 +280,94 @@ export type CoreEvent =
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'agent_chat'
       actorId: string | null
       actorLabel: string | null
+      userId: string
+      companyId: string
+    }}
+  // Async v1 operations (the `operations` table). Emitted when an operation
+  // reaches a terminal state so webhook subscribers can stop polling.
+  | { type: 'operation.completed'; payload: {
+      operationId: string
+      operationType: string
+      userId: string
+      companyId: string
+    }}
+  | { type: 'operation.failed'; payload: {
+      operationId: string
+      operationType: string
+      errorCode: string | null
+      errorMessage: string | null
+      userId: string
+      companyId: string
+    }}
+  // Unified Skatteverket submission pipeline (tax_submissions). Emitted on
+  // the externally-interesting transitions. `submissionType` is vat_return |
+  // agi | income_tax | ....
+  | { type: 'vat_report.generated'; payload: {
+      submissionId: string | null
+      periodKey: string
+      amount: number | null
+      userId: string
+      companyId: string
+    }}
+  | { type: 'tax_submission.waiting_for_signature'; payload: {
+      submissionId: string | null
+      submissionType: string
+      periodKey: string
+      userId: string
+      companyId: string
+    }}
+  | { type: 'tax_submission.submitted'; payload: {
+      submissionId: string | null
+      submissionType: string
+      periodKey: string
+      skatteverketReference: string | null
+      userId: string
+      companyId: string
+    }}
+  | { type: 'tax_submission.failed'; payload: {
+      submissionId: string | null
+      submissionType: string
+      periodKey: string
+      errorMessage: string | null
+      userId: string
+      companyId: string
+    }}
+  // Document extraction finished (invoice inbox / document-extraction).
+  | { type: 'document.extracted'; payload: {
+      documentId: string
+      inboxItemId: string | null
+      succeeded: boolean
+      likelyDuplicate: boolean
+      userId: string
+      companyId: string
+    }}
+  // Peppol e-invoicing (Batch 8). Emitted by the e-invoice provider layer.
+  | { type: 'peppol_invoice.sent'; payload: {
+      invoiceId: string
+      deliveryId: string
+      participantId: string | null
+      status: string
+      userId: string
+      companyId: string
+    }}
+  | { type: 'peppol_invoice.received'; payload: {
+      deliveryId: string
+      supplierName: string | null
+      userId: string
+      companyId: string
+    }}
+  // Invoice financing (Batch 9).
+  | { type: 'invoice_financing.offer_created'; payload: {
+      applicationId: string
+      invoiceId: string
+      offeredAmount: number | null
+      userId: string
+      companyId: string
+    }}
+  | { type: 'invoice_financing.paid_out'; payload: {
+      applicationId: string
+      invoiceId: string
+      paidOutAmount: number | null
       userId: string
       companyId: string
     }}

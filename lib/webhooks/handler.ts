@@ -22,48 +22,23 @@
  */
 
 import { eventBus } from '@/lib/events/bus'
-import type { CoreEventType } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
+import { DELIVERED_WEBHOOK_EVENTS } from '@/lib/webhooks/event-catalog'
 
 const log = createLogger('webhooks/handler')
 
 /**
- * Set of event types that the v1 webhook surface delivers. Restricted to the
- * resource-state-change events that are useful to external integrations;
- * MCP telemetry events and internal-only flows (event_log writes, etc.) are
- * deliberately excluded.
+ * The set of event types the v1 webhook surface delivers now derives from
+ * the SINGLE catalog in lib/webhooks/event-catalog.ts (delivered=true
+ * entries) — the registration route and the /webhook-events endpoint read
+ * the same catalog, so the three surfaces can never drift again.
  *
- * Adding a new event type to this set is a public-API change — bump
+ * Adding a new event type to the catalog is a public-API change — bump
  * API_V1_VERSION + add to the changelog when you do.
  */
-const PUBLIC_WEBHOOK_EVENTS = new Set<CoreEventType>([
-  'invoice.created',
-  'invoice.sent',
-  'invoice.paid',
-  'credit_note.created',
-  'customer.created',
-  'supplier.created',
-  'supplier_invoice.registered',
-  'supplier_invoice.approved',
-  'supplier_invoice.paid',
-  'supplier_invoice.credited',
-  'supplier_invoice.uncredited',
-  'transaction.categorized',
-  'transaction.reconciled',
-  'journal_entry.committed',
-  'journal_entry.reversed',
-  'journal_entry.corrected',
-  'period.locked',
-  'period.unlocked',
-  'period.year_closed',
-  'salary_run.created',
-  'salary_run.approved',
-  'salary_run.booked',
-  'agi.generated',
-  'document.uploaded',
-])
+const PUBLIC_WEBHOOK_EVENTS = DELIVERED_WEBHOOK_EVENTS
 
 let registered = false
 
@@ -121,6 +96,17 @@ export function minimisePayload(payload: Record<string, unknown>): Record<string
   const projected: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(payload)) {
     if (key === 'userId') continue
+    // Batch events (transaction.synced) carry the full row array in-process;
+    // externally we deliver a summary (count + ids) — receivers fetch details
+    // via GET /transactions. Keeps webhook bodies bounded.
+    if (key === 'transactions' && Array.isArray(value)) {
+      projected.transaction_count = value.length
+      projected.transaction_ids = value
+        .map((t) => (t as { id?: string }).id)
+        .filter(Boolean)
+        .slice(0, 100)
+      continue
+    }
     projected[key] = value
   }
   return projected

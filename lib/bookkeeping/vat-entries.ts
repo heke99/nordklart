@@ -1,4 +1,5 @@
-import type { CreateJournalEntryLineInput, VatTreatment } from '@/types'
+import { roundOre } from '@/lib/money'
+import type { CreateJournalEntryLineInput, ReverseChargeType, VatTreatment } from '@/types'
 
 /**
  * Generate VAT journal entry lines based on VAT treatment
@@ -154,19 +155,26 @@ export function generateSalesVatLines(config: VatEntryConfig): CreateJournalEntr
  *   Domestic services (byggtjänster) 4425/4426/4427 → ruta 24
  *   Domestic goods    (RC varor)     4415/4416/4417 → ruta 23
  *
- * EU-varor (ruta 20, 4515/4516/4517) hanteras inte här eftersom våra supplier
- * invoices saknar varor/tjänster-diskriminering. Standard-supplier-flödet är
- * tjänster (SaaS, konsulttjänster); EU-varuhandel sker normalt via SIE-import
- * eller manuell verifikation och får bokas direkt på 4515-konton.
+ * When `reverseChargeType` is supplied it takes precedence over the
+ * supplier-country inference:
+ *
+ *   eu_goods     → 4515/4516/4517 (ruta 20, unionsinternt förvärv av varor)
+ *   eu_services  → 4535/4536/4537 (ruta 21)
+ *   construction → 4425/4426/4427 (ruta 24, byggtjänster ML 16 kap 13 §)
+ *   electronics  → 4415/4416/4417 (ruta 23, ML 16 kap 17 §)
+ *
+ * Utan typ faller vi tillbaka på leverantörslandet (tjänster antas) — det
+ * historiska beteendet för befintliga leverantörsfakturor.
  */
 export function generateReverseChargeBasisLines(
   baseAmount: number,
-  vatRate: number = 0.25,
+  vatRate: number,
   supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business',
+  reverseChargeType?: ReverseChargeType | null,
 ): CreateJournalEntryLineInput[] {
   if (baseAmount <= 0) return []
 
-  const basisAccount = pickBasisAccount(vatRate, supplierType)
+  const basisAccount = pickBasisAccount(vatRate, supplierType, reverseChargeType)
   if (!basisAccount) return []
 
   const amount = Math.round(baseAmount * 100) / 100
@@ -191,9 +199,41 @@ export function generateReverseChargeBasisLines(
 function pickBasisAccount(
   vatRate: number,
   supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business',
+  reverseChargeType?: ReverseChargeType | null,
 ): { account: string; label: string } | null {
   const rateIdx = vatRate === 0.25 ? 0 : vatRate === 0.12 ? 1 : vatRate === 0.06 ? 2 : -1
   if (rateIdx < 0) return null
+
+  // Explicit classification wins over supplier-country inference.
+  switch (reverseChargeType) {
+    case 'eu_goods':
+      return {
+        account: ['4515', '4516', '4517'][rateIdx],
+        label: 'Inköp varor annat EU-land',
+      }
+    case 'eu_services':
+      return {
+        account: ['4535', '4536', '4537'][rateIdx],
+        label: 'Inköp tjänster annat EU-land',
+      }
+    case 'construction':
+      return {
+        account: ['4425', '4426', '4427'][rateIdx],
+        label: 'Inköp tjänster i Sverige omvänd skattskyldighet',
+      }
+    case 'electronics':
+      return {
+        account: ['4415', '4416', '4417'][rateIdx],
+        label: 'Inköp varor i Sverige omvänd skattskyldighet',
+      }
+    case 'import':
+      // Import uses the importmoms path (basis 4545-4547 + output 2615/2625/
+      // 2635), not the fiktiv-moms RC pair — handled by the import booking
+      // flow. No 44xx/45xx basis lines here.
+      return null
+    default:
+      break
+  }
 
   if (supplierType === 'eu_business') {
     return {
@@ -218,15 +258,19 @@ function pickBasisAccount(
  * Generate reverse charge lines (fiktiv moms)
  * For EU/non-EU purchases: Debit 2645 + Credit 26x4 (offsetting entries)
  * For domestic reverse charge: Debit 2647 + Credit 26x4 (offsetting entries)
+ *
+ * `vatRate` is REQUIRED and must be a Swedish statutory rate (0.25 / 0.12 /
+ * 0.06). Callers that lack an explicit rate must resolve one first (see
+ * resolveReverseChargeRate — 25% huvudregel). A silent fallback used to book
+ * 25% fiktiv moms to 2614 for reduced-rate purchases, understating nothing
+ * but mis-declaring rutor 30-32 — now we throw instead.
  */
 export function generateReverseChargeLines(
   baseAmount: number,
-  vatRate: number = 0.25,
+  vatRate: number,
   isDomestic: boolean = false
 ): CreateJournalEntryLineInput[] {
-  const vatAmount = Math.round(baseAmount * vatRate * 100) / 100
-
-  // Determine output account based on rate
+  // Determine output account based on rate — throw on non-statutory rates.
   let outputAccount: string
   switch (vatRate) {
     case 0.25:
@@ -239,8 +283,13 @@ export function generateReverseChargeLines(
       outputAccount = '2634' // Utgående moms omvänd skattskyldighet 6%
       break
     default:
-      outputAccount = '2614'
+      throw new Error(
+        `Ogiltig momssats för omvänd skattskyldighet: ${vatRate}. ` +
+        'Tillåtna satser är 0.25, 0.12 och 0.06 (ML 6 kap 34 §).'
+      )
   }
+
+  const vatAmount = Math.round(baseAmount * vatRate * 100) / 100
 
   // Input VAT account: 2647 for domestic RC (ML 16 kap), 2645 for EU/non-EU
   const inputAccount = isDomestic ? '2647' : '2645'
@@ -258,6 +307,90 @@ export function generateReverseChargeLines(
       debit_amount: 0,
       credit_amount: vatAmount,
       line_description: `Fiktiv utgående moms ${vatRate * 100}% (${context})`,
+    },
+  ]
+}
+
+/**
+ * Generate import VAT lines (importmoms, since 2015 declared via the
+ * momsdeklaration instead of paid to Tullverket for VAT-registered buyers).
+ *
+ *   Debit  2645 Beräknad ingående moms      [monetärt tullvärde × rate]
+ *   Credit 2615/2625/2635 Utgående importmoms [same amount]
+ *
+ * Populates ruta 60/61/62 (output) and, via 2645, ruta 48 (input). The
+ * beskattningsunderlag itself must be booked with generateImportBasisLines
+ * so ruta 50 is populated — SKV cross-validates ruta 60 ≈ ruta 50 × 25%.
+ */
+export function generateImportVatLines(
+  baseAmount: number,
+  vatRate: number,
+): CreateJournalEntryLineInput[] {
+  let outputAccount: string
+  switch (vatRate) {
+    case 0.25: outputAccount = '2615'; break
+    case 0.12: outputAccount = '2625'; break
+    case 0.06: outputAccount = '2635'; break
+    default:
+      throw new Error(
+        `Ogiltig momssats för importmoms: ${vatRate}. ` +
+        'Tillåtna satser är 0.25, 0.12 och 0.06.'
+      )
+  }
+  const vatAmount = roundOre(baseAmount * vatRate)
+  const rateLabel = `${Math.round(vatRate * 100)}%`
+  return [
+    {
+      account_number: '2645',
+      debit_amount: vatAmount,
+      credit_amount: 0,
+      line_description: `Beräknad ingående moms import ${rateLabel}`,
+    },
+    {
+      account_number: outputAccount,
+      debit_amount: 0,
+      credit_amount: vatAmount,
+      line_description: `Utgående moms import ${rateLabel}`,
+    },
+  ]
+}
+
+/**
+ * Generate import beskattningsunderlag lines for momsdeklaration ruta 50.
+ *
+ *   Debit  4545/4546/4547 Beskattningsunderlag import  [base]
+ *   Credit 4598 Motkonto                                [base]
+ *
+ * Resultaträkningen påverkas inte (4598 nettar ut 454x); the 454x debit is
+ * what the momsdeklaration reads for ruta 50. Same motkonto pattern as the
+ * reverse-charge basbeloppsrader.
+ */
+export function generateImportBasisLines(
+  baseAmount: number,
+  vatRate: number,
+): CreateJournalEntryLineInput[] {
+  if (baseAmount <= 0) return []
+  let basisAccount: string
+  switch (vatRate) {
+    case 0.25: basisAccount = '4545'; break
+    case 0.12: basisAccount = '4546'; break
+    case 0.06: basisAccount = '4547'; break
+    default: return []
+  }
+  const amount = roundOre(baseAmount)
+  const rateLabel = `${Math.round(vatRate * 100)}%`
+  return [
+    {
+      account_number: basisAccount,
+      debit_amount: amount,
+      credit_amount: 0,
+      line_description: `Beskattningsunderlag import ${rateLabel}`,
+    },
+    {
+      account_number: '4598',
+      debit_amount: 0,
+      credit_amount: amount,
+      line_description: `Motkonto beskattningsunderlag import ${rateLabel}`,
     },
   ]
 }

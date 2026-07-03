@@ -10,6 +10,8 @@ import {
   generateConsentExpiryEmailSubject,
 } from '@/lib/email/consent-notification-templates'
 import { ensureInitialized } from '@/lib/init'
+import { eventBus } from '@/lib/events'
+import { startSyncRun, finishSyncRun } from '@/extensions/general/enable-banking/lib/sync-run'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getBranding } from '@/lib/branding/service'
@@ -99,8 +101,20 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       if (isExpired) {
         await supabase
           .from('bank_connections')
-          .update({ status: 'expired' })
+          .update({ status: 'expired', consent_status: 'expired', sync_status: 'idle' })
           .eq('id', connection.id)
+
+        // Compliance/webhook trail: consent lapsed → reconnect nudge.
+        await eventBus.emit({
+          type: 'bank_connection.expired',
+          payload: {
+            connectionId: connection.id,
+            bankName: connection.bank_name ?? null,
+            consentExpiresAt: connection.consent_expires ?? null,
+            userId: connection.user_id,
+            companyId: connection.company_id,
+          },
+        })
 
         // Send expiry notification
         await sendConsentExpiryNotification(
@@ -189,6 +203,12 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         ...(isFirstSync ? { strategy: 'longest' as const } : {}),
       }
 
+      const syncRunId = await startSyncRun(supabase, {
+        companyId: connection.company_id,
+        bankConnectionId: connection.id,
+        trigger: isFirstSync ? 'initial_backfill' : 'cron',
+      })
+
       const syncResults = await Promise.all(
         accounts.map(account => syncAccountTransactions(
           supabase,
@@ -206,6 +226,14 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       const totalImported = syncResults.reduce((sum, r) => sum + r.imported, 0)
       const totalDuplicates = syncResults.reduce((sum, r) => sum + r.duplicates, 0)
       const totalErrors = syncResults.reduce((sum, r) => sum + r.errors, 0)
+
+      await finishSyncRun(supabase, syncRunId, {
+        status: totalErrors > 0 ? 'partial' : 'success',
+        accountsSynced: accounts.length,
+        transactionsImported: totalImported,
+        transactionsDeduplicated: totalDuplicates,
+        errorMessage: totalErrors > 0 ? `${totalErrors} kontofel under synk` : null,
+      })
 
       // Batch reconciliation sweep when SIE overlap detected
       if (sieOverlap && totalImported > 0) {
@@ -241,6 +269,9 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         .update({
           accounts_data: allAccounts,
           last_synced_at: completedAt,
+          sync_status: totalErrors > 0 ? 'error' : 'success',
+          consent_status: 'active',
+          last_sync_error: totalErrors > 0 ? `${totalErrors} kontofel under synk` : null,
           ...initialSyncFields,
           ...(connection.error_message ? { error_message: null } : {}),
         })
@@ -269,8 +300,19 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // Persist error status on sync failure
       await supabase
         .from('bank_connections')
-        .update({ status: 'error', error_message: message })
+        .update({ status: 'error', error_message: message, sync_status: 'error', last_sync_error: message })
         .eq('id', connection.id)
+
+      await eventBus.emit({
+        type: 'bank_sync.failed',
+        payload: {
+          connectionId: connection.id,
+          syncRunId: null,
+          error: message,
+          userId: connection.user_id,
+          companyId: connection.company_id,
+        },
+      })
 
       results.push({
         connectionId: connection.id,

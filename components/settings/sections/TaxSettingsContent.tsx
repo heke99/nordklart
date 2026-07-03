@@ -66,11 +66,17 @@ export function TaxSettingsContent() {
   function handleSave(formData: FormData) {
     const vatRegistered = formData.get('vat_registered') === 'true'
 
+    const rawDeductionPercent = parseFloat(formData.get('vat_deduction_percent') as string)
     const updates: Record<string, unknown> = {
       f_skatt: formData.get('f_skatt') === 'true',
       vat_registered: vatRegistered,
       vat_number: vatRegistered ? ((formData.get('vat_number') as string) || null) : null,
       moms_period: vatRegistered ? ((formData.get('moms_period') as string) || null) : null,
+      // Blandad verksamhet: only meaningful for VAT-registered companies.
+      vat_deduction_percent: vatRegistered && Number.isFinite(rawDeductionPercent)
+        ? Math.min(100, Math.max(0, rawDeductionPercent))
+        : 100,
+      voluntary_vat_rental: vatRegistered && formData.get('voluntary_vat_rental') === 'true',
       periodisk_sammanstallning_period:
         (formData.get('periodisk_sammanstallning_period') as string) || 'monthly',
       tax_contact_name: (formData.get('tax_contact_name') as string) || null,

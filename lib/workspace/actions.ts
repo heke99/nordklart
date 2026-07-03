@@ -43,7 +43,7 @@ export async function switchWorkspaceContext(
       .select('agency_id, role, status')
       .eq('user_id', user.id)
       .eq('status', 'active')
-      .in('role', ['agency_owner', 'agency_admin', 'accountant', 'reviewer', 'read_only'])
+      .in('role', ['agency_owner', 'agency_admin', 'accountant', 'payroll', 'reviewer', 'read_only'])
 
     if (agencyId) query = query.eq('agency_id', agencyId)
 

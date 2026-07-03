@@ -32,6 +32,7 @@ import { createLogger, type Logger } from '@/lib/logger'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { featureForOperation } from '@/lib/platform/feature-policy'
 import { checkFeatureAccess, featureAccessError } from '@/lib/platform/entitlements'
+import { maintenanceBlocksWrites, getMaintenanceMessage } from '@/lib/ops/maintenance'
 
 export interface RouteContext {
   /** Stable id for this HTTP request — appears in logs, error envelope, X-Request-Id header. */
@@ -143,6 +144,17 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       }
 
       if (requireWrite) {
+        // Read-only maintenance mode: reject every mutating dashboard route
+        // with a clear Swedish message. Checked before the membership write
+        // check so the operator kill switch works even if the DB is degraded.
+        if (maintenanceBlocksWrites()) {
+          userLog.warn('write rejected — maintenance read-only mode')
+          return errorResponseFromCode('MAINTENANCE_READ_ONLY', userLog, {
+            requestId,
+            messageSv: getMaintenanceMessage(),
+          })
+        }
+
         // Delegate to the existing helper so tests that already mock it
         // continue to work. The helper returns its own 403 NextResponse;
         // we wrap it in our request-id header for traceability.
