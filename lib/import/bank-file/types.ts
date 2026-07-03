@@ -54,7 +54,9 @@ export const BANK_FILE_FORMAT_IDS = [
   'lunar',
   'northmill',
   'generic_csv',
+  'camt052',
   'camt053',
+  'camt054',
 ] as const
 
 /** Supported bank file format identifiers */

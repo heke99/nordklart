@@ -8,6 +8,7 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
+import { startSyncRun, finishSyncRun, updateConnectionSyncStatus } from './lib/sync-run'
 import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import type { StoredAccount } from './types'
@@ -278,6 +279,16 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Connection is not active' }, { status: 400 })
         }
 
+        // Audit trail: one bank_sync_runs row per attempt + canonical
+        // sync_status on the connection. Best-effort — never blocks the sync.
+        const syncRunId = await startSyncRun(supabase, {
+          companyId,
+          bankConnectionId: connection.id,
+          trigger: 'manual',
+          createdBy: user.id,
+        })
+        await updateConnectionSyncStatus(supabase, connection.id, { syncStatus: 'syncing' })
+
         try {
           // Keep the full list for write-back; sync only the enabled subset.
           // undefined enabled === true for back-compat with rows that predate
@@ -399,20 +410,53 @@ export const enableBankingExtension: Extension = {
           }
 
           const syncedAt = new Date().toISOString()
+          const partial = failedAccounts.length > 0
           await supabase
             .from('bank_connections')
             .update({
               accounts_data: allAccounts,
               last_synced_at: syncedAt,
+              sync_status: partial ? 'error' : 'success',
+              consent_status: 'active',
+              last_sync_error: partial
+                ? `Delvis synk: ${failedAccounts.length} konto(n) misslyckades`
+                : null,
               // Structured per-account error state: cleared on a fully
               // successful sync, populated when some account failed.
-              error_message: failedAccounts.length > 0
+              error_message: partial
                 ? `Delvis synk: ${failedAccounts.length} konto(n) misslyckades — ${failedAccounts
                     .map(f => f.account_name || f.account_uid || 'okänt konto')
                     .join(', ')}`
                 : null,
             })
             .eq('id', connection.id)
+
+          await finishSyncRun(supabase, syncRunId, {
+            status: partial ? 'partial' : 'success',
+            accountsSynced: results.length,
+            transactionsImported: totalImported,
+            transactionsDeduplicated: totalDuplicates,
+            errorMessage: partial
+              ? `Delvis synk: ${failedAccounts.length} konto(n) misslyckades`
+              : null,
+            details: partial ? { failed_accounts: failedAccounts } : {},
+          })
+
+          {
+            const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
+            await emit({
+              type: 'bank_sync.completed',
+              payload: {
+                connectionId: connection.id,
+                syncRunId,
+                accountsSynced: results.length,
+                transactionsImported: totalImported,
+                partial,
+                userId: user.id,
+                companyId,
+              },
+            })
+          }
 
           if (totalImported > 0) {
             const { data: syncedTransactions } = await supabase
@@ -440,6 +484,7 @@ export const enableBankingExtension: Extension = {
             ...(failedAccounts.length > 0 ? { failed_accounts: failedAccounts } : {}),
           })
         } catch (error) {
+          const message = error instanceof Error ? error.message : 'Sync failed'
           log.error('[enable-banking] Sync handler error', {
             message: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : undefined,
@@ -449,8 +494,31 @@ export const enableBankingExtension: Extension = {
             connectionStatus: connection.status,
             bankName: connection.bank_name,
           })
+          await finishSyncRun(supabase, syncRunId, {
+            status: 'failed',
+            errorMessage: message,
+          })
+          await updateConnectionSyncStatus(supabase, connection.id, {
+            syncStatus: 'error',
+            lastSyncError: message,
+          })
+          try {
+            const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
+            await emit({
+              type: 'bank_sync.failed',
+              payload: {
+                connectionId: connection.id,
+                syncRunId,
+                error: message,
+                userId: user.id,
+                companyId,
+              },
+            })
+          } catch {
+            // Event emission is best-effort — the 500 below carries the error.
+          }
           return NextResponse.json(
-            { error: error instanceof Error ? error.message : 'Sync failed' },
+            { error: message },
             { status: 500 }
           )
         }

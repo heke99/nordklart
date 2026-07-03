@@ -59,6 +59,15 @@ export type CoreEvent =
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }
   | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string } }
   | { type: 'bank_connection.revoked'; payload: { connectionId: string; bankName: string | null; userId: string; companyId: string } }
+  // Consent expiry — emitted by the sync cron when a PSD2 consent has lapsed
+  // and the connection flips to 'expired'. Drives the reconnect nudge (email +
+  // webhook) so bank data doesn't silently go stale.
+  | { type: 'bank_connection.expired'; payload: { connectionId: string; bankName: string | null; consentExpiresAt: string | null; userId: string; companyId: string } }
+  // Sync outcome events — one per sync run (manual, cron or initial backfill).
+  // `bank_sync.failed` is the ops signal consumed by webhooks + the platform
+  // integration health view.
+  | { type: 'bank_sync.completed'; payload: { connectionId: string; syncRunId: string | null; accountsSynced: number; transactionsImported: number; partial: boolean; userId: string; companyId: string } }
+  | { type: 'bank_sync.failed'; payload: { connectionId: string; syncRunId: string | null; error: string; userId: string; companyId: string } }
   // Emitted when the PSD2 callback fails to mirror a returned account into
   // cash_accounts. ASVS V16 / ISO 27001 A.8.15 — security-relevant failures
   // must land in a structured audit log (event_log, 30-day TTL) rather than

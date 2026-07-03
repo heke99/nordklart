@@ -17,17 +17,21 @@ import { icaBankenFormat } from './formats/ica-banken'
 import { skandiaFormat } from './formats/skandia'
 import { lunarFormat } from './formats/lunar'
 import { northmillFormat } from './formats/northmill'
+import { camt052Format } from './formats/camt052'
 import { camt053Format } from './formats/camt053'
+import { camt054Format } from './formats/camt054'
 import { genericCSVFormat } from './formats/generic-csv'
 
 /**
  * Ordered list of format detectors.
- * camt.053 first (XML detection is unambiguous), then bank-specific CSV formats.
- * New bank formats go after existing ones but before generic_csv.
+ * camt.052/053/054 first (XML detection is unambiguous), then bank-specific
+ * CSV formats. New bank formats go after existing ones but before generic_csv.
  * Generic CSV is last — it never auto-detects (manual fallback only).
  */
 const FORMATS: BankFileFormat[] = [
   camt053Format,
+  camt052Format,
+  camt054Format,
   nordeaFormat,
   nordeaBusinessFormat,
   sebFormat,
@@ -137,8 +141,18 @@ export function generateExternalId(
   formatId: BankFileFormatId,
   rowIndex: number
 ): string {
-  // For camt.053, prefer the raw_line which contains the entry reference
-  if (formatId === 'camt053' && tx.raw_line && !tx.raw_line.startsWith('camt053_entry_')) {
+  // For camt.052/053/054, prefer the raw_line which contains the bank's own
+  // entry reference (<NtryRef>/<AcctSvcrRef>) — stable across re-exports, so
+  // the same entry delivered in both an intraday camt.052 and the end-of-day
+  // camt.053 dedups to one transaction.
+  if (
+    (formatId === 'camt052' || formatId === 'camt053' || formatId === 'camt054') &&
+    tx.raw_line &&
+    !tx.raw_line.startsWith(`${formatId}_entry_`)
+  ) {
+    // Keep the historical camt053_ prefix for all camt variants so an entry
+    // reference seen via camt.052 earlier in the day dedups against the same
+    // entry arriving in the nightly camt.053.
     return `camt053_${tx.raw_line}`
   }
 
