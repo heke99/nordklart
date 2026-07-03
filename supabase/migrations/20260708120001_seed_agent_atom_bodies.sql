@@ -31,7 +31,7 @@ Developer-facing compliance reference for building Swedish accounting software. 
 
 This skill has a router structure. The SKILL.md contains the most critical rules you need constantly. Detailed reference material lives in `references/`. Read the relevant reference file when you need depth on a specific area.
 
-### Reference files
+### Reference filesy
 
 | File | When to read |
 |---|---|
