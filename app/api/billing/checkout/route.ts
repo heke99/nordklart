@@ -87,7 +87,10 @@ export async function POST(request: Request) {
       .limit(1)
       .maybeSingle()
     if (currentBase) {
-      return jsonError('Det finns redan ett basabonnemang. Hantera planbyte och betalning i kundportalen.', 409)
+      // The Stripe customer portal only covers invoices and payment method.
+      // Plan changes go through the reviewed change-request flow on the
+      // billing page — point the user there instead of at the portal.
+      return jsonError('Det finns redan ett basabonnemang. Begär planbyte eller uppsägning under Abonnemang och tillägg på faktureringssidan.', 409)
     }
   }
 

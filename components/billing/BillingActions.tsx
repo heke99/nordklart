@@ -26,6 +26,8 @@ type Props = {
   hasStripeCustomer: boolean
   activeSubscriptionId: string | null
   activePlanVersionId: string | null
+  /** Plan version chosen at signup (signup_drafts) — highlighted, never auto-charged. */
+  preselectedPlanVersionId?: string | null
   changeRequests: ChangeRequest[]
 }
 
@@ -36,7 +38,7 @@ function formatPrice(plan: PurchasablePlan) {
   return `${amount} exkl. moms`
 }
 
-export function BillingActions({ plans, fiscalPeriods, hasActiveBaseSubscription, hasStripeCustomer, activeSubscriptionId, activePlanVersionId, changeRequests }: Props) {
+export function BillingActions({ plans, fiscalPeriods, hasActiveBaseSubscription, hasStripeCustomer, activeSubscriptionId, activePlanVersionId, preselectedPlanVersionId = null, changeRequests }: Props) {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -89,15 +91,21 @@ export function BillingActions({ plans, fiscalPeriods, hasActiveBaseSubscription
       </div>
       {error ? <div className="mt-5 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div> : null}
       {notice ? <div className="mt-5 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">{notice}</div> : null}
+      {!hasActiveBaseSubscription && preselectedPlanVersionId && plans.some((plan) => plan.id === preselectedPlanVersionId) ? (
+        <div className="mt-5 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+          Du valde <strong>{plans.find((plan) => plan.id === preselectedPlanVersionId)?.name}</strong> vid registreringen — planen är markerad nedan och aktiveras när betalningen är bekräftad.
+        </div>
+      ) : null}
 
       {hasActiveBaseSubscription ? <div className="mt-6 rounded-2xl border bg-background/70 p-5"><div className="flex items-start gap-3"><RotateCcw className="mt-0.5 h-5 w-5 text-primary" /><div className="min-w-0 flex-1"><h3 className="font-semibold">Planbyte eller uppsägning</h3><p className="mt-1 text-sm text-muted-foreground">Ändringen granskas och schemaläggs till nästa faktureringsperiod. Bankgiro och andra tillägg kontrolleras tillsammans med basplanen så att inget fortsätter av misstag.</p></div></div>{openRequest ? <p className="mt-4 rounded-lg bg-muted px-3 py-2 text-sm">Pågående begäran: <strong>{openRequest.requestType === 'cancel_subscription' ? 'uppsägning' : 'planbyte'}</strong> ({openRequest.status}).</p> : <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_auto]"><select value={targetPlanVersionId} onChange={(event) => setTargetPlanVersionId(event.target.value)} className="h-10 rounded-lg border bg-card px-3 text-sm"><option value="">Välj ny plan</option>{alternativeBasePlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {formatPrice(plan)}</option>)}</select><Button variant="secondary" disabled={pending || !alternativeBasePlans.length} onClick={() => requestChange('change_plan')}>{pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}Begär planbyte</Button><Button variant="outline" disabled={pending} onClick={() => requestChange('cancel_subscription')}><XCircle className="mr-2 h-4 w-4" />Begär uppsägning</Button></div>}<textarea value={changeNote} onChange={(event) => setChangeNote(event.target.value)} maxLength={1000} placeholder="Valfri kommentar till Nordklart" className="mt-3 min-h-20 w-full rounded-lg border bg-card px-3 py-2 text-sm" /></div> : null}
 
       <div className="mt-6 grid gap-4 lg:grid-cols-3">{plans.map((plan) => {
         const isBase = plan.productType === 'subscription'; const isAddon = plan.productType === 'addon'; const isYearEnd = plan.productType === 'one_time' && plan.productCode === 'year_end'
         if (isBase && hasActiveBaseSubscription) return null
+        const isPreselected = !hasActiveBaseSubscription && plan.id === preselectedPlanVersionId
         const disabled = pending || !plan.stripeReady || (isAddon && !hasActiveBaseSubscription) || (isYearEnd && !yearEndPeriodId)
         const label = !plan.stripeReady ? 'Inte redo för betalning' : isAddon && !hasActiveBaseSubscription ? 'Kräver basabonnemang' : isYearEnd ? 'Köp bokslut' : isAddon ? 'Lägg till tjänst' : 'Välj plan'
-        return <article key={plan.id} className="rounded-2xl border bg-background/70 p-5"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{isYearEnd ? 'Engångsköp' : isAddon ? 'Tillägg' : 'Abonnemang'}</p><h3 className="mt-2 text-xl font-semibold">{plan.name}</h3><p className="mt-2 min-h-14 text-sm leading-6 text-muted-foreground">{plan.description || 'Produktinformation saknas.'}</p><div className="mt-5 text-lg font-semibold tabular-nums">{formatPrice(plan)}</div>{isYearEnd ? <label className="mt-4 block text-sm font-medium">Räkenskapsår<select className="mt-2 flex h-10 w-full rounded-lg border bg-card px-3 text-sm" value={yearEndPeriodId} onChange={(event) => setYearEndPeriodId(event.target.value)}>{fiscalPeriods.length === 0 ? <option value="">Inget räkenskapsår tillgängligt</option> : null}{fiscalPeriods.map((period) => <option key={period.id} value={period.id}>{period.name} · {period.periodStart}–{period.periodEnd}</option>)}</select></label> : null}<Button className="mt-5 w-full" disabled={disabled} onClick={() => openCheckout(plan.id, isYearEnd ? yearEndPeriodId : undefined)}>{pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}{label}</Button></article>
+        return <article key={plan.id} className={`rounded-2xl border bg-background/70 p-5${isPreselected ? ' border-primary shadow-sm ring-1 ring-primary/30' : ''}`}><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{isYearEnd ? 'Engångsköp' : isAddon ? 'Tillägg' : isPreselected ? 'Ditt planval' : 'Abonnemang'}</p><h3 className="mt-2 text-xl font-semibold">{plan.name}</h3><p className="mt-2 min-h-14 text-sm leading-6 text-muted-foreground">{plan.description || 'Produktinformation saknas.'}</p><div className="mt-5 text-lg font-semibold tabular-nums">{formatPrice(plan)}</div>{isYearEnd ? <label className="mt-4 block text-sm font-medium">Räkenskapsår<select className="mt-2 flex h-10 w-full rounded-lg border bg-card px-3 text-sm" value={yearEndPeriodId} onChange={(event) => setYearEndPeriodId(event.target.value)}>{fiscalPeriods.length === 0 ? <option value="">Inget räkenskapsår tillgängligt</option> : null}{fiscalPeriods.map((period) => <option key={period.id} value={period.id}>{period.name} · {period.periodStart}–{period.periodEnd}</option>)}</select></label> : null}<Button className="mt-5 w-full" disabled={disabled} onClick={() => openCheckout(plan.id, isYearEnd ? yearEndPeriodId : undefined)}>{pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}{label}</Button></article>
       })}</div>
     </section>
   )

@@ -53,6 +53,7 @@ function RegisterContent() {
   const [acceptedLegal, setAcceptedLegal] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [confirmationEmail, setConfirmationEmail] = useState<string | null>(null)
+  const [selectedPlan, setSelectedPlan] = useState<{ name: string; priceLabel: string } | null>(null)
   const registry = useCompanyRegistryLookup({ endpoint: '/api/public/company-lookup' })
   const registryLookupFn = registry.lookup
   const registryCompany = registry.company
@@ -65,6 +66,26 @@ function RegisterContent() {
   useEffect(() => {
     registryLookupFn(orgNumber)
   }, [orgNumber, registryLookupFn])
+
+  // Resolve the plan chosen on /priser so the visitor sees what they picked
+  // (name + price) instead of a generic "Vald prisplan" label.
+  useEffect(() => {
+    if (!planVersionId) return
+    let cancelled = false
+    fetch(`/api/public/price-plan?plan_version_id=${encodeURIComponent(planVersionId)}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { data?: { name: string; priceLabel: string } } | null) => {
+        if (!cancelled && body?.data) {
+          setSelectedPlan({ name: body.data.name, priceLabel: body.data.priceLabel })
+        }
+      })
+      .catch(() => {
+        // Silent — the generic label below still renders.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [planVersionId])
 
   useEffect(() => {
     const company = registryCompany
@@ -184,7 +205,13 @@ function RegisterContent() {
           </div>
         </section>
 
-        {(selectedFlow || planCode) && workspaceType === 'company' ? <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">Du startar med: <span className="font-medium text-foreground">{selectedFlow === 'bank_automation' ? 'Automatisk bokföring' : selectedFlow === 'year_end_one_time' ? 'Bokslut' : selectedFlow === 'bankgiro_autogiro' ? 'Bankgiro/Autogiro' : planCode ? 'Vald prisplan' : 'Bokföring'}</span>{planVersionId ? <span className="ml-1">Planvalet sparas till betalningssteget.</span> : null}</div> : null}
+        {selectedPlan ? (
+          <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
+            Vald plan: <span className="font-medium text-foreground">{selectedPlan.name}</span>
+            <span className="ml-1">({selectedPlan.priceLabel} exkl. moms)</span>
+            <span className="ml-1">Planvalet sparas till betalningssteget — inget dras förrän du bekräftar betalningen.</span>
+          </div>
+        ) : (selectedFlow || planCode) && workspaceType === 'company' ? <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">Du startar med: <span className="font-medium text-foreground">{selectedFlow === 'bank_automation' ? 'Automatisk bokföring' : selectedFlow === 'year_end_one_time' ? 'Bokslut' : selectedFlow === 'bankgiro_autogiro' ? 'Bankgiro/Autogiro' : planCode ? 'Vald prisplan' : 'Bokföring'}</span>{planVersionId ? <span className="ml-1">Planvalet sparas till betalningssteget.</span> : null}</div> : null}
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Förnamn" value={firstName} onChange={setFirstName} autoComplete="given-name" />

@@ -56,12 +56,35 @@ export interface FeatureAccessResult {
   limitUnit?: string | null
 }
 
+/**
+ * Current sellable catalog codes (source of truth: platform_price_plans /
+ * platform_plan_versions in Postgres — this constant exists only for typed
+ * references in code and must follow the catalog).
+ *
+ * Legacy codes (start_monthly, auto_monthly, agency_monthly,
+ * bankgiro_addon_monthly) were archived in migration
+ * 20260714140000_commercial_catalog_consolidation.
+ */
 export const NORDKLART_PLAN_CODES = [
-  'start_monthly',
-  'auto_monthly',
-  'agency_monthly',
+  // Company base plans
+  'company_start',
+  'company_plus',
+  'company_pro',
+  // Agency base plans
+  'agency_start',
+  'agency_plus',
+  'agency_pro',
+  // One-time products
   'year_end_one_time',
-  'bankgiro_addon_monthly',
+  // Add-ons
+  'addon_extra_company_user',
+  'addon_extra_external_advisor',
+  'addon_extra_payroll_5_employees',
+  'addon_extra_agency_10_clients',
+  'addon_extra_agency_staff',
+  'addon_bankgiro_operations',
+  'addon_api_webhooks',
+  'addon_ai_automation',
 ] as const
 
 export type NordklartPlanCode = (typeof NORDKLART_PLAN_CODES)[number]

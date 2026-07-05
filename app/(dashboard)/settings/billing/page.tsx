@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import { CheckCircle2, CircleAlert, ReceiptText } from 'lucide-react'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { canManageCompanyBilling } from '@/lib/billing/access'
 import { BillingActions } from '@/components/billing/BillingActions'
@@ -10,7 +10,7 @@ import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
-type PlanRow = { id: string; product_id: string; code: string; name: string; description: string | null; status: string }
+type PlanRow = { id: string; product_id: string; code: string; name: string; description: string | null; status: string; is_public: boolean | null; audience_type: string | null }
 type ProductRow = { id: string; code: string; product_type: 'subscription' | 'addon' | 'one_time'; status: string }
 type VersionRow = { id: string; plan_id: string; price_excl_vat: number | string; currency: string; billing_interval: string; stripe_price_id: string | null; status: string; effective_from: string; grace_days: number }
 type SubscriptionRow = { id: string; plan_version_id: string | null; status: string; current_period_end: string | null; grace_ends_at: string | null; external_provider: string | null; cancel_at_period_end: boolean }
@@ -95,7 +95,10 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
     supabase.from('billing_events').select('id,event_type,amount_excl_vat,currency,created_at').eq('company_id', companyId).order('created_at', { ascending: false }).limit(12),
     supabase.from('bankgiro_applications').select('id,status,provider_setup_status,documents_status,updated_at').eq('company_id', companyId).order('updated_at', { ascending: false }).limit(1),
     supabase.from('company_billing_profiles').select('stripe_customer_id').eq('company_id', companyId).maybeSingle(),
-    supabase.from('platform_price_plans').select('id,product_id,code,name,description,status').eq('status', 'active').order('sort_order', { ascending: true }),
+    // Load the whole catalog (including archived plans) so the CURRENT
+    // subscription always renders its plan name — purchase filtering
+    // happens separately below.
+    supabase.from('platform_price_plans').select('id,product_id,code,name,description,status,is_public,audience_type').order('sort_order', { ascending: true }),
     supabase.from('platform_products').select('id,code,product_type,status').eq('status', 'active').order('sort_order', { ascending: true }),
     supabase.from('platform_plan_versions').select('id,plan_id,price_excl_vat,currency,billing_interval,stripe_price_id,status,effective_from,grace_days').in('status', ['active', 'scheduled']).order('effective_from', { ascending: false }),
     supabase.from('company_subscription_change_requests').select('id,request_type,status,requested_at,target_plan_version_id').eq('company_id', companyId).order('requested_at', { ascending: false }).limit(20),
@@ -129,11 +132,30 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
     ? versions.find((version) => version.plan_id === currentVersion.plan_id && version.status === 'scheduled') ?? null
     : null
 
+  // Base plans are audience-scoped: a byrå's own subscription company buys
+  // agency plans, everyone else buys company plans. Add-ons and one-time
+  // products are audience-neutral SKUs.
+  const { data: agencyRow } = await supabase
+    .from('agencies')
+    .select('id')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const buyerAudience = agencyRow ? 'agency' : 'company'
+
   const purchasablePlans = versions
     .map((version) => {
       const plan = planById.get(version.plan_id)
       const product = plan ? productById.get(plan.product_id) : null
       if (!plan || !product || version.status !== 'active') return null
+      // Only currently sold plans are purchasable — archived/paused plans
+      // remain loaded above solely so existing subscriptions render names.
+      if (plan.status !== 'active') return null
+      if (product.product_type === 'subscription') {
+        // Public base plans matching the buyer's audience. Plans without an
+        // audience (legacy/internal) are not self-service purchasable.
+        if (plan.is_public !== true) return null
+        if (plan.audience_type !== buyerAudience && plan.audience_type !== 'both') return null
+      }
       return {
         id: version.id,
         name: plan.name,
@@ -147,6 +169,26 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
       }
     })
     .filter((plan): plan is NonNullable<typeof plan> => Boolean(plan))
+
+  // Signup plan intent: the plan chosen on /priser is stored on the signup
+  // draft (signup_drafts.selected_plan_version_id) and honored here — the
+  // one place where payment actually happens. Never auto-charges; it only
+  // pre-selects the plan in the purchase UI.
+  let preselectedPlanVersionId: string | null = null
+  if (!activeBase && canManageBilling) {
+    const { data: draft } = await createServiceClient()
+      .from('signup_drafts')
+      .select('selected_plan_version_id')
+      .eq('claimed_by_user_id', user.id)
+      .not('selected_plan_version_id', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const draftVersionId = (draft as { selected_plan_version_id?: string | null } | null)?.selected_plan_version_id ?? null
+    if (draftVersionId && purchasablePlans.some((plan) => plan.id === draftVersionId)) {
+      preselectedPlanVersionId = draftVersionId
+    }
+  }
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -164,7 +206,7 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
         </div>
       </section>
 
-      {canManageBilling ? <BillingActions plans={purchasablePlans} fiscalPeriods={periods.map((period) => ({ id: period.id, name: period.name, periodStart: period.period_start, periodEnd: period.period_end }))} hasActiveBaseSubscription={activeBase} hasStripeCustomer={Boolean(profileRes.data?.stripe_customer_id)} activeSubscriptionId={activeSubscription?.id ?? null} activePlanVersionId={activeSubscription?.plan_version_id ?? null} changeRequests={changeRequests.map((request) => ({ id: request.id, requestType: request.request_type, status: request.status, requestedAt: request.requested_at, targetPlanVersionId: request.target_plan_version_id }))} /> : <section className="rounded-2xl border bg-card p-5 text-sm text-muted-foreground">Endast företagets ägare eller administratör kan ändra abonnemang och betalning.</section>}
+      {canManageBilling ? <BillingActions plans={purchasablePlans} fiscalPeriods={periods.map((period) => ({ id: period.id, name: period.name, periodStart: period.period_start, periodEnd: period.period_end }))} hasActiveBaseSubscription={activeBase} hasStripeCustomer={Boolean(profileRes.data?.stripe_customer_id)} activeSubscriptionId={activeSubscription?.id ?? null} activePlanVersionId={activeSubscription?.plan_version_id ?? null} preselectedPlanVersionId={preselectedPlanVersionId} changeRequests={changeRequests.map((request) => ({ id: request.id, requestType: request.request_type, status: request.status, requestedAt: request.requested_at, targetPlanVersionId: request.target_plan_version_id }))} /> : <section className="rounded-2xl border bg-card p-5 text-sm text-muted-foreground">Endast företagets ägare eller administratör kan ändra abonnemang och betalning.</section>}
 
       <section className="rounded-3xl border bg-card p-5 shadow-sm"><h2 className="text-xl font-semibold">Aktiva tjänster och åtkomst</h2><div className="mt-4 grid gap-3 lg:grid-cols-2"><div className="rounded-2xl border bg-background/60 p-4"><p className="font-medium">Tillägg</p><div className="mt-3 space-y-2">{activeItems.map((item) => { const version = versionById.get(item.plan_version_id); const plan = version ? planById.get(version.plan_id) : null; return <div key={item.id} className="flex items-center justify-between gap-3 text-sm"><span>{plan?.name ?? 'Tillägg'}</span><span className="text-muted-foreground">{item.status === 'past_due' && item.grace_ends_at ? `Tillgång till ${date(item.grace_ends_at)}` : `Period till ${date(item.current_period_end)}`}</span></div> })}{activeItems.length === 0 ? <p className="text-sm text-muted-foreground">Inga aktiva tillägg.</p> : null}</div></div><div className="rounded-2xl border bg-background/60 p-4"><p className="font-medium">Gratis- och partneråtkomst</p><div className="mt-3 space-y-2">{activeGrants.map((grant) => <div key={grant.id} className="flex items-center justify-between gap-3 text-sm"><span>{grantLabel(grant.grant_type)}</span><span className="text-muted-foreground">{grant.expires_at ? `Gäller till ${date(grant.expires_at)}` : 'Utan slutdatum'}</span></div>)}{activeGrants.length === 0 ? <p className="text-sm text-muted-foreground">Ingen separat kostnadsfri åtkomst.</p> : null}</div></div></div></section>
 

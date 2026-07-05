@@ -16,6 +16,12 @@ jobs:
         # seed migration (npm run skills:generate). Keeps prod skill content from
         # silently drifting out of sync. No DB needed — reads files + manifest.
         run: npm run skills:check
+      - name: Verify feature-policy coverage
+        # Every v1 operation / dashboard route family must have an explicit
+        # entitlement mapping (or an explicit exemption) in
+        # lib/platform/feature-policy.ts. Previously not wired into CI, so
+        # coverage could silently regress.
+        run: npm run check:feature-policy
       - name: Reset extensions config
         run: echo '{"extensions":[]}' > extensions.config.json
       - run: npm run setup:extensions

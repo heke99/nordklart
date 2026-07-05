@@ -46,6 +46,12 @@ function planCtaHref(plan: PublicPricePlan) {
   return `${pathname}?${params.toString()}`
 }
 
+function intervalSuffix(billingInterval: string) {
+  if (billingInterval === 'month') return '/mån'
+  if (billingInterval === 'year') return '/år'
+  return ''
+}
+
 function PlanCard({ plan }: { plan: PublicPricePlan }) {
   const isAgency = plan.audience_type === 'agency'
   const ctaHref = planCtaHref(plan)
@@ -61,7 +67,7 @@ function PlanCard({ plan }: { plan: PublicPricePlan }) {
 
       <div className="mt-6">
         <div className="text-sm text-muted-foreground">Pris från</div>
-        <div className="mt-1 text-3xl font-semibold">{money(plan.monthly_price_ex_vat, plan.currency)}<span className="text-base font-normal text-muted-foreground">/mån</span></div>
+        <div className="mt-1 text-3xl font-semibold">{money(plan.monthly_price_ex_vat, plan.currency)}<span className="text-base font-normal text-muted-foreground">{intervalSuffix(plan.billing_interval)}</span></div>
         <p className="mt-1 text-xs text-muted-foreground">Priser visas exklusive moms. Innehåll och villkor kan variera beroende på vald plan.</p>
       </div>
 
@@ -102,8 +108,13 @@ export default async function PriserPage() {
   const plans = await listPublicPricePlans()
   const companyPlans = plans.filter((plan) => plan.audience_type === 'company')
   const agencyPlans = plans.filter((plan) => plan.audience_type === 'agency')
-  const companyFrom = companyPlans.length ? Math.min(...companyPlans.map((plan) => plan.monthly_price_ex_vat)) : null
-  const agencyFrom = agencyPlans.length ? Math.min(...agencyPlans.map((plan) => plan.monthly_price_ex_vat)) : null
+  // The hero "från X/mån" claim only holds for monthly-billed plans.
+  const monthlyPrices = (list: PublicPricePlan[]) =>
+    list.filter((plan) => plan.billing_interval === 'month').map((plan) => plan.monthly_price_ex_vat)
+  const companyMonthly = monthlyPrices(companyPlans)
+  const agencyMonthly = monthlyPrices(agencyPlans)
+  const companyFrom = companyMonthly.length ? Math.min(...companyMonthly) : null
+  const agencyFrom = agencyMonthly.length ? Math.min(...agencyMonthly) : null
 
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-col gap-12 px-6 py-16 sm:py-24 lg:px-8">
