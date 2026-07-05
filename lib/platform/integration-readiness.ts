@@ -274,5 +274,64 @@ export function computeIntegrationReadiness(env: Env = process.env): Integration
     })
   }
 
+  // ── AI document extraction (Anthropic/Bedrock/OpenAI) ─────────────────────
+  {
+    const anyProvider =
+      Boolean(env.ANTHROPIC_API_KEY) || Boolean(env.AWS_ACCESS_KEY_ID) || Boolean(env.OPENAI_API_KEY)
+    entries.push({
+      id: 'document_extraction', name: 'AI-dokumenttolkning (kvitton/fakturor)', responsible: 'superadmin',
+      status: anyProvider ? 'production_ready' : 'not_configured',
+      message_sv: anyProvider
+        ? 'Minst en AI-leverantör är konfigurerad för dokumenttolkning.'
+        : 'Sätt ANTHROPIC_API_KEY, AWS-nycklar (Bedrock) eller OPENAI_API_KEY för AI-tolkning av kvitton och fakturor. Manuell registrering fungerar utan.',
+      missingEnvVars: anyProvider ? [] : ['ANTHROPIC_API_KEY'],
+      docsPath: '/extensions',
+    })
+  }
+
+  // ── Cloud backup (Google Drive) ────────────────────────────────────────────
+  {
+    const g = groupState(env, ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'])
+    entries.push({
+      id: 'cloud_backup', name: 'Molnbackup (Google Drive)', responsible: 'superadmin',
+      status: g.state === 'all' ? 'production_ready' : g.state === 'none' ? 'not_configured' : 'misconfigured',
+      message_sv:
+        g.state === 'all'
+          ? 'Google OAuth-klient konfigurerad för molnbackup.'
+          : g.state === 'none'
+            ? 'Sätt GOOGLE_CLIENT_ID och GOOGLE_CLIENT_SECRET för att aktivera kundens Google Drive-backup.'
+            : `Ofullständig konfiguration — saknar ${g.missing.join(', ')}.`,
+      missingEnvVars: g.missing, docsPath: '/extensions',
+    })
+  }
+
+  // ── Invoice inbox (Resend inbound) ─────────────────────────────────────────
+  {
+    const configured = Boolean(env.RESEND_API_KEY)
+    entries.push({
+      id: 'invoice_inbox', name: 'Fakturainkorg (inkommande e-post)', responsible: 'superadmin',
+      status: configured ? 'production_ready' : 'not_configured',
+      message_sv: configured
+        ? 'Resend är konfigurerad — inkommande leverantörsfakturor kan tas emot via e-post.'
+        : 'Fakturainkorgen kräver Resend (RESEND_API_KEY) med inbound-domän konfigurerad.',
+      missingEnvVars: configured ? [] : ['RESEND_API_KEY'],
+      docsPath: '/extensions',
+    })
+  }
+
+  // ── Provider token encryption at rest ──────────────────────────────────────
+  {
+    const configured = Boolean(env.PROVIDER_TOKEN_ENCRYPTION_KEY)
+    entries.push({
+      id: 'provider_token_encryption', name: 'Tokenkryptering (migreringstokens)', responsible: 'superadmin',
+      status: configured ? 'production_ready' : 'misconfigured',
+      message_sv: configured
+        ? 'Provider-tokens krypteras i vila (AES-256-GCM).'
+        : 'PROVIDER_TOKEN_ENCRYPTION_KEY saknas — OAuth-tokens för migreringsleverantörer lagras i klartext. Sätt nyckeln före produktion.',
+      missingEnvVars: configured ? [] : ['PROVIDER_TOKEN_ENCRYPTION_KEY'],
+      docsPath: null,
+    })
+  }
+
   return entries
 }

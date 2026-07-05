@@ -1,6 +1,6 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
+import { requirePlatformRole } from '@/lib/auth/platform'
 import { NordklartActionCard, NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,9 +19,11 @@ type ProviderRow = {
 }
 
 export default async function PlatformBankAutomationPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  // All platform roles may inspect these cross-tenant stats. The service
+  // client is required: RLS-scoped reads silently return zeros for
+  // platform_support / platform_auditor (only platform_admin bypasses RLS).
+  await requirePlatformRole()
+  const supabase = createServiceClient()
 
   const [
     { data: providers },

@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { AlertTriangle, ArrowLeft, Banknote, BookOpenCheck, Building2, CreditCard, UsersRound } from 'lucide-react'
-import { requirePlatformAdmin } from '@/lib/auth/platform'
+import { requirePlatformRole } from '@/lib/auth/platform'
 import { NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -44,7 +44,10 @@ function sourceTypeLabel(value: unknown) {
 }
 
 export default async function PlatformCompanyDetailPage({ params, searchParams }: { params: Promise<{ companyId: string }>; searchParams: Promise<SearchParams> }) {
-  await requirePlatformAdmin()
+  // Support/auditor roles get the full read view (they could already list
+  // companies but not open them); every write form stays superadmin-only.
+  const { role } = await requirePlatformRole()
+  const canWrite = role === 'platform_admin'
   const [{ companyId }, query] = await Promise.all([params, searchParams])
   const detail = await getPlatformCompanyDetail(companyId)
   if (!detail) notFound()
@@ -57,7 +60,7 @@ export default async function PlatformCompanyDetailPage({ params, searchParams }
 
   return (
     <NordklartPageShell
-      eyebrow="Superadmin · bolagskort"
+      eyebrow={canWrite ? "Superadmin · bolagskort" : "Plattform · bolagskort (läsläge)"}
       title={company.name}
       description="Granska bolagets användare, byråkoppling, åtkomst, abonnemang, bokslut, Bankgiro och bokföringskontroller. Alla ändringar sker via kontrollerade server actions och audit-loggas."
       actions={
@@ -121,7 +124,7 @@ export default async function PlatformCompanyDetailPage({ params, searchParams }
             <p className="mt-2 text-muted-foreground">Förnyas/slutar: {dateTime(commercial?.current_period_end)} · Källa: {commercial?.access_source || 'saknas'}</p>
           </div>
 
-          <form action={setCompanySubscriptionFromCardAction} className="mt-5 grid gap-3 rounded-2xl border p-4">
+          {canWrite ? <form action={setCompanySubscriptionFromCardAction} className="mt-5 grid gap-3 rounded-2xl border p-4">
             <input type="hidden" name="company_id" value={company.id} />
             <h3 className="font-semibold">Byt eller sätt basplan</h3>
             <select required name="plan_version_id" className="h-10 rounded-lg border bg-background px-3 text-sm" defaultValue={commercial?.plan_version_id || ''}>
@@ -134,9 +137,9 @@ export default async function PlatformCompanyDetailPage({ params, searchParams }
             </div>
             <input name="note" placeholder="Intern anteckning" className="h-10 rounded-lg border bg-background px-3 text-sm" />
             <Button type="submit" size="sm">Spara abonnemang</Button>
-          </form>
+          </form> : null}
 
-          <form action={addSubscriptionItemFromCardAction} className="mt-5 grid gap-3 rounded-2xl border p-4">
+          {canWrite ? <form action={addSubscriptionItemFromCardAction} className="mt-5 grid gap-3 rounded-2xl border p-4">
             <input type="hidden" name="company_id" value={company.id} />
             <input type="hidden" name="subscription_id" value={activeSubscriptionId || ''} />
             <h3 className="font-semibold">Lägg till tillägg/quantity</h3>
@@ -147,25 +150,25 @@ export default async function PlatformCompanyDetailPage({ params, searchParams }
             <div className="grid gap-3 md:grid-cols-2"><input name="quantity" type="number" min="1" step="1" defaultValue="1" className="h-10 rounded-lg border bg-background px-3 text-sm" /><input name="current_period_end" type="datetime-local" className="h-10 rounded-lg border bg-background px-3 text-sm" /></div>
             <input name="note" placeholder="Intern anteckning" className="h-10 rounded-lg border bg-background px-3 text-sm" />
             <Button type="submit" size="sm" disabled={!activeSubscriptionId || addonPlans.length === 0}>Lägg till</Button>
-          </form>
+          </form> : null}
         </section>
 
         <section className="rounded-3xl border bg-card p-6 shadow-sm">
           <div className="flex items-start gap-3"><Banknote className="mt-1 h-5 w-5 text-primary" /><div><h2 className="text-xl font-semibold">Särskild åtkomst och köp</h2><p className="mt-1 text-sm text-muted-foreground">Tillfällig eller kostnadsfri åtkomst ska alltid ha intern anteckning.</p></div></div>
-          <form action={grantCompanyAccessFromCardAction} className="mt-5 grid gap-3 rounded-2xl border p-4">
+          {canWrite ? <form action={grantCompanyAccessFromCardAction} className="mt-5 grid gap-3 rounded-2xl border p-4">
             <input type="hidden" name="company_id" value={company.id} />
             <h3 className="font-semibold">Bevilja åtkomst</h3>
             <select name="grant_type" defaultValue="complimentary_full_access" className="h-10 rounded-lg border bg-background px-3 text-sm"><option value="complimentary_full_access">Kostnadsfri full åtkomst</option><option value="complimentary_bankgiro">Kostnadsfri Bankgiro-åtkomst</option></select>
             <div className="grid gap-3 md:grid-cols-2"><input name="starts_at" type="datetime-local" className="h-10 rounded-lg border bg-background px-3 text-sm" /><input name="expires_at" type="datetime-local" className="h-10 rounded-lg border bg-background px-3 text-sm" /></div>
             <input required name="note" placeholder="Orsak / intern anteckning" className="h-10 rounded-lg border bg-background px-3 text-sm" />
             <Button type="submit" size="sm">Bevilja åtkomst</Button>
-          </form>
+          </form> : null}
           <div className="mt-5 space-y-3">
             {detail.grants.map((grant) => (
               <div key={String(grant.id)} className="rounded-2xl border bg-background/60 p-4 text-sm">
                 <div className="flex flex-wrap items-center gap-2"><Badge variant={grant.status === 'active' ? 'success' : 'secondary'}>{text(grant.status)}</Badge><span>{text(grant.grant_type)}</span></div>
                 <p className="mt-1 text-muted-foreground">{text(grant.note)} · {dateTime(grant.created_at)} → {dateTime(grant.expires_at)}</p>
-                {grant.status === 'active' || grant.status === 'scheduled' ? (
+                {canWrite && (grant.status === 'active' || grant.status === 'scheduled') ? (
                   <form action={revokeCompanyAccessFromCardAction} className="mt-3 flex flex-wrap gap-2">
                     <input type="hidden" name="company_id" value={company.id} />
                     <input type="hidden" name="grant_id" value={String(grant.id)} />

@@ -65,6 +65,7 @@ import { WRAPPED_RESPONSE_HEADERS } from './security-headers'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
 import { featureForApiV1Operation } from '@/lib/platform/feature-policy'
 import { checkFeatureAccess } from '@/lib/platform/entitlements'
+import { maintenanceBlocksWrites } from '@/lib/ops/maintenance'
 
 const IDEMPOTENCY_HEADER = 'Idempotency-Key'
 const DRY_RUN_HEADER = 'X-Dry-Run'
@@ -414,6 +415,13 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       //    opts in (or when an Idempotency-Key header is supplied).
       const idempotencyKey = request.headers.get(IDEMPOTENCY_HEADER)
       const isMutation = REQUIRES_IDEMPOTENCY.has(request.method)
+
+      // Read-only maintenance mode covers the external API surface too —
+      // previously only dashboard routes honored the operator kill switch.
+      if (isMutation && maintenanceBlocksWrites()) {
+        userLog.warn('v1 write rejected — maintenance read-only mode')
+        return await v1ErrorResponseFromCode('MAINTENANCE_READ_ONLY', userLog, { requestId })
+      }
 
       if (options.requireIdempotencyKey && isMutation && !idempotencyKey) {
         userLog.warn('missing idempotency key on mutating request')

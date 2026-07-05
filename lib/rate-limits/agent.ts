@@ -1,4 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('agent-rate-limit')
 
 /**
  * Per-user rate limiter for the in-app AI agent's LLM endpoints
@@ -19,6 +22,13 @@ export interface AgentLimitResult {
 const MINUTE_MAX = 30
 const DAY_MAX = 1000
 
+// Circuit breaker for RPC failures: a single blip fails open (defense in
+// depth — better to serve a real user), but SUSTAINED failure fails closed.
+// An unbounded fail-open limiter on LLM endpoints means unbounded Bedrock
+// spend while the quota store is down.
+const FAIL_CLOSED_AFTER_CONSECUTIVE_FAILURES = 3
+let consecutiveRpcFailures = 0
+
 export async function checkAgentRateLimit(
   supabase: SupabaseClient,
   userId: string,
@@ -29,11 +39,16 @@ export async function checkAgentRateLimit(
     p_day_max: DAY_MAX,
   })
   if (error) {
-    // Fail open on infra error — the limiter is defense-in-depth; better to
-    // serve a real user than to 429 them because the RPC blipped.
-    console.error('[agent-rate-limit] RPC failed:', error)
+    consecutiveRpcFailures += 1
+    log.error('agent quota RPC failed', error as unknown as Error, {
+      consecutiveFailures: consecutiveRpcFailures,
+    })
+    if (consecutiveRpcFailures >= FAIL_CLOSED_AFTER_CONSECUTIVE_FAILURES) {
+      return { ok: false, scope: 'minute', retryAfterSec: 30 }
+    }
     return { ok: true }
   }
+  consecutiveRpcFailures = 0
   const result = (data ?? { ok: true }) as {
     ok: boolean
     scope?: 'minute' | 'day'

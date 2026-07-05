@@ -1,4 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('inbox-rate-limit')
 
 /**
  * Per-company rate limiter for document-inbox ingestion. Backed by the
@@ -22,6 +25,12 @@ export interface InboxLimitResult {
 const MINUTE_MAX = 30
 const DAY_MAX = 500
 
+// Circuit breaker: single blips fail open (per-file size + MIME checks still
+// apply), sustained RPC failure fails closed so a flood cannot ride out an
+// outage of the quota store unmetered.
+const FAIL_CLOSED_AFTER_CONSECUTIVE_FAILURES = 3
+let consecutiveRpcFailures = 0
+
 export async function checkInboxUploadRateLimit(
   supabase: SupabaseClient,
   companyId: string,
@@ -32,12 +41,16 @@ export async function checkInboxUploadRateLimit(
     p_day_max: DAY_MAX,
   })
   if (error) {
-    // Fail open on infra error. The limiter is defense-in-depth — per-file
-    // size + MIME checks still apply on the upload route. Better to accept
-    // an upload than 500 a real user because Postgres blipped.
-    console.error('[inbox-rate-limit] RPC failed:', error)
+    consecutiveRpcFailures += 1
+    log.error('inbox quota RPC failed', error as unknown as Error, {
+      consecutiveFailures: consecutiveRpcFailures,
+    })
+    if (consecutiveRpcFailures >= FAIL_CLOSED_AFTER_CONSECUTIVE_FAILURES) {
+      return { ok: false, scope: 'minute', retryAfterSec: 30 }
+    }
     return { ok: true }
   }
+  consecutiveRpcFailures = 0
   // RPC returns jsonb_build_object payload. The JS client decodes as object.
   const result = (data ?? { ok: true }) as {
     ok: boolean

@@ -125,16 +125,33 @@ export async function GET(request: Request) {
   // ── Cron freshness ──────────────────────────────────────────────────────
   // event_log receives rows from ordinary activity AND every cron pass;
   // bank_sync_runs records cron-triggered syncs when PSD2 connections exist.
+  // The webhook dispatcher runs every minute, so a silent event_log for a
+  // whole day means cron scheduling itself is broken — that fails the check.
+  // Bank-sync staleness only applies when a cron sync has ever run (fresh
+  // installs without PSD2 connections must not page anyone).
   try {
     const [{ data: latestEvent }, { data: latestCronSync }] = await Promise.all([
       db.from('event_log').select('created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
       db.from('bank_sync_runs').select('started_at').eq('trigger_source', 'cron').order('started_at', { ascending: false }).limit(1).maybeSingle(),
     ])
+    const latestEventAt = (latestEvent as { created_at: string } | null)?.created_at ?? null
+    const latestCronSyncAt = (latestCronSync as { started_at: string } | null)?.started_at ?? null
+
+    const DAY_MS = 24 * 60 * 60 * 1000
+    const staleEvents = latestEventAt !== null && Date.now() - new Date(latestEventAt).getTime() > DAY_MS
+    // Daily bank sync: alert after two missed windows (50h) to avoid
+    // flapping around the schedule boundary.
+    const staleBankSync = latestCronSyncAt !== null && Date.now() - new Date(latestCronSyncAt).getTime() > 50 * 60 * 60 * 1000
+
     checks.cron = {
-      ok: true,
-      detail: 'freshness reported (thresholds are deployment-specific)',
-      latest_event_at: (latestEvent as { created_at: string } | null)?.created_at ?? null,
-      latest_cron_bank_sync_at: (latestCronSync as { started_at: string } | null)?.started_at ?? null,
+      ok: !staleEvents && !staleBankSync,
+      detail: staleEvents
+        ? 'no event_log rows for >24h — cron scheduling likely broken'
+        : staleBankSync
+          ? 'no cron bank sync for >50h — daily sync missing'
+          : 'cron activity fresh',
+      latest_event_at: latestEventAt,
+      latest_cron_bank_sync_at: latestCronSyncAt,
     }
   } catch {
     checks.cron = { ok: false, detail: 'freshness query failed' }

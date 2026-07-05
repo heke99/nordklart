@@ -100,6 +100,12 @@ export default async function PlatformPage() {
         <NordklartActionCard meta="Behörigheter" title="Plattformsteam" description="Tilldela och återkalla plattformsroller med audit-logg. Kostnadsfri bolagsåtkomst hanteras på bolagskortet.">
           <Button asChild size="sm"><Link href="/platform/access">Öppna</Link></Button>
         </NordklartActionCard>
+        <NordklartActionCard meta="Integrationer" title="Go-live-status" description="Miljövalidering per integration: Stripe, Resend, bank, Skatteverket, Bolagsverket, Peppol och fler.">
+          <Button asChild size="sm"><Link href="/platform/integrations">Öppna</Link></Button>
+        </NordklartActionCard>
+        <NordklartActionCard meta="Drift" title="Företagsoperationer" description="Cross-tenant backlog: misslyckade operationer, webhooks, obetalda perioder och supportprioritering.">
+          <Button asChild size="sm"><Link href="/platform/company-operations">Öppna</Link></Button>
+        </NordklartActionCard>
       </div>
 
     </NordklartPageShell>
