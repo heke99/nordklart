@@ -21,10 +21,29 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWritePermissionMock(...args),
 }))
 
+const getCompanyWriteAccessMock = vi.fn()
+vi.mock('@/lib/access/route-guards', () => ({
+  getCompanyWriteAccess: (...args: unknown[]) => getCompanyWriteAccessMock(...args),
+  getCompanyReadAccess: (...args: unknown[]) => getCompanyWriteAccessMock(...args),
+}))
+
 import { GET, POST } from '../route'
 import { PATCH } from '../[id]/route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+const writeAccess = {
+  companyId: 'company-1',
+  accessSource: 'direct',
+  agencyId: null,
+  effectiveRole: 'client_user',
+  canRead: true,
+  canWrite: true,
+  canReview: false,
+  canManageCompany: false,
+  canManageAgency: false,
+  canManagePlatform: false,
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -32,6 +51,7 @@ beforeEach(() => {
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   getActiveCompanyIdMock.mockResolvedValue('company-1')
   requireWritePermissionMock.mockResolvedValue({ ok: true })
+  getCompanyWriteAccessMock.mockResolvedValue(writeAccess)
 })
 
 describe('GET /api/agent/memory', () => {
@@ -132,10 +152,9 @@ describe('POST /api/agent/memory', () => {
       created_at: '2026-05-18T10:00:00Z',
       updated_at: '2026-05-18T10:00:00Z',
     }
-    // Defense-in-depth: body company_id membership re-check happens after
-    // requireWritePermission. POST flow now is: (1) company_members lookup,
-    // (2) insert.
-    enqueue({ data: { role: 'member' } })
+    // Defense-in-depth: body company_id write-access re-check happens after
+    // requireWritePermission via getCompanyWriteAccess (mocked). POST flow
+    // now is: (1) insert.
     enqueue({ data: inserted })
     const response = await POST(
       createMockRequest('/api/agent/memory', {
@@ -148,8 +167,8 @@ describe('POST /api/agent/memory', () => {
     expect(body.data.id).toBe('mem-2')
   })
 
-  it('rejects when user is a viewer in the target company', async () => {
-    enqueue({ data: { role: 'viewer' } })
+  it('rejects when user lacks write access in the target company', async () => {
+    getCompanyWriteAccessMock.mockResolvedValue(null)
     const response = await POST(
       createMockRequest('/api/agent/memory', {
         method: 'POST',
@@ -210,9 +229,9 @@ describe('PATCH /api/agent/memory/[id]', () => {
     expect(response.status).toBe(404)
   })
 
-  it('returns 404 when user has no membership in row company', async () => {
+  it('returns 404 when user has no write access in row company', async () => {
     enqueue({ data: { company_id: 'company-2' } })
-    enqueue({ data: null }) // company_members lookup
+    getCompanyWriteAccessMock.mockResolvedValue(null)
     const response = await PATCH(
       createMockRequest('/api/agent/memory/mem-1', {
         method: 'PATCH',
@@ -237,9 +256,8 @@ describe('PATCH /api/agent/memory/[id]', () => {
       created_at: '2026-05-10T09:00:00Z',
       updated_at: '2026-05-18T10:00:00Z',
     }
-    // PATCH flow: (1) row lookup, (2) membership lookup, (3) update.
+    // PATCH flow: (1) row lookup, (2) update. Write access is mocked.
     enqueue({ data: { company_id: 'company-1' } })
-    enqueue({ data: { role: 'member' } })
     enqueue({ data: updated })
     const response = await PATCH(
       createMockRequest('/api/agent/memory/mem-1', {
@@ -268,7 +286,6 @@ describe('PATCH /api/agent/memory/[id]', () => {
       updated_at: '2026-05-18T10:00:00Z',
     }
     enqueue({ data: { company_id: 'company-1' } })
-    enqueue({ data: { role: 'member' } })
     enqueue({ data: updated })
     const response = await PATCH(
       createMockRequest('/api/agent/memory/mem-1', {

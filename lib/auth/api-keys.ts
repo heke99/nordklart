@@ -292,6 +292,12 @@ export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
 /**
  * Create a Supabase service client that doesn't require cookies.
  * Used for API key validation (MCP, webhooks) where there's no browser session.
+ *
+ * Functionally equivalent to `createServiceClient()` in
+ * `lib/supabase/server.ts` (both are stateless service-role clients that
+ * bypass RLS), but built on plain `@supabase/supabase-js` so this module
+ * stays importable outside a Next.js request scope (no `next/headers`).
+ * Keep both in sync if the client configuration ever changes.
  */
 export function createServiceClientNoCookies() {
   return createClient(

@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { getCompanyReadAccess } from '@/lib/access/route-guards'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { composeAgentProfile } from '@/lib/agent/composer'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -53,15 +54,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'No active company' }, { status: 400 })
   }
 
-  // Defense in depth alongside RLS — confirm membership before composing.
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .in('status', ['active', 'active_limited'])
-    .maybeSingle()
-  if (!membership) {
+  // Defense in depth alongside RLS — confirm read access before composing.
+  const access = await getCompanyReadAccess(supabase, companyId)
+  if (!access) {
     return NextResponse.json({ error: 'Not a member of this company' }, { status: 403 })
   }
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
+import { getCompanyReadAccess } from '@/lib/access/route-guards'
 
 /**
  * GET /api/documents/:id/inline
@@ -45,7 +46,7 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, supabase, error } = await requireAuth()
+  const { supabase, error } = await requireAuth()
   if (error) return error
 
   const { id } = await params
@@ -62,16 +63,10 @@ export async function GET(
     return NextResponse.json({ error: 'Document not found' }, { status: 404 })
   }
 
-  // Explicit membership check on top of RLS.
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('company_id')
-    .eq('company_id', doc.company_id)
-    .eq('user_id', user.id)
-    .in('status', ['active', 'active_limited'])
-    .maybeSingle()
-
-  if (!membership) {
+  // Explicit access check on top of RLS — includes agency staff and
+  // platform admins, matching what RLS already permits.
+  const access = await getCompanyReadAccess(supabase, doc.company_id)
+  if (!access) {
     return NextResponse.json({ error: 'Document not found' }, { status: 404 })
   }
 

@@ -6,6 +6,13 @@ import type { Company, CompanyRole, Team } from '@/types'
 interface CompanyContextValue {
   company: Company | null
   role: CompanyRole | null
+  /**
+   * Server-resolved effective write capability for the active company
+   * (resolve_company_access → canWrite). Unlike the legacy role check this
+   * accounts for agency reviewer/read-only staff and `active_limited`
+   * memberships — keep UI gating in sync with the API/RLS layers.
+   */
+  canWrite: boolean
   companies: { company: Company; role: CompanyRole }[]
   isTeamMember: boolean
   team: Team | null

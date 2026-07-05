@@ -43,6 +43,10 @@ export function createServiceClient() {
   // service role key and re-enables RLS. A cookie-less client
   // ensures the service role key is used for authorization,
   // properly bypassing RLS on every query.
+  //
+  // Sibling: `createServiceClientNoCookies()` in lib/auth/api-keys.ts is
+  // the same client built on plain supabase-js for modules that must load
+  // outside a Next.js request scope. Keep both in sync.
   return createServerClient(
     safeUrl,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,

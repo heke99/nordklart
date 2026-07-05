@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { getCompanyWriteAccess } from '@/lib/access/route-guards'
 
 // GET /api/agent/memory
 //
@@ -99,16 +100,10 @@ export async function POST(request: Request) {
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
   // requireWritePermission above checks the *active* company's role; if the
-  // caller passes a different company_id in the body, re-check membership +
-  // non-viewer role for THAT company specifically.
-  const { data: bodyMembership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .eq('status', 'active')
-    .maybeSingle()
-  if (!bodyMembership || bodyMembership.role === 'viewer') {
+  // caller passes a different company_id in the body, re-check effective
+  // write access for THAT company specifically.
+  const bodyAccess = await getCompanyWriteAccess(supabase, companyId)
+  if (!bodyAccess) {
     return NextResponse.json(
       { error: 'Du har endast läsbehörighet i detta företag.' },
       { status: 403 },

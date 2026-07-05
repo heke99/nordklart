@@ -26,7 +26,18 @@ export async function requireAuth(): Promise<AuthResult> {
   }
 
   if (shouldEnforceMfa(user)) {
-    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+
+    // Fail closed: if the assurance level cannot be resolved we must not
+    // silently skip MFA enforcement — treat it as unverified.
+    if (aalError) {
+      return {
+        user: null,
+        supabase,
+        error: NextResponse.json({ error: 'MFA verification required' }, { status: 403 }),
+      }
+    }
+
     if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
       return {
         user: null,

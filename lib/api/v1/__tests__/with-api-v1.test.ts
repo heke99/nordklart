@@ -61,9 +61,17 @@ const mockCheckIdempotency = checkIdempotencyKey as ReturnType<typeof vi.fn>
 const mockStoreIdempotency = storeIdempotencyResponse as ReturnType<typeof vi.fn>
 
 function makeSupabaseStub(membership: { company_id: string; role: string } | null) {
-  // Mirrors the wrapper's membership lookup chain:
-  // .from().select().eq().eq().in().maybeSingle()
+  // Mirrors the wrapper's access resolution: an rpc() call to
+  // resolve_company_access_for_user returning zero rows (no access) or one
+  // row with can_read=true. The legacy membership shape is kept as the
+  // test-facing parameter for readability.
   return {
+    rpc: vi.fn().mockResolvedValue({
+      data: membership
+        ? [{ company_id: membership.company_id, effective_role: membership.role, can_read: true, can_write: true }]
+        : [],
+      error: null,
+    }),
     from: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({

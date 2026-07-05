@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { getCompanyWriteAccess } from '@/lib/access/route-guards'
 
 // PATCH /api/agent/memory/[id]
 //
@@ -66,14 +67,8 @@ export async function PATCH(
     .maybeSingle()
   if (!existing) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
 
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', existing.company_id)
-    .eq('user_id', user.id)
-    .in('status', ['active', 'active_limited'])
-    .maybeSingle()
-  if (!membership) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
+  const rowAccess = await getCompanyWriteAccess(supabase, existing.company_id)
+  if (!rowAccess) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
 
   const { data, error } = await supabase
     .from('agent_memory')

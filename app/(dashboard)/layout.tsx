@@ -58,9 +58,9 @@ export default async function DashboardLayout({
 
   // Resolve active company from user_preferences (authoritative). The
   // `nordklart-company-id` cookie is intentionally no longer consulted here —
-  // `getActiveCompanyId` reads from user_preferences, matching what RLS
-  // sees via `current_active_company_id()`. Keeping both sides on the same
-  // source avoids cross-tab / cookie divergence.
+  // `getActiveCompanyId` reads from user_preferences and validates access
+  // through resolve_company_access. Keeping both sides on the same source
+  // avoids cross-tab / cookie divergence.
   const companyId = await getActiveCompanyId(supabase, user.id)
 
   // Read the pathname forwarded by middleware so we can branch on it.
@@ -101,6 +101,7 @@ export default async function DashboardLayout({
         value={{
           company: null,
           role: null,
+          canWrite: false,
           companies: [],
           isTeamMember,
           team,
@@ -156,6 +157,7 @@ export default async function DashboardLayout({
     const companyContextValue = {
       company: null,
       role: null,
+      canWrite: false,
       companies: accessibleCompanies.map((item) => ({
         company: {
           id: item.companyId,
@@ -285,6 +287,7 @@ export default async function DashboardLayout({
   const companyContextValue = {
     company: companyWithName,
     role: legacyRoleFromEffectiveRole(activeAccess.effectiveRole) as CompanyRole,
+    canWrite: activeAccess.canWrite,
     companies: accessibleCompanies.map((item) => {
       const c = {
         id: item.companyId,

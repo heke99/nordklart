@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { getCompanyReadAccess } from '@/lib/access/route-guards'
 
 // GET /api/agent/conversations/[id]
 //
@@ -38,20 +39,14 @@ export async function GET(
   if (convErr) return NextResponse.json({ error: convErr.message }, { status: 500 })
   if (!conv) return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
 
-  // Defense in depth alongside RLS — verify caller is a member of the
+  // Defense in depth alongside RLS — verify caller has read access to the
   // conversation's company AND owns the conversation row. Conversations are
   // user-scoped within a company; one team member should not see another's.
   if (conv.user_id !== user.id) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
   }
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', conv.company_id)
-    .eq('user_id', user.id)
-    .in('status', ['active', 'active_limited'])
-    .maybeSingle()
-  if (!membership) {
+  const access = await getCompanyReadAccess(supabase, conv.company_id)
+  if (!access) {
     return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
   }
 

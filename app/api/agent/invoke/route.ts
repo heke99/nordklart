@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { getCompanyReadAccess } from '@/lib/access/route-guards'
 import { getIntent } from '@/lib/agent/intents/registry'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
@@ -98,14 +99,10 @@ export async function POST(request: Request) {
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .in('status', ['active', 'active_limited'])
-    .maybeSingle()
-  if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  // Defense in depth alongside RLS — direct members, authorized agency
+  // staff and platform admins all resolve through the same source of truth.
+  const access = await getCompanyReadAccess(supabase, companyId)
+  if (!access) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   // No Anthropic Bedrock calls in the sandbox — the demo runs entirely on
   // seed data and the assistant is gated to a "look, don't touch" preview.

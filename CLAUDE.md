@@ -30,7 +30,7 @@ npm run skills:check     # CI guard: fail if an atom SKILL.md changed without re
 
 ## Key Architectural Relationships
 
-- **Multi-tenant model**: `companies` owns all business data. `company_members` links users to companies (owner/admin/member/viewer). `teams` group companies. Context resolved via `nordklart-company-id` cookie in `lib/supabase/middleware.ts`.
+- **Multi-tenant model**: `companies` owns all business data. `company_members` links users to companies (owner/admin/member/viewer). `agencies`/`agency_members`/`agency_clients` model accounting agencies (`teams` remains a legacy bridge). Active company context is resolved from `user_preferences.active_company_id` validated through the `resolve_company_access` RPC (`lib/company/context.ts`, mirrored in `lib/supabase/middleware.ts`); the `nordklart-company-id` cookie is write-only sync for legacy readers.
 - **All journal entry creation** routes through `lib/bookkeeping/engine.ts`. Lifecycle: `createDraftEntry()` → `commitEntry()` (atomic voucher via `commit_journal_entry` RPC). `createJournalEntry()` does both. Reversal: `reverseEntry()`. Correction: `correctEntry()` in `lib/core/bookkeeping/storno-service.ts`.
 - **API routes** emitting events must call `ensureInitialized()` (`lib/init.ts`) at module level to load extensions and wire handlers.
 - **Event bus** (`lib/events/bus.ts`) is a module-level singleton using `Promise.allSettled`. 50+ event types in `lib/events/types.ts`. Persisted to `event_log` table (30-day TTL).
@@ -67,7 +67,7 @@ npm run skills:check     # CI guard: fail if an atom SKILL.md changed without re
 - **teams**: Consultant grouping. Team members auto-sync to company_members via DB triggers.
 - **user_preferences**: Stores `active_company_id` and `locale`.
 
-**Context resolution** (`lib/supabase/middleware.ts`): cookie → `user_preferences.active_company_id` → first membership. RLS uses `user_company_ids()` helper.
+**Context resolution** (`lib/supabase/middleware.ts`): `user_preferences.active_company_id` (validated via `resolve_company_access`) → first accessible company. RLS uses `user_company_ids()` / `user_can_access_company_v2()` helpers.
 
 **Invitations**: `company_invitations`/`team_invitations` with `nordklart_inv_` tokens (SHA-256, 7-day TTL). See `lib/auth/invite-tokens.ts`.
 

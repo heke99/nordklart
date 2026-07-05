@@ -117,7 +117,13 @@ export async function updateSession(request: NextRequest) {
   if (!user) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
-    return NextResponse.redirect(url)
+    const redirect = NextResponse.redirect(url)
+    // Session is gone (logout / expiry) — clear the company context cookie so
+    // the next account on this browser never inherits a stale company id.
+    if (request.cookies.get('nordklart-company-id')) {
+      redirect.cookies.set('nordklart-company-id', '', { path: '/', maxAge: 0 })
+    }
+    return redirect
   }
 
   // /mfa/enroll: gate behind has-password. BankID-only users who reach this
@@ -156,7 +162,12 @@ export async function updateSession(request: NextRequest) {
 
   // MFA enforcement (application-side only, not RLS)
   if (shouldEnforceMfa(user)) {
-    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+
+    // Fail closed: an unresolvable assurance level must not bypass MFA.
+    if (aalError) {
+      return NextResponse.redirect(new URL('/mfa/verify', request.url))
+    }
 
     // User has MFA enrolled but hasn't verified this session → redirect to verify
     if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
@@ -212,7 +223,11 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith('/select-company') ||
     pathname.startsWith('/settings/account') ||
     pathname.startsWith('/api/account/') ||
-    pathname.startsWith('/api/company')
+    pathname.startsWith('/api/company') ||
+    // Users whose signup resolved to a pending access request (duplicate org
+    // number) have no company yet — they must be able to reach the pending
+    // page instead of being bounced back into /onboarding.
+    pathname.startsWith('/access-pending')
 
   // No companies — redirect to the picker if we have BankID enrichment for
   // this user, otherwise the manual wizard. Either way, allow the escape-hatch
@@ -257,12 +272,11 @@ export async function updateSession(request: NextRequest) {
  * Resolution: user_preferences → first non-archived membership.
  *
  * `user_preferences.active_company_id` is the authoritative source for
- * the active company on both the Next.js and Postgres RLS side. The
+ * the active company on both the Next.js and Postgres side. The
  * `nordklart-company-id` cookie is still refreshed for legacy read paths
- * but it is no longer READ here, because RLS (via
- * `current_active_company_id()`) cannot see cookies — so letting the
- * cookie override the database would re-introduce the divergence this
- * entire migration exists to fix.
+ * but it is no longer READ here — the database cannot see cookies, so
+ * letting the cookie override user_preferences would re-introduce the
+ * divergence this migration exists to fix.
  *
  * When we fall back to "first membership" (no user_preferences row yet),
  * we also upsert user_preferences so subsequent RLS lookups agree with

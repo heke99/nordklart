@@ -25,12 +25,17 @@ export async function switchWorkspaceContext(
   const activeCompanyId = prefs?.active_company_id ?? null
 
   if (workspaceType === 'platform') {
+    // Parity with the /platform layout guard (requirePlatformRole): every
+    // active platform role — admin, support, auditor — may enter the
+    // platform workspace. Write actions inside it are separately gated on
+    // platform_admin.
     const { data: platformRole } = await supabase
       .from('platform_roles')
       .select('role')
       .eq('user_id', user.id)
-      .eq('role', 'platform_admin')
+      .in('role', ['platform_admin', 'platform_support', 'platform_auditor'])
       .is('revoked_at', null)
+      .limit(1)
       .maybeSingle()
 
     if (!platformRole) return { ok: false, error: 'Du saknar platform-behörighet.' }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { getCompanyReadAccess } from '@/lib/access/route-guards'
 import { validateDocumentMagicBytes } from '@/lib/core/documents/document-service'
 import { createLogger } from '@/lib/logger'
 
@@ -30,7 +31,7 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, supabase, error } = await requireAuth()
+  const { supabase, error } = await requireAuth()
   if (error) return error
 
   const rawParams = await params
@@ -55,19 +56,13 @@ export async function GET(
     return NextResponse.json({ error: 'Document not found' }, { status: 404 })
   }
 
-  // Tenant membership: even with the user-scoped supabase client below,
+  // Tenant access: even with the user-scoped supabase client below,
   // we want a clear 404 rather than relying on a storage-layer RLS deny
   // (which can present as a generic error). RLS on document_attachments
-  // is the primary control; this is defense in depth.
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('company_id')
-    .eq('company_id', doc.company_id)
-    .eq('user_id', user.id)
-    .in('status', ['active', 'active_limited'])
-    .maybeSingle()
-
-  if (!membership) {
+  // is the primary control; this is defense in depth and includes agency
+  // staff and platform admins, matching RLS.
+  const access = await getCompanyReadAccess(supabase, doc.company_id)
+  if (!access) {
     return NextResponse.json({ error: 'Document not found' }, { status: 404 })
   }
 

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Building2, Loader2, ShieldCheck, UsersRound } from 'lucide-react'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
 import { switchWorkspaceContext, type WorkspaceContextType } from '@/lib/workspace/actions'
 
@@ -93,6 +94,7 @@ function WorkspaceButton({
  */
 export default function WorkspaceSwitcher() {
   const router = useRouter()
+  const { toast } = useToast()
   const [isPending, startTransition] = useTransition()
   const {
     company,
@@ -117,7 +119,14 @@ export default function WorkspaceSwitcher() {
     if (nextType === workspaceType || isPending) return
     startTransition(async () => {
       const result = await switchWorkspaceContext(nextType, nextType === 'agency' ? agencyId : null)
-      if (!result.ok) return
+      if (!result.ok) {
+        toast({
+          title: 'Kunde inte byta arbetsyta',
+          description: result.error,
+          variant: 'destructive',
+        })
+        return
+      }
       router.push(WORKSPACE_META[nextType].href)
       router.refresh()
     })

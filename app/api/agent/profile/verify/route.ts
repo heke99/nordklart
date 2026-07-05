@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { getCompanyWriteAccess } from '@/lib/access/route-guards'
 
 // POST /api/agent/profile/verify
 //
@@ -31,16 +32,10 @@ export async function POST(request: Request) {
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
-  // Defense in depth alongside RLS — confirm membership for the target
-  // company; a non-viewer role is required to stamp verified_at.
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .eq('status', 'active')
-    .maybeSingle()
-  if (!membership || membership.role === 'viewer') {
+  // Defense in depth alongside RLS — effective write access in the target
+  // company is required to stamp verified_at (read-only roles are rejected).
+  const access = await getCompanyWriteAccess(supabase, companyId)
+  if (!access) {
     return NextResponse.json(
       { error: 'Du har endast läsbehörighet i detta företag.' },
       { status: 403 },

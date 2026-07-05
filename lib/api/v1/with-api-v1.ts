@@ -12,8 +12,10 @@
  *      (`/health`, `/openapi.json`) skip the scope check but still validate
  *      the token when one is supplied.
  *   4. When the URL contains `companyId`, verifies the API key's user has
- *      access to that company via `company_members`. Multi-company keys are
- *      supported transparently — the URL is the source of truth.
+ *      access to that company via `resolve_company_access_for_user` (direct
+ *      membership, authorized agency staff or platform admin — the same
+ *      source of truth as RLS). Multi-company keys are supported
+ *      transparently — the URL is the source of truth.
  *   5. Resolves `Idempotency-Key` (header) and replays cached responses.
  *   6. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
  *   7. Invokes the handler with a typed RouteContext.
@@ -197,6 +199,58 @@ function isDryRun(request: Request, url: URL): boolean {
   return false
 }
 
+/**
+ * Verify that the API key's user can read the URL company.
+ *
+ * Primary path: `resolve_company_access_for_user` — the explicit-user
+ * variant of the central access resolver (granted to service_role only).
+ * It covers direct members, authorized agency staff and platform admins,
+ * matching RLS exactly.
+ *
+ * Fallback path: if the RPC is unavailable (deployment gap before the
+ * migration applies), fall back to the pre-existing direct
+ * `company_members` check so direct members are never locked out.
+ */
+async function userCanAccessCompany(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  log: Logger,
+): Promise<boolean | 'error'> {
+  try {
+    const { data, error } = await supabase.rpc('resolve_company_access_for_user', {
+      p_user_id: userId,
+      p_company_id: companyId,
+    })
+    if (!error && Array.isArray(data)) {
+      const row = data[0] as { can_read?: boolean } | undefined
+      return row?.can_read === true
+    }
+    if (error) {
+      log.warn('resolve_company_access_for_user unavailable — falling back to direct membership', {
+        code: (error as { code?: string }).code ?? 'unknown',
+      })
+    }
+  } catch {
+    // RPC transport failure — fall through to the membership check below.
+  }
+
+  const { data: membership, error: membershipErr } = await supabase
+    .from('company_members')
+    .select('company_id, role, status')
+    .eq('user_id', userId)
+    .eq('company_id', companyId)
+    .in('status', ['active', 'active_limited'])
+    .maybeSingle()
+
+  if (membershipErr) {
+    log.error('failed to resolve company membership', membershipErr as Error)
+    return 'error'
+  }
+
+  return Boolean(membership)
+}
+
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
   // We need the body to hash it, but the handler also needs it. Read from a
   // CLONE for the hash and pass the original through to the handler — that
@@ -328,21 +382,14 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       const supabase = createServiceClientNoCookies()
 
       if (companyId !== undefined) {
-        const { data: membership, error: membershipErr } = await supabase
-          .from('company_members')
-          .select('company_id, role, status')
-          .eq('user_id', auth.userId)
-          .eq('company_id', companyId)
-          .in('status', ['active', 'active_limited'])
-          .maybeSingle()
+        const hasAccess = await userCanAccessCompany(supabase, auth.userId, companyId, userLog)
 
-        if (membershipErr) {
-          userLog.error('failed to resolve company membership', membershipErr as Error)
+        if (hasAccess === 'error') {
           return await v1ErrorResponseFromCode('INTERNAL_ERROR', userLog, { requestId })
         }
 
-        if (!membership) {
-          userLog.warn('user is not a member of company in URL', { companyId, ...forensic })
+        if (!hasAccess) {
+          userLog.warn('user has no access to company in URL', { companyId, ...forensic })
           // 404 (not 403) so we don't leak company existence to unauthorized callers.
           return await v1ErrorResponseFromCode('NOT_FOUND', userLog, {
             requestId,

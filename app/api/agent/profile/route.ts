@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { getCompanyReadAccess, getCompanyWriteAccess } from '@/lib/access/route-guards'
 
 // GET /api/agent/profile?company_id=...
 // PATCH same path
@@ -41,15 +42,10 @@ export async function GET(request: Request) {
     url.searchParams.get('company_id') ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
-  // Defense in depth alongside RLS — confirm membership before reading.
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .in('status', ['active', 'active_limited'])
-    .maybeSingle()
-  if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  // Defense in depth alongside RLS — confirm read access (direct member,
+  // authorized agency staff or platform admin) before reading.
+  const access = await getCompanyReadAccess(supabase, companyId)
+  if (!access) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const { data, error } = await supabase
     .from('agent_profiles')
@@ -82,15 +78,10 @@ export async function PATCH(request: Request) {
   const companyId = body.company_id ?? (await getActiveCompanyId(supabase, user.id))
   if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
 
-  // RLS guards reads/updates by company_id; defense in depth — updates require an active membership.
-  const { data: membership } = await supabase
-    .from('company_members')
-    .select('role')
-    .eq('company_id', companyId)
-    .eq('user_id', user.id)
-    .eq('status', 'active')
-    .maybeSingle()
-  if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  // RLS guards reads/updates by company_id; defense in depth — updates
+  // require effective write access in the target company.
+  const access = await getCompanyWriteAccess(supabase, companyId)
+  if (!access) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   // Load current overrides to merge timestamp-stamped entries. Avoids round-trip
   // when caller sends only an atom-array change.
