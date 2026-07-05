@@ -133,7 +133,11 @@ export async function sendReminder(
     html: generateReminderEmailHtml(emailData),
     text: generateReminderEmailText(emailData),
     replyTo: company.email || undefined,
-    fromName: company.company_name || undefined
+    fromName: company.company_name || undefined,
+    context: {
+      companyId: invoice.company_id,
+      templateKey: `invoice.reminder_l${reminderLevel}`,
+    },
   })
 
   return result
@@ -191,7 +195,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     // Get existing reminders for this invoice
     const { data: existingReminders } = await supabase
       .from('invoice_reminders')
-      .select('reminder_level, response_type')
+      .select('reminder_level, response_type, send_status')
       .eq('invoice_id', invoice.id)
 
     // Skip if customer already responded (marked paid OR disputed) — they've
@@ -206,7 +210,11 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       continue
     }
 
-    const existingLevels = existingReminders?.map(r => r.reminder_level) || []
+    // Failed sends do NOT consume the level — the next run retries them by
+    // re-claiming the failed row (see the claim logic below).
+    const existingLevels = existingReminders
+      ?.filter(r => r.send_status !== 'failed')
+      .map(r => r.reminder_level) || []
     const daysOverdue = calculateDaysOverdue(invoice.due_date)
     const reminderLevel = determineReminderLevel(daysOverdue, existingLevels)
 
@@ -307,37 +315,56 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     const totalDue =
       Math.round((overdueAmount + interest.amount + reminderFee) * 100) / 100
 
-    // Create reminder record first (to get action token), persisting the
-    // computed surcharges so the public action page + audit trail show them.
-    const { data: reminderRecord, error: reminderError } = await supabase
-      .from('invoice_reminders')
-      .insert({
-        invoice_id: invoice.id,
-        user_id: invoice.user_id,
-        company_id: invoice.company_id,
-        reminder_level: reminderLevel,
-        email_to: customer.email,
-        interest_amount: interest.amount,
-        interest_rate: interest.rate,
-        interest_from_date: interest.fromDate,
-        interest_days: interest.days,
-        reminder_fee: reminderFee,
-        fee_journal_entry_id: feeJournalEntryId,
-      })
-      .select('action_token')
-      .single()
+    // Claim the reminder row FIRST (send_status='pending'). The partial
+    // unique index on (invoice_id, reminder_level) where send_status IN
+    // ('pending','sent') makes this concurrency-safe: a second cron run
+    // hits 23505 and skips. A previously FAILED send is retried by
+    // compare-and-swap re-claiming the failed row.
+    let reminderRecord: { id: string; action_token: string } | null = null
+    {
+      const { data: inserted, error: reminderError } = await supabase
+        .from('invoice_reminders')
+        .insert({
+          invoice_id: invoice.id,
+          user_id: invoice.user_id,
+          company_id: invoice.company_id,
+          reminder_level: reminderLevel,
+          email_to: customer.email,
+          send_status: 'pending',
+          interest_amount: interest.amount,
+          interest_rate: interest.rate,
+          interest_from_date: interest.fromDate,
+          interest_days: interest.days,
+          reminder_fee: reminderFee,
+          fee_journal_entry_id: feeJournalEntryId,
+        })
+        .select('id, action_token')
+        .single()
 
-    if (reminderError || !reminderRecord) {
-      log.error(`Failed to create reminder record for invoice ${invoice.invoice_number}:`, reminderError)
-      results.push({
-        invoiceId: invoice.id,
-        invoiceNumber: invoice.invoice_number,
-        customerEmail: customer.email,
-        reminderLevel,
-        success: false,
-        error: 'Failed to create reminder record'
-      })
-      continue
+      if (!reminderError && inserted) {
+        reminderRecord = inserted as { id: string; action_token: string }
+      } else if ((reminderError as { code?: string } | null)?.code === '23505') {
+        // A pending/sent row already exists — a concurrent run claimed this
+        // level (or it was sent between our read and this insert). Failed
+        // rows are OUTSIDE the partial index, so a retry after failure takes
+        // the plain-insert path above with a fresh action token; the failed
+        // row remains as audit.
+        log.info(`Skipping invoice ${invoice.invoice_number}: level ${reminderLevel} already claimed by another run`)
+        continue
+      }
+
+      if (!reminderRecord) {
+        log.error(`Failed to create reminder record for invoice ${invoice.invoice_number}:`, reminderError)
+        results.push({
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.invoice_number,
+          customerEmail: customer.email,
+          reminderLevel,
+          success: false,
+          error: 'Failed to create reminder record'
+        })
+        continue
+      }
     }
 
     // Send the reminder email
@@ -355,6 +382,16 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
         totalDue,
       },
     )
+
+    // Mark the claimed row with the real outcome. Failed rows leave the
+    // unique-index predicate so the next cron run retries the level.
+    await supabase
+      .from('invoice_reminders')
+      .update({
+        send_status: sendResult.success ? 'sent' : 'failed',
+        sent_at: sendResult.success ? new Date().toISOString() : null,
+      })
+      .eq('id', reminderRecord.id)
 
     if (sendResult.success) {
       log.info(`Sent level ${reminderLevel} reminder for invoice ${invoice.invoice_number} to ${customer.email}`)

@@ -417,6 +417,10 @@ async function sendConsentExpiryNotification(
       subject: generateConsentExpiryEmailSubject(emailData),
       html: generateConsentExpiryEmailHtml(emailData),
       text: generateConsentExpiryEmailText(emailData),
+      context: {
+        companyId: connection.company_id as string,
+        templateKey: isExpired ? 'bank.consent_expired' : 'bank.consent_expiring',
+      },
     })
 
     // Update last notification timestamp

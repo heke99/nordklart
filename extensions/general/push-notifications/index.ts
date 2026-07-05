@@ -60,7 +60,7 @@ export async function getSettings(userId: string): Promise<PushNotificationSetti
     .select(
       'period_locked_enabled, period_year_closed_enabled, invoice_sent_enabled, receipt_extracted_enabled, receipt_matched_enabled, missing_underlag_enabled'
     )
-    .eq('company_id', userId)
+    .eq('user_id', userId)
     .single()
 
   if (!data) return { ...DEFAULT_SETTINGS }

@@ -167,6 +167,10 @@ export async function POST(request: Request) {
       subject: generateInviteEmailSubject(emailData),
       html: generateInviteEmailHtml(emailData),
       text: generateInviteEmailText(emailData),
+      context: {
+        companyId,
+        templateKey: 'company.member_invite',
+      },
     })
 
     if (result.success) {

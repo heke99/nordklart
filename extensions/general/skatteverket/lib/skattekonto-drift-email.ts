@@ -1,4 +1,5 @@
 import { getEmailService } from '@/lib/email/service'
+import { getBranding } from '@/lib/branding/service'
 import { createLogger } from '@/lib/logger'
 import { formatDate } from '@/lib/utils'
 import type { ExtensionContext } from '@/lib/extensions/types'
@@ -70,7 +71,7 @@ export async function handleSkattekontoDriftDetected(
     '• Tidsskillnad — F-skatt debiteras den 12:e men förfaller senare, så Skatteverkets saldo kan ligga före bokföringen.',
     '• Obokförda skattekonto-rader som väntar på din kategorisering.',
     '',
-    'Skapa inte en rättelseverifikation innan du har granskat raderna i nordklart.',
+    `Skapa inte en rättelseverifikation innan du har granskat raderna i ${getBranding().appName}.`,
   ]
   const text = lines.join('\n')
 
@@ -83,7 +84,7 @@ export async function handleSkattekontoDriftDetected(
   <li>Tidsskillnad — F-skatt debiteras den 12:e men förfaller senare, så Skatteverkets saldo kan ligga före bokföringen.</li>
   <li>Obokförda skattekonto-rader som väntar på din kategorisering.</li>
 </ul>
-<p>Skapa inte en rättelseverifikation innan du har granskat raderna i nordklart.</p>
+<p>Skapa inte en rättelseverifikation innan du har granskat raderna i ${escapeHtml(getBranding().appName)}.</p>
 `.trim()
 
   try {
@@ -92,6 +93,13 @@ export async function handleSkattekontoDriftDetected(
       subject,
       text,
       html,
+      context: {
+        companyId: payload.companyId,
+        templateKey: 'skatteverket.skattekonto_drift',
+        // One alert per company/day even if the drift event replays —
+        // complements the 24h emission throttle upstream.
+        dedupeKey: `skattekonto_drift:${payload.companyId}:${new Date(payload.fetchedAt).toISOString().slice(0, 10)}`,
+      },
     })
     if (!result.success) {
       log.warn('drift email send failed', {

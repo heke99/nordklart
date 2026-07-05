@@ -21,11 +21,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
-import {
-  generateInvoiceEmailHtml,
-  generateInvoiceEmailText,
-  generateInvoiceEmailSubject,
-} from '@/lib/email/invoice-templates'
+import { buildInvoiceEmailOptions, invoiceEmailFilename } from '@/lib/invoices/send-invoice-email'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { createLogger } from '@/lib/logger'
 import type {
@@ -391,22 +387,20 @@ async function sendInvoiceFromSchedule(
     }),
   )
 
-  const emailData = { invoice, customer: invoice.customer, company }
-  const filename = `faktura-${invoice.invoice_number}.pdf`
+  const filename = invoiceEmailFilename(invoice)
   const ccAddress = company.email || undefined
 
-  const result = await emailService.sendEmail({
-    to: invoice.customer.email,
-    cc: ccAddress,
-    subject: generateInvoiceEmailSubject(emailData),
-    html: generateInvoiceEmailHtml(emailData),
-    text: generateInvoiceEmailText(emailData),
-    replyTo: company.email || undefined,
-    fromName: company.company_name ?? undefined,
-    attachments: [
-      { filename, content: pdfBuffer, contentType: 'application/pdf' },
-    ],
-  })
+  const result = await emailService.sendEmail(
+    buildInvoiceEmailOptions({
+      invoice,
+      customer: invoice.customer,
+      company,
+      companyId,
+      pdfBuffer,
+      to: invoice.customer.email,
+      ccAddress,
+    }),
+  )
 
   if (!result.success) {
     log.error(

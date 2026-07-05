@@ -51,38 +51,48 @@ export class ResendEmailService implements EmailService {
       ? `${safeFromName} via ${safeAppName} <${DEFAULT_FROM_EMAIL}>`
       : `${safeAppName} <${DEFAULT_FROM_EMAIL}>`
 
-    try {
-      const resend = getResendClient()
-      const response = await resend.emails.send({
-        from,
-        to: Array.isArray(to) ? to : [to],
-        cc: cc ? (Array.isArray(cc) ? cc : [cc]) : undefined,
-        subject,
-        html,
-        text,
-        replyTo,
-        attachments: attachments?.map(att => ({
-          filename: att.filename,
-          content: typeof att.content === 'string'
-            ? Buffer.from(att.content, 'base64')
-            : Buffer.from(att.content),
-          contentType: att.contentType,
-        })),
-      })
+    const payload = {
+      from,
+      to: Array.isArray(to) ? to : [to],
+      cc: cc ? (Array.isArray(cc) ? cc : [cc]) : undefined,
+      subject,
+      html,
+      text,
+      replyTo,
+      attachments: attachments?.map(att => ({
+        filename: att.filename,
+        content: typeof att.content === 'string'
+          ? Buffer.from(att.content, 'base64')
+          : Buffer.from(att.content),
+        contentType: att.contentType,
+      })),
+    }
 
-      if (response.error) {
-        log.error('Resend error:', response.error)
-        return { success: false, error: response.error.message }
-      }
+    // One bounded retry, only for TRANSPORT failures (thrown — network,
+    // timeout). API-level rejections (response.error: invalid recipient,
+    // quota) are deterministic and never retried.
+    const maxAttempts = 2
+    let lastError = 'Unknown error'
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const resend = getResendClient()
+        const response = await resend.emails.send(payload)
 
-      return { success: true, messageId: response.data?.id }
-    } catch (error) {
-      log.error('Failed to send email:', error)
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        if (response.error) {
+          log.error('Resend error:', response.error)
+          return { success: false, error: response.error.message }
+        }
+
+        return { success: true, messageId: response.data?.id }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : 'Unknown error'
+        log.error(`Failed to send email (attempt ${attempt}/${maxAttempts}):`, error)
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 500))
+        }
       }
     }
+    return { success: false, error: lastError }
   }
 
   isConfigured(): boolean {

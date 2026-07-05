@@ -45,11 +45,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
-import {
-  generateInvoiceEmailHtml,
-  generateInvoiceEmailSubject,
-  generateInvoiceEmailText,
-} from '@/lib/email/invoice-templates'
+import { buildInvoiceEmailOptions, invoiceEmailFilename } from '@/lib/invoices/send-invoice-email'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
@@ -386,30 +382,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 8: send the email. Delivery notes AND credit notes were rejected
     // earlier so docType is 'invoice' or 'proforma' here.
-    const docType = typed.document_type ?? 'invoice'
-    const filename =
-      docType === 'proforma'
-        ? `proformafaktura-${finalInvoiceNumber}.pdf`
-        : `faktura-${finalInvoiceNumber}.pdf`
+    const filename = invoiceEmailFilename(renderableInvoice)
 
     const ccAddress = settings.email ?? null
-    const emailData = { invoice: renderableInvoice, customer, company: settings }
-    const result = await emailService.sendEmail({
-      to: customer.email,
-      cc: ccAddress ?? undefined,
-      subject: generateInvoiceEmailSubject(emailData),
-      html: generateInvoiceEmailHtml(emailData),
-      text: generateInvoiceEmailText(emailData),
-      replyTo: settings.email ?? undefined,
-      fromName: settings.company_name ?? undefined,
-      attachments: [
-        {
-          filename,
-          content: pdfBuffer,
-          contentType: 'application/pdf',
-        },
-      ],
-    })
+    const result = await emailService.sendEmail(
+      buildInvoiceEmailOptions({
+        invoice: renderableInvoice,
+        customer,
+        company: settings,
+        companyId: ctx.companyId!,
+        pdfBuffer,
+        to: customer.email,
+        ccAddress,
+      }),
+    )
 
     if (!result.success) {
       ctx.log.error('invoices.send: email provider failed', new Error(result.error ?? 'unknown'), {

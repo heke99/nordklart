@@ -123,7 +123,7 @@ async function handleDeleteSubscribe(
   const { error } = await supabase
     .from('push_subscriptions')
     .delete()
-    .eq('company_id', userId)
+    .eq('user_id', userId)
     .eq('endpoint', endpoint)
 
   if (error) {

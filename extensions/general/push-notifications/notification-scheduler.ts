@@ -66,7 +66,7 @@ export async function sendTaxDeadlineNotifications(
     const { data: settings } = await supabase
       .from('notification_settings')
       .select('tax_deadlines_enabled')
-      .eq('company_id', userId)
+      .eq('user_id', userId)
       .single()
 
     if (settings && !settings.tax_deadlines_enabled) {
@@ -155,7 +155,7 @@ export async function sendInvoiceNotifications(
     const { data: settings } = await supabase
       .from('notification_settings')
       .select('invoice_reminders_enabled')
-      .eq('company_id', userId)
+      .eq('user_id', userId)
       .single()
 
     if (settings && !settings.invoice_reminders_enabled) {
@@ -282,7 +282,7 @@ export async function sendMissingUnderlagNotifications(
     const { data: settings } = await supabase
       .from('notification_settings')
       .select('missing_underlag_enabled')
-      .eq('company_id', userId)
+      .eq('user_id', userId)
       .single()
 
     if (settings && settings.missing_underlag_enabled === false) {

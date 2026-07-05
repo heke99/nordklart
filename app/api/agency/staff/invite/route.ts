@@ -126,6 +126,10 @@ export async function POST(request: Request) {
       subject: generateAgencyInviteEmailSubject(emailData),
       html: generateAgencyInviteEmailHtml(emailData),
       text: generateAgencyInviteEmailText(emailData),
+      context: {
+        companyId: agencyRow.company_id,
+        templateKey: 'agency.staff_invite',
+      },
     })
 
     if (!result.success) {

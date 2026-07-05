@@ -1,5 +1,6 @@
 import type { Invoice, Customer, CompanySettings } from '@/types'
 import { formatCurrency, formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
+import { escapeHtml } from '@/lib/email/escape-html'
 
 export interface ReminderEmailData {
   invoice: Invoice
@@ -74,7 +75,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${config.title} - Faktura ${invoice.invoice_number}</title>
+  <title>${config.title} - Faktura ${escapeHtml(invoice.invoice_number ?? '')}</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f9fafb;">
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
@@ -88,23 +89,23 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
 
       <!-- Title -->
       <h1 style="margin: 0 0 20px 0; font-size: 22px; font-weight: 600; color: #111; text-align: center;">
-        Faktura ${invoice.invoice_number} förföll för ${daysOverdue} dagar sedan
+        Faktura ${escapeHtml(invoice.invoice_number ?? '')} förföll för ${daysOverdue} dagar sedan
       </h1>
 
       <!-- Greeting and Message -->
       <div style="margin-bottom: 30px;">
         <p style="margin: 0 0 15px 0;">
-          Hej${customer.name ? ` ${customer.name.split(' ')[0]}` : ''},
+          Hej${customer.name ? ` ${escapeHtml(customer.name.split(' ')[0])}` : ''},
         </p>
 
         ${reminderLevel === 1 ? `
         <p style="margin: 0 0 15px 0;">
-          Vi vill påminna dig om att faktura ${invoice.invoice_number} förföll till betalning den ${formatDate(invoice.due_date)}.
+          Vi vill påminna dig om att faktura ${escapeHtml(invoice.invoice_number ?? '')} förföll till betalning den ${formatDate(invoice.due_date)}.
           Om du redan har betalat kan du bortse från denna påminnelse.
         </p>
         ` : reminderLevel === 2 ? `
         <p style="margin: 0 0 15px 0;">
-          Trots vår tidigare påminnelse har vi ännu inte mottagit betalning för faktura ${invoice.invoice_number}
+          Trots vår tidigare påminnelse har vi ännu inte mottagit betalning för faktura ${escapeHtml(invoice.invoice_number ?? '')}
           som förföll den ${formatDate(invoice.due_date)}.
         </p>
         <p style="margin: 0 0 15px 0;">
@@ -112,7 +113,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
         </p>
         ` : `
         <p style="margin: 0 0 15px 0; color: #dc2626; font-weight: 500;">
-          Detta är vår slutliga påminnelse gällande faktura ${invoice.invoice_number}.
+          Detta är vår slutliga påminnelse gällande faktura ${escapeHtml(invoice.invoice_number ?? '')}.
         </p>
         <p style="margin: 0 0 15px 0;">
           Fakturan förföll till betalning den ${formatDate(invoice.due_date)} och vi har ännu inte mottagit betalning
@@ -129,7 +130,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
         <table style="width: 100%; border-collapse: collapse;">
           <tr>
             <td style="padding: 8px 0; color: #666; font-size: 14px;">Fakturanummer:</td>
-            <td style="padding: 8px 0; text-align: right; font-weight: 500;">${invoice.invoice_number}</td>
+            <td style="padding: 8px 0; text-align: right; font-weight: 500;">${escapeHtml(invoice.invoice_number ?? '')}</td>
           </tr>
           <tr>
             <td style="padding: 8px 0; color: #666; font-size: 14px;">Fakturadatum:</td>
@@ -185,30 +186,30 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
           ${company.bank_name ? `
           <tr>
             <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">Bank:</td>
-            <td style="padding: 6px 0;">${company.bank_name}</td>
+            <td style="padding: 6px 0;">${escapeHtml(company.bank_name ?? '')}</td>
           </tr>
           ` : ''}
           ${company.clearing_number && company.account_number ? `
           <tr>
             <td style="padding: 6px 0; color: #666; font-size: 14px;">Kontonummer:</td>
-            <td style="padding: 6px 0;">${company.clearing_number}-${company.account_number}</td>
+            <td style="padding: 6px 0;">${escapeHtml(company.clearing_number ?? '')}-${escapeHtml(company.account_number ?? '')}</td>
           </tr>
           ` : ''}
           ${company.iban ? `
           <tr>
             <td style="padding: 6px 0; color: #666; font-size: 14px;">IBAN:</td>
-            <td style="padding: 6px 0;">${company.iban}</td>
+            <td style="padding: 6px 0;">${escapeHtml(company.iban ?? '')}</td>
           </tr>
           ` : ''}
           ${company.bic ? `
           <tr>
             <td style="padding: 6px 0; color: #666; font-size: 14px;">BIC/SWIFT:</td>
-            <td style="padding: 6px 0;">${company.bic}</td>
+            <td style="padding: 6px 0;">${escapeHtml(company.bic ?? '')}</td>
           </tr>
           ` : ''}
           <tr>
             <td style="padding: 6px 0; color: #666; font-size: 14px;">Meddelande:</td>
-            <td style="padding: 6px 0; font-weight: 500;">${invoice.invoice_number}</td>
+            <td style="padding: 6px 0; font-weight: 500;">${escapeHtml(invoice.invoice_number ?? '')}</td>
           </tr>
         </table>
       </div>
@@ -230,12 +231,12 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
         </p>
         <p style="margin: 0; color: #666; font-size: 14px;">
           Med vänliga hälsningar,<br>
-          <strong>${getCompanyPrimaryName(company)}</strong>
+          <strong>${escapeHtml(getCompanyPrimaryName(company))}</strong>
         </p>
         ${company.org_number ? `
         <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
-          Org.nr: ${company.org_number}
-          ${company.vat_number ? ` | VAT: ${company.vat_number}` : ''}
+          Org.nr: ${escapeHtml(company.org_number ?? '')}
+          ${company.vat_number ? ` | VAT: ${escapeHtml(company.vat_number ?? '')}` : ''}
         </p>
         ` : ''}
       </div>

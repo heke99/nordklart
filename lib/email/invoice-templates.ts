@@ -1,5 +1,6 @@
 import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
+import { escapeHtml } from '@/lib/email/escape-html'
 
 type EmailLang = 'sv' | 'en'
 
@@ -122,7 +123,11 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   const isDeliveryNote = docType === 'delivery_note'
   const isProforma = docType === 'proforma'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma
-  const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  // Every user-influenced string below is HTML-escaped before interpolation
+  // (customer/company names, invoice number/prefix, bank fields).
+  const firstName = escapeHtml(customer.name ? customer.name.split(' ')[0] : '')
+  const senderName = escapeHtml(getCompanyPrimaryName(company))
+  const invoiceNumber = escapeHtml(invoice.invoice_number ?? '')
 
   // Primary color drives the heading accent and the highlighted total. The
   // accent is sanitized to a strict hex pattern — anything else falls back
@@ -137,17 +142,17 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${documentType} ${invoice.invoice_number}</title>
+  <title>${documentType} ${invoiceNumber}</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
     <!-- Header -->
     <div style="margin-bottom: 30px; border-bottom: 2px solid ${primaryColor}; padding-bottom: 16px;">
       <h1 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600; color: ${primaryColor};">
-        ${L.documentFrom(documentType, getCompanyPrimaryName(company))}
+        ${L.documentFrom(documentType, senderName)}
       </h1>
       <p style="margin: 0; color: #666; font-size: 14px;">
-        ${L.documentNumber(documentType)} ${invoice.invoice_number}
+        ${L.documentNumber(documentType)} ${invoiceNumber}
       </p>
     </div>
 
@@ -166,7 +171,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
       <table style="width: 100%; border-collapse: collapse;">
         <tr>
           <td style="padding: 8px 0; color: #666; font-size: 14px;">${L.documentNumber(documentType)}</td>
-          <td style="padding: 8px 0; text-align: right; font-weight: 500;">${invoice.invoice_number}</td>
+          <td style="padding: 8px 0; text-align: right; font-weight: 500;">${invoiceNumber}</td>
         </tr>
         <tr>
           <td style="padding: 8px 0; color: #666; font-size: 14px;">${L.documentDate(documentType)}</td>
@@ -200,30 +205,30 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
         ${company.bank_name ? `
         <tr>
           <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">${L.bank}</td>
-          <td style="padding: 6px 0;">${company.bank_name}</td>
+          <td style="padding: 6px 0;">${escapeHtml(company.bank_name)}</td>
         </tr>
         ` : ''}
         ${company.clearing_number && company.account_number ? `
         <tr>
           <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.account}</td>
-          <td style="padding: 6px 0;">${company.clearing_number}-${company.account_number}</td>
+          <td style="padding: 6px 0;">${escapeHtml(company.clearing_number ?? '')}-${escapeHtml(company.account_number ?? '')}</td>
         </tr>
         ` : ''}
         ${company.iban ? `
         <tr>
           <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.iban}</td>
-          <td style="padding: 6px 0;">${company.iban}</td>
+          <td style="padding: 6px 0;">${escapeHtml(company.iban)}</td>
         </tr>
         ` : ''}
         ${company.bic ? `
         <tr>
           <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.bic}</td>
-          <td style="padding: 6px 0;">${company.bic}</td>
+          <td style="padding: 6px 0;">${escapeHtml(company.bic)}</td>
         </tr>
         ` : ''}
         <tr>
           <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.message}</td>
-          <td style="padding: 6px 0; font-weight: 500;">${invoice.invoice_number}</td>
+          <td style="padding: 6px 0; font-weight: 500;">${invoiceNumber}</td>
         </tr>
       </table>
     </div>
@@ -236,12 +241,12 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
       </p>
       <p style="margin: 0; color: #666; font-size: 14px;">
         ${L.sincerely}<br>
-        <strong style="color: ${primaryColor};">${getCompanyPrimaryName(company)}</strong>
+        <strong style="color: ${primaryColor};">${senderName}</strong>
       </p>
       ${company.org_number ? `
       <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
-        ${L.orgNo} ${company.org_number}
-        ${company.vat_number ? ` | ${L.vat} ${company.vat_number}` : ''}
+        ${L.orgNo} ${escapeHtml(company.org_number ?? '')}
+        ${company.vat_number ? ` | ${L.vat} ${escapeHtml(company.vat_number ?? '')}` : ''}
         ${company.f_skatt ? ` | ${L.fSkatt}` : ''}
       </p>
       ` : ''}

@@ -1,4 +1,5 @@
 import { getBranding } from '@/lib/branding/service'
+import { escapeHtml } from '@/lib/email/escape-html'
 
 export interface ConsentExpiryEmailData {
   bankName: string
@@ -17,7 +18,7 @@ export function generateConsentExpiryEmailHtml(data: ConsentExpiryEmailData): st
   const headerColor = isExpired ? '#dc2626' : '#ea580c'
   const title = isExpired
     ? 'Banksynkronisering har stoppats'
-    : `Samtycket för ${bankName} löper ut snart`
+    : `Samtycket för ${escapeHtml(bankName)} löper ut snart`
 
   return `
 <!DOCTYPE html>
@@ -43,14 +44,14 @@ export function generateConsentExpiryEmailHtml(data: ConsentExpiryEmailData): st
       <div style="margin-bottom: 30px;">
         ${isExpired ? `
         <p style="margin: 0 0 15px 0; color: #dc2626; font-weight: 500;">
-          PSD2-samtycket för ${bankName} har löpt ut. Automatisk transaktionssynkronisering är stoppad.
+          PSD2-samtycket för ${escapeHtml(bankName)} har löpt ut. Automatisk transaktionssynkronisering är stoppad.
         </p>
         <p style="margin: 0 0 15px 0;">
           Förnya anslutningen för att återuppta synkroniseringen.
         </p>
         ` : `
         <p style="margin: 0 0 15px 0;">
-          Samtycket för ${bankName} löper ut om ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'dag' : 'dagar'}.
+          Samtycket för ${escapeHtml(bankName)} löper ut om ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'dag' : 'dagar'}.
         </p>
         <p style="margin: 0 0 15px 0;">
           Förnya anslutningen innan samtycket löper ut för att undvika avbrott i transaktionssynkroniseringen.
@@ -67,7 +68,7 @@ export function generateConsentExpiryEmailHtml(data: ConsentExpiryEmailData): st
       <div style="padding-top: 20px; border-top: 1px solid #e5e7eb;">
         <p style="margin: 0; color: #666; font-size: 14px;">
           Med vänliga hälsningar,<br>
-          <strong>${companyName || appName.toLowerCase()}</strong>
+          <strong>${escapeHtml(companyName) || appName.toLowerCase()}</strong>
         </p>
       </div>
     </div>

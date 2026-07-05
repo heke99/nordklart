@@ -238,7 +238,7 @@ async function wasNotificationSent(
   const { data } = await supabase
     .from('notification_log')
     .select('id')
-    .eq('company_id', userId)
+    .eq('user_id', userId)
     .eq('notification_type', notificationType)
     .eq('reference_id', referenceId)
     .eq('days_before', daysBefore)
@@ -270,7 +270,7 @@ export async function getUserSubscriptions(
   const { data } = await supabase
     .from('push_subscriptions')
     .select('endpoint, p256dh, auth')
-    .eq('company_id', userId)
+    .eq('user_id', userId)
     .eq('is_active', true)
 
   return data || []
@@ -283,7 +283,7 @@ export async function getUserNotificationSettings(
   const { data } = await supabase
     .from('notification_settings')
     .select('*')
-    .eq('company_id', userId)
+    .eq('user_id', userId)
     .single()
 
   return data

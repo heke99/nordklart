@@ -5,11 +5,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
-import {
-  generateInvoiceEmailHtml,
-  generateInvoiceEmailText,
-  generateInvoiceEmailSubject,
-} from '@/lib/email/invoice-templates'
+import { buildInvoiceEmailOptions, invoiceEmailFilename } from '@/lib/invoices/send-invoice-email'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
@@ -143,42 +139,19 @@ export const POST = withRouteContext(
       }),
     )
 
-    const emailData = {
-      invoice: invoice as Invoice,
-      customer,
-      company: company as CompanySettings,
-    }
-
-    const isCreditNote = !!invoice.credited_invoice_id
-    const docType = invoice.document_type || 'invoice'
-    let filename: string
-    if (isCreditNote) {
-      filename = `kreditfaktura-${invoice.invoice_number}.pdf`
-    } else if (docType === 'proforma') {
-      filename = `proformafaktura-${invoice.invoice_number}.pdf`
-    } else if (docType === 'delivery_note') {
-      filename = `foljesedel-${invoice.invoice_number}.pdf`
-    } else {
-      filename = `faktura-${invoice.invoice_number}.pdf`
-    }
-
+    const filename = invoiceEmailFilename(invoice as Invoice)
     const ccAddress = company.email || user.email
-    const result = await emailService.sendEmail({
-      to: customer.email,
-      cc: ccAddress,
-      subject: generateInvoiceEmailSubject(emailData),
-      html: generateInvoiceEmailHtml(emailData),
-      text: generateInvoiceEmailText(emailData),
-      replyTo: company.email || undefined,
-      fromName: company.company_name,
-      attachments: [
-        {
-          filename,
-          content: pdfBuffer,
-          contentType: 'application/pdf',
-        },
-      ],
-    })
+    const result = await emailService.sendEmail(
+      buildInvoiceEmailOptions({
+        invoice: invoice as Invoice,
+        customer,
+        company: company as CompanySettings,
+        companyId: companyId!,
+        pdfBuffer,
+        to: customer.email,
+        ccAddress,
+      }),
+    )
 
     if (!result.success) {
       opLog.error('email provider failed to send invoice', new Error(result.error || 'Unknown'))
