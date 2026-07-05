@@ -69,17 +69,19 @@ function canonicalJson(value: unknown): string {
 export async function checkIdempotencyKey(
   supabase: SupabaseClient,
   userId: string,
-  companyId: string,
+  // Null for routes without a company scope (e.g. global webhook-delivery
+  // retry) — the (user_id, key) unique index still guarantees isolation.
+  companyId: string | null,
   key: string,
   requestHash: string
 ): Promise<IdempotencyHit | null> {
-  const { data, error } = await supabase
+  let query = supabase
     .from('idempotency_keys')
     .select('request_hash, response_status, response_body, expires_at')
     .eq('user_id', userId)
-    .eq('company_id', companyId)
     .eq('key', key)
-    .maybeSingle()
+  query = companyId ? query.eq('company_id', companyId) : query.is('company_id', null)
+  const { data, error } = await query.maybeSingle()
 
   if (error || !data) return null
 
@@ -106,7 +108,7 @@ export async function checkIdempotencyKey(
 export async function storeIdempotencyResponse(
   supabase: SupabaseClient,
   userId: string,
-  companyId: string,
+  companyId: string | null,
   key: string,
   requestHash: string,
   status: 'success' | 'error',

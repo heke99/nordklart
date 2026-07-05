@@ -132,6 +132,54 @@ const SCOPE_GROUPS: ScopeGroup[] = [
     read: { scope: 'compliance:read', labelKey: 'scope_compliance_read', tools: 0 },
     write: null,
   },
+  {
+    domain: 'year_end',
+    labelKey: 'group_year_end',
+    read: { scope: 'year_end:read', labelKey: 'scope_year_end_read', tools: 0 },
+    write: { scope: 'year_end:write', labelKey: 'scope_year_end_write', tools: 0 },
+  },
+  {
+    domain: 'tax',
+    labelKey: 'group_tax',
+    read: { scope: 'tax:read', labelKey: 'scope_tax_read', tools: 0 },
+    write: { scope: 'tax:write', labelKey: 'scope_tax_write', tools: 0 },
+  },
+  {
+    domain: 'bankgiro',
+    labelKey: 'group_bankgiro',
+    read: { scope: 'bankgiro:read', labelKey: 'scope_bankgiro_read', tools: 0 },
+    write: { scope: 'bankgiro:write', labelKey: 'scope_bankgiro_write', tools: 0 },
+  },
+  {
+    domain: 'articles',
+    labelKey: 'group_articles',
+    read: { scope: 'articles:read', labelKey: 'scope_articles_read', tools: 0 },
+    write: { scope: 'articles:write', labelKey: 'scope_articles_write', tools: 0 },
+  },
+  {
+    domain: 'bank',
+    labelKey: 'group_bank',
+    read: { scope: 'bank:read', labelKey: 'scope_bank_read', tools: 0 },
+    write: null,
+  },
+  {
+    domain: 'audit',
+    labelKey: 'group_audit',
+    read: { scope: 'audit:read', labelKey: 'scope_audit_read', tools: 0 },
+    write: null,
+  },
+  {
+    domain: 'financing',
+    labelKey: 'group_financing',
+    read: { scope: 'financing:read', labelKey: 'scope_financing_read', tools: 0 },
+    write: { scope: 'financing:write', labelKey: 'scope_financing_write', tools: 0 },
+  },
+  {
+    domain: 'webhook_events',
+    labelKey: 'group_webhook_events',
+    read: { scope: 'webhook_events:read', labelKey: 'scope_webhook_events_read', tools: 0 },
+    write: null,
+  },
 ]
 
 type Scope = ApiKeyScope

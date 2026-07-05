@@ -177,7 +177,12 @@ export const SCOPE_GROUPS = [
   { domain: 'financing',           label: 'Fakturafinansiering',  read: 'financing:read' as const,           write: 'financing:write' as const },
 ] as const
 
-/** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */
+/**
+ * Map MCP tool name → required scope. DEFAULT DENY: a tool that is neither
+ * mapped here nor listed in UNSCOPED_TOOLS below is rejected by the MCP
+ * dispatcher and hidden from tools/list. Coverage is enforced by
+ * extensions/general/mcp-server/__tests__/tool-scope-coverage.test.ts.
+ */
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Transactions
   nordklart_list_uncategorized_transactions:     'transactions:read',
@@ -280,7 +285,44 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   nordklart_list_pending_operations:         'pending_operations:read',
   nordklart_approve_pending_operation:       'pending_operations:approve',
   nordklart_reject_pending_operation:        'pending_operations:approve',
+  // Invoice ↔ voucher linking (marks an invoice paid against an existing
+  // posted verifikation — no new bokföring)
+  nordklart_find_voucher_candidates_for_invoice: 'invoices:read',
+  nordklart_link_invoice_to_voucher:             'invoices:write',
+  // Underlag coverage
+  nordklart_list_verifikat_without_documents:    'reports:read',
+  // Skatteverket submissions
+  nordklart_vat_declaration_validate:            'tax:read',
+  nordklart_vat_declaration_status:              'tax:read',
+  nordklart_vat_declaration_submit:              'tax:write',
+  nordklart_agi_status:                          'tax:read',
+  nordklart_agi_submit:                          'tax:write',
+  // SIE import rollback (removes imported vouchers via storno pipeline)
+  nordklart_undo_sie_import:                     'bookkeeping:write',
+  // Year-end (read-only proposals/previews vs staged postings)
+  nordklart_propose_dispositioner:               'year_end:read',
+  nordklart_propose_accruals:                    'year_end:read',
+  nordklart_propose_annual_depreciation:         'year_end:read',
+  nordklart_post_annual_depreciation:            'bookkeeping:write',
+  nordklart_preview_arsredovisning:              'year_end:read',
+  nordklart_preview_ef_declaration:              'year_end:read',
 }
+
+/**
+ * Deliberately unscoped meta/discovery tools — callable by ANY valid key.
+ * Everything else MUST have a TOOL_SCOPE_MAP entry: the MCP dispatcher
+ * fails closed (denies) tools that are neither mapped nor listed here, and
+ * a unit test enforces full coverage of the tool inventory.
+ */
+export const UNSCOPED_TOOLS: ReadonlySet<string> = new Set([
+  // Tool discovery/search — must work before any scope is known.
+  'nordklart_search_tools',
+  // Skill catalog + static Markdown bodies; globally readable atom registry.
+  'nordklart_list_skills',
+  'nordklart_load_skill',
+  // Feedback capture — no company data read or written beyond the note.
+  'nordklart_feedback',
+])
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
   if (scopes === null || scopes === undefined) return null

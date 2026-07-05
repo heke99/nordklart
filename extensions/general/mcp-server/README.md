@@ -10,7 +10,7 @@ Enforced by tests in `__tests__/` — these are not style preferences, they're g
 2. **Descriptions ≤ 280 chars.** Guarded by `output-schema.test.ts`. No `Args:` / `Returns:` / `Examples:` prose — those belong in JSON Schema. Use agent-native hints ("Use to…", "Call X first", "HIGH risk").
 3. **Staged-operation envelope** for write tools — `outputSchema: STAGED_OPERATION_SCHEMA` (`server.ts`). Fields: `staged, risk_level, actor, message, preview, period_status?, next?`. The `staged: true` boolean is the explicit completion signal; agents must not infer completion from prose. Do NOT introduce a parallel `{ success, shouldContinue, output }` envelope.
 4. **`period_status` threading** — any tool that ties to a fiscal-period-bound date (categorize, mark paid, create voucher, correct/reverse entry, approve supplier invoice) passes `dateForPeriodCheck` to `stagePendingOperation`. Response then includes `period_status: { period_id, status: open|locked|closed, lock_date }` so widgets and agents disable writes without round-trips.
-5. **Scope mapping** — every new tool needs an entry in `lib/auth/api-keys.ts` `TOOL_SCOPE_MAP`. Missing entries default to deny.
+5. **Scope mapping** — every new tool needs an entry in `lib/auth/api-keys.ts` `TOOL_SCOPE_MAP` (or, for pure discovery/meta tools, `UNSCOPED_TOOLS`). Missing entries default to deny: the dispatcher rejects unmapped tools, hides them from `tools/list`/search, and `__tests__/tool-scope-coverage.test.ts` fails the build.
 6. **Tests for new write tools** — add staging-gate coverage to `__tests__/voucher-tools.test.ts` (or a sibling) plus executor coverage to `lib/pending-operations/__tests__/voucher-executors.test.ts` if the tool stages a new `operation_type`.
 
 ## Determinism / cache stability

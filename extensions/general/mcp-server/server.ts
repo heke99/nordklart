@@ -5,6 +5,7 @@ import {
   createServiceClientNoCookies,
   hasScope,
   TOOL_SCOPE_MAP,
+  UNSCOPED_TOOLS,
 } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -1530,6 +1531,10 @@ export const tools: McpTool[] = [
           // Scoped tool: visible only if scopes were injected AND the caller has it.
           if (!scopesInjected) return false
           if (!callerScopes.includes(required)) return false
+        } else if (!UNSCOPED_TOOLS.has(t.name)) {
+          // Default deny: an unmapped tool outside the discovery set is
+          // never callable, so never advertise it either.
+          return false
         }
         if (scopeFilter && required !== scopeFilter) return false
         return true
@@ -9761,7 +9766,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const listStartedAt = Date.now()
       const allowedTools = tools.filter((t) => {
         const required = TOOL_SCOPE_MAP[t.name]
-        return !required || hasScope(keyScopes, required)
+        // Default deny: unmapped tools outside the discovery set are hidden.
+        if (!required) return UNSCOPED_TOOLS.has(t.name)
+        return hasScope(keyScopes, required)
       })
       emitToolsListTelemetry({
         toolCount: allowedTools.length,
@@ -9819,7 +9826,37 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       // Enforce scope — surface structured error so the agent can dispatch.
+      // DEFAULT DENY: a tool that is neither scope-mapped nor in the
+      // documented UNSCOPED_TOOLS discovery set is never callable — a new
+      // tool without a TOOL_SCOPE_MAP entry fails closed instead of being
+      // silently open to every key.
       const requiredScope = TOOL_SCOPE_MAP[toolName]
+      if (!requiredScope && !UNSCOPED_TOOLS.has(toolName)) {
+        const unmappedError = toToolError(
+          new Error(`Tool "${toolName}" has no scope mapping and is not callable. Contact Nordklart if you believe this is an error.`),
+          { toolName }
+        )
+        emitToolCallTelemetry({
+          tool: toolName,
+          requiredScope: null,
+          actor,
+          latencyMs: 0,
+          success: false,
+          isError: true,
+          errorCode: unmappedError.error.code,
+          errorKind: 'scope_denied',
+          errorMessage: unmappedError.error.message_sv,
+          requestId: id ?? null,
+          userId,
+          companyId,
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, {
+            content: [{ type: 'text', text: JSON.stringify(unmappedError) }],
+            isError: true,
+          })
+        )
+      }
       if (requiredScope && !hasScope(keyScopes, requiredScope)) {
         const scopeError = toToolError(
           new Error(`Insufficient scope: this API key does not have the "${requiredScope}" scope`),

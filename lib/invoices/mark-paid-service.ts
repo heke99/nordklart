@@ -32,6 +32,7 @@ import {
   recordInvoiceUnderpayment,
 } from '@/lib/invoices/customer-credit-recording'
 import { eventBus } from '@/lib/events'
+import { computePreviousAttributes } from '@/lib/webhooks/diff'
 import { createLogger } from '@/lib/logger'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
@@ -522,6 +523,13 @@ export async function markInvoicePaid(
         userId,
         paymentAmount: appliedAmount,
         paymentDate,
+        // Stripe-style diff: prior values of the fields the payment changed
+        // (status, paid_amount, remaining_amount, paid_at). Delivered in the
+        // webhook row's previous_attributes column.
+        previousAttributes: computePreviousAttributes(
+          typed as unknown as Record<string, unknown>,
+          updated as unknown as Record<string, unknown>,
+        ),
       },
     })
   } catch (err) {

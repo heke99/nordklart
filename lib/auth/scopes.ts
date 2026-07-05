@@ -10,7 +10,9 @@
  * Endpoints not listed here are public (no auth) — only the discovery routes
  * (`/llms.txt`, `/.well-known/skills`, `/api/v1/health`, `/api/v1/openapi.json`)
  * fall into that bucket. Everything else under `/api/v1/` MUST be in this map
- * or the wrapper will refuse the request with INSUFFICIENT_SCOPE.
+ * or the wrapper fails closed with 404 NOT_FOUND (see with-api-v1.ts step 2 —
+ * an unmapped route is treated as non-existent rather than leaking that a
+ * handler exists behind a scope the key lacks).
  */
 
 import type { ApiKeyScope } from './api-keys'
@@ -22,7 +24,6 @@ import type { ApiKeyScope } from './api-keys'
 export const V1_PUBLIC_ENDPOINTS: ReadonlyArray<string> = [
   'GET /api/v1/health',
   'GET /api/v1/openapi.json',
-  'GET /api/v1/openapi.yaml',
 ]
 
 /**

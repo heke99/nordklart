@@ -37,7 +37,7 @@ export type CoreEvent =
   // makulerade instead and surface via the journal, not this event.
   | { type: 'invoice.draft_deleted'; payload: { invoiceId: string; userId: string; companyId: string } }
   | { type: 'invoice.sent'; payload: { invoice: Invoice; userId: string; companyId: string } }
-  | { type: 'invoice.paid'; payload: { invoice: Invoice; paymentAmount: number; paymentDate: string; userId: string; companyId: string } }
+  | { type: 'invoice.paid'; payload: { invoice: Invoice; paymentAmount: number; paymentDate: string; userId: string; companyId: string; previousAttributes?: Record<string, unknown> | null } }
   | { type: 'credit_note.created'; payload: { creditNote: CreditNote; userId: string; companyId: string } }
   // Recurring invoices — emitted by the daily cron after a schedule spawns
   // an invoice. `autoSent` tells observers whether the email also went out

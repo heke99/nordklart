@@ -425,16 +425,18 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         })
       }
 
-      // 7. If idempotency-key supplied, check for cached response.
+      // 7. If idempotency-key supplied, check for cached response. Routes
+      //    without a :companyId segment (e.g. global webhook-delivery retry)
+      //    cache under a NULL company scope — still isolated per user+key.
       let bodyForHash: unknown = null
       let workingRequest = request
-      if (idempotencyKey && isMutation && companyId) {
+      if (idempotencyKey && isMutation) {
         const { body, cloned } = await readBodyForHash(request)
         bodyForHash = body
         workingRequest = cloned
         const reqHash = hashRequest({ method: request.method, path, body })
         try {
-          const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
+          const hit = await checkIdempotencyKey(supabase, auth.userId, companyId ?? null, idempotencyKey, reqHash)
           if (hit) {
             userLog.info('idempotent replay', { idempotencyKey })
             const replay = NextResponse.json(hit.body, { status: hit.status === 'success' ? 200 : 400 })
@@ -474,7 +476,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       const response = await handler(workingRequest, ctx, params)
 
       // 10. Persist idempotency cache (best-effort).
-      if (idempotencyKey && isMutation && companyId && response.status < 500) {
+      if (idempotencyKey && isMutation && response.status < 500) {
         try {
           const body = await response.clone().json().catch(() => ({}))
           const reqHash = hashRequest({ method: request.method, path, body: bodyForHash })
@@ -482,7 +484,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           await storeIdempotencyResponse(
             supabase,
             auth.userId,
-            companyId,
+            companyId ?? null,
             idempotencyKey,
             reqHash,
             status,
@@ -512,6 +514,12 @@ function stampHeaders(response: Response, requestId: string): Response {
   if (!response.headers.get('X-Request-Id')) response.headers.set('X-Request-Id', requestId)
   if (!response.headers.get(API_V1_VERSION_HEADER)) {
     response.headers.set(API_V1_VERSION_HEADER, API_V1_VERSION)
+  }
+  // The per-key limit is enforced atomically in validate_and_increment_api_key
+  // (100 RPM). The RPC doesn't return remaining/reset counters, so only the
+  // limit itself is advertised here; exceeding it yields 429 RATE_LIMITED.
+  if (!response.headers.get('X-RateLimit-Limit')) {
+    response.headers.set('X-RateLimit-Limit', '100')
   }
   // Apply security headers to every wrapped v1 response — same set as the
   // public discovery routes PLUS X-Robots-Tag noai so authenticated payloads

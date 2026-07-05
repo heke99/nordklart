@@ -49,8 +49,16 @@ const RESOURCES: ResourceGroup[] = [
   { slug: 'reports', label: 'Reports', description: 'Read-only reports — trial balance, P&L, balance sheet, GL, VAT, salary journal, SIE export, +9 more.', matcher: (p) => /\/reports(\/|$)/.test(p) },
   { slug: 'imports', label: 'Imports', description: 'Bulk async ingest — SIE files (Fortnox/Visma/BL/SpeedLedger/Bokio migrations) and bank statements (11 formats).', matcher: (p) => /\/imports(\/|$)/.test(p) },
   { slug: 'compliance', label: 'Compliance check', description: 'Pre-flight verification — voucher gaps, year-end readiness, before submitting to Skatteverket.', matcher: (p) => /\/compliance(\/|$)/.test(p) },
-  { slug: 'webhooks', label: 'Webhooks', description: 'Subscribe to events with HMAC-signed delivery, exponential retries, and dead-letter replay.', matcher: (p) => /\/webhooks|\/webhook-deliveries/.test(p) },
+  { slug: 'webhooks', label: 'Webhooks', description: 'Subscribe to events with HMAC-signed delivery, exponential retries, dead-letter replay — plus the deliverable event catalog.', matcher: (p) => /\/webhooks|\/webhook-deliveries|\/webhook-events/.test(p) },
   { slug: 'operations', label: 'Operations', description: 'Poll long-running async operations (year-end closing, imports, currency revaluation).', matcher: (p) => /\/operations(\/|$)/.test(p) },
+  { slug: 'articles', label: 'Articles', description: 'The article/product register used on invoice lines.', matcher: (p) => /\/articles(\/|$)/.test(p) },
+  { slug: 'bank-connections', label: 'Bank connections', description: 'Read PSD2 bank connections, consent and sync status.', matcher: (p) => /\/bank-connections(\/|$)/.test(p) },
+  { slug: 'audit-logs', label: 'Audit logs', description: 'Read the company audit trail (behandlingshistorik).', matcher: (p) => /\/audit-logs(\/|$)/.test(p) },
+  { slug: 'bankgiro-applications', label: 'Bankgiro applications', description: 'Bankgiro/Autogiro onboarding — create and track payment-provider applications.', matcher: (p) => /\/bankgiro-applications(\/|$)/.test(p) },
+  { slug: 'tax-submissions', label: 'Tax submissions', description: 'Prepared Skatteverket submissions with explicit signature/receipt states.', matcher: (p) => /\/tax-submissions(\/|$)/.test(p) },
+  { slug: 'year-end-projects', label: 'Year-end projects', description: 'Start and read bokslut projects without bypassing period locks.', matcher: (p) => /\/year-end\/projects(\/|$)/.test(p) },
+  { slug: 'invoice-financing', label: 'Invoice financing', description: 'Factoring — eligibility, applications, offers, acceptance and payout tracking.', matcher: (p) => /\/invoice-financing(\/|$)/.test(p) },
+  { slug: 'events', label: 'Events', description: 'Poll the event log as a webhook fallback (sequence-cursor pagination).', matcher: (p) => /\/events$/.test(p) },
 ]
 
 /** Discover the resource a given endpoint path belongs to. Returns null if it doesn't fit any. */

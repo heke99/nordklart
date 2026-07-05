@@ -24,7 +24,7 @@ Create keys in the nordklart dashboard at **/settings/api**. Two key prefixes ar
 
 Each key carries one or more **scopes** (\`invoices:read\`, \`invoices:write\`, \`payroll:write\`, \`webhooks:manage\`, ...) that gate which endpoints it can call. Scopes are listed on every endpoint reference page.
 
-Rate limit: 100 requests per minute per key, returned in \`X-RateLimit-*\` headers.
+Rate limit: 100 requests per minute per key. The limit is advertised in the \`X-RateLimit-Limit\` response header; exceeding it returns \`429 RATE_LIMITED\`. Remaining/reset counters are not exposed — back off on 429.
 
 ## Base URL
 

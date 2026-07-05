@@ -66,10 +66,18 @@ export function registerWebhookHandler(): void {
       }
 
       try {
+        // Emit sites that mutate an existing resource may attach a
+        // Stripe-style `previousAttributes` diff (see lib/webhooks/diff.ts).
+        // It is delivered in the delivery row's previous_attributes column,
+        // not inside the payload body.
+        const previousAttributes =
+          (payload as { previousAttributes?: Record<string, unknown> | null }).previousAttributes ?? null
+
         await fanOutToWebhooks({
           eventType,
           companyId,
           payload: minimisePayload(payload as Record<string, unknown>),
+          previousAttributes,
         })
       } catch (err) {
         log.error('webhook fanout failed', err as Error, { eventType, companyId })
@@ -96,6 +104,9 @@ export function minimisePayload(payload: Record<string, unknown>): Record<string
   const projected: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(payload)) {
     if (key === 'userId') continue
+    // Delivered separately in the delivery row's previous_attributes column —
+    // never duplicated inside the payload body.
+    if (key === 'previousAttributes') continue
     // Batch events (transaction.synced) carry the full row array in-process;
     // externally we deliver a summary (count + ids) — receivers fetch details
     // via GET /transactions. Keeps webhook bodies bounded.
@@ -121,6 +132,7 @@ async function fanOutToWebhooks(args: {
   eventType: string
   companyId: string
   payload: Record<string, unknown>
+  previousAttributes?: Record<string, unknown> | null
 }): Promise<void> {
   const supabase = createServiceClientNoCookies()
 
@@ -157,9 +169,9 @@ async function fanOutToWebhooks(args: {
     event_type: args.eventType,
     payload: args.payload,
     api_version: (w as { api_version_pinned: string }).api_version_pinned ?? API_V1_VERSION,
-    // previous_attributes is null in Phase 6 PR-1; populated in a follow-up
-    // when each route's emit() call captures the prior row.
-    previous_attributes: null,
+    // Populated when the emit site attached a previousAttributes diff
+    // (update-style events); null for pure "created" events.
+    previous_attributes: args.previousAttributes ?? null,
     request_id: fanoutId,
   }))
 

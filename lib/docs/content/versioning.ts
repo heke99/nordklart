@@ -64,7 +64,7 @@ What does NOT count as a breaking change:
 
 ## Idempotency
 
-Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key\` header. The key is a UUID you generate; the server caches the response keyed by \`(api_key_id, company_id, idempotency_key, request_body_hash)\` for 24 hours.
+Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key\` header. The key is a UUID you generate; the server caches the response keyed by \`(user, company, idempotency_key, request_body_hash)\` for 24 hours — the *user* is the account the API key belongs to, so keys from two different accounts can never collide even if they reuse the same UUID.
 
 ### How it works
 

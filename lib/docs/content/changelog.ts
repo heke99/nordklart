@@ -57,7 +57,7 @@ The first stable release of the public REST API. Six phases of development cover
 - **Bokslut**: \`GET/POST /companies/{companyId}/year-end/projects\` for starting and syncing year-end projects without posting journal entries or bypassing locked-period rules. New scopes: \`year_end:read\`, \`year_end:write\`.
 - **Skatteverket**: \`GET/POST /companies/{companyId}/tax-submissions\` for prepared VAT/tax submissions with explicit \`waiting_for_signature\`, \`signed_submitted\`, and \`receipt_received\` states. New scopes: \`tax:read\`, \`tax:write\`.
 - **Bankgiro/Autogiro**: \`GET/POST /companies/{companyId}/bankgiro-applications\` for the separate payment-provider onboarding flow. New scopes: \`bankgiro:read\`, \`bankgiro:write\`.
-- **Webhook catalog**: \`GET /companies/{companyId}/webhook-events\` lists Nordklart events such as \`year_end.started\`, \`vat_return.submitted\`, \`bankgiro_application.approved\`, and \`payment_provider.activated\`. New scope: \`webhook_events:read\`.
+- **Webhook catalog**: \`GET /companies/{companyId}/webhook-events\` lists Nordklart events such as \`year_end.started\`, \`tax_submission.submitted\`, \`bankgiro_application.approved\`, and \`payment_provider.activated\`. New scope: \`webhook_events:read\`.
 
 ### Webhooks (Phase 6 PR-1) *— shipped 2026-05-15*
 
@@ -68,13 +68,17 @@ The first stable release of the public REST API. Six phases of development cover
 - **Audit + retention**: webhook delivery rows are *behandlingshistorik* per BFNAR 2013:2 kap 8 § — immutable once terminal so the audit trail of what an integration was notified of stays intact. Delivery rows are NOT räkenskapsinformation themselves; the 7-year statutory retention under BFL 7 kap 1 § applies only to the underlying verifikation / faktura / AGI XML in its own table, NOT to the delivery envelope. Nordklart keeps accounting-event delivery rows for 7 years as a voluntary operational policy (the duration aligns with BFL 7 kap on the underlying records but is not itself a statutory obligation on delivery rows). Webhook DELETE preserves the delivery audit trail (\`ON DELETE SET NULL\` on \`webhook_id\`).
 - **Verbs**: \`POST /webhooks/{id}/test\` enqueues a synthetic event; \`POST /webhook-deliveries/{id}/retry\` re-enqueues a dead/delivered delivery.
 
-### Coming soon (Phase 6 PR-2 hardening)
+### Webhook hardening (Phase 6 PR-2) *— shipped*
+
+- DNS-rebinding protection: outbound deliveries pin the SSRF-validated IP for the HTTPS request (\`lib/webhooks/pinned-fetch\`)
+- \`claim_due_webhook_deliveries\` SQL function with \`FOR UPDATE SKIP LOCKED\` — concurrent dispatcher runs never double-deliver
+- \`previous_attributes\` populated for update-style events where the emitting flow captures the prior row (first: \`invoice.paid\` — prior \`status\`/\`paid_amount\`/\`remaining_amount\`)
+- \`Idempotency-Key\` honored on \`POST /webhook-deliveries/{id}/retry\` (cached under the API key's user)
+
+### Coming soon
 
 - 90-day TTL cleanup cron for non-accounting webhook deliveries
 - Per-route rate limits on \`:test\`, \`:retry\`, and webhook \`:create\`
 - V16 audit-log entries on webhook lifecycle events
-- DNS-rebinding pinned-IP HTTPS agent
-- Integration tests + \`*.pg.test.ts\` for webhook triggers
-- \`claim_due_webhook_deliveries\` SQL function with \`FOR UPDATE SKIP LOCKED\`
-- Populated \`previous_attributes\` for update-style webhook events
+- \`previous_attributes\` for the remaining update-style events
 `
