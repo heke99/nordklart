@@ -1,7 +1,11 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { listAccessibleCompanies } from '@/lib/access/company'
+import { AGENCY_ADMIN_ROLES } from '@/lib/agency/commercial'
 import { agencyStatusTone, formatAgencyStatus, type AgencyClientOverview } from '@/lib/agency/dashboard'
+import { AddClientDialog, type LinkableCompany } from '@/components/agency/AddClientDialog'
+import { OpenClientWorkspaceButton } from '@/components/agency/OpenClientWorkspaceButton'
 import { NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,22 +17,68 @@ export default async function AgencyClientsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: rows } = await supabase
-    .from('agency_client_overview_v')
-    .select('*')
-    .order('company_name', { ascending: true })
+  const [{ data: rows }, { data: adminMembership }, accessibleCompanies] = await Promise.all([
+    supabase
+      .from('agency_client_overview_v')
+      .select('*')
+      .order('company_name', { ascending: true }),
+    supabase
+      .from('agency_members')
+      .select('agency_id, role, agencies:agency_id(company_id)')
+      .eq('user_id', user.id)
+      .eq('status', 'active')
+      .in('role', [...AGENCY_ADMIN_ROLES])
+      .limit(1)
+      .maybeSingle(),
+    listAccessibleCompanies(supabase),
+  ])
 
   const clients = (rows ?? []) as AgencyClientOverview[]
   const needsReview = clients.filter((c) => c.review_items_count > 0).length
   const bankNeedsAttention = clients.filter((c) => ['not_connected', 'needs_attention'].includes(c.bank_status)).length
   const overdue = clients.filter((c) => c.invoice_status === 'overdue' || c.supplier_invoice_status === 'overdue').length
 
+  const isAgencyAdmin = Boolean(adminMembership)
+  const agencyRelation = Array.isArray(adminMembership?.agencies)
+    ? adminMembership?.agencies[0]
+    : adminMembership?.agencies
+  const agencyOwnCompanyId = agencyRelation?.company_id ?? null
+  const linkedCompanyIds = new Set(clients.map((c) => c.company_id))
+
+  // Companies the user can link directly: directly administered workspaces
+  // that are not already agency clients and not the agency's own
+  // subscription company. Foreign companies require client-side approval.
+  const linkableCompanies: LinkableCompany[] = accessibleCompanies
+    .filter(
+      (company) =>
+        company.accessSource === 'direct' &&
+        company.canManageCompany &&
+        !company.archivedAt &&
+        !linkedCompanyIds.has(company.companyId) &&
+        company.companyId !== agencyOwnCompanyId,
+    )
+    .map((company) => ({
+      id: company.companyId,
+      name: company.name,
+      orgNumber: company.orgNumber,
+    }))
+
   return (
     <NordklartPageShell
       eyebrow="Redovisningsbyrå"
       title="Kundbolag och status"
       description="Byrån ser kundbolag, ansvarig konsult, bankstatus, granskningskö, fakturastatus, bokslut, Bankgiro och nästa deadline på ett ställe."
-      actions={<Button asChild variant="secondary"><Link href="/agency">Byråöversikt</Link></Button>}
+      actions={
+        <div className="flex flex-wrap gap-2">
+          {isAgencyAdmin ? (
+            <AddClientDialog
+              agencyId={adminMembership?.agency_id}
+              linkableCompanies={linkableCompanies}
+            />
+          ) : null}
+          <Button asChild variant="secondary"><Link href="/agency">Byråöversikt</Link></Button>
+        </div>
+      }
     >
       <div className="grid gap-4 md:grid-cols-4">
         <NordklartStatCard label="Kunder" value={clients.length} description="Kopplade kundbolag." tone="primary" />
@@ -48,6 +98,7 @@ export default async function AgencyClientsPage() {
               <th className="p-3">Moms</th>
               <th className="p-3">Bokslut</th>
               <th className="p-3">Nästa deadline</th>
+              <th className="p-3"><span className="sr-only">Åtgärder</span></th>
             </tr>
           </thead>
           <tbody>
@@ -63,10 +114,13 @@ export default async function AgencyClientsPage() {
                 <td className="p-3"><Badge variant={agencyStatusTone(client.vat_status)}>{formatAgencyStatus(client.vat_status)}</Badge></td>
                 <td className="p-3"><Badge variant={agencyStatusTone(client.year_end_status)}>{formatAgencyStatus(client.year_end_status)}</Badge></td>
                 <td className="p-3 text-muted-foreground">{client.next_deadline_at ?? 'Ingen'}</td>
+                <td className="p-3 text-right">
+                  <OpenClientWorkspaceButton companyId={client.company_id} />
+                </td>
               </tr>
             ))}
             {clients.length === 0 ? (
-              <tr><td className="p-8 text-center text-muted-foreground" colSpan={7}>Inga byråkunder hittades för din behörighet.</td></tr>
+              <tr><td className="p-8 text-center text-muted-foreground" colSpan={8}>Inga byråkunder hittades för din behörighet.</td></tr>
             ) : null}
           </tbody>
         </table>

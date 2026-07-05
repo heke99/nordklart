@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { resolveCompanyAccess } from '@/lib/access/company'
 import { assertAgencyClientCapacity, resolveManageableAgency } from '@/lib/agency/commercial'
 
 const CreateAgencyClientSchema = z.object({
@@ -27,6 +28,25 @@ export async function POST(request: Request) {
 
   const capacity = await assertAgencyClientCapacity(supabase, agencyAccess.agencyCompanyId)
   if (!capacity.ok) return capacity.response
+
+  // Tenant consent: an active link grants the whole agency access to the
+  // client company's books, so activating requires the caller to manage the
+  // client company (agency-created workspaces). Foreign companies start as
+  // 'pending' and must be approved by the client company's owner/admin.
+  // RLS on agency_clients enforces the same rule — this check exists to
+  // return a clear Swedish error instead of a generic RLS denial.
+  if (parsed.data.status === 'active') {
+    const clientAccess = await resolveCompanyAccess(supabase, parsed.data.company_id)
+    if (!clientAccess?.canManageCompany) {
+      return NextResponse.json(
+        {
+          error:
+            'Kopplingen kan inte aktiveras direkt. Skapa den som väntande — kundbolagets ägare eller administratör måste godkänna byråns åtkomst.',
+        },
+        { status: 403 },
+      )
+    }
+  }
 
   const { data: existing, error: existingError } = await supabase
     .from('agency_clients')

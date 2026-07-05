@@ -182,3 +182,123 @@ describe('signup workspace provisioning core v3', () => {
     ])
   })
 })
+
+type ProvisionV4Row = ProvisionRow & {
+  access_request_id: string | null
+  existing_company_name: string | null
+}
+
+async function provisionV4(userId: string): Promise<ProvisionV4Row> {
+  const { rows } = await getPool().query<ProvisionV4Row>(
+    `select * from public.provision_authorized_signup_draft_v4($1::uuid)`,
+    [userId],
+  )
+  expect(rows).toHaveLength(1)
+  return rows[0]!
+}
+
+describe('signup provisioning v4 — duplicate org number → access request', () => {
+  it('creates a pending access request instead of a duplicate company, idempotently', async () => {
+    // Existing tenant: owner already runs the company with this org number.
+    const ownerId = await insertAuthUser()
+    const orgNumber = `55699${String(Math.floor(Math.random() * 100000)).padStart(5, '0')}`
+    const existingCompanyId = randomUUID()
+    await getPool().query(
+      `insert into public.companies (id, name, entity_type, created_by, org_number)
+       values ($1, 'Befintligt AB', 'aktiebolag', $2, $3)`,
+      [existingCompanyId, ownerId, orgNumber],
+    )
+    await getPool().query(
+      `insert into public.company_members (company_id, user_id, role) values ($1, $2, 'owner')`,
+      [existingCompanyId, ownerId],
+    )
+
+    // New signup with the SAME org number must not create a second company.
+    const requesterId = await insertAuthUser()
+    const draftId = randomUUID()
+    await getPool().query(
+      `insert into public.signup_drafts (
+         id, token_hash, status, login_email, first_name, last_name,
+         workspace_type, legal_form, company_name, org_number, contact_email,
+         country, accepted_terms_at, accepted_privacy_at,
+         claimed_by_user_id, email_verified_at, password_set_at, expires_at
+       ) values (
+         $1, $2, 'ready_for_first_login', $3, 'Dubbel', 'Test',
+         'company', 'aktiebolag', 'Befintligt AB', $4, $3,
+         'SE', now(), now(),
+         $5, now(), now(), now() + interval '30 days'
+       )`,
+      [draftId, `test-token-${randomUUID()}`, `pg-real-${requesterId}@test.invalid`, orgNumber, requesterId],
+    )
+
+    const first = await provisionV4(requesterId)
+    expect(first.provision_state).toBe('access_request_pending')
+    expect(first.onboarding_path).toBe('/access-pending')
+    expect(first.company_id).toBe(existingCompanyId)
+    expect(first.access_request_id).toMatch(/^[0-9a-f-]{36}$/)
+
+    // Idempotent replay: same request row, no duplicate company/access request.
+    const replay = await provisionV4(requesterId)
+    expect(replay.provision_state).toBe('access_request_pending')
+    expect(replay.access_request_id).toBe(first.access_request_id)
+
+    const checks = await getPool().query<{ request_count: number; company_count: number; draft_status: string }>(
+      `select
+         (select count(*)::int from public.company_access_requests car
+            where car.requester_user_id = $1 and car.company_id = $2) as request_count,
+         (select count(*)::int from public.companies c where c.org_number = $3 and c.archived_at is null) as company_count,
+         (select sd.status from public.signup_drafts sd where sd.id = $4) as draft_status`,
+      [requesterId, existingCompanyId, orgNumber, draftId],
+    )
+    expect(checks.rows[0]).toEqual({
+      request_count: 1,
+      company_count: 1,
+      draft_status: 'access_request_pending',
+    })
+  })
+
+  it('resolves to provisioned once the requester becomes an active member', async () => {
+    const ownerId = await insertAuthUser()
+    const orgNumber = `55698${String(Math.floor(Math.random() * 100000)).padStart(5, '0')}`
+    const existingCompanyId = randomUUID()
+    await getPool().query(
+      `insert into public.companies (id, name, entity_type, created_by, org_number)
+       values ($1, 'Godkänt AB', 'aktiebolag', $2, $3)`,
+      [existingCompanyId, ownerId, orgNumber],
+    )
+    await getPool().query(
+      `insert into public.company_members (company_id, user_id, role) values ($1, $2, 'owner')`,
+      [existingCompanyId, ownerId],
+    )
+
+    const requesterId = await insertAuthUser()
+    await getPool().query(
+      `insert into public.signup_drafts (
+         id, token_hash, status, login_email, first_name, last_name,
+         workspace_type, legal_form, company_name, org_number, contact_email,
+         country, accepted_terms_at, accepted_privacy_at,
+         claimed_by_user_id, email_verified_at, password_set_at, expires_at
+       ) values (
+         $1, $2, 'ready_for_first_login', $3, 'Vantande', 'Test',
+         'company', 'aktiebolag', 'Godkänt AB', $4, $3,
+         'SE', now(), now(),
+         $5, now(), now(), now() + interval '30 days'
+       )`,
+      [randomUUID(), `test-token-${randomUUID()}`, `pg-real-${requesterId}@test.invalid`, orgNumber, requesterId],
+    )
+
+    const pending = await provisionV4(requesterId)
+    expect(pending.provision_state).toBe('access_request_pending')
+
+    // Approval flow adds the requester as an active member.
+    await getPool().query(
+      `insert into public.company_members (company_id, user_id, role) values ($1, $2, 'member')`,
+      [existingCompanyId, requesterId],
+    )
+
+    const resolved = await provisionV4(requesterId)
+    expect(resolved.provision_state).toBe('provisioned')
+    expect(resolved.company_id).toBe(existingCompanyId)
+    expect(resolved.onboarding_path).toBe('/app')
+  })
+})

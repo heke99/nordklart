@@ -14,7 +14,10 @@ import { getBranding } from '@/lib/branding/service'
 const branding = getBranding()
 
 interface InviteInfo {
-  type: 'company'
+  // /api/team/accept resolves both company invitations and agency
+  // (redovisningsbyrå) staff invitations. `companyName` carries the agency
+  // name for agency invites.
+  type: 'company' | 'agency'
   companyName?: string
   email: string
   expired: boolean
@@ -77,6 +80,10 @@ export default function InvitePage() {
   // invite is for. They need to sign out first.
   const isLoggedInAsOther =
     !!currentUserEmail && !!invite && !isLoggedInAsInvitee
+
+  const invitedDescription = invite?.type === 'agency'
+    ? t('invited_to_agency')
+    : t('invited_to_company')
 
   const handleAccept = () => {
     // Store invite token in cookie before redirecting to register
@@ -226,7 +233,7 @@ export default function InvitePage() {
                     <div>
                       <p className="font-medium">{invite.companyName}</p>
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
+                        {invitedDescription}
                       </p>
                       <p className="text-sm text-muted-foreground mt-1">
                         {t.rich('logged_in_as', {
@@ -293,7 +300,7 @@ export default function InvitePage() {
                     <div>
                       <p className="font-medium">{invite.companyName}</p>
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
+                        {invitedDescription}
                       </p>
                       <p className="text-sm text-muted-foreground mt-1">
                         {t.rich('existing_account', {
@@ -321,7 +328,7 @@ export default function InvitePage() {
                     <div>
                       <p className="font-medium">{invite.companyName}</p>
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        {t('invited_to_company')}
+                        {invitedDescription}
                       </p>
                     </div>
                   </div>

@@ -7,9 +7,10 @@ import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
 import {
-  generateInviteEmailHtml,
-  generateInviteEmailSubject,
-  generateInviteEmailText,
+  AGENCY_INVITE_ROLE_LABELS,
+  generateAgencyInviteEmailHtml,
+  generateAgencyInviteEmailSubject,
+  generateAgencyInviteEmailText,
 } from '@/lib/email/invite-templates'
 
 ensureInitialized()
@@ -114,16 +115,17 @@ export async function POST(request: Request) {
 
   if (emailService.isConfigured()) {
     const emailData = {
-      companyName: agencyRow.name || 'Redovisningsbyrå',
+      agencyName: agencyRow.name || 'Redovisningsbyrå',
       inviterEmail: user.email || '',
       inviteUrl,
+      roleLabel: AGENCY_INVITE_ROLE_LABELS[parsed.data.role] ?? 'medarbetare',
     }
 
     const result = await emailService.sendEmail({
       to: email,
-      subject: generateInviteEmailSubject(emailData),
-      html: generateInviteEmailHtml(emailData),
-      text: generateInviteEmailText(emailData),
+      subject: generateAgencyInviteEmailSubject(emailData),
+      html: generateAgencyInviteEmailHtml(emailData),
+      text: generateAgencyInviteEmailText(emailData),
     })
 
     if (!result.success) {

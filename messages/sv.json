@@ -983,6 +983,7 @@
     "expired_title": "Inbjudan har gått ut",
     "expired_description": "Be personen som bjöd in dig att skicka en ny inbjudan.",
     "invited_to_company": "Du har bjudits in som medlem till detta företag.",
+    "invited_to_agency": "Du har bjudits in som medarbetare till denna redovisningsbyrå.",
     "logged_in_as": "Inloggad som <strong>{email}</strong>.",
     "joining": "Går med…",
     "join_named": "Gå med i {companyName}",

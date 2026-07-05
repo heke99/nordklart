@@ -12,11 +12,13 @@ export default async function AgencyOnboardingPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
+  // Owners AND admins may complete agency onboarding — an invited
+  // agency_admin is a legitimate administrator, not a signup candidate.
   const { data: agencyMember } = await supabase
     .from('agency_members')
     .select('agency_id, agencies:agency_id(name, company_id)')
     .eq('user_id', user.id)
-    .eq('role', 'agency_owner')
+    .in('role', ['agency_owner', 'agency_admin'])
     .eq('status', 'active')
     .order('created_at', { ascending: false })
     .limit(1)
@@ -36,9 +38,9 @@ export default async function AgencyOnboardingPage() {
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">{agencyName} är redo att konfigureras</h1>
           <p className="mt-3 max-w-2xl leading-7 text-muted-foreground">Byrån har nu ett eget bolag för sin egen bokföring och en separat byråarbetsyta för team, kundbolag och granskning. Kunddata är fortfarande isolerad per bolag.</p>
           <div className="mt-7 grid gap-3 md:grid-cols-3">
-            <Step title="1. Bjud in teamet" icon={<UsersRound className="h-4 w-4" />} />
-            <Step title="2. Lägg till kundbolag" icon={<Building2 className="h-4 w-4" />} />
-            <Step title="3. Öppna granskningskön" icon={<CheckCircle2 className="h-4 w-4" />} />
+            <Step title="1. Bjud in teamet" href="/agency" icon={<UsersRound className="h-4 w-4" />} />
+            <Step title="2. Lägg till kundbolag" href="/agency/clients" icon={<Building2 className="h-4 w-4" />} />
+            <Step title="3. Öppna granskningskön" href="/agency" icon={<CheckCircle2 className="h-4 w-4" />} />
           </div>
           <div className="mt-8 flex flex-wrap gap-3">
             <Button asChild><Link href="/agency">Öppna byråöversikten</Link></Button>
@@ -50,6 +52,14 @@ export default async function AgencyOnboardingPage() {
   )
 }
 
-function Step({ title, icon }: { title: string; icon: ReactNode }) {
-  return <div className="rounded-2xl border bg-background/70 p-4 text-sm font-medium"><span className="mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">{icon}</span>{title}</div>
+function Step({ title, href, icon }: { title: string; href: string; icon: ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="rounded-2xl border bg-background/70 p-4 text-sm font-medium transition-colors hover:border-primary/40 hover:bg-background"
+    >
+      <span className="mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">{icon}</span>
+      {title}
+    </Link>
+  )
 }

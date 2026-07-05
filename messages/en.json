@@ -983,6 +983,7 @@
     "expired_title": "The invitation has expired",
     "expired_description": "Ask the person who invited you to send a new invitation.",
     "invited_to_company": "You've been invited as a member of this company.",
+    "invited_to_agency": "You've been invited to join this accounting agency.",
     "logged_in_as": "Signed in as <strong>{email}</strong>.",
     "joining": "Joining…",
     "join_named": "Join {companyName}",

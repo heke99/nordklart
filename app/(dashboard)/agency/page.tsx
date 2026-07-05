@@ -1,6 +1,8 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { AGENCY_ADMIN_ROLES } from '@/lib/agency/commercial'
+import { InviteStaffDialog } from '@/components/agency/InviteStaffDialog'
 import { NordklartActionCard, NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Button } from '@/components/ui/button'
 import { buildAgencyWorkQueue, type AgencyClientOverviewRow } from '@/lib/agency/work-queue'
@@ -40,15 +42,22 @@ export default async function AgencyPage() {
   // Work queue: rank clients by what needs a consultant's attention.
   const workQueue = buildAgencyWorkQueue((overviewRows ?? []) as AgencyClientOverviewRow[]).slice(0, 8)
 
+  const adminMembership = (memberships || []).find((m) =>
+    (AGENCY_ADMIN_ROLES as readonly string[]).includes(m.role),
+  )
+
   return (
     <NordklartPageShell
       eyebrow="Redovisningsbyrå"
       title="Byråläge för kunder, deadlines och granskning"
       description="Nordklart ger byrån översikt över kundstatus, ansvariga konsulter, deadlines och granskning utan att kundernas data blandas."
       actions={
-        <Button asChild>
-          <Link href="/agency/clients">Visa kundstatus</Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {adminMembership ? <InviteStaffDialog agencyId={adminMembership.agency_id} /> : null}
+          <Button asChild>
+            <Link href="/agency/clients">Visa kundstatus</Link>
+          </Button>
+        </div>
       }
     >
       <div className="grid gap-4 md:grid-cols-4">
