@@ -650,6 +650,50 @@ describe('idempotency and audit', () => {
     expect(mockCommitPendingOperation).not.toHaveBeenCalled()
   })
 
+  it('fails closed when the decision row cannot be claimed (non-23505 error)', async () => {
+    const { supabase, setResult, inserts } = createTableMockSupabase()
+    setResult('automation_decisions:insert', {
+      data: null,
+      error: { code: '57014', message: 'canceling statement due to statement timeout' },
+    })
+    mockEvaluateMappingRules.mockResolvedValue(feeMapping())
+
+    const outcome = await processBankTransactionAutomation(
+      supabase as never,
+      COMPANY_ID,
+      USER_ID,
+      baseInput() as never,
+    )
+
+    // Without a claimed decision row there is no idempotency guarantee —
+    // a retried run could double-book. Nothing may execute.
+    expect(outcome.decision).toBe('blocked')
+    expect(outcome.reasonCodes).toContain('decision_claim_failed')
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    expect(mockCommitPendingOperation).not.toHaveBeenCalled()
+    expect(inserts['pending_operations'] ?? []).toHaveLength(0)
+  })
+
+  it('bulk-booked transactions (voucher links, journal_entry_id NULL) are never re-decided', async () => {
+    const { supabase, setResult } = createTableMockSupabase()
+    setupDecisionInsert(setResult)
+    setResult('transaction_voucher_links:select', {
+      data: [{ transaction_id: 'tx-fee' }],
+    })
+    mockEvaluateMappingRules.mockResolvedValue(feeMapping())
+
+    const outcome = await processBankTransactionAutomation(
+      supabase as never,
+      COMPANY_ID,
+      USER_ID,
+      baseInput() as never,
+    )
+
+    expect(outcome.decision).toBe('blocked')
+    expect(outcome.reasonCodes).toContain('already_linked')
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('records a decision row with the deterministic idempotency key for every evaluation', async () => {
     const { supabase, setResult, inserts } = createTableMockSupabase()
     setupDecisionInsert(setResult)

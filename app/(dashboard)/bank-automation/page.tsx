@@ -149,7 +149,7 @@ export default async function BankAutomationPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <NordklartActionCard meta="Skydd" title="Autobokföring kräver regel" description="En hög säkerhetsnivå räcker inte ensam. Regeln måste uttryckligen tillåta autobokföring och risknivån får inte vara hög." />
+        <NordklartActionCard meta="Skydd" title="Autobokföring kräver rätt inställningar" description="En hög säkerhetsnivå räcker inte ensam. Automatisk bokföring körs bara när företagets automationsinställningar uttryckligen tillåter det och risknivån inte är hög." />
         <NordklartActionCard meta="Granskning" title="Osäkra transaktioner blir arbete" description="Okänd leverantör, flera möjliga matchningar eller momsosäkerhet hamnar i granskningskön." />
         <NordklartActionCard meta="Spårbarhet" title="Beslut kan förklaras" description="Beslutsorsaker, vald matchning, säkerhetsnivå och föreslaget konto sparas för spårbarhet." />
       </div>

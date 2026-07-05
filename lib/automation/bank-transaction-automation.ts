@@ -5,6 +5,7 @@ import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templ
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { isTransactionBooked } from '@/lib/transactions/is-booked'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { createLogger } from '@/lib/logger'
 import type {
@@ -326,6 +327,46 @@ async function evaluateTransaction(
       action: { kind: 'none', reasonCodes: ['already_linked'] },
       riskLevel: 'low',
     }
+  }
+
+  // N:1 bulk bookings and multi-invoice allocations leave
+  // transactions.journal_entry_id NULL — the anchoring rows live in
+  // transaction_voucher_links / *_payments. Use the shared predicate so a
+  // re-evaluated transaction that was batch-booked is never decided again.
+  try {
+    const [voucherLinksRes, invoicePaymentsRes, supplierPaymentsRes] = await Promise.all([
+      supabase
+        .from('transaction_voucher_links')
+        .select('transaction_id')
+        .eq('transaction_id', transaction.id)
+        .limit(1),
+      supabase
+        .from('invoice_payments')
+        .select('transaction_id')
+        .eq('transaction_id', transaction.id)
+        .limit(1),
+      supabase
+        .from('supplier_invoice_payments')
+        .select('transaction_id')
+        .eq('transaction_id', transaction.id)
+        .limit(1),
+    ])
+    const payments = [
+      ...((invoicePaymentsRes.data ?? []) as Array<{ transaction_id: string | null }>),
+      ...((supplierPaymentsRes.data ?? []) as Array<{ transaction_id: string | null }>),
+    ]
+    const voucherLinks = (voucherLinksRes.data ?? []) as Array<{ transaction_id: string }>
+    if (isTransactionBooked(transaction, payments, voucherLinks)) {
+      return {
+        candidates,
+        selected: null,
+        mapping: null,
+        action: { kind: 'none', reasonCodes: ['already_linked'] },
+        riskLevel: 'low',
+      }
+    }
+  } catch {
+    // Best-effort — the field-level guard above already covered the 1:1 case.
   }
 
   // Candidate: customer invoice (income only)
@@ -718,7 +759,7 @@ async function claimDecision(
     selected: AutomationCandidate | null
     source: string
   },
-): Promise<{ decisionId: string | null; replayed: boolean }> {
+): Promise<{ decisionId: string | null; replayed: boolean; claimFailed: boolean }> {
   const idempotencyKey = `bank_tx:${transactionId}`
   const { data, error } = await supabase
     .from('automation_decisions')
@@ -748,16 +789,19 @@ async function claimDecision(
     // 23505 = unique violation on (company_id, idempotency_key): decision
     // already recorded by a previous run — replay, never re-execute.
     if ((error as { code?: string }).code === '23505') {
-      return { decisionId: null, replayed: true }
+      return { decisionId: null, replayed: true, claimFailed: false }
     }
     log.warn('failed to record automation decision', {
       companyId,
       transactionId,
       error: error.message,
     })
-    return { decisionId: null, replayed: false }
+    // Fail closed: without a claimed decision row the idempotency guarantee
+    // is gone — a retried run could double-book. The caller must not run
+    // side effects for this transaction.
+    return { decisionId: null, replayed: false, claimFailed: true }
   }
-  return { decisionId: (data as { id: string }).id, replayed: false }
+  return { decisionId: (data as { id: string }).id, replayed: false, claimFailed: false }
 }
 
 /** Finalize the claimed decision row after side effects ran (or failed). */
@@ -808,6 +852,56 @@ async function updateTransactionAutomationState(
       .eq('id', transactionId)
   } catch {
     // Non-critical — the decision row is the source of truth.
+  }
+}
+
+/**
+ * Mirror a needs-review outcome into review_queue_items so the shared
+ * review surfaces (/bank-automation, the agency work queue) list it.
+ * Direct insert (not the queue_bank_transaction_review RPC) so it works in
+ * both user-context and service-role/cron contexts; RLS enforces tenancy
+ * for user-context clients. Best-effort — the pending operation remains the
+ * actionable record.
+ */
+async function queueBankTransactionReviewItem(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionId: string,
+  title: string,
+  description: string,
+  confidence: number,
+): Promise<void> {
+  try {
+    const { data: agencyClient } = await supabase
+      .from('agency_clients')
+      .select('agency_id')
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const { error } = await supabase.from('review_queue_items').insert({
+      company_id: companyId,
+      agency_id: (agencyClient as { agency_id?: string } | null)?.agency_id ?? null,
+      source_type: 'bank_transaction',
+      source_id: transactionId,
+      title,
+      description,
+      priority: 'normal',
+      status: 'open',
+      confidence: Math.round(Math.max(0, Math.min(1, confidence)) * 100),
+      metadata: { created_by: 'bank_automation_engine' },
+    })
+    if (error) {
+      log.warn('failed to queue bank transaction review item', {
+        companyId,
+        transactionId,
+        error: error.message,
+      })
+    }
+  } catch {
+    // Best-effort — see above.
   }
 }
 
@@ -915,7 +1009,7 @@ export async function processBankTransactionAutomation(
 
   // Claim the decision BEFORE any side effect: the unique idempotency key is
   // what makes a retried sync/import safe — a replay never re-books.
-  const { decisionId, replayed } = await claimDecision(supabase, companyId, userId, transaction.id, {
+  const { decisionId, replayed, claimFailed } = await claimDecision(supabase, companyId, userId, transaction.id, {
     decision: intendedKind,
     confidence,
     riskLevel,
@@ -935,6 +1029,24 @@ export async function processBankTransactionAutomation(
       pendingOperationId: null,
       decisionId: null,
       replayed: true,
+    }
+  }
+
+  if (claimFailed) {
+    // Fail closed: no decision row = no idempotency guarantee. Running side
+    // effects here would let a retried sync double-book. Surface the
+    // transaction for manual review instead.
+    await updateTransactionAutomationState(supabase, transaction.id, 'blocked', confidence, null)
+    return {
+      decision: 'blocked',
+      confidence,
+      candidate: selected,
+      reasonCodes: ['decision_claim_failed'],
+      riskLevel,
+      journalEntryId: null,
+      pendingOperationId: null,
+      decisionId: null,
+      replayed: false,
     }
   }
 
@@ -1030,6 +1142,18 @@ export async function processBankTransactionAutomation(
         })
       }
       decisionKind = pendingOperationId ? 'pending_operation_created' : 'suggested'
+      // Surface the review case in the shared review queue as well — runs
+      // once per transaction thanks to the claimed decision above.
+      if (pendingOperationId) {
+        await queueBankTransactionReviewItem(
+          supabase,
+          companyId,
+          transaction.id,
+          `Granska bankmatchning ${transaction.date} (${transaction.amount} ${transaction.currency})`,
+          'Automationen hittade en säker fakturamatchning som stoppades av en spärr och behöver mänsklig granskning.',
+          confidence,
+        )
+      }
       break
     }
 

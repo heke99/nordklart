@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { syncAccountTransactions } from '@/extensions/general/enable-banking/lib/sync'
+import { checkSieOverlap } from '@/lib/automation/sie-overlap'
 import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 import { isConsentExpiringSoon, getDaysUntilExpiry } from '@/extensions/general/enable-banking/lib/api-client'
 import { getEmailService } from '@/lib/email/service'
@@ -185,15 +186,17 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       }
 
       // Detect SIE overlap — skip auto-categorization if the sync range
-      // overlaps with a completed SIE import to prevent double-booking
-      const { data: sieOverlap } = await supabase
-        .from('sie_imports')
-        .select('id')
-        .eq('company_id', connection.company_id)
-        .eq('status', 'completed')
-        .gte('fiscal_year_end', fromDate)
-        .limit(1)
-        .maybeSingle()
+      // overlaps with a completed SIE import to prevent double-booking.
+      // Shared range-intersection predicate (checkSieOverlap) so the cron
+      // cannot drift from ingest: the previous inline query only checked
+      // fiscal_year_end ≥ fromDate and therefore suppressed automation for
+      // syncs long AFTER an old import's fiscal year ended.
+      const { overlaps: sieOverlap } = await checkSieOverlap(
+        supabase,
+        connection.company_id,
+        fromDate,
+        toDate,
+      )
 
       // First sync uses strategy=longest to pull the deepest history available
       // from the ASPSP. Incremental syncs skip it — the implicit default is
@@ -287,6 +290,22 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         status: expiringSoon ? 'expiring_soon' : 'synced',
         daysUntilExpiry: daysLeft,
       })
+
+      // Parity with the manual sync path: cron-driven syncs are webhook- and
+      // audit-relevant events too (bank_sync.completed is in the deliverable
+      // webhook catalog).
+      await eventBus.emit({
+        type: 'bank_sync.completed',
+        payload: {
+          connectionId: connection.id,
+          syncRunId,
+          accountsSynced: accounts.length,
+          transactionsImported: totalImported,
+          partial: totalErrors > 0,
+          userId: connection.user_id,
+          companyId: connection.company_id,
+        },
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
       ctx.log.error('sync failed for connection', error as Error, {
@@ -353,8 +372,8 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
  * Send consent expiry notification email.
  * Guards with last_expiry_notification_at to avoid spamming (2-day cooldown).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function sendConsentExpiryNotification(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: SupabaseClient<any>,
   connection: Record<string, unknown>,
   daysLeft: number,

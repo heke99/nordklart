@@ -17,7 +17,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { data: tx, error: txError } = await supabase
       .from('transactions')
       .select(
-        'id, transaction_date, description, amount, currency, journal_entry_id, matched_invoice_id, potential_invoice_id, automation_status, automation_confidence, automation_decision_id',
+        'id, date, description, amount, currency, journal_entry_id, invoice_id, potential_invoice_id, automation_status, automation_confidence, automation_decision_id',
       )
       .eq('id', transactionId)
       .eq('company_id', companyId)
@@ -60,7 +60,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
           automation_status: tx.automation_status ?? null,
           automation_confidence: tx.automation_confidence ?? null,
           booked: tx.journal_entry_id !== null,
-          matched_invoice_id: tx.matched_invoice_id ?? null,
+          matched_invoice_id: tx.invoice_id ?? null,
           potential_invoice_id: tx.potential_invoice_id ?? null,
         },
         decisions: ((decisions ?? []) as Array<{

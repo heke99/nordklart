@@ -184,6 +184,45 @@ describe('findMatchingInvoices', () => {
     expect(result[0].matchReason).toContain('OCR-referens')
   })
 
+  it('matches a Luhn-verified OCR reference (invoice digits + check digit)', async () => {
+    // The OCR printed on the invoice is generateOcrReference('F-2024001')
+    // = '2024001' + Luhn check digit — this is what banks put in the
+    // transaction reference for real OCR payments.
+    const { generateOcrReference } = await import('@/lib/bankgiro/luhn')
+    const ocr = generateOcrReference('F-2024001')
+    const tx = makeTransaction({ amount: 12500, reference: ocr })
+    mockResult({
+      data: [
+        { ...makeInvoice({ invoice_number: 'F-2024001', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe(0.99)
+    expect(result[0].matchReason).toContain('kontrollsiffra verifierad')
+  })
+
+  it('does not OCR-match a numeric reference whose check digit fails Luhn', async () => {
+    const { generateOcrReference } = await import('@/lib/bankgiro/luhn')
+    const validOcr = generateOcrReference('F-2024001')
+    // Flip the check digit so Luhn validation fails.
+    const brokenOcr = validOcr.slice(0, -1) + String((Number(validOcr.at(-1)) + 1) % 10)
+    const tx = makeTransaction({ amount: 99999, reference: brokenOcr, description: 'No match', merchant_name: null })
+    mockResult({
+      data: [
+        { ...makeInvoice({ invoice_number: 'F-2024001', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) },
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    // No OCR match (invalid check digit) and the amount is far off, so no
+    // fuzzy match either.
+    expect(result).toEqual([])
+  })
+
   it('returns immediately on OCR match without further scoring', async () => {
     const tx = makeTransaction({ amount: 12500, reference: 'F-2024001' })
     mockResult({

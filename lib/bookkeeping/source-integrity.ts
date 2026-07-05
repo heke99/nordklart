@@ -25,20 +25,37 @@ export async function linkSourceDocumentToJournalEntry(params: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     try {
+      // review_queue_items.source_type has a CHECK constraint — journal
+      // source types (e.g. 'invoice_created') are not in it, so map to the
+      // allowed vocabulary and keep the original in metadata.
+      const allowedSourceTypes = new Set([
+        'bank_transaction',
+        'supplier_invoice',
+        'customer_invoice',
+        'year_end',
+        'vat_return',
+        'bankgiro_application',
+        'manual',
+      ])
       await supabase.from('review_queue_items').insert({
         company_id: companyId,
         status: 'open',
-        category: 'bookkeeping_integrity',
         title: 'Underlag kunde inte länkas till verifikation',
         description: message,
-        severity: 'medium',
-        source_type: sourceType,
+        priority: 'normal',
+        source_type: allowedSourceTypes.has(sourceType) ? sourceType : 'manual',
         source_id: sourceId,
-        metadata: { document_id: documentId, journal_entry_id: journalEntryId, source_type: sourceType, source_id: sourceId },
+        metadata: {
+          category: 'bookkeeping_integrity',
+          document_id: documentId,
+          journal_entry_id: journalEntryId,
+          source_type: sourceType,
+          source_id: sourceId,
+        },
       })
     } catch {
-      // Review queue schemas can differ between installations. The caller still
-      // gets a warning, and SQL integrity views will surface the unlinked source.
+      // Review queue writes are best-effort. The caller still gets a
+      // warning, and SQL integrity views will surface the unlinked source.
     }
     return {
       linked: false,

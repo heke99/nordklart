@@ -44,8 +44,12 @@ export const REASON_CODE_SV: Record<string, string> = {
   no_actionable_candidate: 'Ingen kandidat var tillräckligt konkret för att agera på',
   sie_import_overlap:
     'En SIE-import täcker samma period — auto-bokföring spärrad för att undvika dubbelbokning',
-  period_locked: 'Bokföringsperioden är stängd eller låst',
+  period_locked: 'Bokföringsperioden är låst',
+  period_closed: 'Bokföringsperioden är stängd',
   period_status_unknown: 'Periodens status kunde inte fastställas — automatiken avstod',
+  decision_claim_failed:
+    'Beslutet kunde inte registreras i granskningsloggen — automatiken avstod av säkerhetsskäl',
+  idempotent_replay: 'Transaktionen har redan utvärderats — inget gjordes om',
 }
 
 export interface TranslatedReasonCode {

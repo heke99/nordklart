@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, Transaction, Customer } from '@/types'
+import { generateOcrReference, validateOcrReference } from '@/lib/bankgiro/luhn'
 
 export interface InvoiceMatch {
   invoice: Invoice & { customer?: Customer }
@@ -171,15 +172,32 @@ export async function findMatchingInvoices(
 
   const matches: InvoiceMatch[] = []
 
-  // OCR/Bankgiro reference matching — highest confidence
-  // Swedish standard: match transaction reference to invoice OCR number
+  // OCR/Bankgiro reference matching — highest confidence.
+  // Two accepted forms, both exact:
+  //   1. The Luhn-verified OCR reference printed on the invoice
+  //      (generateOcrReference(invoice_number) — digits + check digit).
+  //   2. The raw invoice number typed as reference by the payer.
+  // Validating the check digit prevents false positives where an unrelated
+  // digit string happens to contain the invoice number.
   const txReference = (transaction as Transaction & { reference?: string | null }).reference
   if (txReference) {
     const normalizedRef = txReference.replace(/\s+/g, '')
+    const numericRef = normalizedRef.replace(/\D/g, '')
+    const refIsValidOcr = numericRef.length >= 2 && validateOcrReference(numericRef)
     for (const invoice of filteredInvoices) {
-      // Match against invoice_number (used as OCR reference in Swedish payments)
       const invoiceRef = invoice.invoice_number?.replace(/\s+/g, '')
-      if (invoiceRef && normalizedRef === invoiceRef) {
+      const invoiceDigits = invoice.invoice_number?.replace(/\D/g, '') ?? ''
+      const invoiceOcr = invoiceDigits.length > 0 && invoiceDigits.length <= 24
+        ? generateOcrReference(invoice.invoice_number!)
+        : null
+
+      if (refIsValidOcr && invoiceOcr && numericRef === invoiceOcr) {
+        matches.push({
+          invoice: invoice as Invoice & { customer?: Customer },
+          confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
+          matchReason: `OCR-referens matchar faktura ${invoice.invoice_number} (kontrollsiffra verifierad)`,
+        })
+      } else if (invoiceRef && normalizedRef === invoiceRef) {
         matches.push({
           invoice: invoice as Invoice & { customer?: Customer },
           confidence: CONFIDENCE.OCR_REFERENCE_MATCH,

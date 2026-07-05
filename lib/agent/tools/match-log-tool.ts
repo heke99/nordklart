@@ -40,7 +40,7 @@ export const explainTransactionMatchTool: AgentTool = {
     const { data: tx, error: txError } = await supabase
       .from('transactions')
       .select(
-        'id, transaction_date, description, amount, currency, status, journal_entry_id, matched_invoice_id, automation_status, automation_confidence, automation_decision_id',
+        'id, date, description, amount, currency, category, journal_entry_id, invoice_id, automation_status, automation_confidence, automation_decision_id',
       )
       .eq('id', transactionId)
       .eq('company_id', companyId)
@@ -89,13 +89,13 @@ export const explainTransactionMatchTool: AgentTool = {
     return {
       transaction: {
         id: tx.id,
-        date: tx.transaction_date,
+        date: tx.date,
         description: tx.description,
         amount: tx.amount,
         currency: tx.currency,
-        status: tx.status,
+        category: tx.category,
         booked: tx.journal_entry_id !== null,
-        matched_invoice_id: tx.matched_invoice_id ?? null,
+        matched_invoice_id: tx.invoice_id ?? null,
         automation_status: tx.automation_status ?? null,
         automation_confidence: tx.automation_confidence ?? null,
       },
