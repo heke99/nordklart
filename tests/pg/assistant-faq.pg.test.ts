@@ -1,32 +1,31 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { seedCompany } from '@/tests/pg/fixtures'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
- * Covers 20260707120000_assistant_faq_entries + the generated seed migration
+ * Covers 20260707120000_assistant_faq_entries + the generated seed migrations
  * (…_seed_assistant_faq_entries.sql):
- *   - seed populated exactly 450 entries with the mandated category counts
+ *   - the seeded DB rows match data/assistant/faq-sv.json exactly (the
+ *     dataset is the single source of truth; it grows append-only past the
+ *     original 450-entry floor)
  *   - RLS: authenticated users can read, cannot write
  *   - search_assistant_faq RPC returns ranked hits for Swedish questions
  *   - assistant_faq_status RPC reports count + seed time
  */
 
-const EXPECTED_DISTRIBUTION: Record<string, number> = {
-  'Kom igång & onboarding': 35,
-  'Bankkoppling & transaktioner': 45,
-  'Bokföring, verifikationer & BAS-konton': 55,
-  'Moms, VAT & periodisk sammanställning': 55,
-  'Fakturering, kundreskontra & Bankgiro': 45,
-  'Leverantörsfakturor, kvitton & OCR': 35,
-  'Lön, AGI & F-skatt': 40,
-  'Bokslut, årsredovisning, INK2, NE & SRU': 55,
-  'Import/export, SIE, API & webhooks': 35,
-  'Byrå, plattform, behörigheter & säkerhet': 35,
-  'Felsökning & vanliga fel': 15,
+const dataset = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../../data/assistant/faq-sv.json'), 'utf8'),
+) as Array<{ id: string; category: string }>
+
+const EXPECTED_DISTRIBUTION: Record<string, number> = {}
+for (const entry of dataset) {
+  EXPECTED_DISTRIBUTION[entry.category] = (EXPECTED_DISTRIBUTION[entry.category] ?? 0) + 1
 }
 
 describe('assistant_faq_entries.pg — seed, RLS and search RPC', () => {
-  it('seed migration populated exactly 450 entries with the exact category distribution', async () => {
+  it('seed migrations populated the DB to match the dataset exactly', async () => {
     const res = await getPool().query<{ category: string; n: number }>(
       `SELECT category, count(*)::int AS n
          FROM public.assistant_faq_entries
@@ -38,7 +37,9 @@ describe('assistant_faq_entries.pg — seed, RLS and search RPC', () => {
       expect(counts[category], category).toBe(expected)
       total += expected
     }
-    expect(total).toBe(450)
+    // Append-only floor: the original curated dataset had 450 entries.
+    expect(total).toBeGreaterThanOrEqual(450)
+    expect(total).toBe(dataset.length)
     expect(res.rows.length).toBe(Object.keys(EXPECTED_DISTRIBUTION).length)
   })
 
@@ -56,6 +57,8 @@ describe('assistant_faq_entries.pg — seed, RLS and search RPC', () => {
 
   it('authenticated users cannot insert or update entries (RLS write denied)', async () => {
     const { userId } = await seedCompany()
+    // Separate user contexts: the rejected INSERT aborts its transaction, so
+    // the UPDATE probe must run in a fresh one.
     await withUserContext(userId, async (client) => {
       await expect(
         client.query(
@@ -65,7 +68,9 @@ describe('assistant_faq_entries.pg — seed, RLS and search RPC', () => {
                    '["a?","b?","c?"]'::jsonb, 'x', 'y', 'low', now())`,
         ),
       ).rejects.toThrow(/row-level security/i)
+    })
 
+    await withUserContext(userId, async (client) => {
       const upd = await client.query(
         `UPDATE public.assistant_faq_entries SET short_answer_sv = 'pwned' WHERE id = 'bank-001'`,
       )
@@ -112,7 +117,7 @@ describe('assistant_faq_entries.pg — seed, RLS and search RPC', () => {
       }>(`SELECT * FROM public.assistant_faq_status()`)
       return res.rows[0]
     })
-    expect(Number(row.entry_count)).toBe(450)
+    expect(Number(row.entry_count)).toBe(dataset.length)
     expect(row.last_seeded_at).toBeTruthy()
     expect(row.last_updated_at).toBeTruthy()
   })
