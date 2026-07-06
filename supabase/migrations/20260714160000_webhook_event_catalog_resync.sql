@@ -1,19 +1,82 @@
--- Webhook event catalog resync.
---
--- The DB webhook_events table (used by the platform admin console) drifted
--- from the runtime catalog in lib/webhooks/event-catalog.ts — the single
--- source of truth that drives delivery fan-out, subscription validation and
--- GET /api/v1/companies/:companyId/webhook-events. Old rows used event codes
--- that never existed on the bus (vat_return.submitted, journal_entry.created,
--- company.created, ...).
---
--- This migration marks every non-canonical row 'deprecated' and upserts the
--- canonical catalog (delivered → 'active', planned → 'planned'). The rows
--- below are GENERATED from lib/webhooks/event-catalog.ts — regenerate when
--- the catalog changes (see that module's header).
---
--- pg-test: skip (seed-data resync of an admin-console lookup table; no
--- triggers/RPC/RLS logic changed)
+-- =====================================================================
+-- Webhook events catalog foundation + resync
+-- Fixes missing public.webhook_events before catalog sync.
+-- =====================================================================
+
+create extension if not exists pgcrypto;
+
+create table if not exists public.webhook_events (
+  id uuid primary key default gen_random_uuid(),
+  code text not null,
+  category text not null default 'general',
+  description text not null default '',
+  status text not null default 'active',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.webhook_events
+  add column if not exists id uuid default gen_random_uuid();
+
+alter table public.webhook_events
+  add column if not exists code text;
+
+alter table public.webhook_events
+  add column if not exists category text default 'general';
+
+alter table public.webhook_events
+  add column if not exists description text default '';
+
+alter table public.webhook_events
+  add column if not exists status text default 'active';
+
+alter table public.webhook_events
+  add column if not exists created_at timestamptz default now();
+
+alter table public.webhook_events
+  add column if not exists updated_at timestamptz default now();
+
+update public.webhook_events
+set
+  category = coalesce(category, 'general'),
+  description = coalesce(description, ''),
+  status = coalesce(status, 'active'),
+  created_at = coalesce(created_at, now()),
+  updated_at = coalesce(updated_at, now())
+where category is null
+   or description is null
+   or status is null
+   or created_at is null
+   or updated_at is null;
+
+delete from public.webhook_events a
+using public.webhook_events b
+where a.ctid < b.ctid
+  and a.code = b.code;
+
+create unique index if not exists webhook_events_code_uidx
+  on public.webhook_events (code);
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'webhook_events_status_check'
+      and conrelid = 'public.webhook_events'::regclass
+  ) then
+    alter table public.webhook_events
+      add constraint webhook_events_status_check
+      check (status in ('active', 'planned', 'deprecated'));
+  end if;
+end $$;
+
+-- Lock direct browser/PostgREST access unless explicit policies already exist.
+alter table public.webhook_events enable row level security;
+
+-- =====================================================================
+-- Webhook event catalog resync
+-- =====================================================================
 
 update public.webhook_events
 set status = 'deprecated', updated_at = now()
@@ -134,7 +197,7 @@ insert into public.webhook_events (code, category, description, status) values
   ('bankgiro_application.submitted', 'bankgiro', 'Bankgiro-ansökan inskickad (planerad)', 'planned'),
   ('bankgiro_application.approved', 'bankgiro', 'Bankgiro-ansökan godkänd (planerad)', 'planned'),
   ('bankgiro_application.rejected', 'bankgiro', 'Bankgiro-ansökan avslagen (planerad)', 'planned'),
-  ('payment_provider.activated', 'payments', 'Betalleverantör aktiverad (planerad)', 'planned')
+  ('payment_provider.activated', 'payments', 'Betalleverantör aktiverad', 'planned')
 on conflict (code) do update set
   category = excluded.category,
   description = excluded.description,
