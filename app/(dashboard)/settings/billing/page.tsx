@@ -62,7 +62,7 @@ const billingEventLabel = (eventType: string) => {
   return labels[eventType] ?? 'Betalningshändelse'
 }
 
-export default async function BillingSettingsPage({ searchParams }: { searchParams: Promise<{ checkout?: string }> }) {
+export default async function BillingSettingsPage({ searchParams }: { searchParams: Promise<{ checkout?: string; checkout_id?: string }> }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
@@ -71,6 +71,25 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
   if (!companyId) redirect('/onboarding')
   const canManageBilling = await canManageCompanyBilling(supabase, user.id, companyId)
   const query = await searchParams
+
+  // Cancel return from Stripe: mark the local checkout session failed so the
+  // open-session guard doesn't block a retry until Stripe's 24h expiry.
+  // Scoped to the active company + created/open status; a later paid webhook
+  // still completes the purchase (stripe_finalize_checkout_v2 only skips
+  // sessions already marked completed).
+  if (
+    query.checkout === 'cancelled'
+    && query.checkout_id
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(query.checkout_id)
+    && canManageBilling
+  ) {
+    await createServiceClient()
+      .from('billing_checkout_sessions')
+      .update({ status: 'failed' })
+      .eq('id', query.checkout_id)
+      .eq('company_id', companyId)
+      .in('status', ['created', 'open'])
+  }
 
   const [
     subscriptionsRes,
@@ -135,12 +154,12 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
   // Base plans are audience-scoped: a byrå's own subscription company buys
   // agency plans, everyone else buys company plans. Add-ons and one-time
   // products are audience-neutral SKUs.
-  const { data: agencyRow } = await supabase
-    .from('agencies')
-    .select('id')
-    .eq('company_id', companyId)
-    .maybeSingle()
+  const [{ data: agencyRow }, { data: companyRow }] = await Promise.all([
+    supabase.from('agencies').select('id').eq('company_id', companyId).maybeSingle(),
+    supabase.from('companies').select('name').eq('id', companyId).maybeSingle(),
+  ])
   const buyerAudience = agencyRow ? 'agency' : 'company'
+  const companyName = (companyRow as { name?: string } | null)?.name ?? null
 
   const purchasablePlans = versions
     .map((version) => {
@@ -206,7 +225,7 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
         </div>
       </section>
 
-      {canManageBilling ? <BillingActions plans={purchasablePlans} fiscalPeriods={periods.map((period) => ({ id: period.id, name: period.name, periodStart: period.period_start, periodEnd: period.period_end }))} hasActiveBaseSubscription={activeBase} hasStripeCustomer={Boolean(profileRes.data?.stripe_customer_id)} activeSubscriptionId={activeSubscription?.id ?? null} activePlanVersionId={activeSubscription?.plan_version_id ?? null} preselectedPlanVersionId={preselectedPlanVersionId} changeRequests={changeRequests.map((request) => ({ id: request.id, requestType: request.request_type, status: request.status, requestedAt: request.requested_at, targetPlanVersionId: request.target_plan_version_id }))} /> : <section className="rounded-2xl border bg-card p-5 text-sm text-muted-foreground">Endast företagets ägare eller administratör kan ändra abonnemang och betalning.</section>}
+      {canManageBilling ? <BillingActions plans={purchasablePlans} fiscalPeriods={periods.map((period) => ({ id: period.id, name: period.name, periodStart: period.period_start, periodEnd: period.period_end }))} hasActiveBaseSubscription={activeBase} hasStripeCustomer={Boolean(profileRes.data?.stripe_customer_id)} activeSubscriptionId={activeSubscription?.id ?? null} activePlanVersionId={activeSubscription?.plan_version_id ?? null} preselectedPlanVersionId={preselectedPlanVersionId} changeRequests={changeRequests.map((request) => ({ id: request.id, requestType: request.request_type, status: request.status, requestedAt: request.requested_at, targetPlanVersionId: request.target_plan_version_id }))} companyName={companyName} yearEndPurchasedPeriodIds={purchases.filter((purchase) => purchase.purchase_type === 'year_end' && ['paid', 'active', 'fulfilled'].includes(purchase.status) && purchase.fiscal_period_id).map((purchase) => purchase.fiscal_period_id as string)} /> : <section className="rounded-2xl border bg-card p-5 text-sm text-muted-foreground">Endast företagets ägare eller administratör kan ändra abonnemang och betalning.</section>}
 
       <section className="rounded-3xl border bg-card p-5 shadow-sm"><h2 className="text-xl font-semibold">Aktiva tjänster och åtkomst</h2><div className="mt-4 grid gap-3 lg:grid-cols-2"><div className="rounded-2xl border bg-background/60 p-4"><p className="font-medium">Tillägg</p><div className="mt-3 space-y-2">{activeItems.map((item) => { const version = versionById.get(item.plan_version_id); const plan = version ? planById.get(version.plan_id) : null; return <div key={item.id} className="flex items-center justify-between gap-3 text-sm"><span>{plan?.name ?? 'Tillägg'}</span><span className="text-muted-foreground">{item.status === 'past_due' && item.grace_ends_at ? `Tillgång till ${date(item.grace_ends_at)}` : `Period till ${date(item.current_period_end)}`}</span></div> })}{activeItems.length === 0 ? <p className="text-sm text-muted-foreground">Inga aktiva tillägg.</p> : null}</div></div><div className="rounded-2xl border bg-background/60 p-4"><p className="font-medium">Gratis- och partneråtkomst</p><div className="mt-3 space-y-2">{activeGrants.map((grant) => <div key={grant.id} className="flex items-center justify-between gap-3 text-sm"><span>{grantLabel(grant.grant_type)}</span><span className="text-muted-foreground">{grant.expires_at ? `Gäller till ${date(grant.expires_at)}` : 'Utan slutdatum'}</span></div>)}{activeGrants.length === 0 ? <p className="text-sm text-muted-foreground">Ingen separat kostnadsfri åtkomst.</p> : null}</div></div></div></section>
 

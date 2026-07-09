@@ -70,6 +70,11 @@ export function isPeriodBoundYearEndOperation(operation: string): boolean {
     || normalized === 'report.ink2'
     || normalized === 'report.ne_bilaga'
     || normalized.startsWith('tax_declaration.')
+    // v1 API: year-end closing on a specific fiscal period. The wrapper's
+    // company-wide feature check would wrongly deny one-time buyers (their
+    // purchase is bound to one fiscal_period_id) — requireYearEndAccess in
+    // the route handler resolves subscription OR period purchase correctly.
+    || normalized === 'fiscal-periods.year-end'
   )
 }
 
@@ -175,6 +180,7 @@ export function isApiV1CoreOperation(operation: string): boolean {
  */
 export function featureForApiV1Operation(operation: string): FeatureCode | null {
   const normalized = operation.toLowerCase()
+  if (isPeriodBoundYearEndOperation(normalized)) return null
   if (normalized.includes('webhook')) return NORDKLART_FEATURES.apiWebhooks
   if (normalized.includes('bankgiro')) return normalized.includes('application') ? NORDKLART_FEATURES.bankgiroApplication : NORDKLART_FEATURES.bankgiroOperations
   if (normalized.includes('year_end') || normalized.includes('year-end') || normalized.includes('ixbrl')) return normalized.includes('ixbrl') ? NORDKLART_FEATURES.yearEndIxbrl : NORDKLART_FEATURES.yearEndProjects

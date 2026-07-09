@@ -21,6 +21,7 @@ import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { startOperation, completeOperation, failOperation } from '@/lib/api/v1/operations'
 import { executeYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
+import { requireYearEndAccess } from '@/lib/year-end/access'
 
 const YearEndAcceptedResponse = z.object({
   operation_id: z.string().uuid(),
@@ -83,6 +84,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, fiscalPeriodId))) {
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId, details: { resource: 'fiscal_period' },
+      })
+    }
+
+    // Period-bound commercial gate: a year-end subscription covers every
+    // period, a one-time purchase covers exactly this fiscal_period_id.
+    // The generic wrapper cannot resolve the period, so the check lives here
+    // (same rule as the dashboard year-end routes).
+    const yearEndAccess = await requireYearEndAccess(
+      ctx.supabase,
+      ctx.companyId!,
+      ctx.userId,
+      fiscalPeriodId,
+      { operation: 'fiscal-periods.year-end', requestId: ctx.requestId },
+    )
+    if (!yearEndAccess.allowed) {
+      ctx.log.warn('year-end access denied', { fiscalPeriodId, reason: yearEndAccess.reason })
+      return v1ErrorResponseFromCode('FORBIDDEN', ctx.log, {
+        requestId: ctx.requestId,
+        details: { feature: 'year_end.projects', reason: yearEndAccess.reason ?? 'missing_entitlement' },
       })
     }
 

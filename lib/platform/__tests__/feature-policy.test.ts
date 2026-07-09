@@ -124,9 +124,16 @@ describe('featureForApiV1Operation', () => {
     expect(featureForApiV1Operation('voucher-gap-explanations.create')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForApiV1Operation('reports.vat-declaration')).toBe(NORDKLART_FEATURES.reportsCore)
     expect(featureForApiV1Operation('year_end.projects.create')).toBe(NORDKLART_FEATURES.yearEndProjects)
-    expect(featureForApiV1Operation('fiscal-periods.year-end')).toBe(NORDKLART_FEATURES.yearEndProjects)
     expect(featureForApiV1Operation('bankgiro_applications.create')).toBe(NORDKLART_FEATURES.bankgiroApplication)
     expect(featureForApiV1Operation('webhooks.create')).toBe(NORDKLART_FEATURES.apiWebhooks)
+  })
+
+  it('keeps the period-bound v1 year-end operation null (gated via requireYearEndAccess)', () => {
+    // The wrapper's company-wide feature check would wrongly deny one-time
+    // buyers whose purchase is bound to a single fiscal_period_id — the
+    // route handler enforces requireYearEndAccess instead.
+    expect(featureForApiV1Operation('fiscal-periods.year-end')).toBeNull()
+    expect(isPeriodBoundYearEndOperation('fiscal-periods.year-end')).toBe(true)
   })
 
   it('keeps documented account-level operations core', () => {

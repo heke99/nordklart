@@ -198,7 +198,10 @@ export async function POST(request: Request) {
       priceId: version.stripe_price_id,
       mode: checkoutKind === 'one_time' ? 'payment' : 'subscription',
       successUrl: `${origin}/settings/billing?checkout=success`,
-      cancelUrl: `${origin}/settings/billing?checkout=cancelled`,
+      // checkout_id lets the billing page mark the local session failed on
+      // the cancel return, so the open-session guard doesn't block a retry
+      // until Stripe's own 24h expiry fires.
+      cancelUrl: `${origin}/settings/billing?checkout=cancelled&checkout_id=${checkoutId}`,
       clientReferenceId: checkoutId,
       metadata: {
         nordklart_checkout_id: checkoutId,

@@ -1,6 +1,9 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { checkFeatureAccess, featureAccessError } from '@/lib/platform/entitlements'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('year-end/access')
 
 export type YearEndAccessSource =
   | 'feature_entitlement'
@@ -43,18 +46,25 @@ async function isPlatformAdmin(supabase: SupabaseClient, userId?: string | null)
 }
 
 async function auditPlatformBypass(
-  supabase: SupabaseClient,
+  fallbackClient: SupabaseClient,
   userId: string,
   companyId: string,
   fiscalPeriodId: string,
   operation?: string,
   requestId?: string,
 ) {
-  // The legacy audit_log is intentionally append-only and may reject direct
-  // inserts under RLS in some deployments. This audit is best-effort here;
-  // the dedicated tax_declaration_audit_events table added by the completion
-  // migration records the durable export/project history.
-  await supabase.from('audit_log').insert({
+  // Write with the service-role client so the append-only audit_log RLS can
+  // never silently drop the security event (the caller's session client may
+  // lack an INSERT policy in some deployments). Falls back to the caller's
+  // client when the service client is unavailable (e.g. unit tests).
+  let supabase = fallbackClient
+  try {
+    const { createServiceClient } = await import('@/lib/supabase/server')
+    supabase = createServiceClient()
+  } catch {
+    // Keep the fallback client.
+  }
+  const { error } = await supabase.from('audit_log').insert({
     user_id: userId,
     actor_id: userId,
     action: 'SECURITY_EVENT',
@@ -69,6 +79,9 @@ async function auditPlatformBypass(
       access_source: 'platform_admin_bypass',
     },
   })
+  // supabase-js returns errors instead of throwing — surface it so the
+  // caller's error log fires (bypass-without-audit must never be silent).
+  if (error) throw new Error(`audit_log insert failed: ${error.message}`)
 }
 
 /**
@@ -170,9 +183,17 @@ export async function requireYearEndAccess(
         options.operation,
         options.requestId,
       )
-    } catch {
+    } catch (err) {
       // Never block a legitimate platform admin because an optional audit sink
-      // is unavailable; request logs still carry requestId and operation.
+      // is unavailable — but surface the gap loudly: bypass-without-audit is a
+      // compliance signal operations must see.
+      log.error('platform admin year-end bypass could NOT be audit-logged', err as Error, {
+        userId,
+        companyId,
+        fiscalPeriodId,
+        operation: options.operation ?? null,
+        requestId: options.requestId ?? null,
+      })
     }
   }
   return decision

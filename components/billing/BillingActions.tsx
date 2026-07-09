@@ -29,6 +29,10 @@ type Props = {
   /** Plan version chosen at signup (signup_drafts) — highlighted, never auto-charged. */
   preselectedPlanVersionId?: string | null
   changeRequests: ChangeRequest[]
+  /** Name of the active company — shown on the one-time purchase card so the buyer always sees WHICH company the purchase binds to. */
+  companyName?: string | null
+  /** Fiscal periods that already have an active/paid year-end purchase. */
+  yearEndPurchasedPeriodIds?: string[]
 }
 
 function formatPrice(plan: PurchasablePlan) {
@@ -38,7 +42,7 @@ function formatPrice(plan: PurchasablePlan) {
   return `${amount} exkl. moms`
 }
 
-export function BillingActions({ plans, fiscalPeriods, hasActiveBaseSubscription, hasStripeCustomer, activeSubscriptionId, activePlanVersionId, preselectedPlanVersionId = null, changeRequests }: Props) {
+export function BillingActions({ plans, fiscalPeriods, hasActiveBaseSubscription, hasStripeCustomer, activeSubscriptionId, activePlanVersionId, preselectedPlanVersionId = null, changeRequests, companyName = null, yearEndPurchasedPeriodIds = [] }: Props) {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -103,9 +107,15 @@ export function BillingActions({ plans, fiscalPeriods, hasActiveBaseSubscription
         const isBase = plan.productType === 'subscription'; const isAddon = plan.productType === 'addon'; const isYearEnd = plan.productType === 'one_time' && plan.productCode === 'year_end'
         if (isBase && hasActiveBaseSubscription) return null
         const isPreselected = !hasActiveBaseSubscription && plan.id === preselectedPlanVersionId
-        const disabled = pending || !plan.stripeReady || (isAddon && !hasActiveBaseSubscription) || (isYearEnd && !yearEndPeriodId)
-        const label = !plan.stripeReady ? 'Inte redo för betalning' : isAddon && !hasActiveBaseSubscription ? 'Kräver basabonnemang' : isYearEnd ? 'Köp bokslut' : isAddon ? 'Lägg till tjänst' : 'Välj plan'
-        return <article key={plan.id} className={`rounded-2xl border bg-background/70 p-5${isPreselected ? ' border-primary shadow-sm ring-1 ring-primary/30' : ''}`}><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{isYearEnd ? 'Engångsköp' : isAddon ? 'Tillägg' : isPreselected ? 'Ditt planval' : 'Abonnemang'}</p><h3 className="mt-2 text-xl font-semibold">{plan.name}</h3><p className="mt-2 min-h-14 text-sm leading-6 text-muted-foreground">{plan.description || 'Produktinformation saknas.'}</p><div className="mt-5 text-lg font-semibold tabular-nums">{formatPrice(plan)}</div>{isYearEnd ? <label className="mt-4 block text-sm font-medium">Räkenskapsår<select className="mt-2 flex h-10 w-full rounded-lg border bg-card px-3 text-sm" value={yearEndPeriodId} onChange={(event) => setYearEndPeriodId(event.target.value)}>{fiscalPeriods.length === 0 ? <option value="">Inget räkenskapsår tillgängligt</option> : null}{fiscalPeriods.map((period) => <option key={period.id} value={period.id}>{period.name} · {period.periodStart}–{period.periodEnd}</option>)}</select></label> : null}<Button className="mt-5 w-full" disabled={disabled} onClick={() => openCheckout(plan.id, isYearEnd ? yearEndPeriodId : undefined)}>{pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}{label}</Button></article>
+        const selectedPeriodPurchased = isYearEnd && Boolean(yearEndPeriodId) && yearEndPurchasedPeriodIds.includes(yearEndPeriodId)
+        const disabled = pending || !plan.stripeReady || (isAddon && !hasActiveBaseSubscription) || (isYearEnd && (!yearEndPeriodId || selectedPeriodPurchased))
+        const label = !plan.stripeReady ? 'Inte redo för betalning' : isAddon && !hasActiveBaseSubscription ? 'Kräver basabonnemang' : isYearEnd ? (selectedPeriodPurchased ? 'Redan köpt för räkenskapsåret' : 'Köp bokslut') : isAddon ? 'Lägg till tjänst' : 'Välj plan'
+        return <article key={plan.id} className={`rounded-2xl border bg-background/70 p-5${isPreselected ? ' border-primary shadow-sm ring-1 ring-primary/30' : ''}`}><p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">{isYearEnd ? 'Engångsköp' : isAddon ? 'Tillägg' : isPreselected ? 'Ditt planval' : 'Abonnemang'}</p><h3 className="mt-2 text-xl font-semibold">{plan.name}</h3><p className="mt-2 min-h-14 text-sm leading-6 text-muted-foreground">{isYearEnd ? 'Ladda upp SIE och skapa bokslut, årsredovisningsunderlag och INK2-deklarationspaket.' : plan.description || 'Produktinformation saknas.'}</p><div className="mt-5 text-lg font-semibold tabular-nums">{formatPrice(plan)}</div>{isYearEnd ? <>
+          {companyName ? <p className="mt-3 text-sm"><span className="text-muted-foreground">Företag:</span> <strong>{companyName}</strong></p> : null}
+          <label className="mt-3 block text-sm font-medium">Räkenskapsår<select className="mt-2 flex h-10 w-full rounded-lg border bg-card px-3 text-sm" value={yearEndPeriodId} onChange={(event) => setYearEndPeriodId(event.target.value)}>{fiscalPeriods.length === 0 ? <option value="">Inget räkenskapsår tillgängligt</option> : null}{fiscalPeriods.map((period) => <option key={period.id} value={period.id}>{period.name} · {period.periodStart}–{period.periodEnd}{yearEndPurchasedPeriodIds.includes(period.id) ? ' · redan köpt' : ''}</option>)}</select></label>
+          {selectedPeriodPurchased ? <p className="mt-2 rounded-lg bg-success/10 px-3 py-2 text-xs text-success">Bokslutsåtkomst är redan aktiv för det valda räkenskapsåret.</p> : null}
+          <p className="mt-3 text-xs leading-5 text-muted-foreground">Köpet gäller endast det valda räkenskapsåret för företaget ovan. Underlagen skapas för din granskning — ingenting lämnas in automatiskt utan ditt godkännande. Ingår inte: löpande bokföring, bank, fakturering och lön (kräver abonnemang).</p>
+        </> : null}<Button className="mt-5 w-full" disabled={disabled} onClick={() => openCheckout(plan.id, isYearEnd ? yearEndPeriodId : undefined)}>{pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CreditCard className="mr-2 h-4 w-4" />}{label}</Button></article>
       })}</div>
     </section>
   )
