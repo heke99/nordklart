@@ -376,6 +376,59 @@ describe('POST /api/invoices/[id]/send', () => {
     ).toContain('SMTP error')
   })
 
+  it('returns 400 when customer email is malformed', async () => {
+    const badCustomer = makeCustomer({ id: 'cust-1', email: 'inte-en-mejl' })
+    enqueue({ data: makeInvoice({ id: 'inv-1', status: 'draft', customer: badCustomer, items: [] }), error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_INVALID_CUSTOMER_EMAIL')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when customer email carries CRLF header-injection payload', async () => {
+    const badCustomer = makeCustomer({ id: 'cust-1', email: 'kund@test.se\r\nBcc: attacker@evil.se' })
+    enqueue({ data: makeInvoice({ id: 'inv-1', status: 'draft', customer: badCustomer, items: [] }), error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('reports partial_failures when the status update fails after the email left', async () => {
+    enqueue({ data: invoice, error: null }) // invoice fetch
+    enqueue({ data: company, error: null }) // company settings
+
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-partial' })
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+
+    enqueue({ data: null, error: { message: 'status write blocked' } }) // status update FAILS
+    enqueue({ data: null, error: null }) // journal_entry_id update
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      partial?: boolean
+      partial_failures?: Array<{ step: string; reason: string }>
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.partial).toBe(true)
+    expect(body.partial_failures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: 'status_update', reason: 'status write blocked' }),
+      ]),
+    )
+  })
+
   it('renders the final PDF as if already sent (no UTKAST banner)', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: company, error: null })

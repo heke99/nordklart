@@ -12,6 +12,7 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
+import { isValidEmailAddress } from '@/lib/email/validate'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 
 ensureInitialized()
@@ -59,6 +60,12 @@ export const POST = withRouteContext(
     const customer = invoice.customer as Customer
     if (!customer.email) {
       return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {
+        requestId,
+        details: { customerId: customer.id },
+      })
+    }
+    if (!isValidEmailAddress(customer.email)) {
+      return errorResponseFromCode('INVOICE_SEND_INVALID_CUSTOMER_EMAIL', opLog, {
         requestId,
         details: { customerId: customer.id },
       })

@@ -652,6 +652,12 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'Customer has no email address.',
     remediation: { description: 'Add an email address on the customer record before sending.' },
   },
+  INVOICE_SEND_INVALID_CUSTOMER_EMAIL: {
+    httpStatus: 400,
+    message_sv: 'Kundens e-postadress är ogiltig. Rätta kunduppgifterna innan fakturan skickas.',
+    message_en: 'Customer email address is invalid.',
+    remediation: { description: 'Correct the email address on the customer record before sending.' },
+  },
   INVOICE_SEND_COMPANY_SETTINGS_MISSING: {
     httpStatus: 404,
     message_sv: 'Företagsinställningar saknas.',

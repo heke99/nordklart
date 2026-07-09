@@ -116,11 +116,22 @@ function makeSchedule(overrides: Partial<RecurringInvoiceSchedule> = {}): Recurr
   }
 }
 
-/** Enqueue the base spawn pipeline: customer, invoice insert, items, refetch. */
-function enqueueSpawnPipeline(customerRow: Record<string, unknown> = customer, complete: Record<string, unknown> = completeInvoice) {
+const companySettings = { company_id: 'company-1', company_name: 'Bolag AB', email: 'bolag@test.se', entity_type: 'aktiebolag' }
+
+/**
+ * Enqueue the base spawn pipeline: customer, invoice insert, items,
+ * [preflight company_settings when auto_send], refetch.
+ */
+function enqueueSpawnPipeline(options: {
+  customerRow?: Record<string, unknown>
+  complete?: Record<string, unknown>
+  autoSend?: boolean
+} = {}) {
+  const { customerRow = customer, complete = completeInvoice, autoSend = false } = options
   enqueue({ data: customerRow, error: null }) // customers select
   enqueue({ data: insertedInvoice, error: null }) // invoices insert
   enqueue({ data: null, error: null }) // invoice_items insert
+  if (autoSend) enqueue({ data: companySettings, error: null }) // preflight company_settings
   enqueue({ data: complete, error: null }) // refetch with relations
 }
 
@@ -150,8 +161,8 @@ describe('executeRecurringSchedule', () => {
   })
 
   it('auto_send=true sends the email and flips status', async () => {
-    enqueueSpawnPipeline()
-    enqueue({ data: { company_id: 'company-1', company_name: 'Bolag AB', email: 'bolag@test.se', entity_type: 'aktiebolag' }, error: null }) // company_settings
+    enqueueSpawnPipeline({ autoSend: true })
+    enqueue({ data: companySettings, error: null }) // company_settings (send)
     enqueue({ data: null, error: null }) // status update
     enqueue({ data: null, error: null }) // journal_entry_id update
 
@@ -167,7 +178,7 @@ describe('executeRecurringSchedule', () => {
 
   it('blocks auto-send with a clear warning when customer email is invalid', async () => {
     const badCustomer = { ...customer, email: 'inte-en-mejl' }
-    enqueueSpawnPipeline(badCustomer, { ...completeInvoice, customer: badCustomer })
+    enqueueSpawnPipeline({ customerRow: badCustomer, complete: { ...completeInvoice, customer: badCustomer }, autoSend: true })
 
     const result = await executeRecurringSchedule(mockSupabase as never, makeSchedule({ auto_send: true }))
 
@@ -178,7 +189,7 @@ describe('executeRecurringSchedule', () => {
 
   it('blocks auto-send for sandbox companies', async () => {
     isSandboxMock.mockResolvedValue(true)
-    enqueueSpawnPipeline()
+    enqueueSpawnPipeline({ autoSend: true })
 
     const result = await executeRecurringSchedule(mockSupabase as never, makeSchedule({ auto_send: true }))
 
@@ -187,22 +198,24 @@ describe('executeRecurringSchedule', () => {
     expect(sendEmailMock).not.toHaveBeenCalled()
   })
 
-  it('never sends an email without its PDF (render failure blocks send)', async () => {
+  it('never sends an email without its PDF, and the preflight failure keeps the invoice unnumbered', async () => {
     renderToBufferMock.mockRejectedValue(new Error('pdf boom'))
-    enqueueSpawnPipeline()
-    enqueue({ data: { company_id: 'company-1', entity_type: 'aktiebolag' }, error: null }) // company_settings
+    enqueueSpawnPipeline({ autoSend: true })
 
     const result = await executeRecurringSchedule(mockSupabase as never, makeSchedule({ auto_send: true }))
 
     expect(result.autoSent).toBe(false)
     expect(result.warning).toContain('PDF')
+    expect(result.invoiceNumber).toBeNull()
     expect(sendEmailMock).not.toHaveBeenCalled()
+    // The F-series number must NOT be consumed when the PDF pipeline is broken.
+    expect(ensureInvoiceNumberMock).not.toHaveBeenCalled()
   })
 
   it('surfaces a warning when the email provider fails', async () => {
     sendEmailMock.mockResolvedValue({ success: false, error: 'provider down' })
-    enqueueSpawnPipeline()
-    enqueue({ data: { company_id: 'company-1', entity_type: 'aktiebolag' }, error: null }) // company_settings
+    enqueueSpawnPipeline({ autoSend: true })
+    enqueue({ data: companySettings, error: null }) // company_settings (send)
 
     const result = await executeRecurringSchedule(mockSupabase as never, makeSchedule({ auto_send: true }))
 
@@ -212,7 +225,7 @@ describe('executeRecurringSchedule', () => {
 
   it('surfaces a warning when the email service is unconfigured', async () => {
     isConfiguredMock.mockReturnValue(false)
-    enqueueSpawnPipeline()
+    enqueueSpawnPipeline({ autoSend: true })
 
     const result = await executeRecurringSchedule(mockSupabase as never, makeSchedule({ auto_send: true }))
 
@@ -222,8 +235,8 @@ describe('executeRecurringSchedule', () => {
 
   it('records a partial-failure warning when the journal entry fails after send', async () => {
     createJournalEntryMock.mockRejectedValue(new Error('JE boom'))
-    enqueueSpawnPipeline()
-    enqueue({ data: { company_id: 'company-1', entity_type: 'aktiebolag' }, error: null }) // company_settings
+    enqueueSpawnPipeline({ autoSend: true })
+    enqueue({ data: companySettings, error: null }) // company_settings (send)
     enqueue({ data: null, error: null }) // status update
 
     const result = await executeRecurringSchedule(mockSupabase as never, makeSchedule({ auto_send: true }))

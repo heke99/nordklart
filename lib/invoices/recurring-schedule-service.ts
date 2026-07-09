@@ -255,7 +255,53 @@ export async function executeRecurringSchedule(
     throw new Error(`failed to insert invoice items: ${itemsError.message}`)
   }
 
-  // 7. Allocate F-series number.
+  // 7a. Preflight PDF for auto-send BEFORE consuming an F-series number —
+  //     mirrors the manual send route. If the PDF pipeline is broken the
+  //     invoice stays an UNNUMBERED draft (no sequence slot wasted, ML 17
+  //     kap 24§) and the schedule gets a clear warning; a later manual send
+  //     allocates the number once the PDF renders again.
+  if (schedule.auto_send) {
+    const { data: preflightCompany } = await supabase
+      .from('company_settings')
+      .select('*')
+      .eq('company_id', schedule.company_id)
+      .single<CompanySettings>()
+
+    if (preflightCompany) {
+      try {
+        const { branding } = prepareInvoicePdfRender(preflightCompany)
+        await renderToBuffer(
+          InvoicePDF({
+            invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW', status: 'sent' as const },
+            customer,
+            items: itemRows as unknown as InvoiceItem[],
+            company: preflightCompany,
+            branding,
+          }),
+        )
+      } catch (err) {
+        opLog.error('preflight PDF render failed for recurring auto-send — invoice kept unnumbered', err as Error, {
+          invoiceId: invoice.id,
+        })
+        await eventBus.emit({
+          type: 'invoice.created',
+          payload: {
+            invoice: { ...(invoice as Invoice), items: itemRows as unknown as InvoiceItem[] },
+            companyId: schedule.company_id,
+            userId: schedule.user_id,
+          },
+        })
+        return {
+          invoiceId: invoice.id,
+          invoiceNumber: null,
+          autoSent: false,
+          warning: 'PDF-genereringen misslyckades — inget e-postmeddelande skickades. Fakturan finns som utkast utan fakturanummer och kan skickas manuellt.',
+        }
+      }
+    }
+  }
+
+  // 7b. Allocate F-series number.
   try {
     await ensureInvoiceNumber(supabase, schedule.company_id, invoice as Invoice)
   } catch (err) {

@@ -1,6 +1,7 @@
 import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
 import { escapeHtml } from '@/lib/email/escape-html'
+import { generateOcrReference } from '@/lib/bankgiro/luhn'
 
 type EmailLang = 'sv' | 'en'
 
@@ -24,10 +25,13 @@ const LABELS = {
     bodyInvoice: 'Tack för ditt förtroende! Bifogat hittar du din faktura.',
     toPay: 'Att betala:',
     paymentHeading: 'Betalningsinformation',
+    bankgiro: 'Bankgiro:',
+    plusgiro: 'Plusgiro:',
     bank: 'Bank:',
     account: 'Kontonummer:',
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
+    ocr: 'OCR/Referens:',
     message: 'Meddelande:',
     questions: 'Har du frågor om fakturan? Svara direkt på detta mejl så hjälper vi dig.',
     sincerely: 'Med vänliga hälsningar,',
@@ -52,10 +56,13 @@ const LABELS = {
     bodyInvoice: 'Thank you for your business. Attached you will find your invoice.',
     toPay: 'Total due:',
     paymentHeading: 'Payment information',
+    bankgiro: 'Bankgiro:',
+    plusgiro: 'Plusgiro:',
     bank: 'Bank:',
     account: 'Account number:',
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
+    ocr: 'Reference:',
     message: 'Reference:',
     questions: 'Questions about the invoice? Reply directly to this email and we will help you.',
     sincerely: 'Kind regards,',
@@ -71,6 +78,23 @@ const LABELS = {
 
 function resolveLang(customer: Customer): EmailLang {
   return customer.language === 'en' ? 'en' : 'sv'
+}
+
+/**
+ * The customer's payment reference — mirrors the PDF exactly so email and
+ * attachment never disagree. Swedish recipients paying via bankgiro/plusgiro
+ * get the Luhn OCR; everyone else references the invoice number.
+ */
+function resolvePaymentReference(
+  invoice: Invoice,
+  company: CompanySettings,
+  lang: EmailLang,
+): { label: 'ocr' | 'message'; value: string } {
+  const showOcr = (company.invoice_show_ocr ?? true) && Boolean(company.bankgiro || company.plusgiro) && lang === 'sv'
+  if (showOcr && invoice.invoice_number) {
+    return { label: 'ocr', value: generateOcrReference(invoice.invoice_number) }
+  }
+  return { label: 'message', value: invoice.invoice_number ?? '' }
 }
 
 function getDocumentLabel(invoice: Invoice, lang: EmailLang): string {
@@ -135,6 +159,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   // green for the total regardless of branding, because the customer's brain
   // is wired to expect "money coming back = green".
   const primaryColor = safeBrandingColor(company.invoice_primary_color, '#111111')
+  const paymentReference = resolvePaymentReference(invoice, company, lang)
 
   return `
 <!DOCTYPE html>
@@ -202,6 +227,18 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
         ${L.paymentHeading}
       </h2>
       <table style="width: 100%; border-collapse: collapse;">
+        ${company.bankgiro && (company.invoice_show_bankgiro ?? true) ? `
+        <tr>
+          <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">${L.bankgiro}</td>
+          <td style="padding: 6px 0; font-weight: 500;">${escapeHtml(company.bankgiro)}</td>
+        </tr>
+        ` : ''}
+        ${company.plusgiro && (company.invoice_show_plusgiro ?? true) ? `
+        <tr>
+          <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">${L.plusgiro}</td>
+          <td style="padding: 6px 0; font-weight: 500;">${escapeHtml(company.plusgiro)}</td>
+        </tr>
+        ` : ''}
         ${company.bank_name ? `
         <tr>
           <td style="padding: 6px 0; color: #666; font-size: 14px; width: 140px;">${L.bank}</td>
@@ -227,8 +264,8 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
         </tr>
         ` : ''}
         <tr>
-          <td style="padding: 6px 0; color: #666; font-size: 14px;">${L.message}</td>
-          <td style="padding: 6px 0; font-weight: 500;">${invoiceNumber}</td>
+          <td style="padding: 6px 0; color: #666; font-size: 14px;">${paymentReference.label === 'ocr' ? L.ocr : L.message}</td>
+          <td style="padding: 6px 0; font-weight: 500;">${escapeHtml(paymentReference.value)}</td>
         </tr>
       </table>
     </div>
@@ -289,14 +326,17 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   text += `---\n\n`
 
   if (!hidePayment) {
+    const paymentReference = resolvePaymentReference(invoice, company, lang)
     text += `${L.paymentHeading}:\n`
+    if (company.bankgiro && (company.invoice_show_bankgiro ?? true)) text += `${L.bankgiro} ${company.bankgiro}\n`
+    if (company.plusgiro && (company.invoice_show_plusgiro ?? true)) text += `${L.plusgiro} ${company.plusgiro}\n`
     if (company.bank_name) text += `${L.bank} ${company.bank_name}\n`
     if (company.clearing_number && company.account_number) {
       text += `${L.account} ${company.clearing_number}-${company.account_number}\n`
     }
     if (company.iban) text += `${L.iban} ${company.iban}\n`
     if (company.bic) text += `${L.bic} ${company.bic}\n`
-    text += `${L.message} ${invoice.invoice_number}\n\n`
+    text += `${paymentReference.label === 'ocr' ? L.ocr : L.message} ${paymentReference.value}\n\n`
   }
 
   text += `${L.questions}\n\n`

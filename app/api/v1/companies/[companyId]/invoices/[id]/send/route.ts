@@ -45,6 +45,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
+import { isValidEmailAddress } from '@/lib/email/validate'
 import { buildInvoiceEmailOptions, invoiceEmailFilename } from '@/lib/invoices/send-invoice-email'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { uploadDocument } from '@/lib/core/documents/document-service'
@@ -232,6 +233,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const customer = typed.customer
     if (!customer?.email) {
       return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {
+        requestId: ctx.requestId,
+        details: { customer_id: typed.customer_id },
+      })
+    }
+    if (!isValidEmailAddress(customer.email)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_INVALID_CUSTOMER_EMAIL', ctx.log, {
         requestId: ctx.requestId,
         details: { customer_id: typed.customer_id },
       })
