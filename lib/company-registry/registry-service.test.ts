@@ -6,7 +6,7 @@ import type { CompanyRegistryLookup } from './provider'
 
 const lookup: CompanyRegistryLookup = {
   organizationNumber: '5594167149',
-  companyName: 'Div3rsa AB',
+  companyName: 'Testbolaget AB',
   legalForm: 'aktiebolag',
   registryStatus: 'active',
   address: { street: 'Testgatan 1', postalCode: '12345', city: 'Stockholm' },
@@ -22,13 +22,13 @@ const lookup: CompanyRegistryLookup = {
 describe('company registry service', () => {
   it('keeps public lookup payload compact and excludes raw source payload', () => {
     const payload = publicLookupPayload(lookup)
-    expect(payload.companyName).toBe('Div3rsa AB')
+    expect(payload.companyName).toBe('Testbolaget AB')
     expect('sourcePayload' in payload).toBe(false)
   })
 
   it('normalizes Bolagsverket data into settings-friendly fields', () => {
     const normalized = normalizedDataFromLookup(lookup)
-    expect(normalized.company_name).toBe('Div3rsa AB')
+    expect(normalized.company_name).toBe('Testbolaget AB')
     expect(normalized.address_line1).toBe('Testgatan 1')
     expect(normalized.business_description).toBe('Programutveckling')
   })

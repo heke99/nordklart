@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 export default function AngerrattPage() {
   return (
     <MarketingInfoPage
+      showLegalEntity
       eyebrow="Juridik"
       title="Ångerrätt"
       description="Här sammanfattas hur ångerrätt hanteras för Nordklarts digitala tjänster. Den avtalade versionen som accepteras vid köp eller teckning gäller alltid."

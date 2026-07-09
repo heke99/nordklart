@@ -9,6 +9,7 @@ export const metadata: Metadata = {
 export default function IntegritetspolicyPage() {
   return (
     <MarketingInfoPage
+      showLegalEntity
       eyebrow="Integritet"
       title="Integritetspolicy"
       description="Nordklart behandlar person- och bolagsuppgifter för att tillhandahålla bokföring, bokslut, Bankgiroflöden, support och säker drift."

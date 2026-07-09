@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 export default function PrisvillkorPage() {
   return (
     <MarketingInfoPage
+      showLegalEntity
       eyebrow="Juridik"
       title="Prisvillkor"
       description="Dessa villkor beskriver hur priser, betalning och ändringar av abonnemang fungerar i Nordklart. Den version som accepteras vid teckning gäller alltid."

@@ -250,6 +250,13 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       continue
     }
 
+    // Sandbox companies must never send real reminder emails to real
+    // addresses — same rule as guardSandbox on the manual send routes.
+    if (company.is_sandbox === true) {
+      log.info(`Skipping invoice ${invoice.invoice_number}: sandbox company ${invoice.company_id} never sends real email`)
+      continue
+    }
+
     // Race-window guard — re-check invoice status immediately before sending.
     // The cron runs at 08:00; a payment match arriving during the run shouldn't
     // produce a reminder for an already-paid invoice.

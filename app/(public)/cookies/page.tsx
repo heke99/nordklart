@@ -9,6 +9,7 @@ export const metadata: Metadata = {
 export default function CookiesPage() {
   return (
     <MarketingInfoPage
+      showLegalEntity
       eyebrow="Cookies"
       title="Cookies och lokal lagring"
       description="Nordklart använder nödvändiga cookies och lokal lagring för inloggning, säkerhet, språkval och grundläggande funktioner."

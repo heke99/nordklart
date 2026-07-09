@@ -9,6 +9,7 @@ export const metadata: Metadata = {
 export default function PersonuppgifterPage() {
   return (
     <MarketingInfoPage
+      showLegalEntity
       eyebrow="Personuppgifter"
       title="Personuppgifter och dataskydd"
       description="Den här sidan sammanfattar hur personuppgifter hanteras i Nordklart och hur du kan begära åtkomst, rättelse, export eller radering."

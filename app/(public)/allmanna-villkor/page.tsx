@@ -9,6 +9,7 @@ export const metadata: Metadata = {
 export default function AllmannaVillkorPage() {
   return (
     <MarketingInfoPage
+      showLegalEntity
       eyebrow="Juridik"
       title="Allmänna villkor"
       description="Villkoren beskriver huvudprinciperna för användning av Nordklart. Slutliga kundvillkor ska alltid vara de versioner som presenteras och accepteras vid teckning eller köp."

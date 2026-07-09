@@ -6,6 +6,8 @@ import {
   marketingPrimaryCta,
   marketingSecondaryCta,
   marketingSectionLabel,
+  NORDKLART_LEGAL_NAME,
+  NORDKLART_ORG_NUMBER,
 } from '@/components/marketing/MarketingChrome'
 
 type InfoPageProps = {
@@ -16,6 +18,13 @@ type InfoPageProps = {
   secondaryCta?: { label: string; href: string }
   highlights?: string[]
   sections?: Array<{ title: string; body: string; points?: string[] }>
+  /**
+   * Renders the formal legal-entity block (legal name + org.nr) under the
+   * content. Legal pages (villkor, integritet, ånger, priser, cookies, DPA)
+   * must identify the responsible legal entity — the footer line alone is
+   * not a formal identification.
+   */
+  showLegalEntity?: boolean
   children?: ReactNode
 }
 
@@ -27,6 +36,7 @@ export function MarketingInfoPage({
   secondaryCta,
   highlights = [],
   sections = [],
+  showLegalEntity = false,
   children,
 }: InfoPageProps) {
   return (
@@ -86,6 +96,35 @@ export function MarketingInfoPage({
         </section>
 
         {children}
+
+        {showLegalEntity ? (
+          <section className="px-5 pb-16 md:px-8">
+            <div className="mx-auto max-w-7xl rounded-[2rem] border border-border bg-card/90 p-6 shadow-sm md:p-8">
+              <h2 className="text-lg font-semibold tracking-tight">Ansvarigt bolag</h2>
+              <dl className="mt-4 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
+                <div className="flex justify-between gap-4 sm:justify-start sm:gap-2">
+                  <dt className="text-muted-foreground">Juridiskt namn:</dt>
+                  <dd className="font-medium">{NORDKLART_LEGAL_NAME}</dd>
+                </div>
+                <div className="flex justify-between gap-4 sm:justify-start sm:gap-2">
+                  <dt className="text-muted-foreground">Organisationsnummer:</dt>
+                  <dd className="font-medium tabular-nums">{NORDKLART_ORG_NUMBER}</dd>
+                </div>
+                <div className="flex justify-between gap-4 sm:justify-start sm:gap-2">
+                  <dt className="text-muted-foreground">Säte:</dt>
+                  <dd className="font-medium">Sverige</dd>
+                </div>
+                <div className="flex justify-between gap-4 sm:justify-start sm:gap-2">
+                  <dt className="text-muted-foreground">Kontakt:</dt>
+                  <dd className="font-medium"><Link href="/kontakt" className="underline underline-offset-2">nordklart.se/kontakt</Link></dd>
+                </div>
+              </dl>
+              <p className="mt-4 text-xs leading-5 text-muted-foreground">
+                {NORDKLART_LEGAL_NAME} (org.nr {NORDKLART_ORG_NUMBER}) är avtalspart och personuppgiftsansvarig för tjänsten Nordklart, om inte annat anges i respektive avtal.
+              </p>
+            </div>
+          </section>
+        ) : null}
       </main>
     </MarketingChrome>
   )

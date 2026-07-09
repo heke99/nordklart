@@ -56,7 +56,8 @@ export const marketingSecondaryCta =
 
 export const marketingSectionLabel = 'text-sm font-semibold uppercase tracking-[0.22em] text-primary'
 
-const NORDKLART_ORG_NUMBER = '559416-7149'
+export const NORDKLART_ORG_NUMBER = '559416-7149'
+export const NORDKLART_LEGAL_NAME = 'Nordklart AB'
 
 export function MarketingChrome({ children }: { children: ReactNode }) {
   return (

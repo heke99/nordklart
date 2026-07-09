@@ -1,20 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const chainCalls: Array<{ method: string; args: unknown[] }> = []
+// Per-table fixture rows; when a table has no fixture the chain resolves to [].
+const tableFixtures = new Map<string, unknown>()
 
 vi.mock('@supabase/ssr', () => {
-  const buildChain = (): unknown =>
+  const buildChain = (result: unknown): unknown =>
     new Proxy(
       {},
       {
         get(_t, prop) {
           if (prop === 'then') {
             return (resolve: (v: unknown) => void) =>
-              resolve({ data: [], error: null, count: null })
+              resolve({ data: result, error: null, count: null })
+          }
+          if (prop === 'single' || prop === 'maybeSingle') {
+            return async () => ({
+              data: Array.isArray(result) ? (result[0] ?? null) : result,
+              error: null,
+            })
           }
           return (...args: unknown[]) => {
             chainCalls.push({ method: String(prop), args })
-            return buildChain()
+            return buildChain(result)
           }
         },
       },
@@ -22,15 +30,16 @@ vi.mock('@supabase/ssr', () => {
 
   return {
     createServerClient: vi.fn(() => ({
-      from: vi.fn(() => buildChain()),
-      rpc: vi.fn(() => buildChain()),
+      from: vi.fn((table: string) => buildChain(tableFixtures.get(table) ?? [])),
+      rpc: vi.fn(() => buildChain([])),
     })),
   }
 })
 
+const sendEmailMock = vi.fn().mockResolvedValue({ success: true })
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
-    sendEmail: vi.fn().mockResolvedValue({ success: true }),
+    sendEmail: (...args: unknown[]) => sendEmailMock(...args),
   }),
 }))
 
@@ -72,9 +81,70 @@ describe('calculateDaysOverdue', () => {
   })
 })
 
+describe('processOverdueReminders — sandbox guard', () => {
+  beforeEach(() => {
+    chainCalls.length = 0
+    tableFixtures.clear()
+    sendEmailMock.mockClear()
+  })
+
+  it('never sends reminder emails for sandbox companies', async () => {
+    const overdueDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    tableFixtures.set('invoices', [
+      {
+        id: 'inv-1',
+        company_id: 'company-sandbox',
+        user_id: 'user-1',
+        invoice_number: 'F-100',
+        due_date: overdueDate,
+        total: 1000,
+        remaining_amount: 1000,
+        status: 'sent',
+        customer: { id: 'cust-1', name: 'Kund AB', email: 'kund@test.se' },
+      },
+    ])
+    tableFixtures.set('invoice_reminders', [])
+    tableFixtures.set('company_settings', [
+      { company_id: 'company-sandbox', is_sandbox: true, send_invoice_reminders: true },
+    ])
+
+    const result = await processOverdueReminders()
+
+    expect(sendEmailMock).not.toHaveBeenCalled()
+    expect(result.sent).toBe(0)
+  })
+
+  it('honours the per-company reminder kill switch', async () => {
+    const overdueDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    tableFixtures.set('invoices', [
+      {
+        id: 'inv-1',
+        company_id: 'company-1',
+        user_id: 'user-1',
+        invoice_number: 'F-100',
+        due_date: overdueDate,
+        total: 1000,
+        remaining_amount: 1000,
+        status: 'sent',
+        customer: { id: 'cust-1', name: 'Kund AB', email: 'kund@test.se' },
+      },
+    ])
+    tableFixtures.set('invoice_reminders', [])
+    tableFixtures.set('company_settings', [
+      { company_id: 'company-1', is_sandbox: false, send_invoice_reminders: false },
+    ])
+
+    const result = await processOverdueReminders()
+
+    expect(sendEmailMock).not.toHaveBeenCalled()
+    expect(result.sent).toBe(0)
+  })
+})
+
 describe('processOverdueReminders — credit-note filter', () => {
   beforeEach(() => {
     chainCalls.length = 0
+    tableFixtures.clear()
   })
 
   it('excludes credit notes via .is("credited_invoice_id", null)', async () => {
