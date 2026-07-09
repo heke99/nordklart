@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { CreateEmployeeBenefitSchema } from '@/lib/api/schemas'
 import { calculateBikeBenefit } from '@/lib/salary/benefits'
@@ -19,6 +21,9 @@ export async function GET(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const { data, error } = await supabase
     .from('employee_benefits')
@@ -45,6 +50,9 @@ export async function POST(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const validation = await validateBody(request, CreateEmployeeBenefitSchema)
   if (!validation.success) return validation.response

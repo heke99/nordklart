@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
@@ -36,6 +38,9 @@ export async function POST(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   // Load the original booked run
   const { data: originalRun, error: runError } = await supabase

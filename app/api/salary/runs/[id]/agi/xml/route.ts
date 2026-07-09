@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { generateAgiDeclaration } from '@/lib/salary/agi/generate-declaration'
 import { createLogger } from '@/lib/logger'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -37,6 +39,9 @@ export async function GET(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
   const requestId = `req_${crypto.randomUUID()}`
   const log = createLogger('api/salary/agi/xml', { requestId, userId: user.id })
 

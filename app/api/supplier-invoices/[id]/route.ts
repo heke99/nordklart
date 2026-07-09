@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
 export async function GET(
@@ -19,6 +21,9 @@ export async function GET(
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   const { data: invoice, error } = await supabase
     .from('supplier_invoices')
@@ -53,6 +58,9 @@ export async function PUT(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   // Only allow editing registered invoices
   const { data: existing } = await supabase
@@ -109,6 +117,9 @@ export async function DELETE(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   // Only allow deleting registered invoices without journal entries
   const { data: existing } = await supabase

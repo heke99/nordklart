@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { generateKU10Xml } from '@/lib/salary/ku/ku10-generator'
 import type { KU10EmployeeData, KU10CompanyData } from '@/lib/salary/ku/ku10-generator'
 
@@ -26,6 +28,9 @@ export async function GET(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   if (isNaN(yearNum) || yearNum < 2020 || yearNum > 2100) {
     return NextResponse.json({ error: 'Ogiltigt år' }, { status: 400 })

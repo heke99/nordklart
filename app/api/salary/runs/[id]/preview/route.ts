@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { SALARY_ACCOUNTS, getLineItemAccount } from '@/lib/salary/account-mapping'
 import type { CreateJournalEntryLineInput } from '@/types'
 
@@ -21,6 +23,9 @@ export async function GET(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const { data: run, error: runError } = await supabase
     .from('salary_runs')

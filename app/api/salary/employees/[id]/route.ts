@@ -4,6 +4,8 @@ import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 
@@ -19,6 +21,9 @@ export async function GET(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const { data: employee, error } = await supabase
     .from('employees')
@@ -52,6 +57,9 @@ export async function PATCH(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const validation = await validateBody(request, UpdateEmployeeSchema)
   if (!validation.success) return validation.response
@@ -135,6 +143,9 @@ export async function DELETE(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   // Soft delete only — BFL 7 kap retention
   const { data, error } = await supabase

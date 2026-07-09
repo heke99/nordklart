@@ -4,6 +4,8 @@ import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSalaryLineItemSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
 
@@ -22,6 +24,9 @@ export async function POST(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const validation = await validateBody(request, CreateSalaryLineItemSchema)
   if (!validation.success) return validation.response

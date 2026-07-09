@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { saveMappings } from '@/lib/import/sie-import'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import type { AccountMapping } from '@/lib/import/types'
 
@@ -21,6 +23,9 @@ export async function GET() {
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   const { data, error } = await supabase
     .from('sie_account_mappings')
@@ -54,6 +59,9 @@ export async function POST(request: Request) {
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   const body = await request.json()
   const mappings: AccountMapping[] = body.mappings
@@ -96,6 +104,9 @@ export async function PUT(request: Request) {
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   const body = await request.json()
   const { sourceAccount, targetAccount } = body
@@ -151,6 +162,9 @@ export async function DELETE(request: Request) {
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   const { searchParams } = new URL(request.url)
   const sourceAccount = searchParams.get('sourceAccount')

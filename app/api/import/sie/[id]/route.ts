@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
 /**
@@ -23,6 +25,9 @@ export async function GET(
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   const { data, error } = await supabase
     .from('sie_imports')
@@ -70,6 +75,9 @@ export async function DELETE(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
+  if (featureGate) return featureGate
 
   // Check current status before deleting
   const { data: importRecord } = await supabase

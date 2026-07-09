@@ -8,6 +8,8 @@ import {
   WorkedHoursRangeQuerySchema,
 } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
+import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -38,6 +40,9 @@ export async function GET(
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const employee = await loadEmployee(supabase, employeeId, companyId)
   if (!employee) {
@@ -81,6 +86,9 @@ export async function POST(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const employee = await loadEmployee(supabase, employeeId, companyId)
   if (!employee) {
@@ -150,6 +158,9 @@ export async function DELETE(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
+  if (featureGate) return featureGate
 
   const employee = await loadEmployee(supabase, employeeId, companyId)
   if (!employee) {
