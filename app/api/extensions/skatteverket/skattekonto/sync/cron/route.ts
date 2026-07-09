@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
-import { verifyCronSecret } from '@/lib/auth/cron'
+import { withCronContext } from '@/lib/api/with-cron-context'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from '@/extensions/general/skatteverket/lib/skattekonto-sync'
 import { computeSkattekontoDrift, maybeAlertDrift } from '@/extensions/general/skatteverket/lib/skattekonto-drift'
@@ -24,13 +24,10 @@ export const maxDuration = 60
  *
  * Time budget: 50s (Vercel default 60s function timeout, 10s margin).
  *
- * Per-company errors are logged but do not abort the run — one expired
- * token shouldn't block 49 other working syncs.
+ * Per-company outcomes are logged with the run's request id — the response
+ * body carries AGGREGATES ONLY (no tenant identifiers).
  */
-export async function GET(request: Request) {
-  const authError = verifyCronSecret(request)
-  if (authError) return authError
-
+export const GET = withCronContext('cron.skatteverket_skattekonto_sync', async (_request, cronCtx) => {
   // Respect the runtime extension toggle. When the integration is disabled
   // the cron should no-op rather than spam Skatteverket with stale tokens.
   if (process.env.SKATTEVERKET_ENABLED !== 'true') {
@@ -54,10 +51,7 @@ export async function GET(request: Request) {
     .limit(50)
 
   if (tokensError) {
-    console.error('[skattekonto-sync-cron] Failed to fetch tokens', {
-      message: tokensError.message,
-      code: tokensError.code,
-    })
+    cronCtx.log.error('failed to fetch tokens', tokensError)
     return NextResponse.json({ error: 'Failed to fetch tokens' }, { status: 500 })
   }
 
@@ -69,20 +63,17 @@ export async function GET(request: Request) {
   const TIME_BUDGET_MS = 50_000
   const SYNC_COOLDOWN_MS = 60 * 60 * 1000 // 1 hour
 
-  type Result = {
-    userId: string
-    companyId: string
-    status: 'synced' | 'skipped_cooldown' | 'expired' | 'error'
-    booked?: number
-    upcoming?: number
-    error?: string
-  }
-  const results: Result[] = []
+  let processed = 0
+  let synced = 0
+  let skipped = 0
+  let expired = 0
+  let budgetReached = false
 
-  for (const token of tokens) {
-    if (Date.now() - startTime > TIME_BUDGET_MS) {
-      console.log(`[skattekonto-sync-cron] Time budget reached after ${results.length} tokens`)
-      break
+  const summary = await cronCtx.forEach('token', tokens, async (token, itemCtx) => {
+    if (budgetReached || Date.now() - startTime > TIME_BUDGET_MS) {
+      if (!budgetReached) itemCtx.log.info('time budget reached — remaining tokens deferred to next run')
+      budgetReached = true
+      return
     }
 
     const userId = token.user_id as string
@@ -90,9 +81,12 @@ export async function GET(request: Request) {
 
     if (!companyId) {
       // Pre-multi-tenant tokens may lack company_id. Skip — cannot scope.
-      results.push({ userId, companyId: '(missing)', status: 'error', error: 'No company_id on token' })
-      continue
+      itemCtx.log.warn('token without company_id — cannot scope, skipping', { userId })
+      return
     }
+
+    processed += 1
+    const itemLog = itemCtx.log
 
     try {
       // Cooldown: skip if synced within the last hour.
@@ -108,8 +102,9 @@ export async function GET(request: Request) {
       if (lastSyncedAt) {
         const elapsed = Date.now() - new Date(lastSyncedAt).getTime()
         if (elapsed < SYNC_COOLDOWN_MS) {
-          results.push({ userId, companyId, status: 'skipped_cooldown' })
-          continue
+          skipped += 1
+          itemLog.info('skipped (cooldown)', { companyId })
+          return
         }
       }
 
@@ -122,59 +117,44 @@ export async function GET(request: Request) {
         const drift = await computeSkattekontoDrift(ctx)
         if (drift) await maybeAlertDrift(ctx, drift)
       } catch (driftErr) {
-        console.error('[skattekonto-sync-cron] Drift check failed', {
-          userId,
-          companyId,
-          message: driftErr instanceof Error ? driftErr.message : String(driftErr),
-        })
+        itemLog.error('drift check failed', driftErr as Error, { companyId })
       }
 
-      results.push({
-        userId,
-        companyId,
-        status: 'synced',
-        booked: syncResult.booked,
-        upcoming: syncResult.upcoming,
-      })
+      synced += 1
+      itemLog.info('synced', { companyId, booked: syncResult.booked, upcoming: syncResult.upcoming })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error'
-
       // Expired token / refresh exhausted is a known outcome — surface it
       // distinctly so ops can dashboard "X companies need to reconnect".
       if (
         err instanceof SkatteverketAuthError &&
         (err.code === 'REFRESH_EXHAUSTED' || err.code === 'SESSION_EXPIRED' || err.code === 'TOKEN_CORRUPTED')
       ) {
-        results.push({ userId, companyId, status: 'expired', error: err.code })
-        continue
+        expired += 1
+        itemLog.warn('token expired — reconnect required', { companyId, code: err.code })
+        return
       }
 
       const felkod = err instanceof SkatteverketSkattekontoError ? err.felkod : null
-      console.error('[skattekonto-sync-cron] Sync failed', {
-        userId,
-        companyId,
-        message,
-        felkod,
-      })
-      results.push({ userId, companyId, status: 'error', error: message })
+      itemLog.error('sync failed', err as Error, { companyId, felkod })
+      throw err
     }
-  }
+  })
 
-  const synced = results.filter(r => r.status === 'synced').length
-  const skipped = results.filter(r => r.status === 'skipped_cooldown').length
-  const expired = results.filter(r => r.status === 'expired').length
-  const errors = results.filter(r => r.status === 'error').length
-
-  console.log(
-    `[skattekonto-sync-cron] Processed ${results.length}: ${synced} synced, ${skipped} cooldown, ${expired} expired, ${errors} errors`,
-  )
-
-  return NextResponse.json({
-    processed: results.length,
+  cronCtx.log.info('skattekonto sync summary', {
+    processed,
     synced,
     skipped,
     expired,
-    errors,
-    results,
+    failed: summary.failed,
   })
-}
+
+  // Aggregates only — per-tenant details live in the structured logs above,
+  // correlated via the run's request id.
+  return NextResponse.json({
+    processed,
+    synced,
+    skipped,
+    expired,
+    errors: summary.failed,
+  })
+})

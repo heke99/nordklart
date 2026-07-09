@@ -350,12 +350,16 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   const totalExpiringSoon = results.filter(r => r.status === 'expiring_soon').length
   const totalFailed = results.filter(r => r.status === 'error').length
 
+  // Per-connection outcomes (with tenant identifiers) belong in the
+  // structured logs, correlated via the run's request id — never in the
+  // HTTP response body.
   ctx.log.info('bank sync summary', {
     processed: results.length,
     totalImported,
     totalExpired,
     totalExpiringSoon,
     totalFailed,
+    results,
   })
 
   return NextResponse.json({
@@ -364,7 +368,6 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     totalExpired,
     totalExpiringSoon,
     totalFailed,
-    results,
   })
 })
 

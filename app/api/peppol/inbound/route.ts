@@ -69,7 +69,52 @@ export async function POST(request: Request) {
     extractNestedText(body.ubl_xml, 'AccountingSupplierParty', 'Name') ?? null
   const invoiceNumber = extractTextContent(body.ubl_xml, 'cbc:ID') ?? 'okänt'
 
-  // Archive the UBL as a WORM document.
+  // Replay protection FIRST (access-point deliveries are at-least-once):
+  // the delivery row is claimed via the unique (company, content) index
+  // before any side effect, so a redelivered invoice can never archive a
+  // second WORM document or fan out a second event.
+  const contentSha256 = crypto.createHash('sha256').update(body.ubl_xml).digest('hex')
+
+  const { data: delivery, error: insertErr } = await supabase
+    .from('e_invoice_deliveries')
+    .insert({
+      company_id: body.company_id,
+      direction: 'inbound',
+      provider: 'access_point',
+      status: 'received',
+      ubl_xml: body.ubl_xml,
+      content_sha256: contentSha256,
+      metadata: {
+        supplier_name: supplierName,
+        invoice_number: invoiceNumber,
+        document_id: null,
+      },
+    })
+    .select('id')
+    .single()
+
+  if (insertErr) {
+    if ((insertErr as { code?: string }).code === '23505') {
+      const { data: existing } = await supabase
+        .from('e_invoice_deliveries')
+        .select('id')
+        .eq('company_id', body.company_id)
+        .eq('direction', 'inbound')
+        .eq('content_sha256', contentSha256)
+        .maybeSingle()
+      log.info('inbound delivery replay acknowledged', { companyId: body.company_id })
+      return NextResponse.json({
+        data: { delivery_id: (existing as { id: string } | null)?.id ?? null, duplicate: true },
+      })
+    }
+    log.error('inbound delivery insert failed', insertErr, { companyId: body.company_id })
+    return NextResponse.json({ error: 'Kunde inte registrera e-fakturan.' }, { status: 500 })
+  }
+
+  const deliveryId = (delivery as { id: string }).id
+
+  // Archive the UBL as a WORM document (after the claim — replays can no
+  // longer reach this point).
   let documentId: string | null = null
   try {
     const buffer = new TextEncoder().encode(body.ubl_xml).buffer as ArrayBuffer
@@ -85,33 +130,19 @@ export async function POST(request: Request) {
       { upload_source: 'e_invoice' },
     )
     documentId = doc.id
+    await supabase
+      .from('e_invoice_deliveries')
+      .update({
+        metadata: {
+          supplier_name: supplierName,
+          invoice_number: invoiceNumber,
+          document_id: documentId,
+        },
+      })
+      .eq('id', deliveryId)
   } catch (err) {
     log.error('inbound UBL archive failed', err as Error, { companyId: body.company_id })
   }
-
-  const { data: delivery, error: insertErr } = await supabase
-    .from('e_invoice_deliveries')
-    .insert({
-      company_id: body.company_id,
-      direction: 'inbound',
-      provider: 'access_point',
-      status: 'received',
-      ubl_xml: body.ubl_xml,
-      metadata: {
-        supplier_name: supplierName,
-        invoice_number: invoiceNumber,
-        document_id: documentId,
-      },
-    })
-    .select('id')
-    .single()
-
-  if (insertErr) {
-    log.error('inbound delivery insert failed', insertErr, { companyId: body.company_id })
-    return NextResponse.json({ error: 'Kunde inte registrera e-fakturan.' }, { status: 500 })
-  }
-
-  const deliveryId = (delivery as { id: string }).id
   try {
     await eventBus.emit({
       type: 'peppol_invoice.received',

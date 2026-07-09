@@ -104,6 +104,19 @@ export async function POST(request: Request) {
     created_by: string | null
   }
 
+  // Replay dedupe: providers deliver at-least-once. A push carrying the
+  // status the application ALREADY has is acknowledged idempotently (200)
+  // instead of 409, so provider retry queues drain instead of looping.
+  if (body.status === application.status) {
+    log.info('provider webhook replay acknowledged', {
+      applicationId: application.id,
+      status: body.status,
+    })
+    return NextResponse.json({
+      data: { application_id: application.id, status: application.status, duplicate: true },
+    })
+  }
+
   const allowed = ALLOWED_TRANSITIONS[application.status] ?? []
   if (FINANCING_TERMINAL_STATUSES.has(application.status) || !allowed.includes(body.status)) {
     return NextResponse.json(

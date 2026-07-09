@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
-import { verifyCronSecret } from '@/lib/auth/cron'
+import { withCronContext } from '@/lib/api/with-cron-context'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
@@ -29,14 +29,13 @@ export const maxDuration = 60
  * `submitted` + stamp salary_runs.agi_submitted_at.
  *
  * Per-row errors are logged and skipped — one expired token shouldn't
- * block other companies' reconciliation.
+ * block other companies' reconciliation. The response body carries
+ * AGGREGATES ONLY (no tenant identifiers); per-row outcomes go to the
+ * structured logs under the run's request id.
  *
  * Time budget: 50s (Vercel default 60s function timeout with 10s margin).
  */
-export async function GET(request: Request) {
-  const authError = verifyCronSecret(request)
-  if (authError) return authError
-
+export const GET = withCronContext('cron.skatteverket_agi_kvittenser', async (_request, cronCtx) => {
   if (process.env.SKATTEVERKET_ENABLED !== 'true') {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
@@ -57,10 +56,7 @@ export async function GET(request: Request) {
     .limit(100)
 
   if (pendingError) {
-    console.error('[agi-kvittenser-cron] Failed to fetch pending declarations', {
-      message: pendingError.message,
-      code: pendingError.code,
-    })
+    cronCtx.log.error('failed to fetch pending declarations', pendingError)
     return NextResponse.json({ error: 'Failed to fetch pending declarations' }, { status: 500 })
   }
 
@@ -71,24 +67,24 @@ export async function GET(request: Request) {
   const startTime = Date.now()
   const TIME_BUDGET_MS = 50_000
 
-  type Result = {
-    declarationId: string
-    companyId: string
-    period: string
-    status: 'signed' | 'still_pending' | 'no_token' | 'no_company_settings' | 'expired_token' | 'error'
-    error?: string
-  }
-  const results: Result[] = []
+  let processed = 0
+  let signed = 0
+  let stillPending = 0
+  let expired = 0
+  let skippedConfig = 0
+  let budgetReached = false
 
-  for (const decl of pending) {
-    if (Date.now() - startTime > TIME_BUDGET_MS) {
-      console.log(`[agi-kvittenser-cron] Time budget reached after ${results.length} declarations`)
-      break
+  const summary = await cronCtx.forEach('declaration', pending, async (decl, itemCtx) => {
+    if (budgetReached || Date.now() - startTime > TIME_BUDGET_MS) {
+      if (!budgetReached) itemCtx.log.info('time budget reached — remaining declarations deferred to next run')
+      budgetReached = true
+      return
     }
 
     const companyId = decl.company_id as string
     const declarationId = decl.id as string
     const period = formatRedovisningsperiod('monthly', decl.period_year as number, decl.period_month as number)
+    const itemLog = itemCtx.log
 
     try {
       // The token table is user-scoped (one BankID identity per user) but
@@ -101,9 +97,11 @@ export async function GET(request: Request) {
         .maybeSingle()
 
       if (!token?.user_id) {
-        results.push({ declarationId, companyId, period, status: 'no_token' })
-        continue
+        skippedConfig += 1
+        itemLog.info('no connected token for company', { declarationId, companyId, period })
+        return
       }
+      processed += 1
 
       const { data: settings } = await supabase
         .from('company_settings')
@@ -112,8 +110,9 @@ export async function GET(request: Request) {
         .single()
 
       if (!settings?.org_number) {
-        results.push({ declarationId, companyId, period, status: 'no_company_settings' })
-        continue
+        skippedConfig += 1
+        itemLog.warn('company settings missing org number', { declarationId, companyId, period })
+        return
       }
 
       const arbetsgivare = formatRedovisare(
@@ -123,18 +122,15 @@ export async function GET(request: Request) {
 
       const kvittRes = await agiGetKvittenser(supabase, token.user_id as string, arbetsgivare, period)
       if (!kvittRes.ok) {
-        results.push({
-          declarationId, companyId, period,
-          status: 'error',
-          error: kvittRes.error,
-        })
-        continue
+        itemLog.error('kvittens fetch failed', new Error(kvittRes.error), { declarationId, companyId, period })
+        throw new Error(kvittRes.error)
       }
 
       const kvittens = kvittRes.data.kvittenser?.[0]
       if (!kvittens?.uuidKvittens) {
-        results.push({ declarationId, companyId, period, status: 'still_pending' })
-        continue
+        stillPending += 1
+        itemLog.info('still pending signature', { declarationId, companyId, period })
+        return
       }
 
       // The presence of uuidKvittens confirms SKV signed and accepted
@@ -146,7 +142,7 @@ export async function GET(request: Request) {
       // path because we're inside the kvittens-found branch above.
       const submittedAt = kvittens.signeradTid || new Date().toISOString()
       if (!kvittens.signeradTid) {
-        console.warn('[agi-kvittenser-cron] kvittens missing signeradTid; using reconciliation time', {
+        itemLog.warn('kvittens missing signeradTid; using reconciliation time', {
           declarationId, companyId, period, uuidKvittens: kvittens.uuidKvittens,
         })
       }
@@ -195,38 +191,37 @@ export async function GET(request: Request) {
         .eq('extension_id', 'skatteverket')
         .eq('key', `agi_submission_${period}`)
 
-      results.push({ declarationId, companyId, period, status: 'signed' })
+      signed += 1
+      itemLog.info('kvittens reconciled — AGI marked submitted', { declarationId, companyId, period })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error'
-
       if (
         err instanceof SkatteverketAuthError &&
         (err.code === 'REFRESH_EXHAUSTED' || err.code === 'SESSION_EXPIRED' || err.code === 'TOKEN_CORRUPTED' || err.code === 'MISSING_SCOPE')
       ) {
-        results.push({ declarationId, companyId, period, status: 'expired_token', error: err.code })
-        continue
+        expired += 1
+        itemLog.warn('token expired — reconnect required', { declarationId, companyId, period, code: err.code })
+        return
       }
-
-      console.error('[agi-kvittenser-cron] Reconciliation failed', { declarationId, companyId, period, message })
-      results.push({ declarationId, companyId, period, status: 'error', error: message })
+      itemLog.error('reconciliation failed', err as Error, { declarationId, companyId, period })
+      throw err
     }
-  }
+  })
 
-  const signed = results.filter(r => r.status === 'signed').length
-  const stillPending = results.filter(r => r.status === 'still_pending').length
-  const expired = results.filter(r => r.status === 'expired_token').length
-  const errors = results.filter(r => r.status === 'error').length
-
-  console.log(
-    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${errors} errors`,
-  )
-
-  return NextResponse.json({
-    processed: results.length,
+  cronCtx.log.info('agi kvittens reconciliation summary', {
+    processed,
     signed,
     stillPending,
     expired,
-    errors,
-    results,
+    skippedConfig,
+    failed: summary.failed,
   })
-}
+
+  // Aggregates only — per-tenant details live in the structured logs above.
+  return NextResponse.json({
+    processed,
+    signed,
+    stillPending,
+    expired,
+    errors: summary.failed,
+  })
+})
