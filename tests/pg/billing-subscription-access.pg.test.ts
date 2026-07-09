@@ -218,4 +218,15 @@ describe('stripe_sync_subscription_v2 — incomplete grants no access', () => {
     await sync('active')
     expect(await featureAccess(companyId, 'bookkeeping.core')).toBe(true)
   })
+
+  it('unpaid (dunning exhausted) removes access', async () => {
+    await sync('unpaid')
+    const { rows } = await getPool().query(
+      `SELECT status FROM public.company_subscriptions WHERE company_id = $1 AND external_subscription_id = $2`,
+      [companyId, stripeSubscriptionId],
+    )
+    expect(rows[0].status).toBe('cancelled')
+    expect(await featureAccess(companyId, 'bookkeeping.core')).toBe(false)
+    await sync('active') // restore for any later assertions
+  })
 })
