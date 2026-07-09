@@ -22,9 +22,41 @@ export function isBankIdEnabled(): boolean {
 // Personnummer hashing (for lookup)
 // ---------------------------------------------------------------------------
 
-/** SHA-256 hash of a personnummer for fast DB lookup. */
+/**
+ * Legacy plain SHA-256 hash. Personnummer have ~10^10 possible values, so an
+ * unkeyed hash is brute-forceable offline if the table leaks. Kept ONLY so
+ * existing bankid_identities rows written before the HMAC migration can
+ * still be found (dual-read in the TIC login flow, which upgrades rows to
+ * the HMAC hash on successful login). Never use for new rows.
+ */
 export function hashPersonalNumber(personalNumber: string): string {
   return crypto.createHash('sha256').update(personalNumber).digest('hex')
+}
+
+function getHashSecret(): string {
+  // Dedicated secret preferred; the encryption key and the service-role key
+  // are acceptable fallbacks — all are server-only secrets, which is the
+  // property that defeats offline brute force of the ~10^10 personnummer space.
+  const secret = process.env.BANKID_HASH_SECRET
+    || process.env.BANKID_ENCRYPTION_KEY
+    || process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!secret) {
+    throw new Error('BANKID_HASH_SECRET (eller BANKID_ENCRYPTION_KEY/SUPABASE_SERVICE_ROLE_KEY) krävs för att hasha personnummer.')
+  }
+  return secret
+}
+
+/** Keyed (HMAC-SHA256) personnummer hash — use for ALL new rows. */
+export function hashPersonalNumberHmac(personalNumber: string): string {
+  return crypto.createHmac('sha256', getHashSecret()).update(personalNumber).digest('hex')
+}
+
+/**
+ * All hashes that may identify an existing row for this personnummer, in
+ * lookup-priority order: [HMAC (current), SHA-256 (legacy)].
+ */
+export function personalNumberHashCandidates(personalNumber: string): string[] {
+  return [hashPersonalNumberHmac(personalNumber), hashPersonalNumber(personalNumber)]
 }
 
 // ---------------------------------------------------------------------------

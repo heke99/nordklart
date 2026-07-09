@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   isBankIdEnabled,
   hashPersonalNumber,
+  hashPersonalNumberHmac,
+  personalNumberHashCandidates,
   encryptPersonalNumber,
   decryptPersonalNumber,
   maskPersonalNumber,
@@ -51,6 +53,45 @@ describe('bankid helpers', () => {
       const hash1 = hashPersonalNumber('199001011234')
       const hash2 = hashPersonalNumber('199001015678')
       expect(hash1).not.toBe(hash2)
+    })
+  })
+
+  describe('hashPersonalNumberHmac', () => {
+    it('is keyed: differs from the plain SHA-256 hash and depends on the secret', () => {
+      process.env.BANKID_HASH_SECRET = 'secret-a'
+      const keyed = hashPersonalNumberHmac('199001011234')
+      expect(keyed).toMatch(/^[a-f0-9]{64}$/)
+      expect(keyed).not.toBe(hashPersonalNumber('199001011234'))
+
+      process.env.BANKID_HASH_SECRET = 'secret-b'
+      expect(hashPersonalNumberHmac('199001011234')).not.toBe(keyed)
+      process.env.BANKID_HASH_SECRET = 'secret-a'
+      expect(hashPersonalNumberHmac('199001011234')).toBe(keyed)
+    })
+
+    it('lists lookup candidates with the keyed hash first, legacy second', () => {
+      process.env.BANKID_HASH_SECRET = 'secret-a'
+      const candidates = personalNumberHashCandidates('199001011234')
+      expect(candidates).toEqual([
+        hashPersonalNumberHmac('199001011234'),
+        hashPersonalNumber('199001011234'),
+      ])
+    })
+
+    it('throws when no server secret is available', () => {
+      const prevHash = process.env.BANKID_HASH_SECRET
+      const prevEnc = process.env.BANKID_ENCRYPTION_KEY
+      const prevService = process.env.SUPABASE_SERVICE_ROLE_KEY
+      delete process.env.BANKID_HASH_SECRET
+      delete process.env.BANKID_ENCRYPTION_KEY
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY
+      try {
+        expect(() => hashPersonalNumberHmac('199001011234')).toThrow(/BANKID_HASH_SECRET/)
+      } finally {
+        if (prevHash) process.env.BANKID_HASH_SECRET = prevHash
+        if (prevEnc) process.env.BANKID_ENCRYPTION_KEY = prevEnc
+        if (prevService) process.env.SUPABASE_SERVICE_ROLE_KEY = prevService
+      }
     })
   })
 

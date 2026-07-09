@@ -27,7 +27,7 @@ import { TICAPIError } from './lib/tic-types'
 import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-types'
 import type { BankIdCompleteRequest } from './lib/bankid-types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
-import { hashPersonalNumber, encryptPersonalNumber } from '@/lib/auth/bankid'
+import { hashPersonalNumberHmac, personalNumberHashCandidates, encryptPersonalNumber } from '@/lib/auth/bankid'
 import { registerBankIdProvider } from '@/lib/auth/bankid-provider'
 import { ticBankIdProvider } from './lib/bankid-provider'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -896,15 +896,25 @@ export const ticExtension: Extension = {
           }
 
           const { personalNumber, givenName, surname, name } = session.user
-          const pnrHash = hashPersonalNumber(personalNumber)
+          // Keyed HMAC for all NEW rows; legacy plain-SHA256 rows are found
+          // via dual-read and upgraded in place on successful match.
+          const pnrHash = hashPersonalNumberHmac(personalNumber)
           const supabase = createServiceClient()
 
-          // Look up existing BankID identity
+          // Look up existing BankID identity (HMAC first, then legacy hash).
           const { data: existing } = await supabase
             .from('bankid_identities')
-            .select('user_id')
-            .eq('personal_number_hash', pnrHash)
-            .single()
+            .select('id, user_id, personal_number_hash')
+            .in('personal_number_hash', personalNumberHashCandidates(personalNumber))
+            .limit(1)
+            .maybeSingle()
+          if (existing?.personal_number_hash && existing.personal_number_hash !== pnrHash) {
+            // Legacy-hash row: upgrade to the keyed hash (best-effort).
+            await supabase
+              .from('bankid_identities')
+              .update({ personal_number_hash: pnrHash })
+              .eq('id', existing.id)
+          }
 
           if (mode === 'login') {
             if (!existing) {
@@ -1117,15 +1127,17 @@ export const ticExtension: Extension = {
           }
 
           const { personalNumber, givenName, surname } = session.user
-          const pnrHash = hashPersonalNumber(personalNumber)
+          const pnrHash = hashPersonalNumberHmac(personalNumber)
           const supabase = createServiceClient()
 
           // Check personnummer not already linked to another user
+          // (HMAC first, then legacy hash for rows written pre-migration).
           const { data: existing } = await supabase
             .from('bankid_identities')
             .select('user_id')
-            .eq('personal_number_hash', pnrHash)
-            .single()
+            .in('personal_number_hash', personalNumberHashCandidates(personalNumber))
+            .limit(1)
+            .maybeSingle()
 
           if (existing && existing.user_id !== ctx.userId) {
             return NextResponse.json(

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   mockBankIdProvider,
   formatQrData,
@@ -80,5 +80,46 @@ describe('getBankIdProvider', () => {
       process.env.NEXT_PUBLIC_BANKID_ENABLED = prevEnabled
       process.env.NEXT_PUBLIC_SELF_HOSTED = prevSelfHosted
     }
+  })
+
+  describe('production mock guard', () => {
+    const prevEnabled = process.env.NEXT_PUBLIC_BANKID_ENABLED
+    const prevSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED
+
+    afterEach(() => {
+      vi.unstubAllEnvs()
+      process.env.NEXT_PUBLIC_BANKID_ENABLED = prevEnabled
+      process.env.NEXT_PUBLIC_SELF_HOSTED = prevSelfHosted
+      delete process.env.BANKID_ALLOW_MOCK
+    })
+
+    it('BLOCKS the mock provider in hosted production', () => {
+      vi.stubEnv('NODE_ENV', 'production')
+      process.env.NEXT_PUBLIC_SELF_HOSTED = 'false'
+      // Enabled but no real provider registered → must throw, never mock.
+      registerBankIdProvider(null as unknown as BankIdProvider)
+      process.env.NEXT_PUBLIC_BANKID_ENABLED = 'true'
+      expect(() => getBankIdProvider()).toThrow(/blockerad i produktion/)
+      // Disabled flag in hosted production → same guard.
+      process.env.NEXT_PUBLIC_BANKID_ENABLED = 'false'
+      expect(() => getBankIdProvider()).toThrow(/blockerad i produktion/)
+    })
+
+    it('allows the mock in hosted production only with the explicit escape hatch', () => {
+      vi.stubEnv('NODE_ENV', 'production')
+      process.env.NEXT_PUBLIC_SELF_HOSTED = 'false'
+      process.env.NEXT_PUBLIC_BANKID_ENABLED = 'false'
+      registerBankIdProvider(null as unknown as BankIdProvider)
+      process.env.BANKID_ALLOW_MOCK = 'true'
+      expect(getBankIdProvider().id).toBe('mock')
+    })
+
+    it('keeps the mock for self-hosted production (intentional)', () => {
+      vi.stubEnv('NODE_ENV', 'production')
+      process.env.NEXT_PUBLIC_SELF_HOSTED = 'true'
+      process.env.NEXT_PUBLIC_BANKID_ENABLED = 'false'
+      registerBankIdProvider(null as unknown as BankIdProvider)
+      expect(getBankIdProvider().id).toBe('mock')
+    })
   })
 })

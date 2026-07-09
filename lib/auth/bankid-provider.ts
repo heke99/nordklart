@@ -97,12 +97,34 @@ export function registerBankIdProvider(provider: BankIdProvider): void {
  * Resolve the active provider. Preference order:
  *   1. Registered production provider (TIC) when BankID is enabled.
  *   2. Mock provider (self-hosted / tests / demo).
+ *
+ * Production guard: a hosted production deployment must NEVER silently fall
+ * back to the mock provider — a mock "signature" recorded as consent
+ * evidence would be worthless and dangerous. If the real provider is
+ * missing (extension not loaded, registration failed) the flow fails
+ * loudly instead. `BANKID_ALLOW_MOCK=true` is the explicit escape hatch
+ * for staging environments that intentionally run hosted-mode without TIC.
  */
 export function getBankIdProvider(): BankIdProvider {
-  if (registeredProvider && process.env.NEXT_PUBLIC_BANKID_ENABLED === 'true'
-    && process.env.NEXT_PUBLIC_SELF_HOSTED !== 'true') {
+  const selfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
+  const bankIdEnabled = process.env.NEXT_PUBLIC_BANKID_ENABLED === 'true'
+
+  if (registeredProvider && bankIdEnabled && !selfHosted) {
     return registeredProvider
   }
+
+  if (
+    process.env.NODE_ENV === 'production'
+    && !selfHosted
+    && process.env.BANKID_ALLOW_MOCK !== 'true'
+  ) {
+    throw new Error(
+      bankIdEnabled
+        ? 'BankID-providern är inte tillgänglig (TIC-integrationen är inte registrerad). Mock-providern är blockerad i produktion.'
+        : 'BankID är inte aktiverat i den här miljön (NEXT_PUBLIC_BANKID_ENABLED). Mock-providern är blockerad i produktion.',
+    )
+  }
+
   return mockBankIdProvider
 }
 

@@ -153,11 +153,25 @@ export function ConsentSigningDialog({
   }, [phase, sessionId, onSigned, stopPolling])
 
   useEffect(() => {
-    if (!open) reset()
+    if (open) return
+    // Deferred so the effect body never sets state synchronously
+    // (react-hooks/set-state-in-effect).
+    const timer = setTimeout(() => reset(), 0)
+    return () => clearTimeout(timer)
   }, [open, reset])
 
+  // Closing the dialog while a session is pending must cancel the session
+  // server-side too — otherwise the provider order dangles and the session
+  // stays "pending" forever in the database.
+  const handleClose = useCallback(() => {
+    if (phase === 'pending' && sessionId) {
+      void fetch(`/api/bankid/consents/${sessionId}/cancel`, { method: 'POST' }).catch(() => {})
+    }
+    onClose()
+  }, [phase, sessionId, onClose])
+
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
@@ -207,7 +221,7 @@ export function ConsentSigningDialog({
         )}
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={handleClose}>
             {phase === 'complete' ? 'Stäng' : 'Avbryt'}
           </Button>
         </DialogFooter>
