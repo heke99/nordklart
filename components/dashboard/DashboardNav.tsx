@@ -14,6 +14,7 @@ import {
   Home,
   Landmark,
   LayoutDashboard,
+  Lock,
   LogOut,
   Menu,
   Plug,
@@ -31,6 +32,7 @@ import { getBranding } from '@/lib/branding/service'
 import { clearRecaptIdentity } from '@/lib/recapt'
 import WorkspaceSwitcher from '@/components/dashboard/WorkspaceSwitcher'
 import { useCompany } from '@/contexts/CompanyContext'
+import { buildNavGroups, type NavIconKey, type NavItemSpec } from '@/lib/navigation/nav-builder'
 import type { EntityType } from '@/types'
 import { useMemo, useState } from 'react'
 
@@ -49,17 +51,36 @@ interface DashboardNavProps {
   extensionNavItems?: ExtensionNavItem[]
   userName?: string | null
   userEmail?: string | null
+  /** Enabled feature codes for the active company; null = unknown (fail open for display). */
+  enabledFeatures?: string[] | null
+  /** Year-end access incl. fiscal-period-bound one-time purchases. */
+  hasYearEndAccess?: boolean
 }
 
-type NavItem = {
-  href: string
-  label: string
-  icon: typeof LayoutDashboard
-  badge?: number
-  requiresCompany?: boolean
+const NAV_ICONS: Record<NavIconKey, typeof LayoutDashboard> = {
+  home: Home,
+  pending: ClipboardCheck,
+  transactions: Landmark,
+  bookkeeping: BookOpen,
+  invoices: Receipt,
+  suppliers: WalletCards,
+  reports: BarChart3,
+  skatteverket: Send,
+  yearEnd: FileCheck2,
+  bankgiro: Banknote,
+  extensions: Plug,
+  automation: Sparkles,
+  assistant: Sparkles,
+  agency: Users,
+  platform: ShieldCheck,
+  settings: Settings,
+  users: Users,
+  pricePlans: WalletCards,
+  onboarding: ClipboardCheck,
+  bank: Landmark,
+  api: Plug,
+  operations: ClipboardCheck,
 }
-
-type NavGroup = { label: string; items: NavItem[] }
 
 function initials(name: string | null, email: string | null) {
   const source = name?.trim() || email?.trim() || 'N'
@@ -71,13 +92,37 @@ function isActive(pathname: string, href: string) {
 }
 
 function NavLink({ item, pathname, disabled, onClick }: {
-  item: NavItem
+  item: NavItemSpec
   pathname: string
   disabled?: boolean
   onClick?: () => void
 }) {
   const active = isActive(pathname, item.href)
-  const Icon = item.icon
+  const Icon = NAV_ICONS[item.icon] ?? LayoutDashboard
+
+  // Locked features stay visible but link to the upgrade path so the CTA is
+  // one click away — never a dead item, never silent access to unpaid tools.
+  if (item.locked) {
+    return (
+      <Link
+        href={`/settings/billing?feature=${encodeURIComponent(item.feature ?? '')}`}
+        onClick={onClick}
+        title="Ingår inte i din plan — uppgradera för att låsa upp"
+      >
+        <span className="group flex items-center justify-between rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground/70 transition-all hover:bg-accent/60 hover:text-accent-foreground">
+          <span className="flex min-w-0 items-center gap-3">
+            <Icon className="h-4 w-4 shrink-0 opacity-60" />
+            <span className="truncate">{item.label}</span>
+          </span>
+          <span className="ml-3 flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <Lock className="h-3 w-3" aria-hidden="true" />
+            Uppgradera
+          </span>
+        </span>
+      </Link>
+    )
+  }
+
   const content = (
     <span className={cn(
       'group flex items-center justify-between rounded-xl px-3 py-2 text-sm font-medium transition-all',
@@ -105,6 +150,8 @@ export default function DashboardNav({
   isSandbox = false,
   userName = null,
   userEmail = null,
+  enabledFeatures = null,
+  hasYearEndAccess = false,
 }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
@@ -119,84 +166,23 @@ export default function DashboardNav({
   const branding = getBranding()
   const hasCompany = Boolean(company)
 
-  const groups = useMemo<NavGroup[]>(() => {
-    if (workspaceType === 'platform') {
-      return [
-        {
-          label: 'Plattform',
-          items: [
-            { href: '/platform', label: 'Översikt', icon: Home },
-            { href: '/platform/price-plans', label: 'Prisplaner', icon: WalletCards },
-            { href: '/platform/onboarding', label: 'Onboarding', icon: ClipboardCheck },
-            { href: '/platform/bank-automation', label: 'Bankautomation', icon: Landmark },
-            { href: '/platform/year-end', label: 'Bokslut', icon: FileCheck2 },
-            { href: '/platform/skatteverket', label: 'Skatteverket', icon: Send },
-            { href: '/platform/bankgiro', label: 'Bankgiro', icon: Banknote },
-            { href: '/platform/api-webhooks', label: 'API & webhooks', icon: Plug },
-            { href: '/platform/integrations', label: 'Integrationer', icon: Plug },
-            { href: '/platform/company-operations', label: 'Företagsoperationer', icon: ClipboardCheck },
-          ],
+  const groups = useMemo(
+    () =>
+      buildNavGroups({
+        workspaceType,
+        hasCompany,
+        canManageAgency,
+        canManagePlatform,
+        enabledFeatures: enabledFeatures ? new Set(enabledFeatures) : null,
+        hasYearEndAccess,
+        isSandbox,
+        badges: {
+          pendingOperations: pendingOperationsCount,
+          uncategorizedTransactions: uncategorizedTransactionCount,
         },
-      ]
-    }
-
-    if (workspaceType === 'agency') {
-      return [
-        {
-          label: 'Byrå',
-          items: [
-            { href: '/agency', label: 'Byråöversikt', icon: Home },
-            { href: '/agency/clients', label: 'Kunder', icon: Users },
-            { href: '/pending', label: 'Att granska', icon: ClipboardCheck, badge: pendingOperationsCount, requiresCompany: true },
-            { href: '/deadlines', label: 'Deadlines', icon: FileCheck2, requiresCompany: true },
-            { href: '/year-end', label: 'Bokslut', icon: FileCheck2, requiresCompany: true },
-            { href: '/reports', label: 'Rapporter', icon: BarChart3, requiresCompany: true },
-          ],
-        },
-        {
-          label: 'Inställningar',
-          items: [
-            { href: '/settings/team', label: 'Team', icon: Users, requiresCompany: true },
-            { href: '/settings', label: 'Inställningar', icon: Settings },
-          ],
-        },
-      ]
-    }
-
-    return [
-      {
-        label: 'Arbetsyta',
-        items: [
-          { href: '/app', label: 'Översikt', icon: Home, requiresCompany: true },
-          { href: '/pending', label: 'Att göra', icon: ClipboardCheck, badge: pendingOperationsCount, requiresCompany: true },
-          { href: '/transactions', label: 'Bank & transaktioner', icon: Landmark, badge: uncategorizedTransactionCount, requiresCompany: true },
-          { href: '/bookkeeping', label: 'Bokföring', icon: BookOpen, requiresCompany: true },
-          { href: '/invoices', label: 'Fakturor', icon: Receipt, requiresCompany: true },
-          { href: '/supplier-invoices', label: 'Leverantörer', icon: WalletCards, requiresCompany: true },
-        ],
-      },
-      {
-        label: 'Ekonomi',
-        items: [
-          { href: '/reports', label: 'Rapporter', icon: BarChart3, requiresCompany: true },
-          { href: '/skatteverket', label: 'Moms & skatt', icon: Send, requiresCompany: true },
-          { href: '/year-end', label: 'Bokslut', icon: FileCheck2, requiresCompany: true },
-          { href: '/payments/bankgiro', label: 'Bankgiro', icon: Banknote, requiresCompany: true },
-          { href: '/extensions', label: 'Integrationer', icon: Plug, requiresCompany: true },
-        ],
-      },
-      {
-        label: 'Inställningar',
-        items: [
-          { href: '/automation', label: 'Automatisering', icon: Sparkles, requiresCompany: true },
-          { href: '/chat', label: 'Bokföringsassistent', icon: Sparkles, requiresCompany: true },
-          ...(canManageAgency ? [{ href: '/agency', label: 'Redovisningsbyrå', icon: Users } as NavItem] : []),
-          ...(canManagePlatform ? [{ href: '/platform', label: 'Plattform', icon: ShieldCheck } as NavItem] : []),
-          { href: '/settings', label: 'Inställningar', icon: Settings },
-        ],
-      },
-    ]
-  }, [workspaceType, canManageAgency, canManagePlatform, pendingOperationsCount, uncategorizedTransactionCount])
+      }),
+    [workspaceType, hasCompany, canManageAgency, canManagePlatform, enabledFeatures, hasYearEndAccess, isSandbox, pendingOperationsCount, uncategorizedTransactionCount],
+  )
 
   const logout = async () => {
     clearRecaptIdentity()

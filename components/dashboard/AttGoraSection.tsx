@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -96,6 +97,7 @@ export default function AttGoraSection({
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
   const { toast } = useToast()
+  const { canWrite } = useCanWrite()
 
   const [counts, setCounts] = useState(worklist.counts)
   const [total, setTotal] = useState(worklist.total)
@@ -268,21 +270,23 @@ export default function AttGoraSection({
                                 >
                                   <Eye className="h-4 w-4" />
                                 </Link>
-                                <Button
-                                  size="sm"
-                                  className="shrink-0"
-                                  disabled={!!confirmingId || isLeaving}
-                                  onClick={() => void handleConfirmMatch(match)}
-                                >
-                                  {isConfirming ? (
-                                    <>
-                                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                      {t('suggested_confirm')}
-                                    </>
-                                  ) : (
-                                    t('suggested_confirm')
-                                  )}
-                                </Button>
+                                {canWrite ? (
+                                  <Button
+                                    size="sm"
+                                    className="shrink-0"
+                                    disabled={!!confirmingId || isLeaving}
+                                    onClick={() => void handleConfirmMatch(match)}
+                                  >
+                                    {isConfirming ? (
+                                      <>
+                                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                        {t('suggested_confirm')}
+                                      </>
+                                    ) : (
+                                      t('suggested_confirm')
+                                    )}
+                                  </Button>
+                                ) : null}
                               </div>
                             )
                           })}

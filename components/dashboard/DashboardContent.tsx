@@ -20,6 +20,7 @@ import {
 import type { Deadline, OnboardingProgress } from '@/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import { getBranding } from '@/lib/branding/service'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 
 interface DashboardContentProps {
   companyId: string
@@ -54,6 +55,7 @@ export default function DashboardContent({
   isNewWorkspace = false,
 }: DashboardContentProps) {
   const t = useTranslations('dashboard')
+  const { canWrite } = useCanWrite()
 
   const formatLargeNumber = (amount: number) => {
     return new Intl.NumberFormat('sv-SE', {
@@ -114,6 +116,19 @@ export default function DashboardContent({
         cta: 'Visa fakturor',
         tone: 'primary' as const,
         icon: Receipt,
+      }
+    }
+    // The all-clear CTA is a mutation ("create invoice") — viewers get a
+    // read-only destination instead so the dashboard never advertises an
+    // action their role cannot perform.
+    if (!canWrite) {
+      return {
+        href: '/reports',
+        title: 'Allt är ikapp',
+        body: 'Inga obokförda transaktioner och inga obetalda fakturor.',
+        cta: 'Visa rapporter',
+        tone: 'neutral' as const,
+        icon: CheckCircle2,
       }
     }
     return {

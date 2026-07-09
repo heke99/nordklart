@@ -60,6 +60,7 @@ import type {
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
 import { translateReasonCodes } from '@/lib/automation/reason-codes'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 
 const OPERATION_LABEL_KEYS: Record<string, { labelKey: string; icon: typeof ArrowLeftRight; variant: 'default' | 'secondary' | 'outline' }> = {
   categorize_transaction: { labelKey: 'type_categorize_transaction', icon: ArrowLeftRight, variant: 'default' },
@@ -555,6 +556,9 @@ type StatusCounts = Record<TabStatus, number | null>
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  // Approve/reject are mutations — viewers can inspect the queue but never
+  // see action buttons (the API enforces the same rule server-side).
+  const { canWrite } = useCanWrite()
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<PendingOperationStatus>('pending')
@@ -782,7 +786,7 @@ export default function PendingOperationsPage() {
     }
   })
 
-  const showBulkControls = activeTab === 'pending'
+  const showBulkControls = activeTab === 'pending' && canWrite
   // Pending ops that meet two criteria: not high risk AND the period covering
   // them is open. We exclude locked/closed periods from bulk because they will
   // be rejected at commit time anyway — silently letting the user "select all"
@@ -1054,7 +1058,7 @@ export default function PendingOperationsPage() {
                   ) : undefined
                 }
                 trailing={
-                  op.status === 'pending' ? (
+                  op.status === 'pending' && canWrite ? (
                     <>
                       <Button
                         size="sm"

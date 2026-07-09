@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Check, Upload, Plus } from 'lucide-react'
 import Link from 'next/link'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 
 interface InboxZeroStateProps {
   hasTransactions: boolean
@@ -13,6 +14,9 @@ interface InboxZeroStateProps {
 
 export default function InboxZeroState({ hasTransactions, onCreateTransaction }: InboxZeroStateProps) {
   const t = useTranslations('tx_inbox_zero')
+  // Viewers cannot import or create transactions — hide the mutation CTAs
+  // so the empty state never advertises actions their role cannot perform.
+  const { canWrite } = useCanWrite()
   if (!hasTransactions) {
     // No transactions at all
     return (
@@ -25,18 +29,20 @@ export default function InboxZeroState({ hasTransactions, onCreateTransaction }:
           <p className="text-sm text-muted-foreground text-center max-w-sm mb-6">
             {t('empty_description')}
           </p>
-          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto px-4 sm:px-0">
-            <Button asChild>
-              <Link href="/import">
-                <Upload className="mr-2 h-4 w-4" />
-                {t('import_btn')}
-              </Link>
-            </Button>
-            <Button variant="outline" onClick={onCreateTransaction}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t('add_manual_btn')}
-            </Button>
-          </div>
+          {canWrite ? (
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto px-4 sm:px-0">
+              <Button asChild>
+                <Link href="/import">
+                  <Upload className="mr-2 h-4 w-4" />
+                  {t('import_btn')}
+                </Link>
+              </Button>
+              <Button variant="outline" onClick={onCreateTransaction}>
+                <Plus className="mr-2 h-4 w-4" />
+                {t('add_manual_btn')}
+              </Button>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     )
@@ -53,18 +59,20 @@ export default function InboxZeroState({ hasTransactions, onCreateTransaction }:
         <p className="text-muted-foreground text-center mt-1 max-w-sm">
           {t('done_description')}
         </p>
-        <div className="flex gap-2 mt-6">
-          <Button asChild variant="outline">
-            <Link href="/import">
-              <Upload className="mr-2 h-4 w-4" />
-              {t('import_more_btn')}
-            </Link>
-          </Button>
-          <Button variant="outline" onClick={onCreateTransaction}>
-            <Plus className="mr-2 h-4 w-4" />
-            {t('new_btn')}
-          </Button>
-        </div>
+        {canWrite ? (
+          <div className="flex gap-2 mt-6">
+            <Button asChild variant="outline">
+              <Link href="/import">
+                <Upload className="mr-2 h-4 w-4" />
+                {t('import_more_btn')}
+              </Link>
+            </Button>
+            <Button variant="outline" onClick={onCreateTransaction}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t('new_btn')}
+            </Button>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   )

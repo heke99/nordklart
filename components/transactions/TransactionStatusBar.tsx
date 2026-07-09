@@ -53,7 +53,7 @@ export default function TransactionStatusBar({
             {t('action_import')}
           </Link>
         </Button>
-        {mode === 'inbox' && uncategorizedCount > 0 && (
+        {mode === 'inbox' && uncategorizedCount > 0 && canWrite && (
           <Button
             variant={isBatchMode ? 'default' : 'outline'}
             size="sm"

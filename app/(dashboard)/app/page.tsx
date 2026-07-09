@@ -69,10 +69,11 @@ export default async function DashboardPage() {
       .or(`due_date.lt.${today},due_date.lte.${nextWeek}`).order('due_date', { ascending: true }),
     supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).is('journal_entry_id', null).eq('is_ignored', false).is('is_business', null).lt('date', new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]),
-    // Skatteverket tokens are user-scoped (one BankID identity per user) but
-    // carry the active company_id; either filter would work — we use user_id
-    // because that's what the token-store reads/writes against.
-    supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
+    // Skatteverket connection status is COMPANY-scoped: the token authorizes
+    // filings for this company's org number (unique per company_id since the
+    // multi-tenant refactor). Filtering by user_id showed "connected" for the
+    // wrong company when a user works across multiple companies.
+    supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('agent_profiles').select('verified_at').eq('company_id', companyId).maybeSingle(),
     // Any posted entry counts as real dashboard activity for workspace state.
     supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'posted'),

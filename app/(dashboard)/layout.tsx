@@ -20,6 +20,8 @@ import { getBranding } from '@/lib/branding/service'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { countPendingOperations, countUnbookedTransactions } from '@/lib/worklist'
 import { PLATFORM_ROLES } from '@/lib/auth/platform'
+import { listCompanyFeatureAccess } from '@/lib/platform/entitlements'
+import { resolveWorkspaceType } from '@/lib/workspace/resolve'
 import type { EntityType, CompanyRole, Team } from '@/types'
 
 /**
@@ -242,6 +244,25 @@ export default async function DashboardLayout({
     supabase.from('agency_members').select('agency_id, role').eq('user_id', user.id).in('role', ['agency_owner', 'agency_admin', 'accountant', 'payroll', 'reviewer']).limit(1).maybeSingle(),
   ])
 
+  // Feature-aware navigation: enabled feature codes drive which sidebar items
+  // render locked (with an upgrade CTA). Year-end additionally honours
+  // fiscal-period-bound one-time purchases, which the feature view cannot see.
+  const [featureAccessList, { count: yearEndPurchaseCount }] = await Promise.all([
+    listCompanyFeatureAccess(supabase, companyId),
+    supabase
+      .from('one_time_purchases')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('purchase_type', 'year_end')
+      .in('status', ['paid', 'active', 'fulfilled']),
+  ])
+  const enabledFeatures = featureAccessList.length > 0
+    ? featureAccessList.filter((f) => f.enabled).map((f) => f.feature_code)
+    : null
+  const hasYearEndAccess = Boolean(
+    (yearEndPurchaseCount ?? 0) > 0 || enabledFeatures?.includes('year_end.projects'),
+  )
+
   // If onboarding incomplete, still render the dashboard — the page component
   // will show the inline onboarding card instead of the normal dashboard content.
 
@@ -272,17 +293,14 @@ export default async function DashboardLayout({
 
   const canManagePlatform = Boolean(platformRole)
   const canManageAgency = Boolean(agencyMembership)
-  const preferredWorkspaceType = workspacePrefs?.active_workspace_type
-  const workspaceType: 'company' | 'agency' | 'platform' =
-    pathname.startsWith('/platform') && canManagePlatform
-      ? 'platform'
-      : pathname.startsWith('/agency') && canManageAgency
-        ? 'agency'
-        : preferredWorkspaceType === 'platform' && canManagePlatform
-          ? 'platform'
-          : preferredWorkspaceType === 'agency' && canManageAgency
-            ? 'agency'
-            : 'company'
+  // URL wins over the saved preference: company-only routes always render the
+  // company sidebar (see lib/workspace/resolve.ts for the full rule).
+  const workspaceType = resolveWorkspaceType({
+    pathname,
+    preferredWorkspaceType: workspacePrefs?.active_workspace_type,
+    canManagePlatform,
+    canManageAgency,
+  })
 
   const companyContextValue = {
     company: companyWithName,
@@ -346,6 +364,8 @@ export default async function DashboardLayout({
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
+            enabledFeatures={enabledFeatures}
+            hasYearEndAccess={hasYearEndAccess}
           />
           <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
             <MainContainer companyId={companyId}>{children}</MainContainer>
