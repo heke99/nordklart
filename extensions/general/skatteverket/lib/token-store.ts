@@ -128,17 +128,23 @@ export async function storeTokens(
 /**
  * Retrieve and decrypt Skatteverket tokens for a user.
  * Returns null if no tokens are stored.
+ *
+ * Pass `companyId` to additionally require that the stored connection was
+ * made in THAT company's context — the connection-status surfaces must never
+ * show "connected" for company B because the user connected company A.
  */
 export async function getTokens(
   _supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  companyId?: string,
 ): Promise<SkatteverketTokens | null> {
   const db = getServiceClient()
-  const { data, error } = await db
+  let query = db
     .from('skatteverket_tokens')
     .select('access_token, refresh_token, expires_at, refresh_count, scope')
     .eq('user_id', userId)
-    .single()
+  if (companyId) query = query.eq('company_id', companyId)
+  const { data, error } = await query.single()
 
   if (error || !data) return null
 
@@ -173,11 +179,14 @@ export async function getTokens(
  */
 export async function deleteTokens(
   _supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  companyId?: string,
 ): Promise<void> {
   const db = getServiceClient()
-  await db
+  let query = db
     .from('skatteverket_tokens')
     .delete()
     .eq('user_id', userId)
+  if (companyId) query = query.eq('company_id', companyId)
+  await query
 }

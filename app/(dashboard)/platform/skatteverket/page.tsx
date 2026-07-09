@@ -41,18 +41,30 @@ export default async function PlatformSkatteverketPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Sysorg" value={sysorg.enabled ? 'På' : 'Av'} description={`Miljö: ${sysorg.environment}.`} tone={sysorg.enabled ? 'success' : 'warning'} />
+        <NordklartStatCard label="Sysorg" value={sysorg.enabled ? 'På' : 'Av'} description={`Miljö: ${sysorg.environment}${sysorg.environmentExplicit ? '' : ' (ej explicit satt)'}.`} tone={sysorg.enabled ? 'success' : 'warning'} />
         <NordklartStatCard label="Certifikat" value={sysorg.checks.find((c) => c.key === 'org_cert')?.ok ? 'Finns' : 'Saknas'} description="Expisoft .p12 via secret/env." tone={sysorg.checks.find((c) => c.key === 'org_cert')?.ok ? 'success' : 'warning'} />
-        <NordklartStatCard label="Scopes" value={sysorg.scopes.length} description={sysorg.scopes.join(', ')} />
+        <NordklartStatCard label="Filframställare" value={sysorg.filframstallare ? 'Konfigurerad' : 'Saknas'} description={sysorg.filframstallare ? `${sysorg.filframstallare.name} (${sysorg.filframstallare.orgnr})` : 'SKV_FILFRAMSTALLARE_* måste sättas innan inlämning.'} tone={sysorg.filframstallare ? 'success' : 'warning'} />
         <NordklartStatCard label="API-fel" value={requestFailures.count ?? 0} description="Misslyckade sysorg-anrop." tone={(requestFailures.count ?? 0) > 0 ? 'warning' : 'success'} />
       </div>
+
+      {!sysorg.productionSafe ? (
+        <div className="rounded-3xl border border-warning/40 bg-warning/10 p-5 text-sm">
+          <p className="font-semibold">Produktionskonfiguration saknas</p>
+          <p className="mt-1 text-muted-foreground">
+            Sysorg-flödet stoppas automatiskt tills SKV_ENV är explicit satt och filframställarens identitet
+            (SKV_FILFRAMSTALLARE_ORGNR, SKV_FILFRAMSTALLARE_NAME, SKV_FILFRAMSTALLARE_CONTACT_EMAIL) är konfigurerad.
+            Inga hårdkodade standardvärden finns — identiteten skickas till Skatteverket och måste vara korrekt juridiskt.
+          </p>
+        </div>
+      ) : null}
 
       <div className="rounded-3xl border bg-card p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h2 className="text-xl font-semibold">Komplett Testtjänst / CCG sysorg</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-              Nordklart är förberett för Skatteverkets CCG sysorg-flöde med Gridex EL AB som filframställare/API-konsument. Inga hemligheter visas här; nycklar och Expisoft-certifikat ska ligga i miljövariabler.
+              Nordklart är förberett för Skatteverkets CCG sysorg-flöde. Filframställare/API-konsument konfigureras via miljövariabler
+              (SKV_FILFRAMSTALLARE_*). Inga hemligheter visas här; nycklar och Expisoft-certifikat ska ligga i miljövariabler.
             </p>
           </div>
           <Button asChild size="sm" variant="secondary"><Link href="/api/skatteverket/sysorg/status">Visa teknisk status</Link></Button>

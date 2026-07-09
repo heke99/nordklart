@@ -1,6 +1,7 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { skvSysorgRequest } from './client'
+import { assertSkatteverketSubmissionConsent } from './consent'
 
 export type Momsuppgift = {
   momspliktigForsaljning?: number
@@ -68,6 +69,9 @@ export async function sparaMomsdeklarationsutkast(
   options: { las?: boolean } = {},
   ctx: CallContext = {},
 ) {
+  // las=true locks the draft for filing — that is the submission boundary
+  // and legally requires the customer's BankID-signed mandate.
+  if (options.las) await assertSkatteverketSubmissionConsent(ctx.supabase, ctx.companyId)
   const query = options.las ? '?las=true' : ''
   return skvSysorgRequest({
     ...ctx,
@@ -100,6 +104,7 @@ export async function raderaMomsdeklarationsutkast(redovisare: string, redovisni
 }
 
 export async function lasMomsdeklarationsutkast(redovisare: string, redovisningsperiod: string, ctx: CallContext = {}) {
+  await assertSkatteverketSubmissionConsent(ctx.supabase, ctx.companyId)
   return skvSysorgRequest({
     ...ctx,
     service: 'momsdeklaration',

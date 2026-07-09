@@ -1,6 +1,7 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { skvSysorgRequest } from './client'
+import { assertSkatteverketSubmissionConsent } from './consent'
 
 type CallContext = {
   supabase?: SupabaseClient
@@ -14,6 +15,9 @@ function periodPath(arbetsgivare: string, redovisningsperiod: string): string {
 }
 
 export async function lasInAgiUnderlag(xml: string, ctx: CallContext = {}) {
+  // Loading an AGI underlag starts the filing flow on the company's behalf —
+  // the customer's BankID-signed mandate must exist first.
+  await assertSkatteverketSubmissionConsent(ctx.supabase, ctx.companyId)
   return skvSysorgRequest<{ inlamningId: number }>({
     ...ctx,
     service: 'agdInlamning',
@@ -127,6 +131,7 @@ export async function hamtaAgiKvittenser(arbetsgivare: string, redovisningsperio
 }
 
 export async function lasAgiRedovisningsperiod(arbetsgivare: string, redovisningsperiod: string, ctx: CallContext = {}) {
+  await assertSkatteverketSubmissionConsent(ctx.supabase, ctx.companyId)
   return skvSysorgRequest({
     ...ctx,
     service: 'agdPeriod',

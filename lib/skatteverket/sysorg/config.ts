@@ -9,10 +9,6 @@ export type SkvServiceKey =
   | 'inkForetag'
 
 export const SKV_DEFAULT_SCOPES = ['agd', 'ink1', 'inkforetag', 'momsdeklaration'] as const
-export const SKV_DEFAULT_FILFRAMSTALLARE_ORGNR = '559416-7149'
-export const SKV_DEFAULT_FILFRAMSTALLARE_ID = '165594167149'
-export const SKV_DEFAULT_FILFRAMSTALLARE_NAME = 'Gridex EL AB'
-export const SKV_DEFAULT_FILFRAMSTALLARE_EMAIL = 'hekmat.h@div3rsa.com'
 
 const TEST_API_BASE = 'https://api.test.skatteverket.se'
 const PROD_API_BASE = 'https://api.skatteverket.se'
@@ -52,6 +48,11 @@ function boolEnv(...names: string[]): boolean {
 export function getSkvEnvironment(): SkvEnvironment {
   const value = firstEnv('SKV_ENV', 'SKATTEVERKET_ENV')?.toLowerCase()
   return value === 'prod' || value === 'production' ? 'prod' : 'test'
+}
+
+/** True when SKV_ENV/SKATTEVERKET_ENV is explicitly set (not defaulted). */
+export function isSkvEnvironmentExplicit(): boolean {
+  return Boolean(firstEnv('SKV_ENV', 'SKATTEVERKET_ENV'))
 }
 
 export function getSkvSysorgEnabled(): boolean {
@@ -130,16 +131,75 @@ export function toSkatteverketId(value: string, kind: 'organization' | 'person' 
   return `${century}${digits}`
 }
 
-export function getSkvFilframstallare() {
-  const orgnr = firstEnv('SKV_FILFRAMSTALLARE_ORGNR', 'SKATTEVERKET_FILFRAMSTALLARE_ORGNR') ?? SKV_DEFAULT_FILFRAMSTALLARE_ORGNR
+export type SkvFilframstallare = {
+  orgnr: string
+  id: string
+  name: string
+  contactName: string
+  contactEmail: string
+  contactPhone: string | null
+}
+
+/**
+ * Filframställare (file producer) identity sent to Skatteverket on every
+ * sysorg filing. This is a LEGAL identity — it must ALWAYS come from
+ * environment configuration and never from hardcoded defaults. (Earlier
+ * versions silently fell back to a specific company's identity, which would
+ * have attributed customer filings to the wrong legal entity in production.)
+ *
+ * Returns null when not configured; use getSkvFilframstallare() in flows
+ * that must fail hard.
+ */
+export function getSkvFilframstallareOrNull(): SkvFilframstallare | null {
+  const orgnr = firstEnv('SKV_FILFRAMSTALLARE_ORGNR', 'SKATTEVERKET_FILFRAMSTALLARE_ORGNR')
+  const name = firstEnv('SKV_FILFRAMSTALLARE_NAME', 'SKATTEVERKET_FILFRAMSTALLARE_NAME')
+  const contactEmail = firstEnv('SKV_FILFRAMSTALLARE_CONTACT_EMAIL', 'SKATTEVERKET_FILFRAMSTALLARE_CONTACT_EMAIL')
+  if (!orgnr || !name || !contactEmail) return null
   return {
     orgnr,
     id: firstEnv('SKV_FILFRAMSTALLARE_ID', 'SKATTEVERKET_FILFRAMSTALLARE_ID') ?? toSkatteverketId(orgnr, 'organization'),
-    name: firstEnv('SKV_FILFRAMSTALLARE_NAME', 'SKATTEVERKET_FILFRAMSTALLARE_NAME') ?? SKV_DEFAULT_FILFRAMSTALLARE_NAME,
-    contactName: firstEnv('SKV_FILFRAMSTALLARE_CONTACT_NAME', 'SKATTEVERKET_FILFRAMSTALLARE_CONTACT_NAME') ?? 'Hekmat Hourani',
-    contactEmail: firstEnv('SKV_FILFRAMSTALLARE_CONTACT_EMAIL', 'SKATTEVERKET_FILFRAMSTALLARE_CONTACT_EMAIL') ?? SKV_DEFAULT_FILFRAMSTALLARE_EMAIL,
+    name,
+    contactName: firstEnv('SKV_FILFRAMSTALLARE_CONTACT_NAME', 'SKATTEVERKET_FILFRAMSTALLARE_CONTACT_NAME') ?? name,
+    contactEmail,
     contactPhone: firstEnv('SKV_FILFRAMSTALLARE_CONTACT_PHONE', 'SKATTEVERKET_FILFRAMSTALLARE_CONTACT_PHONE') ?? null,
   }
+}
+
+export function getSkvFilframstallare(): SkvFilframstallare {
+  const configured = getSkvFilframstallareOrNull()
+  if (!configured) {
+    throw new SkvConfigurationError(
+      'Filframställare är inte konfigurerad. Sätt SKV_FILFRAMSTALLARE_ORGNR, SKV_FILFRAMSTALLARE_NAME och SKV_FILFRAMSTALLARE_CONTACT_EMAIL i miljövariablerna — identiteten skickas till Skatteverket och får aldrig hårdkodas.',
+    )
+  }
+  return configured
+}
+
+/**
+ * Fail-fast production guard for every sysorg flow (token + API requests).
+ *
+ * Throws SkvConfigurationError when the deployment cannot safely talk to
+ * Skatteverket:
+ *  - NODE_ENV=production requires an EXPLICIT SKV_ENV ('test' or 'prod') —
+ *    silently defaulting a production deployment to Skatteverket's test API
+ *    (or vice versa) must never happen.
+ *  - The filframställare identity must be explicitly configured (no
+ *    hardcoded fallback exists anymore).
+ */
+export function assertSkvProductionSafety(): void {
+  const isProductionRuntime = process.env.NODE_ENV === 'production'
+  const isProdEnvironment = getSkvEnvironment() === 'prod'
+  if (!isProductionRuntime && !isProdEnvironment) return
+
+  if (isProductionRuntime && !isSkvEnvironmentExplicit()) {
+    throw new SkvConfigurationError(
+      'SKV_ENV måste sättas explicit i produktion (test eller prod). Utan den skulle produktionsflöden tyst gå mot Skatteverkets testmiljö.',
+    )
+  }
+
+  // Both a prod SKV environment and a production runtime require a real,
+  // explicitly configured filframställare identity.
+  getSkvFilframstallare()
 }
 
 export type SkvConfigCheck = {
@@ -151,13 +211,15 @@ export type SkvConfigCheck = {
 
 export function getSkvConfigStatus(): {
   environment: SkvEnvironment
+  environmentExplicit: boolean
   enabled: boolean
   scopes: string[]
-  filframstallare: ReturnType<typeof getSkvFilframstallare>
+  filframstallare: SkvFilframstallare | null
   tokenUrl: string
   serviceBaseUrls: Record<SkvServiceKey, string>
   checks: SkvConfigCheck[]
   readyForTokenTest: boolean
+  productionSafe: boolean
 } {
   const serviceBaseUrls = {
     momsdeklaration: getSkvServiceBaseUrl('momsdeklaration'),
@@ -166,6 +228,7 @@ export function getSkvConfigStatus(): {
     ink1: getSkvServiceBaseUrl('ink1'),
     inkForetag: getSkvServiceBaseUrl('inkForetag'),
   }
+  const filframstallare = getSkvFilframstallareOrNull()
   const checks: SkvConfigCheck[] = [
     { key: 'enabled', label: 'SKV_SYSORG_ENABLED/SKV_ENABLED', ok: getSkvSysorgEnabled(), required: true },
     { key: 'oauth_client_id', label: 'SKV_OAUTH_CLIENT_ID', ok: Boolean(getSkvOAuthClientId()), required: true },
@@ -174,17 +237,21 @@ export function getSkvConfigStatus(): {
     { key: 'apigw_client_secret', label: 'SKV_APIGW_CLIENT_SECRET', ok: Boolean(getSkvApiGwClientSecret()), required: true },
     { key: 'org_cert', label: 'SKV_ORG_CERT_P12_BASE64', ok: Boolean(getSkvOrgCertBase64()), required: true },
     { key: 'org_cert_pin', label: 'SKV_ORG_CERT_PIN', ok: Boolean(getSkvOrgCertPin()), required: true },
+    { key: 'filframstallare', label: 'SKV_FILFRAMSTALLARE_ORGNR/_NAME/_CONTACT_EMAIL', ok: Boolean(filframstallare), required: true },
+    { key: 'environment_explicit', label: 'SKV_ENV explicit satt', ok: isSkvEnvironmentExplicit(), required: process.env.NODE_ENV === 'production' },
   ]
 
   return {
     environment: getSkvEnvironment(),
+    environmentExplicit: isSkvEnvironmentExplicit(),
     enabled: getSkvSysorgEnabled(),
     scopes: getSkvScopeString().split(/\s+/).filter(Boolean),
-    filframstallare: getSkvFilframstallare(),
+    filframstallare,
     tokenUrl: getSkvSysorgTokenUrl(),
     serviceBaseUrls,
     checks,
     readyForTokenTest: checks.every((check) => !check.required || check.ok),
+    productionSafe: Boolean(filframstallare) && (process.env.NODE_ENV !== 'production' || isSkvEnvironmentExplicit()),
   }
 }
 

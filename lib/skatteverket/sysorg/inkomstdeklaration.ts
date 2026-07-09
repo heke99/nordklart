@@ -2,6 +2,7 @@ import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { skvSysorgRequest } from './client'
 import { getSkvFilframstallare } from './config'
+import { assertSkatteverketSubmissionConsent } from './consent'
 
 type CallContext = {
   supabase?: SupabaseClient
@@ -52,6 +53,7 @@ export async function lamnaInk1Deklarationsunderlag(
   underlag: Ink1Deklarationsunderlag,
   ctx: CallContext = {},
 ) {
+  await assertSkatteverketSubmissionConsent(ctx.supabase, ctx.companyId)
   return skvSysorgRequest({
     ...ctx,
     service: 'ink1',
@@ -69,6 +71,7 @@ export async function lamnaInkForetagDeklarationsunderlag(
   underlag: InkForetagDeklarationsunderlag,
   ctx: CallContext = {},
 ) {
+  await assertSkatteverketSubmissionConsent(ctx.supabase, ctx.companyId)
   // INK2–4 path differs between API-definition versions; call this only with a path
   // copied from Skatteverkets RAML/OpenAPI, for example from the authenticated portal.
   return skvSysorgRequest({

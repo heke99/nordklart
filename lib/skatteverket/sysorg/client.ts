@@ -5,6 +5,7 @@ import { createLogger } from '@/lib/logger'
 import {
   getSkvApiGwClientId,
   getSkvApiGwClientSecret,
+  getSkvEnvironment,
   getSkvRequestTimeoutMs,
   getSkvServiceBaseUrl,
   requireSkvConfigValue,
@@ -125,7 +126,9 @@ async function writeApiRequestStart(options: SkvSysorgRequestOptions, correlatio
     user_id: options.userId ?? null,
     service: options.service,
     operation: options.operation ?? `${options.method} ${options.path}`,
-    environment: null,
+    // The audit row must record WHICH Skatteverket environment the request
+    // targeted — indispensable when investigating a filing after the fact.
+    environment: getSkvEnvironment(),
     auth_flow: 'ccg_sysorg',
     correlation_id: correlationId,
     request_url: redactUrl(url),

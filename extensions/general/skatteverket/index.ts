@@ -13,6 +13,7 @@ import { storeTokens, getTokens, deleteTokens } from './lib/token-store'
 import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
 import { skvAuthCodeToStructured } from './lib/error-map'
+import { checkFeatureAccess, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import {
   buildMomsuppgift,
   buildAgiUnderlag,
@@ -396,7 +397,9 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
 
-        const tokens = await getTokens(ctx.supabase, ctx.userId)
+        // Company-scoped: connected means "connected for the ACTIVE company",
+        // not "the user connected some company at some point".
+        const tokens = await getTokens(ctx.supabase, ctx.userId, ctx.companyId)
         const environment = getSkatteverketEnvironment()
         const disabled = (process.env.SKATTEVERKET_DISABLED ?? '').toLowerCase() === 'true'
 
@@ -428,7 +431,7 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
 
-        await deleteTokens(ctx.supabase, ctx.userId)
+        await deleteTokens(ctx.supabase, ctx.userId, ctx.companyId)
         return NextResponse.json({ success: true })
       },
     },
@@ -466,7 +469,7 @@ export const skatteverketExtension: Extension = {
             const text = await response.text()
             console.error('[skatteverket] Validate error:', response.status, text)
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
+              { error: sanitizeSkvUpstreamError(response.status) },
               { status: response.status }
             )
           }
@@ -525,7 +528,7 @@ export const skatteverketExtension: Extension = {
             const text = await response.text()
             console.error('[skatteverket] Draft error:', response.status, text)
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
+              { error: sanitizeSkvUpstreamError(response.status) },
               { status: response.status }
             )
           }
@@ -587,9 +590,10 @@ export const skatteverketExtension: Extension = {
           }
 
           if (!response.ok) {
-            const text = await response.text()
+            const text = await response.text().catch(() => '')
+            console.error('[skatteverket] upstream error:', response.status, text.slice(0, 300))
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
+              { error: sanitizeSkvUpstreamError(response.status) },
               { status: response.status }
             )
           }
@@ -622,9 +626,10 @@ export const skatteverketExtension: Extension = {
           )
 
           if (response.status !== 204 && !response.ok) {
-            const text = await response.text()
+            const text = await response.text().catch(() => '')
+            console.error('[skatteverket] upstream error:', response.status, text.slice(0, 300))
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
+              { error: sanitizeSkvUpstreamError(response.status) },
               { status: response.status }
             )
           }
@@ -716,9 +721,10 @@ export const skatteverketExtension: Extension = {
           )
 
           if (!response.ok) {
-            const text = await response.text()
+            const text = await response.text().catch(() => '')
+            console.error('[skatteverket] upstream error:', response.status, text.slice(0, 300))
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
+              { error: sanitizeSkvUpstreamError(response.status) },
               { status: response.status }
             )
           }
@@ -775,9 +781,10 @@ export const skatteverketExtension: Extension = {
           )
 
           if (response.status !== 204 && !response.ok) {
-            const text = await response.text()
+            const text = await response.text().catch(() => '')
+            console.error('[skatteverket] upstream error:', response.status, text.slice(0, 300))
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
+              { error: sanitizeSkvUpstreamError(response.status) },
               { status: response.status }
             )
           }
@@ -833,9 +840,10 @@ export const skatteverketExtension: Extension = {
           }
 
           if (!response.ok) {
-            const text = await response.text()
+            const text = await response.text().catch(() => '')
+            console.error('[skatteverket] upstream error:', response.status, text.slice(0, 300))
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
+              { error: sanitizeSkvUpstreamError(response.status) },
               { status: response.status }
             )
           }
@@ -887,9 +895,10 @@ export const skatteverketExtension: Extension = {
           }
 
           if (!response.ok) {
-            const text = await response.text()
+            const text = await response.text().catch(() => '')
+            console.error('[skatteverket] upstream error:', response.status, text.slice(0, 300))
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
+              { error: sanitizeSkvUpstreamError(response.status) },
               { status: response.status }
             )
           }
@@ -2149,6 +2158,86 @@ export const skatteverketExtension: Extension = {
   },
 }
 
+// ── Commercial feature gate + write-role guards (defense in depth) ──────────
+//
+// Applied uniformly over the route table AFTER definition so no handler —
+// current or future — can forget them. Skatteverket filing is a paid feature
+// (skatteverket.submissions, Plus/Pro) and every mutating flow requires a
+// write-capable company role.
+
+/** Safe upstream error: never forward Skatteverket's raw response body to end users. */
+function sanitizeSkvUpstreamError(status: number): string {
+  if (status === 401 || status === 403) {
+    return 'Skatteverket nekade begäran. Koppla om anslutningen under Inställningar → Moms & skatt och försök igen.'
+  }
+  if (status === 404) return 'Skatteverket hittade inte uppgiften. Kontrollera period och organisationsnummer.'
+  if (status === 400 || status === 422) return 'Skatteverket kunde inte ta emot uppgifterna. Kontrollera underlaget och försök igen.'
+  if (status >= 500) return 'Skatteverkets tjänst svarar inte just nu. Försök igen om en stund.'
+  return `Skatteverket kunde inte behandla begäran (HTTP ${status}). Försök igen eller kontakta support.`
+}
+
+// Routes that must stay reachable without the commercial feature: connection
+// status powers badges/settings for every plan, and disconnect (removing the
+// company's tokens) must never be locked behind a paywall.
+const SKV_FEATURE_EXEMPT = new Set(['GET /status', 'POST /disconnect', 'GET /callback'])
+
+// Mutating routes → non-viewer company role required (same rule as
+// requireWritePermission in core API routes).
+const SKV_WRITE_ROUTES = new Set([
+  'GET /authorize',
+  'POST /declaration/validate',
+  'POST /declaration/draft',
+  'DELETE /declaration/draft',
+  'PUT /declaration/lock',
+  'DELETE /declaration/lock',
+  'POST /agi/submit',
+  'POST /agi/spara',
+  'DELETE /agi/underlag',
+  'DELETE /agi/sparad',
+  'POST /agi/granskningsunderlag',
+  'POST /agi/kontrollera/hu',
+  'POST /agi/kontrollera/iu',
+  'POST /agi/las',
+  'POST /agi/lasUpp',
+  'POST /skattekonto/sync',
+  'POST /skattekonto/import',
+  'POST /skattekonto/transaktioner/:id/bokfor',
+  'POST /skattekonto/transaktioner/:id/match',
+])
+
+async function requireSkatteverketFeature(ctx: ExtensionContext): Promise<NextResponse | null> {
+  const access = await checkFeatureAccess(ctx.supabase, ctx.companyId, NORDKLART_FEATURES.skatteverketSubmissions)
+  if (access.allowed) return null
+  return NextResponse.json(
+    {
+      error: 'FEATURE_NOT_ENABLED',
+      message: 'Skatteverket-flöden ingår inte i företagets plan. Uppgradera under Inställningar → Fakturering för att aktivera inlämning.',
+    },
+    { status: 403 },
+  )
+}
+
+for (let i = 0; i < (skatteverketExtension.apiRoutes?.length ?? 0); i++) {
+  const route = skatteverketExtension.apiRoutes![i]
+  const key = `${route.method} ${route.path}`
+  if (route.skipAuth || SKV_FEATURE_EXEMPT.has(key)) continue
+  const inner = route.handler
+  skatteverketExtension.apiRoutes![i] = {
+    ...route,
+    handler: async (request: Request, ctx?: ExtensionContext) => {
+      if (ctx) {
+        const featureDenied = await requireSkatteverketFeature(ctx)
+        if (featureDenied) return featureDenied
+        if (SKV_WRITE_ROUTES.has(key)) {
+          const writeDenied = await requireAgiWriteRole(ctx)
+          if (writeDenied) return writeDenied
+        }
+      }
+      return inner(request, ctx)
+    },
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────
 
 /**
@@ -2335,9 +2424,10 @@ async function commitSubmitVatDeclaration(
     })
     if (!utkast.ok) {
       const text = await utkast.text().catch(() => '')
+      console.error('[skatteverket] utkast rejected:', utkast.status, text.slice(0, 300))
       return {
         ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: utkast.status,
-        recoverable: false, error: `Skatteverket svarade med ${utkast.status}: ${text}`,
+        recoverable: false, error: sanitizeSkvUpstreamError(utkast.status),
       }
     }
     const utkastData = (await utkast.json()) as SkatteverketUtkastResponse
@@ -2352,9 +2442,10 @@ async function commitSubmitVatDeclaration(
     })
     if (!las.ok) {
       const text = await las.text().catch(() => '')
+      console.error('[skatteverket] las rejected:', las.status, text.slice(0, 300))
       return {
         ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: las.status,
-        recoverable: false, error: `Skatteverket svarade med ${las.status}: ${text}`,
+        recoverable: false, error: sanitizeSkvUpstreamError(las.status),
       }
     }
     const lasData = (await las.json()) as SkatteverketUtkastResponse

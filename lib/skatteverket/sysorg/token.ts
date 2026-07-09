@@ -4,6 +4,7 @@ import type { IncomingHttpHeaders } from 'node:http'
 import { URL } from 'node:url'
 import { createLogger } from '@/lib/logger'
 import {
+  assertSkvProductionSafety,
   getSkvOAuthClientId,
   getSkvOAuthClientSecret,
   getSkvOrgCertBase64,
@@ -56,6 +57,10 @@ export async function getSkvSysorgAccessToken(options: { forceRefresh?: boolean 
   if (!getSkvSysorgEnabled()) {
     throw new SkvConfigurationError('Skatteverket sysorg är avstängt. Sätt SKV_SYSORG_ENABLED=true först.')
   }
+  // Fail fast BEFORE any credential leaves the process: production requires
+  // an explicit SKV_ENV and an explicitly configured filframställare —
+  // hardcoded fallbacks no longer exist.
+  assertSkvProductionSafety()
 
   if (!options.forceRefresh && tokenCache && tokenCache.expiresAt > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
     return tokenCache
