@@ -155,11 +155,16 @@ export default function RecurringInvoicesPage() {
                         {s.name}
                         {s.last_run_warning && (
                           <AlertTriangle
-                            className="h-4 w-4 text-warning-foreground"
-                            aria-label={s.last_run_warning}
+                            className="h-4 w-4 shrink-0 text-warning-foreground"
+                            aria-hidden="true"
                           />
                         )}
                       </div>
+                      {s.last_run_warning && (
+                        <p className="mt-1 max-w-xs text-xs font-normal text-warning-foreground">
+                          {s.last_run_warning}
+                        </p>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {s.customer?.name ?? '—'}

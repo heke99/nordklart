@@ -21,8 +21,10 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
+import { isValidEmailAddress } from '@/lib/email/validate'
 import { buildInvoiceEmailOptions, invoiceEmailFilename } from '@/lib/invoices/send-invoice-email'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createLogger } from '@/lib/logger'
 import type {
   Invoice,
@@ -298,14 +300,23 @@ export async function executeRecurringSchedule(
   //    user can manually send from /invoices/[id].
   if (schedule.auto_send) {
     try {
-      autoSent = await sendInvoiceFromSchedule(
+      const sendOutcome = await sendInvoiceFromSchedule(
         supabase,
         schedule.company_id,
         schedule.user_id,
         completeInvoice as Invoice & { customer: Customer; items: InvoiceItem[] },
       )
-      if (!autoSent) {
-        warning = 'Auto-utskick misslyckades — fakturan finns som utkast och kan skickas manuellt.'
+      autoSent = sendOutcome.sent
+      if (!sendOutcome.sent) {
+        warning = sendOutcome.blockedReason
+          ?? 'Auto-utskick misslyckades — fakturan finns som utkast och kan skickas manuellt.'
+      } else if (sendOutcome.partialFailures.length > 0) {
+        // The email reached the customer, but a follow-up step failed
+        // (status flip / journal entry / PDF archive). Surface it — the user
+        // must be able to see and repair the gap.
+        warning = `Fakturan skickades, men följande steg misslyckades: ${sendOutcome.partialFailures
+          .map((f) => f.label)
+          .join(', ')}. Kontrollera fakturan manuellt.`
       }
     } catch (err) {
       opLog.error('auto-send failed for recurring schedule', err as Error, {
@@ -335,30 +346,66 @@ export async function executeRecurringSchedule(
   }
 }
 
+export interface ScheduleSendOutcome {
+  /** True when the email actually reached the provider successfully. */
+  sent: boolean
+  /** Swedish reason when the send was blocked before any email left. */
+  blockedReason?: string
+  /**
+   * Follow-up steps that failed AFTER the email was delivered
+   * (status flip / journal entry / PDF archive). Mirrors the
+   * partial_failures contract of the dashboard send route.
+   */
+  partialFailures: Array<{ step: string; label: string; reason: string }>
+}
+
 /**
  * Render PDF + send email + flip status + create JE + archive PDF.
  * Mirrors /api/invoices/[id]/send/route.ts but inline so we don't depend on
- * the route's auth chain. Returns true if email was sent successfully.
+ * the route's auth chain. Partial failures after the email left are reported
+ * back so the cron can persist them on the schedule/run — never silently
+ * swallowed.
  */
 async function sendInvoiceFromSchedule(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   invoice: Invoice & { customer: Customer; items: InvoiceItem[] },
-): Promise<boolean> {
+): Promise<ScheduleSendOutcome> {
   const emailService = getEmailService()
   if (!emailService.isConfigured()) {
     log.warn('email service not configured; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
     })
-    return false
+    return {
+      sent: false,
+      blockedReason: 'E-posttjänsten är inte konfigurerad — fakturan finns som utkast och kan skickas manuellt.',
+      partialFailures: [],
+    }
   }
-  if (!invoice.customer.email) {
-    log.warn('customer has no email; recurring schedule cannot auto-send', {
+  if (!isValidEmailAddress(invoice.customer.email)) {
+    log.warn('customer email missing or invalid; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
       customerId: invoice.customer.id,
     })
-    return false
+    return {
+      sent: false,
+      blockedReason: 'Kundens e-postadress saknas eller är ogiltig — fakturan finns som utkast. Uppdatera kunden och skicka manuellt.',
+      partialFailures: [],
+    }
+  }
+
+  // The sandbox must never deliver a real email to a real address — same
+  // rule as guardSandbox on the manual send route.
+  if (await isSandboxCompany(supabase, companyId)) {
+    log.warn('sandbox company; recurring schedule auto-send blocked', {
+      invoiceId: invoice.id,
+    })
+    return {
+      sent: false,
+      blockedReason: 'Sandlådebolag skickar aldrig riktig e-post — fakturan finns som utkast.',
+      partialFailures: [],
+    }
   }
 
   const { data: company } = await supabase
@@ -374,18 +421,31 @@ async function sendInvoiceFromSchedule(
   const items = (invoice.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
 
   // Render PDF with status overridden to 'sent' so the customer doesn't
-  // receive a "UTKAST" stamp.
+  // receive a "UTKAST" stamp. A render failure here blocks the email —
+  // an invoice email without its PDF must never go out.
   const renderableInvoice = { ...invoice, status: 'sent' as const }
   const { branding } = prepareInvoicePdfRender(company)
-  const pdfBuffer = await renderToBuffer(
-    InvoicePDF({
-      invoice: renderableInvoice,
-      customer: invoice.customer,
-      items,
-      company,
-      branding,
-    }),
-  )
+  let pdfBuffer: Buffer
+  try {
+    pdfBuffer = await renderToBuffer(
+      InvoicePDF({
+        invoice: renderableInvoice,
+        customer: invoice.customer,
+        items,
+        company,
+        branding,
+      }),
+    )
+  } catch (err) {
+    log.error('PDF render failed in recurring schedule auto-send', err as Error, {
+      invoiceId: invoice.id,
+    })
+    return {
+      sent: false,
+      blockedReason: 'PDF-genereringen misslyckades — inget e-postmeddelande skickades. Fakturan finns som utkast.',
+      partialFailures: [],
+    }
+  }
 
   const filename = invoiceEmailFilename(invoice)
   const ccAddress = company.email || undefined
@@ -397,7 +457,7 @@ async function sendInvoiceFromSchedule(
       company,
       companyId,
       pdfBuffer,
-      to: invoice.customer.email,
+      to: invoice.customer.email!,
       ccAddress,
     }),
   )
@@ -408,16 +468,28 @@ async function sendInvoiceFromSchedule(
       new Error(result.error || 'unknown'),
       { invoiceId: invoice.id },
     )
-    return false
+    return {
+      sent: false,
+      blockedReason: 'E-postleverantören kunde inte skicka fakturan — den finns som utkast och kan skickas manuellt.',
+      partialFailures: [],
+    }
   }
 
   // Email delivered — flip status, create JE, archive PDF. Treat downstream
-  // failures as warnings (don't unsend the email).
-  await supabase
+  // failures as warnings (don't unsend the email) but report every one.
+  const partialFailures: ScheduleSendOutcome['partialFailures'] = []
+
+  const { error: statusError } = await supabase
     .from('invoices')
     .update({ status: 'sent' })
     .eq('id', invoice.id)
     .eq('company_id', companyId)
+  if (statusError) {
+    log.error('failed to flip recurring invoice status to sent', statusError, {
+      invoiceId: invoice.id,
+    })
+    partialFailures.push({ step: 'status_update', label: 'statusuppdatering', reason: statusError.message })
+  }
 
   const accountingMethod = (company as { accounting_method?: string }).accounting_method
   let journalEntryId: string | undefined
@@ -441,6 +513,11 @@ async function sendInvoiceFromSchedule(
       log.error('failed to create journal entry for recurring invoice', err as Error, {
         invoiceId: invoice.id,
       })
+      partialFailures.push({
+        step: 'journal_entry',
+        label: 'bokföring',
+        reason: err instanceof Error ? err.message : 'okänt fel',
+      })
     }
   }
 
@@ -457,6 +534,11 @@ async function sendInvoiceFromSchedule(
     log.error('failed to archive recurring invoice PDF', err as Error, {
       invoiceId: invoice.id,
     })
+    partialFailures.push({
+      step: 'pdf_archive',
+      label: 'PDF-arkivering',
+      reason: err instanceof Error ? err.message : 'okänt fel',
+    })
   }
 
   await eventBus.emit({
@@ -464,5 +546,5 @@ async function sendInvoiceFromSchedule(
     payload: { invoice, companyId, userId },
   })
 
-  return true
+  return { sent: true, partialFailures }
 }

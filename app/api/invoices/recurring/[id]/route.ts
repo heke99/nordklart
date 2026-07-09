@@ -25,7 +25,18 @@ export const GET = withRouteContext(
         { status: 404 },
       )
     }
-    return NextResponse.json({ data })
+
+    // Run history: latest attempts (succeeded/failed/running) with the
+    // spawned invoice number where available. Read via RLS — company-scoped.
+    const { data: runs } = await supabase
+      .from('recurring_invoice_runs')
+      .select('id, run_date, status, invoice_id, auto_sent, warning, error, started_at, finished_at, invoice:invoices(id, invoice_number, status, total)')
+      .eq('schedule_id', id)
+      .eq('company_id', companyId)
+      .order('started_at', { ascending: false })
+      .limit(12)
+
+    return NextResponse.json({ data, runs: runs ?? [] })
   },
 )
 
@@ -83,73 +94,32 @@ export const PATCH = withRouteContext(
     }
 
     if (items) {
-      // Replace items wholesale. Cheaper than diffing for a small list and
-      // matches how the UI form sends the full list back on every save.
-      const { data: existing } = await supabase
-        .from('recurring_invoice_schedules')
-        .select('id')
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .single()
-
-      if (!existing) {
-        return NextResponse.json(
-          { error: 'Schedule not found', type: 'not_found' },
-          { status: 404 },
-        )
-      }
-
-      // Snapshot existing rows so we can restore them if the insert fails.
-      // Without this, a failed replace would leave the schedule with zero
-      // items and every subsequent cron run would throw "schedule has no
-      // items", silently skipping billing dates.
-      const { data: previousItems } = await supabase
-        .from('recurring_invoice_schedule_items')
-        .select('sort_order, description, quantity, unit, unit_price, vat_rate')
-        .eq('schedule_id', id)
-
-      await supabase
-        .from('recurring_invoice_schedule_items')
-        .delete()
-        .eq('schedule_id', id)
-
-      const itemRows = items.map((item, idx) => ({
-        schedule_id: id,
-        sort_order: idx,
+      // Replace items wholesale — atomically, via an RPC that runs the
+      // delete + insert in one transaction with a tenant/write guard. A
+      // failed replace can therefore never leave the schedule with zero
+      // items (which would make every subsequent cron run throw "schedule
+      // has no items" and silently skip billing dates).
+      const itemPayload = items.map((item) => ({
         description: item.description,
         quantity: item.quantity,
         unit: item.unit,
         unit_price: item.unit_price,
         vat_rate: item.vat_rate ?? null,
       }))
-      const { error: itemsError } = await supabase
-        .from('recurring_invoice_schedule_items')
-        .insert(itemRows)
-      if (itemsError) {
-        log.error('failed to replace schedule items', itemsError)
-        // Restore the snapshot so the schedule stays valid for the cron.
-        if (previousItems && previousItems.length > 0) {
-          const restoreRows = previousItems.map((row) => ({
-            schedule_id: id,
-            sort_order: row.sort_order,
-            description: row.description,
-            quantity: row.quantity,
-            unit: row.unit,
-            unit_price: row.unit_price,
-            vat_rate: row.vat_rate,
-          }))
-          const { error: restoreError } = await supabase
-            .from('recurring_invoice_schedule_items')
-            .insert(restoreRows)
-          if (restoreError) {
-            log.error(
-              'failed to restore schedule items after failed replace — schedule may be left empty',
-              restoreError,
-              { scheduleId: id },
-            )
-          }
+      const { error: replaceError } = await supabase.rpc('replace_recurring_schedule_items', {
+        p_schedule_id: id,
+        p_company_id: companyId,
+        p_items: itemPayload,
+      })
+      if (replaceError) {
+        if (replaceError.code === 'P0002') {
+          return NextResponse.json(
+            { error: 'Schedule not found', type: 'not_found' },
+            { status: 404 },
+          )
         }
-        return errorResponse(itemsError, log, { requestId })
+        log.error('failed to replace schedule items', replaceError)
+        return errorResponse(replaceError, log, { requestId })
       }
     }
 
