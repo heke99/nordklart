@@ -16,6 +16,12 @@
  *   2. naive-ore-round — `Math.round(x * 100) / 100`, which is subtly wrong on
  *      exact-half values (see lib/money.ts `roundOre`). Tracked as a count.
  *      The canonical rounding modules are excluded.
+ *   3. migration-missing-rls — a migration that CREATE TABLEs in the public
+ *      schema without ENABLE ROW LEVEL SECURITY on that table in the same
+ *      file. Every public table is reachable over PostgREST; a table without
+ *      RLS is readable/writable by any authenticated caller. Tracked as an
+ *      entry-set (migration#table) so new offenders fail even when legacy
+ *      ones remain.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -93,9 +99,43 @@ function countNaiveRound() {
   return count
 }
 
+/**
+ * Migration files that create a public table without enabling RLS on it in
+ * the same file. Reported as `file#table` entries.
+ */
+function findMigrationsMissingRls() {
+  const dir = path.join(ROOT, 'supabase', 'migrations')
+  let files
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.sql'))
+  } catch {
+    return []
+  }
+  const offenders = []
+  const CREATE_RE = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:"?public"?\.)?"?([a-z0-9_]+)"?/g
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(dir, f), 'utf8').toLowerCase()
+    const created = new Set()
+    for (const m of src.matchAll(CREATE_RE)) created.add(m[1])
+    for (const table of created) {
+      const rlsRe = new RegExp(
+        `alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:"?public"?\\.)?"?${table}"?\\s+enable\\s+row\\s+level\\s+security`,
+      )
+      // Dynamic (format()-based) RLS enabling inside DO blocks can't be
+      // statically matched per table — accept a file-level dynamic marker.
+      const dynamicRls = src.includes('enable row level security') && src.includes('execute format(')
+      if (!rlsRe.test(src) && !dynamicRls) {
+        offenders.push(`supabase/migrations/${f}#${table}`)
+      }
+    }
+  }
+  return offenders.sort()
+}
+
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
+  migrationsMissingRls: findMigrationsMissingRls(),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -103,13 +143,14 @@ const isUpdate = process.argv.includes('--update')
 if (isUpdate) {
   const baseline = {
     _comment:
-      'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).',
+      'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: all reach 0 (A1 route-auth campaign, D1 rounding codemod, RLS backfill).',
     rawRouteAuth: { count: current.rawRouteAuth.length, files: current.rawRouteAuth },
     naiveOreRound: { count: current.naiveOreRound },
+    migrationsMissingRls: { count: current.migrationsMissingRls.length, entries: current.migrationsMissingRls },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
   console.log(
-    `Baseline written: ${current.rawRouteAuth.length} raw-route-auth files, ${current.naiveOreRound} naive-ore-round occurrences.`,
+    `Baseline written: ${current.rawRouteAuth.length} raw-route-auth files, ${current.naiveOreRound} naive-ore-round occurrences, ${current.migrationsMissingRls.length} migration-missing-rls entries.`,
   )
   process.exit(0)
 }
@@ -144,6 +185,18 @@ if (current.naiveOreRound > baseline.naiveOreRound.count) {
       `(baseline ${baseline.naiveOreRound.count}, +${current.naiveOreRound - baseline.naiveOreRound.count}).`,
   )
   console.error('  → import roundOre from @/lib/money instead.')
+}
+
+// 3. migration-missing-rls: any entry not in the baseline set is a NEW violation.
+const rlsBaselineSet = new Set(baseline.migrationsMissingRls?.entries ?? [])
+const newRlsEntries = current.migrationsMissingRls.filter((e) => !rlsBaselineSet.has(e))
+if (newRlsEntries.length) {
+  failed = true
+  console.error(
+    `\n✗ migration-missing-rls: ${newRlsEntries.length} new public table(s) created without ENABLE ROW LEVEL SECURITY:`,
+  )
+  newRlsEntries.forEach((e) => console.error(`    ${e}`))
+  console.error('  → add ALTER TABLE public.<table> ENABLE ROW LEVEL SECURITY (plus policies) in the same migration.')
 }
 
 // Report ratchet-down progress (informational, never fails).

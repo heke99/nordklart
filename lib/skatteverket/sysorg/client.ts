@@ -119,9 +119,27 @@ export async function skvSysorgRequest<T = unknown>(options: SkvSysorgRequestOpt
   return { ok: response.ok, status: response.status, correlationId, data, text, headers: headersOut }
 }
 
+/**
+ * Audit rows are written with the SERVICE client: the table's RLS makes it
+ * append-only from the server's perspective (members read, never write), so
+ * a user session can neither forge nor mutate the Skatteverket audit trail.
+ * Falls back to the caller's client when the service client is unavailable
+ * (unit tests without env).
+ */
+async function resolveAuditClient(options: SkvSysorgRequestOptions): Promise<SupabaseClient | null> {
+  if (!options.supabase) return null
+  try {
+    const { createServiceClient } = await import('@/lib/supabase/server')
+    return createServiceClient()
+  } catch {
+    return options.supabase
+  }
+}
+
 async function writeApiRequestStart(options: SkvSysorgRequestOptions, correlationId: string, url: string) {
-  if (!options.supabase) return
-  await options.supabase.from('skatteverket_api_requests').insert({
+  const auditClient = await resolveAuditClient(options)
+  if (!auditClient) return
+  await auditClient.from('skatteverket_api_requests').insert({
     company_id: options.companyId ?? null,
     user_id: options.userId ?? null,
     service: options.service,
@@ -145,9 +163,10 @@ async function writeApiRequestEnd(
   durationMs: number,
   errorMessage: string | null,
 ) {
-  if (!options.supabase) return
+  const auditClient = await resolveAuditClient(options)
+  if (!auditClient) return
   const status = statusCode >= 200 && statusCode < 300 ? 'succeeded' : 'failed'
-  await options.supabase
+  await auditClient
     .from('skatteverket_api_requests')
     .update({
       status,

@@ -72,8 +72,9 @@ export default async function DashboardPage() {
     // Skatteverket connection status is COMPANY-scoped: the token authorizes
     // filings for this company's org number (unique per company_id since the
     // multi-tenant refactor). Filtering by user_id showed "connected" for the
-    // wrong company when a user works across multiple companies.
-    supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
+    // wrong company when a user works across multiple companies. Reads go
+    // through the metadata view — the token table itself is service-role only.
+    supabase.from('skatteverket_connections_v').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('agent_profiles').select('verified_at').eq('company_id', companyId).maybeSingle(),
     // Any posted entry counts as real dashboard activity for workspace state.
     supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'posted'),
