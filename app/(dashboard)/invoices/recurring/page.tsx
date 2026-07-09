@@ -53,7 +53,13 @@ export default function RecurringInvoicesPage() {
   }
 
   useEffect(() => {
-    fetchSchedules()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchSchedules does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchSchedules()
+    }, 0)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function togglePause(s: ScheduleRow) {
