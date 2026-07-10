@@ -7,17 +7,17 @@ import { cancelConsentSession } from '@/lib/auth/consent-service'
 ensureInitialized()
 
 /**
- * POST /api/bankid/consents/[sessionId]/cancel
+ * POST /api/bankid/consents/[id]/cancel
  *
  * Cancel a PENDING BankID consent-signing session (the user closed the
  * dialog or changed their mind). Cancels the provider order and flips the
  * session status — completed sessions cannot be cancelled (use revoke on the
  * signed consent instead). Idempotent for already-cancelled sessions.
  */
-export const POST = withRouteContext<{ params: Promise<{ sessionId: string }> }>(
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bankid.consents.cancel',
   async (_request, ctx, { params }) => {
-    const { sessionId } = await params
+    const { id: sessionId } = await params
     const { user, supabase, log, requestId } = ctx
 
     try {

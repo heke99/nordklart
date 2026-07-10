@@ -43,13 +43,6 @@ export default async function DashboardLayout({
   const headerStore = await headers()
   const pathname = headerStore.get('x-pathname') ?? ''
 
-  // The historical dashboard group owned `/`. Nordklart now uses `/` as the
-  // public hero page, while the authenticated app overview lives at `/app`.
-  // Keep this branch above auth so first-time visitors never land on login.
-  if (pathname === '/' || pathname === '') {
-    return <>{children}</>
-  }
-
   const supabase = await createClient()
 
   const { data: { user } } = await supabase.auth.getUser()

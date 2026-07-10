@@ -1,7 +1,7 @@
 'use client'
 
 import { Suspense, useState, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -18,6 +18,8 @@ import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { AuthLegalFooter } from '@/components/auth/AuthLegalFooter'
 import { isRecoverableSignupProvisioningStatus } from '@/lib/signup/provisioning-status'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { clearRecaptIdentity } from '@/lib/recapt'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
 const branding = getBranding()
@@ -41,13 +43,15 @@ function LoginPageContent() {
   const [resetCooldownUntil, setResetCooldownUntil] = useState<number | null>(null)
   const [resetCooldownRemaining, setResetCooldownRemaining] = useState(0)
   const [bankIdNoAccount, setBankIdNoAccount] = useState<{ givenName?: string; surname?: string } | null>(null)
+  const [existingSessionEmail, setExistingSessionEmail] = useState<string | null>(null)
+  const [isSwitchingAccount, setIsSwitchingAccount] = useState(false)
   const { toast } = useToast()
-  const router = useRouter()
   const searchParams = useSearchParams()
   const legacyCallbackError = searchParams.get('error')
   const callbackError = searchParams.get('auth_error')
     ?? (legacyCallbackError === 'auth_error' ? 'password_reset_failed' : null)
-  const supabase = createClient()
+  const [supabase] = useState(() => createClient())
+  const requestedNext = safeReturnTo(searchParams.get('next'), '/app')
   const bankIdEnabled = isBankIdEnabled()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
@@ -57,6 +61,32 @@ function LoginPageContent() {
   const isInviteError = callbackError === 'invite_failed'
   const isMagicLinkError = callbackError === 'magic_link_failed'
   const isEmailChangeError = callbackError === 'email_change_failed'
+
+  useEffect(() => {
+    let active = true
+    supabase.auth.getUser().then(({ data }) => {
+      if (active) setExistingSessionEmail(data.user?.email ?? null)
+    })
+    return () => {
+      active = false
+    }
+  }, [supabase])
+
+  const navigateAfterAuth = (path: string) => {
+    // Authentication changes cookies. A hard navigation prevents the App
+    // Router from reusing an anonymous or previously authenticated RSC tree.
+    window.location.assign(path)
+  }
+
+  const handleSwitchAccount = async () => {
+    setIsSwitchingAccount(true)
+    clearRecaptIdentity()
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } finally {
+      window.location.replace('/login?account_switched=1')
+    }
+  }
 
   // Reset cooldown timer
   useEffect(() => {
@@ -135,8 +165,7 @@ function LoginPageContent() {
 
         // Always land on the picker after BankID login so the user sees
         // fresh CompanyRoles fetched during this session's enrichment.
-        router.push('/select-company')
-        router.refresh()
+        navigateAfterAuth('/select-company')
       } catch (error) {
         console.error('[login] BankID complete error', error)
         toast({
@@ -177,7 +206,7 @@ function LoginPageContent() {
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
 
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        router.push('/mfa/verify')
+        navigateAfterAuth('/mfa/verify')
         return
       }
 
@@ -209,21 +238,18 @@ function LoginPageContent() {
       if (activation.status === 200 || activation.status === 202) {
         const workspace = await activation.json().catch(() => null) as { onboardingPath?: string; state?: string } | null
         if (activation.status === 202 || workspace?.state === 'access_request_pending') {
-          router.push('/access-pending')
-          router.refresh()
+          navigateAfterAuth('/access-pending')
           return
         }
         if (workspace?.onboardingPath) {
-          router.push(workspace.onboardingPath)
-          router.refresh()
+          navigateAfterAuth(workspace.onboardingPath)
           return
         }
       }
       if (isRecoverableSignupProvisioningStatus(activation.status)) {
         // The account is valid. Keep the session so setup can be retried
         // idempotently from the recovery screen instead of forcing another login.
-        router.push('/onboarding/problem')
-        router.refresh()
+        navigateAfterAuth('/onboarding/problem')
         return
       }
       if (activation.status !== 204) {
@@ -233,13 +259,11 @@ function LoginPageContent() {
           description: body.error || 'Försök igen om en stund.',
           variant: 'destructive',
         })
-        router.push('/onboarding/problem')
-        router.refresh()
+        navigateAfterAuth('/onboarding/problem')
         return
       }
 
-      router.push('/app')
-      router.refresh()
+      navigateAfterAuth(requestedNext)
     } catch (error) {
       toast({
         title: tAuth('login_failed_title'),
@@ -425,6 +449,24 @@ function LoginPageContent() {
         </div>
 
         <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+          {existingSessionEmail && (
+            <div className="mb-5 rounded-lg border border-primary/25 bg-primary/5 p-4" role="status">
+              <p className="text-sm font-medium text-foreground">Du är redan inloggad</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Sessionen tillhör <strong className="text-foreground">{existingSessionEmail}</strong>.
+                Fortsätt till appen eller logga ut för att använda ett annat konto.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <Button type="button" onClick={() => navigateAfterAuth('/app')}>
+                  Fortsätt till appen
+                </Button>
+                <Button type="button" variant="outline" onClick={handleSwitchAccount} disabled={isSwitchingAccount}>
+                  {isSwitchingAccount ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Byt konto
+                </Button>
+              </div>
+            </div>
+          )}
           {callbackError && (
             <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4" role="alert">
               <p className="text-sm font-medium text-destructive">

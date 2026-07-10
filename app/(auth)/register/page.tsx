@@ -15,6 +15,8 @@ import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { CompanyRegistryLookupStatusLine } from '@/components/company-registry/CompanyRegistryLookupStatus'
 import { CompanyRegistryResultCard } from '@/components/company-registry/CompanyRegistryResultCard'
 import { useCompanyRegistryLookup } from '@/components/company-registry/useCompanyRegistryLookup'
+import { createClient } from '@/lib/supabase/client'
+import { clearRecaptIdentity } from '@/lib/recapt'
 
 type WorkspaceType = 'company' | 'agency'
 type LegalForm = 'enskild_firma' | 'aktiebolag'
@@ -54,6 +56,9 @@ function RegisterContent() {
   const [isLoading, setIsLoading] = useState(false)
   const [confirmationEmail, setConfirmationEmail] = useState<string | null>(null)
   const [selectedPlan, setSelectedPlan] = useState<{ name: string; priceLabel: string } | null>(null)
+  const [existingSessionEmail, setExistingSessionEmail] = useState<string | null>(null)
+  const [isSwitchingAccount, setIsSwitchingAccount] = useState(false)
+  const [supabase] = useState(() => createClient())
   const registry = useCompanyRegistryLookup({ endpoint: '/api/public/company-lookup' })
   const registryLookupFn = registry.lookup
   const registryCompany = registry.company
@@ -62,6 +67,26 @@ function RegisterContent() {
 
   const selectedFlow = flowFromIntent(resolvedIntent || planCode)
   const label = workspaceType === 'agency' ? 'redovisningsbyrå' : legalForm === 'aktiebolag' ? 'aktiebolag' : 'enskild firma'
+
+  useEffect(() => {
+    let active = true
+    supabase.auth.getUser().then(({ data }) => {
+      if (active) setExistingSessionEmail(data.user?.email ?? null)
+    })
+    return () => {
+      active = false
+    }
+  }, [supabase])
+
+  async function handleSwitchAccount() {
+    setIsSwitchingAccount(true)
+    clearRecaptIdentity()
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } finally {
+      window.location.replace(`${window.location.pathname}${window.location.search}`)
+    }
+  }
 
   useEffect(() => {
     registryLookupFn(orgNumber)
@@ -188,6 +213,21 @@ function RegisterContent() {
         <BrandWordmark size="hero" className="mb-2" />
         <p className="mt-3 text-sm text-muted-foreground">Skapa rätt arbetsyta från början. Du kan alltid lägga till fler bolag senare.</p>
       </div>
+      {existingSessionEmail ? (
+        <div className="mb-5 rounded-xl border border-primary/25 bg-primary/5 p-4 shadow-sm" role="status">
+          <p className="text-sm font-medium text-foreground">Du är redan inloggad som {existingSessionEmail}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Fortsätt till din befintliga arbetsyta eller byt konto innan du registrerar ett nytt konto.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <Button type="button" onClick={() => window.location.assign('/app')}>Fortsätt till appen</Button>
+            <Button type="button" variant="outline" onClick={handleSwitchAccount} disabled={isSwitchingAccount}>
+              {isSwitchingAccount ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Byt konto
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <form onSubmit={handleSubmit} className="space-y-5 rounded-xl border bg-card p-6 shadow-sm">
         <section className="space-y-3">
           <Label>Jag vill använda Nordklart som</Label>

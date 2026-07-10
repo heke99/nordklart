@@ -1,5 +1,5 @@
 /**
- * POST /api/bankid/consents/[sessionId]/cancel — pending-only cancel.
+ * POST /api/bankid/consents/[id]/cancel — pending-only cancel.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
@@ -24,9 +24,9 @@ vi.mock('@/lib/auth/consent-service', () => ({
 import { POST } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
-const routeParams = { params: Promise.resolve({ sessionId: 'session-1' }) }
+const routeParams = { params: Promise.resolve({ id: 'session-1' }) }
 
-describe('POST /api/bankid/consents/[sessionId]/cancel', () => {
+describe('POST /api/bankid/consents/[id]/cancel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()

@@ -3,8 +3,29 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { isPublicAuthPath, isPublicMarketingPath } from '@/lib/auth/route-access'
 
 export async function updateSession(request: NextRequest) {
+  const pathname = request.nextUrl.pathname
+
+  // Marketing and auth-entry pages must render independently of Supabase.
+  // Calling getUser() before classifying the route made `/`, `/login` and
+  // `/register` hang whenever the auth endpoint was slow or misconfigured.
+  // Auth callbacks handle their own PKCE exchange, and the login/register
+  // clients inspect any existing session after the page has rendered.
+  if (isPublicMarketingPath(pathname) || isPublicAuthPath(pathname)) {
+    const response = NextResponse.next({ request })
+    response.headers.set('x-pathname', pathname)
+
+    // The active company is authoritative in user_preferences. Clearing this
+    // legacy cookie on auth entry pages prevents a shared browser from carrying
+    // stale company context into the next account.
+    if (pathname === '/login' || pathname === '/register') {
+      response.cookies.set('nordklart-company-id', '', { path: '/', maxAge: 0 })
+    }
+    return response
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -41,36 +62,7 @@ export async function updateSession(request: NextRequest) {
     error: authError,
   } = await supabase.auth.getUser()
 
-  // Get the pathname
-  const pathname = request.nextUrl.pathname
-
-  const publicMarketingPaths = new Set([
-    '/',
-    '/dashboard',
-    '/bokforing',
-    '/bokslut',
-    '/bankgiro',
-    '/byra',
-    '/priser',
-    '/kontakt',
-    '/boka-demo',
-    '/allmanna-villkor',
-    '/integritetspolicy',
-    '/cookies',
-    '/personuppgifter',
-    '/privacy',
-    '/dpa',
-    '/personuppgiftsbitradesavtal',
-    '/angerratt',
-    '/bokslut/villkor',
-  ])
-  const isPublicMarketingPath = publicMarketingPaths.has(pathname)
-
   supabaseResponse.headers.set('x-pathname', pathname)
-
-  if (isPublicMarketingPath) {
-    return supabaseResponse
-  }
 
   // If the refresh token is stale/invalid, clear the session cookies
   // so the browser stops sending them on every request.
@@ -98,25 +90,13 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
-  // Public auth routes — allow access
-  if (
-    pathname.startsWith('/login') ||
-    pathname.startsWith('/forgot-password') ||
-    pathname.startsWith('/register') ||
-    pathname.startsWith('/auth') ||
-    pathname.startsWith('/sandbox')
-  ) {
-    // If user is logged in and trying to access auth pages, redirect to dashboard
-    if (user) {
-      return NextResponse.redirect(new URL('/app', request.url))
-    }
-    return supabaseResponse
-  }
-
   // Protected routes - require authentication
   if (!user) {
+    const requestedPath = `${request.nextUrl.pathname}${request.nextUrl.search}`
     const url = request.nextUrl.clone()
     url.pathname = '/login'
+    url.search = ''
+    url.searchParams.set('next', requestedPath)
     const redirect = NextResponse.redirect(url)
     // Session is gone (logout / expiry) — clear the company context cookie so
     // the next account on this browser never inherits a stale company id.

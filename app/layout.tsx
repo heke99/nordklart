@@ -15,7 +15,7 @@ import "./globals.css";
 // Load extensions before metadata/viewport functions read the branding service.
 // Without this, an extension that calls registerBrandingService() at its module
 // load time would not have run yet when the first request hits this layout.
-ensureInitialized();
+ensureInitialized({ validateEnvironment: false });
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

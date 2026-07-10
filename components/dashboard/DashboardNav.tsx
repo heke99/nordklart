@@ -1,8 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -154,8 +153,6 @@ export default function DashboardNav({
   hasYearEndAccess = false,
 }: DashboardNavProps) {
   const pathname = usePathname()
-  const router = useRouter()
-  const supabase = createClient()
   const {
     company,
     canManageAgency,
@@ -186,8 +183,13 @@ export default function DashboardNav({
 
   const logout = async () => {
     clearRecaptIdentity()
-    await supabase.auth.signOut()
-    router.push(isSandbox ? '/sandbox' : '/login')
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } finally {
+      // Use a hard navigation so App Router/RSC caches cannot reuse the old
+      // authenticated tree after the session cookies have been cleared.
+      window.location.assign(isSandbox ? '/sandbox' : '/login')
+    }
   }
 
   const Sidebar = (

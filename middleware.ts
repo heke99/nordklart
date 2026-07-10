@@ -15,6 +15,6 @@ export const config = {
      * - api (API routes - they handle their own auth)
      * - Static assets (images, scripts, manifest, icons, etc.)
      */
-    '/((?!_next/static|_next/image|favicon.ico|api|\\.well-known|sw\\.js|sw-register\\.js|manifest\\.json|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|api|\\.well-known|sw\\.js|sw-register\\.js|manifest\\.(?:json|webmanifest)|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$).*)',
   ],
 }

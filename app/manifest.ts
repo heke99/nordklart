@@ -3,7 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { getBranding } from '@/lib/branding/service'
 
 // Guarantee branding extensions have registered before the manifest is built.
-ensureInitialized()
+ensureInitialized({ validateEnvironment: false })
 
 export default function manifest(): MetadataRoute.Manifest {
   const b = getBranding()

@@ -11,13 +11,13 @@ import { createLogger } from '@/lib/logger'
 const log = createLogger('init')
 
 let initialized = false
+let environmentValidated = false
 
 const REQUIRED_CORE_VARS = [
   'NEXT_PUBLIC_SUPABASE_URL',
   'NEXT_PUBLIC_SUPABASE_ANON_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
   'NEXT_PUBLIC_APP_URL',
-  'CRON_SECRET',
 ] as const
 
 // Each entry is one logical requirement; if multiple names are listed, the
@@ -67,10 +67,18 @@ function validateEnvironment(): void {
  * Called from API routes that emit events.
  * Idempotent — safe to call multiple times.
  */
-export function ensureInitialized(): void {
+export function ensureInitialized(
+  options: { validateEnvironment?: boolean } = {},
+): void {
+  const shouldValidateEnvironment = options.validateEnvironment ?? true
+
+  if (shouldValidateEnvironment && !environmentValidated) {
+    validateEnvironment()
+    environmentValidated = true
+  }
+
   if (initialized) return
 
-  validateEnvironment()
   setContextFactory(createExtensionContext)
   registerSupplierInvoiceHandler()
   registerEventLogHandler()
