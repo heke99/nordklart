@@ -120,7 +120,7 @@ export function MarketingInfoPage({
                 </div>
               </dl>
               <p className="mt-4 text-xs leading-5 text-muted-foreground">
-                {NORDKLART_LEGAL_NAME} (org.nr {NORDKLART_ORG_NUMBER}) är avtalspart och personuppgiftsansvarig för tjänsten Nordklart, om inte annat anges i respektive avtal.
+                Nordklart är produkt- och systemnamnet och inte ett separat aktiebolag. {NORDKLART_LEGAL_NAME} (org.nr {NORDKLART_ORG_NUMBER}) tillhandahåller tjänsten och är avtalspart samt personuppgiftsansvarig där det följer av respektive avtal eller behandling.
               </p>
             </div>
           </section>

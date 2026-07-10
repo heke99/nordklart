@@ -12,6 +12,7 @@ const PUBLIC_MARKETING_PATHS = new Set([
   '/byra',
   '/priser',
   '/kontakt',
+  '/om-oss',
   '/boka-demo',
   '/allmanna-villkor',
   '/prisvillkor',

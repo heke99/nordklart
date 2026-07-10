@@ -17,6 +17,7 @@ import { CompanyRegistryResultCard } from '@/components/company-registry/Company
 import { useCompanyRegistryLookup } from '@/components/company-registry/useCompanyRegistryLookup'
 import { createClient } from '@/lib/supabase/client'
 import { clearRecaptIdentity } from '@/lib/recapt'
+import { NORDKLART_LEGAL_NAME } from '@/lib/branding/legal-identity'
 
 type WorkspaceType = 'company' | 'agency'
 type LegalForm = 'enskild_firma' | 'aktiebolag'
@@ -281,7 +282,7 @@ function RegisterContent() {
         </div>
         <label className="flex gap-3 rounded-lg border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">
           <input type="checkbox" checked={acceptedLegal} onChange={(event) => setAcceptedLegal(event.target.checked)} required className="mt-0.5 h-4 w-4 shrink-0 accent-primary" />
-          <span>Jag godkänner Nordklarts <LegalInlineLinks />.</span>
+          <span>Jag godkänner {NORDKLART_LEGAL_NAME}:s <LegalInlineLinks /> för tjänsten Nordklart.</span>
         </label>
         <Button type="submit" className="w-full" disabled={isLoading}>
           {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Skickar bekräftelse</> : 'Fortsätt'}

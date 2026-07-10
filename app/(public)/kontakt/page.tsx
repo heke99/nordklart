@@ -12,9 +12,10 @@ export const metadata: Metadata = {
 export default function KontaktPage() {
   return (
     <MarketingInfoPage
+      showLegalEntity
       eyebrow="Kontakt"
       title="Berätta vad du behöver hjälp med."
-      description="Oavsett om du vill börja bokföra, göra ett fristående bokslut, ansöka om Bankgiro eller prata byråupplägg kan du kontakta oss här."
+      description="Oavsett om du vill börja bokföra, göra ett fristående bokslut, ansöka om Bankgiro eller prata byråupplägg kan du kontakta Nordklart här. Tjänsten tillhandahålls av Gridex El AB."
       highlights={['Bokföring', 'Enbart bokslut', 'Bankgiro via partner', 'Byrå och allt i ett']}
     >
       <section className="px-5 pb-16 md:px-8">

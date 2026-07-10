@@ -42,8 +42,8 @@ describe('branding service', () => {
     const { getBranding } = await import('../service')
     const b = getBranding()
     expect(b.appName).toBe('Nordklart')
-    expect(b.appDescription).toBe('Ekonomihantering')
-    expect(b.legalEntity).toBe('Nordklart AB')
+    expect(b.appDescription).toBe('Nordklart är en tjänst som tillhandahålls av Gridex El AB.')
+    expect(b.legalEntity).toBe('Gridex El AB')
     expect(b.supportEmail).toBe('support@nordklart.se')
     expect(b.privacyEmail).toBe('privacy@nordklart.se')
     expect(b.securityEmail).toBe('security@nordklart.se')
@@ -113,7 +113,7 @@ describe('branding service', () => {
     expect(b.supportEmail).toBe('hello@holdio.se')
     expect(b.logoPath).toBe('/holdio-logo.svg')
     expect(b.authEmailFrom).toBe('noreply@holdio.se')
-    expect(b.appDescription).toBe('Ekonomihantering')
+    expect(b.appDescription).toBe('Nordklart är en tjänst som tillhandahålls av Gridex El AB.')
   })
 
   it('extension override beats env vars', async () => {
@@ -128,7 +128,7 @@ describe('branding service', () => {
     registerBrandingService({ appName: 'Holdio' })
     const b = getBranding()
     expect(b.appName).toBe('Holdio')
-    expect(b.legalEntity).toBe('Nordklart AB')
+    expect(b.legalEntity).toBe('Gridex El AB')
     expect(b.supportEmail).toBe('support@nordklart.se')
   })
 

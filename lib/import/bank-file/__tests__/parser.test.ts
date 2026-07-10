@@ -205,7 +205,7 @@ const LUNAR_CSV = [
 const NORTHMILL_CSV = [
   'Kontonummer,9750-8770139',
   'Saldo,"251495,41",SEK',
-  'Kontohavare,Nordklart AB',
+  'Kontohavare,Gridex El AB',
   'Org. Nr,559538-6219',
   'Period,2025-10-01,2026-04-07',
   '',

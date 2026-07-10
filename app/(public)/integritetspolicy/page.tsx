@@ -12,7 +12,7 @@ export default function IntegritetspolicyPage() {
       showLegalEntity
       eyebrow="Integritet"
       title="Integritetspolicy"
-      description="Nordklart behandlar person- och bolagsuppgifter för att tillhandahålla bokföring, bokslut, Bankgiroflöden, support och säker drift."
+      description="Gridex El AB tillhandahåller Nordklart och behandlar person- och bolagsuppgifter för att tillhandahålla bokföring, bokslut, Bankgiroflöden, support och säker drift."
       sections={[
         {
           title: 'Uppgifter vi kan behandla',

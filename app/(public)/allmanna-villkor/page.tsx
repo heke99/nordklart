@@ -12,11 +12,11 @@ export default function AllmannaVillkorPage() {
       showLegalEntity
       eyebrow="Juridik"
       title="Allmänna villkor"
-      description="Villkoren beskriver huvudprinciperna för användning av Nordklart. Slutliga kundvillkor ska alltid vara de versioner som presenteras och accepteras vid teckning eller köp."
+      description="Villkoren beskriver huvudprinciperna för användning av Nordklart, en tjänst som tillhandahålls av Gridex El AB. Nordklart är produktnamnet och inte ett separat aktiebolag. Slutliga kundvillkor är de versioner som presenteras och accepteras vid teckning eller köp."
       sections={[
         {
           title: 'Tjänsten',
-          body: 'Nordklart tillhandahåller digitala funktioner för bokföring, bokslut, rapportering, Bankgiroansökan via partner och relaterade administrativa flöden.',
+          body: 'Gridex El AB tillhandahåller Nordklart, ett digitalt system med funktioner för bokföring, bokslut, rapportering, Bankgiroansökan via partner och relaterade administrativa flöden.',
           points: ['Funktioner kan variera beroende på vald tjänst', 'Bankgiro och betalflöden kan hanteras via partner', 'Vissa flöden kräver kompletterande uppgifter eller granskning'],
         },
         {

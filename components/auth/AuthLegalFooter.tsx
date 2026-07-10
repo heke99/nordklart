@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { NORDKLART_LEGAL_NAME, NORDKLART_ORG_NUMBER } from "@/lib/branding/legal-identity";
 
 type AuthLegalFooterProps = {
   className?: string;
@@ -23,9 +24,11 @@ export function AuthLegalFooter({
     <div className={`text-center text-xs text-muted-foreground ${className}`}>
       {!compact && (
         <p className="mb-3 leading-relaxed">
-          Genom att använda Nordklart godkänner du våra villkor och hur vi
-          behandlar personuppgifter.
+          Nordklart är en tjänst från {NORDKLART_LEGAL_NAME}, org.nr {NORDKLART_ORG_NUMBER}. Genom att använda tjänsten godkänner du våra villkor och hur vi behandlar personuppgifter.
         </p>
+      )}
+      {compact && (
+        <p className="mb-2 leading-relaxed">Nordklart tillhandahålls av {NORDKLART_LEGAL_NAME}, org.nr {NORDKLART_ORG_NUMBER}.</p>
       )}
       <nav
         className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2"

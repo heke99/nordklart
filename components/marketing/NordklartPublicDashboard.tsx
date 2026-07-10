@@ -15,6 +15,7 @@ import {
   marketingSecondaryCta,
   marketingSectionLabel,
 } from '@/components/marketing/MarketingChrome'
+import { NORDKLART_LEGAL_NAME, NORDKLART_SHORT_DISCLOSURE } from '@/lib/branding/legal-identity'
 
 const mainPaths = [
   {
@@ -133,6 +134,14 @@ export function NordklartPublicDashboard() {
                   </div>
                 ))}
               </div>
+
+              <p className="max-w-2xl rounded-2xl border border-border bg-card/75 px-4 py-3 text-sm leading-6 text-muted-foreground shadow-sm">
+                <span className="font-semibold text-foreground">{NORDKLART_SHORT_DISCLOSURE}</span>{' '}
+                Nordklart är system- och produktnamnet, inte ett separat bolag.{' '}
+                <Link href="/om-oss" className="font-medium text-primary underline underline-offset-2">
+                  Läs om {NORDKLART_LEGAL_NAME} och Nordklart
+                </Link>.
+              </p>
             </div>
 
             <DashboardPreview />

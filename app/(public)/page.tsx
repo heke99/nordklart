@@ -4,7 +4,7 @@ import { NordklartPublicDashboard } from '@/components/marketing/NordklartPublic
 export const metadata: Metadata = {
   title: 'Nordklart – automatiserad bokföring, fakturor och bokslut',
   description:
-    'Automatisera bokföring, verifikationer och fakturor. Gör bokslut separat eller koppla Bankgiro via partner.',
+    'Nordklart är ett system för automatiserad bokföring, fakturor och bokslut som tillhandahålls av Gridex El AB, org.nr 559416-7149.',
 }
 
 export default function HomePage() {

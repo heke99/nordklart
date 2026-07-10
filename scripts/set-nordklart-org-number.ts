@@ -1,5 +1,5 @@
 /**
- * One-off: set the org_number on Nordklart AB.
+ * One-off: set the org_number on the company workspace used for Nordklart.
  *
  * Writes ONE row in `companies`. Verifies the company id, name, and current
  * value before writing. Refuses to overwrite a non-null org_number unless

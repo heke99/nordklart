@@ -14,6 +14,8 @@
  * See WHITELABEL.md for the full env var reference and fork checklist.
  */
 
+import { NORDKLART_LEGAL_NAME, NORDKLART_SHORT_DISCLOSURE } from './legal-identity'
+
 export interface BrandingConfig {
   // Identity
   appName: string
@@ -59,10 +61,10 @@ export interface BrandingConfig {
 
 const DEFAULT_BRANDING: BrandingConfig = {
   appName: 'Nordklart',
-  appDescription: 'Ekonomihantering',
-  legalEntity: 'Nordklart AB',
-  // Emails and URLs intentionally keep the nordklart.se hostname — the rebrand is
-  // visual only; we don't churn the support inbox or app domain alongside it.
+  appDescription: NORDKLART_SHORT_DISCLOSURE,
+  legalEntity: NORDKLART_LEGAL_NAME,
+  // Nordklart remains the product/domain identity while legal responsibility
+  // is carried by Gridex El AB.
   supportEmail: 'support@nordklart.se',
   privacyEmail: 'privacy@nordklart.se',
   securityEmail: 'security@nordklart.se',

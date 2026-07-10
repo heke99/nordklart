@@ -2,6 +2,12 @@ import Link from 'next/link'
 import type { ReactNode } from 'react'
 import { ArrowRight, Scale } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import {
+  NORDKLART_LEGAL_DISCLOSURE,
+  NORDKLART_LEGAL_NAME,
+  NORDKLART_ORG_NUMBER,
+  NORDKLART_SHORT_DISCLOSURE,
+} from '@/lib/branding/legal-identity'
 
 const navItems = [
   { label: 'Automatiserad bokföring', href: '/bokforing' },
@@ -9,6 +15,7 @@ const navItems = [
   { label: 'Bankgiro', href: '/bankgiro' },
   { label: 'Byrå', href: '/byra' },
   { label: 'Priser', href: '/priser' },
+  { label: 'Om oss', href: '/om-oss' },
   { label: 'Kontakt', href: '/kontakt' },
 ]
 
@@ -21,6 +28,7 @@ const footerGroups = [
       { label: 'Bankgiro', href: '/bankgiro' },
       { label: 'Redovisningsbyrå', href: '/byra' },
       { label: 'Priser', href: '/priser' },
+      { label: 'Om Nordklart', href: '/om-oss' },
     ],
   },
   {
@@ -56,12 +64,29 @@ export const marketingSecondaryCta =
 
 export const marketingSectionLabel = 'text-sm font-semibold uppercase tracking-[0.22em] text-primary'
 
-export const NORDKLART_ORG_NUMBER = '559416-7149'
-export const NORDKLART_LEGAL_NAME = 'Nordklart AB'
+export { NORDKLART_LEGAL_NAME, NORDKLART_ORG_NUMBER } from '@/lib/branding/legal-identity'
 
 export function MarketingChrome({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen overflow-hidden bg-background text-foreground">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@type': 'SoftwareApplication',
+            name: 'Nordklart',
+            applicationCategory: 'BusinessApplication',
+            operatingSystem: 'Web',
+            provider: {
+              '@type': 'Organization',
+              name: NORDKLART_LEGAL_NAME,
+              identifier: NORDKLART_ORG_NUMBER,
+              url: 'https://nordklart.se',
+            },
+          }),
+        }}
+      />
       <MarketingHeader />
       {children}
       <MarketingFooter />
@@ -77,7 +102,12 @@ export function MarketingHeader() {
           <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
             <Scale className="h-5 w-5" aria-hidden="true" />
           </span>
-          <BrandWordmark size="inline" lowercase={false} className="text-xl" />
+          <span className="flex flex-col">
+            <BrandWordmark size="inline" lowercase={false} className="text-xl" />
+            <span className="hidden text-[10px] font-medium leading-tight text-muted-foreground sm:block">
+              En tjänst från {NORDKLART_LEGAL_NAME}
+            </span>
+          </span>
         </Link>
 
         <nav className="hidden items-center gap-7 text-sm font-medium text-muted-foreground lg:flex" aria-label="Huvudmeny">
@@ -118,7 +148,11 @@ export function MarketingFooter() {
           <p className="max-w-sm leading-7 text-muted-foreground">
             Automatiserad svensk bokföring med fakturor, verifikationer, fristående bokslut och hjälp med Bankgiro via partner.
           </p>
-          <p className="text-sm text-muted-foreground">© Nordklart. Org.nr {NORDKLART_ORG_NUMBER}. Alla rättigheter förbehållna.</p>
+          <div className="max-w-md rounded-2xl border border-border bg-background/70 p-4 text-sm leading-6 text-muted-foreground">
+            <p className="font-semibold text-foreground">{NORDKLART_SHORT_DISCLOSURE}</p>
+            <p className="mt-1">{NORDKLART_LEGAL_DISCLOSURE}</p>
+          </div>
+          <p className="text-sm text-muted-foreground">© {new Date().getFullYear()} {NORDKLART_LEGAL_NAME}. Org.nr {NORDKLART_ORG_NUMBER}. Alla rättigheter förbehållna.</p>
         </div>
 
         {footerGroups.map((group) => (

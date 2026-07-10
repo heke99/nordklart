@@ -12,7 +12,7 @@ export default function PersonuppgifterPage() {
       showLegalEntity
       eyebrow="Personuppgifter"
       title="Personuppgifter och dataskydd"
-      description="Den här sidan sammanfattar hur personuppgifter hanteras i Nordklart och hur du kan begära åtkomst, rättelse, export eller radering."
+      description="Den här sidan sammanfattar hur Gridex El AB hanterar personuppgifter inom tjänsten Nordklart och hur du kan begära åtkomst, rättelse, export eller radering."
       sections={[
         {
           title: 'Ansvar och roller',

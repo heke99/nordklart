@@ -6,6 +6,7 @@ describe('route access classification', () => {
     for (const path of [
       '/',
       '/priser',
+      '/om-oss',
       '/prisvillkor',
       '/systemdokumentation',
       '/integritetspolicy',

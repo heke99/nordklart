@@ -28,6 +28,7 @@ import {
   X,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
+import { NORDKLART_LEGAL_NAME } from '@/lib/branding/legal-identity'
 import { clearRecaptIdentity } from '@/lib/recapt'
 import WorkspaceSwitcher from '@/components/dashboard/WorkspaceSwitcher'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -201,7 +202,7 @@ export default function DashboardNav({
           </div>
           <div className="leading-tight">
             <div className="font-display text-xl font-semibold tracking-tight nordklart-gradient-text">{branding.appName}</div>
-            <div className="text-xs text-muted-foreground">Bokföring utan friktion</div>
+            <div className="text-xs text-muted-foreground">En tjänst från {NORDKLART_LEGAL_NAME}</div>
           </div>
         </Link>
         <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setOpen(false)} aria-label="Stäng meny">

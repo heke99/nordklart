@@ -31,7 +31,7 @@ Format: **`SE` + 10 digits (orgnr) + `01`** (the trailing `01` is the legal sequ
 
 ```xml
 <cac:PartyLegalEntity>
-  <cbc:RegistrationName>Nordklart AB</cbc:RegistrationName>
+  <cbc:RegistrationName>Gridex El AB</cbc:RegistrationName>
   <cbc:CompanyID schemeID="0007">5567321000</cbc:CompanyID>
   <cbc:CompanyLegalForm>Godkänd för F-skatt</cbc:CompanyLegalForm>
 </cac:PartyLegalEntity>
@@ -82,7 +82,7 @@ Bankgiro payment with OCR reference:
   <cbc:PaymentID>1234567890123</cbc:PaymentID>     <!-- BT-83 OCR reference -->
   <cac:PayeeFinancialAccount>
     <cbc:ID>5555-1234</cbc:ID>
-    <cbc:Name>Nordklart AB</cbc:Name>
+    <cbc:Name>Gridex El AB</cbc:Name>
     <cac:FinancialInstitutionBranch>
       <cbc:ID>SE:BANKGIRO</cbc:ID>
     </cac:FinancialInstitutionBranch>
