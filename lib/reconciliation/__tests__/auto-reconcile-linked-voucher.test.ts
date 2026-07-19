@@ -45,17 +45,20 @@ const SEK_PRIMARY = { id: CA_1930, ledger_account: '1930', currency: 'SEK', is_p
 
 /**
  * Enqueue the manualLink sub-call results (tx fetch → entry fetch → 1930 line
- * → update). cash_account_id is null on the fetched tx so manualLink skips the
- * cross-account check (one fewer query).
+ * → entry_date lookup → optimistic-lock update). cash_account_id is null on the
+ * fetched tx so manualLink skips the cross-account check (one fewer query).
+ * The A05 verification requires the mocked tx amount/date to agree with the
+ * voucher's bank line and entry_date, and the update to return the claimed row.
  */
 function enqueueManualLinkSuccess(
   enqueue: ReturnType<typeof createQueueMockSupabase>['enqueue'],
   txAmount: number,
 ) {
-  enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: null, amount: txAmount, currency: 'SEK' }) })
+  enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: null, amount: txAmount, currency: 'SEK', date: POSTED_VOUCHER.entry_date }) })
   enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
   enqueue({ data: [{ debit_amount: Math.max(txAmount, 0), credit_amount: Math.max(-txAmount, 0), account_number: '1930' }] })
-  enqueue({ data: null, error: null }) // update
+  enqueue({ data: { entry_date: POSTED_VOUCHER.entry_date } }) // A05 date-tolerance lookup
+  enqueue({ data: [{ id: 'tx-1' }], error: null }) // A04 optimistic-lock update — row claimed
 }
 
 describe('autoReconcileTransactionForLinkedVoucher', () => {

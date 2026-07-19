@@ -389,6 +389,9 @@ describe('PATCH /accounts (enable-banking)', () => {
         imported: 47,
         duplicates: 3,
         errors: 0,
+        automationErrors: 0,
+        mappingRequired: 0,
+        archiveErrors: 0,
         returnedMinBookingDate: '2026-02-15',
         returnedMaxBookingDate: '2026-05-13',
       })
@@ -458,6 +461,9 @@ describe('PATCH /accounts (enable-banking)', () => {
         imported: 99,
         duplicates: 0,
         errors: 0,
+        automationErrors: 0,
+        mappingRequired: 0,
+        archiveErrors: 0,
         returnedMinBookingDate: '2026-01-01',
         returnedMaxBookingDate: '2026-05-13',
       })
@@ -531,6 +537,9 @@ describe('PATCH /accounts (enable-banking)', () => {
         imported: 0,
         duplicates: 0,
         errors: 0,
+        automationErrors: 0,
+        mappingRequired: 0,
+        archiveErrors: 0,
       })
 
       const stub: SupabaseStub = {
@@ -566,6 +575,9 @@ describe('PATCH /accounts (enable-banking)', () => {
         imported: 12,
         duplicates: 0,
         errors: 0,
+        automationErrors: 0,
+        mappingRequired: 0,
+        archiveErrors: 0,
         returnedMinBookingDate: '2026-03-01',
         returnedMaxBookingDate: '2026-05-13',
       })
@@ -607,7 +619,10 @@ describe('PATCH /accounts (enable-banking)', () => {
 
   describe('per-account ledger mapping (account_mappings)', () => {
     it('persists ledger_account from account_mappings into accounts_data JSONB', async () => {
-      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+      mockedSync.mockResolvedValue({
+        imported: 0, duplicates: 0, errors: 0,
+        automationErrors: 0, mappingRequired: 0, archiveErrors: 0,
+      })
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
@@ -760,7 +775,10 @@ describe('PATCH /accounts (enable-banking)', () => {
     })
 
     it('clears ledger_account when account_mappings entry sets it to null', async () => {
-      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+      mockedSync.mockResolvedValue({
+        imported: 0, duplicates: 0, errors: 0,
+        automationErrors: 0, mappingRequired: 0, archiveErrors: 0,
+      })
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
