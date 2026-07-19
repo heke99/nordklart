@@ -455,6 +455,7 @@ DECLARE
   v_next_ob jsonb := p_options->'next_period_ob';
   v_period record;
   v_next_period record;
+  v_next_period_id uuid := NULL;
   v_next_ob_entry_id uuid;
   v_diff record;
   v_ext_ref text;
@@ -615,6 +616,7 @@ BEGIN
     END IF;
 
     IF v_next_period.id IS NOT NULL THEN
+      v_next_period_id := v_next_period.id;
       IF v_next_period.is_closed OR v_next_period.locked_at IS NOT NULL THEN
         RAISE EXCEPTION 'SIE_NEXT_PERIOD_LOCKED: next period is locked/closed — cannot resync opening balance';
       END IF;
@@ -712,7 +714,7 @@ BEGIN
     'deleted_from_replaced', v_deleted,
     'opening_balance_entry_id', v_ob_entry_id,
     'next_period_opening_balance_entry_id', v_next_ob_entry_id,
-    'next_period_id', v_next_period.id
+    'next_period_id', v_next_period_id
   );
 END;
 $$;
