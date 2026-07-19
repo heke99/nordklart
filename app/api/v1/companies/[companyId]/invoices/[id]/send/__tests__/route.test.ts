@@ -187,6 +187,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
           { data: { invoice_number: '2026-0042' }, error: null }, // re-read after allocation
         ],
         company_settings: { data: COMPANY_SETTINGS, error: null },
+        // Canonical legal form (B13) — journal entry step reads companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
 
@@ -365,6 +367,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
           { data: [], error: null }, // status flip: 0 rows matched
         ],
         company_settings: { data: COMPANY_SETTINGS, error: null },
+        // Canonical legal form (B13) — journal entry step reads companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
 
@@ -390,6 +394,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
           { data: { invoice_number: '2026-0043' }, error: null }, // re-read after allocation
         ],
         company_settings: { data: COMPANY_SETTINGS, error: null },
+        // Canonical legal form (B13) — journal entry step reads companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
 

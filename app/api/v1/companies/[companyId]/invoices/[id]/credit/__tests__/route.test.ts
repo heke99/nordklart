@@ -138,7 +138,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
           { data: CREATED_CREDIT_NOTE, error: null },   // insert returning
         ],
         invoice_items: { data: null, error: null },
-        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        // Canonical legal form (B13) — read from companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
 
@@ -268,7 +270,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: ORIGINAL_SENT_INVOICE, error: null },
-        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        // Canonical legal form (B13) — read from companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
 

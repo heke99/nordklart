@@ -62,7 +62,8 @@ describe('markInvoicePaid', () => {
     } as never)
 
     enqueue({ data: invoice })                     // invoice fetch
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } }) // settings
+    enqueue({ data: { accounting_method: 'accrual' } }) // company_settings (accounting_method only)
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // companies (canonical entity type, B13)
     enqueue({ data: { ...invoice, status: 'paid', remaining_amount: 0, paid_amount: 12500 } }) // update
     enqueue({ data: { id: 'pay-1' } })             // invoice_payments insert
 
@@ -105,7 +106,8 @@ describe('markInvoicePaid', () => {
     } as never)
 
     enqueue({ data: invoice })
-    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' } })
+    enqueue({ data: { accounting_method: 'cash' } })
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // companies (canonical entity type, B13)
     enqueue({ data: { ...invoice, status: 'paid', remaining_amount: 0, paid_amount: 5000 } })
     enqueue({ data: { id: 'pay-2' } })
 
@@ -130,7 +132,8 @@ describe('markInvoicePaid', () => {
     } as never)
 
     enqueue({ data: invoice })
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // companies (canonical entity type, B13)
     enqueue({
       data: { ...invoice, status: 'partially_paid', remaining_amount: 6000, paid_amount: 4000 },
     })
@@ -164,7 +167,8 @@ describe('markInvoicePaid', () => {
     } as never)
 
     enqueue({ data: invoice })
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // companies (canonical entity type, B13)
     enqueue({ data: { ...invoice, status: 'paid', remaining_amount: 0, paid_amount: 10000 } })
     enqueue({ data: { id: 'pay-4' } })
 
@@ -234,7 +238,8 @@ describe('markInvoicePaid', () => {
     } as never)
 
     enqueue({ data: invoice })
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // companies (canonical entity type, B13)
     // Race-guarded update matches no row (status flipped concurrently).
     enqueue({ data: null })
     // Orphan JE lookup for the gap explanation.

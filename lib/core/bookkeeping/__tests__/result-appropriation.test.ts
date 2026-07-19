@@ -137,14 +137,14 @@ describe('generateResultAppropriation', () => {
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('defaults missing company_settings to aktiebolag and posts', async () => {
-    results = [NO_EXISTING /* settings missing */, NO_EXISTING, PERIOD]
+  it('throws when companies.entity_type is missing — no silent AB fallback (B13)', async () => {
+    results = [NO_EXISTING /* companies row missing entity_type */]
     mockOpeningBalance([{ account_number: '2099', debit: 0, credit: 5000 }])
 
-    const entry = await generateResultAppropriation(makeClient() as never, 'c1', 'u1', 'p1')
-
-    expect(entry).toEqual(FAKE_ENTRY)
-    expect(createJournalEntry).toHaveBeenCalledTimes(1)
+    await expect(
+      generateResultAppropriation(makeClient() as never, 'c1', 'u1', 'p1'),
+    ).rejects.toThrow(/Företagsform saknas/)
+    expect(createJournalEntry).not.toHaveBeenCalled()
   })
 
   it('reclassifies the IB 2099 amount only — current-year 2099 activity is excluded', async () => {

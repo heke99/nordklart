@@ -139,7 +139,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: DRAFT_INVOICE, error: null },
           { data: SENT_INVOICE, error: null },
         ],
-        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        // Canonical legal form (B13) — read from companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
 
@@ -256,7 +258,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: DRAFT_INVOICE, error: null },
           { data: SENT_INVOICE, error: null },
         ],
-        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        // Canonical legal form (B13) — read from companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
     // Force the journal-entry generator to throw.
@@ -324,7 +328,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
-        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        // Canonical legal form (B13) — read from companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
 
@@ -354,7 +360,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: DRAFT_INVOICE, error: null },
           { data: SENT_INVOICE, error: null },
         ],
-        company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+        company_settings: { data: { accounting_method: 'cash' }, error: null },
+        // Canonical legal form (B13) — read from companies.entity_type.
+        companies: { data: { entity_type: 'enskild_firma' }, error: null },
       }),
     )
 
