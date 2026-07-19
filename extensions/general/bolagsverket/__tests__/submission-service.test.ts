@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -41,17 +42,22 @@ function makeLog() {
 
 /**
  * Recording mock: chainable builder consuming queued results per terminal
- * (single/maybeSingle/await), capturing update payloads per table so tests
- * can assert what was written.
+ * (single/maybeSingle/await), capturing insert/update payloads per table so
+ * tests can assert what was written.
  */
 function makeRecordingSupabase(results: Array<{ data?: unknown; error?: unknown }>) {
   let idx = 0
   const updates: Array<{ table: string; payload: Record<string, unknown> }> = []
+  const inserts: Array<{ table: string; payload: Record<string, unknown> }> = []
   const next = () => results[idx++] ?? { data: null, error: null }
   const makeBuilder = (table: string) => {
     const b: Record<string, unknown> = {}
-    for (const m of ['select', 'eq', 'in', 'order', 'limit', 'insert']) {
+    for (const m of ['select', 'eq', 'in', 'order', 'limit']) {
       b[m] = () => b
+    }
+    b.insert = (payload: Record<string, unknown>) => {
+      inserts.push({ table, payload })
+      return b
     }
     b.update = (payload: Record<string, unknown>) => {
       updates.push({ table, payload })
@@ -62,7 +68,7 @@ function makeRecordingSupabase(results: Array<{ data?: unknown; error?: unknown 
     b.then = (resolve: (v: unknown) => void) => resolve(next())
     return b
   }
-  return { supabase: { from: (table: string) => makeBuilder(table) } as never, updates }
+  return { supabase: { from: (table: string) => makeBuilder(table) } as never, updates, inserts }
 }
 
 function makeClientMock(overrides: Record<string, unknown> = {}) {
@@ -367,7 +373,7 @@ describe('submitArsredovisning', () => {
     expect(errorUpdate!.payload.error_message).toContain('inlamning exploded')
   })
 
-  it('logs and persists a document-archive failure without blocking the filing', async () => {
+  it('BLOCKS the filing when the document archive fails (R14): row → error, throws, no lamnaIn', async () => {
     vi.mocked(uploadDocument).mockRejectedValueOnce(new Error('magic bytes rejected'))
     const { supabase, updates } = makeRecordingSupabase([
       { data: { org_number: '5560001111' } }, // getOrgnr
@@ -375,7 +381,49 @@ describe('submitArsredovisning', () => {
       { data: { id: 'acc-1' } },               // avtal acceptance exists
       { data: { id: 'sub-1' } },               // insert submission row
       {},                                      // update → kontrollerad
-      {},                                      // error_message update (doc failure)
+      {},                                      // update → error (archive block)
+      {},                                      // markSubmissionError (outer catch)
+    ])
+    const log = makeLog()
+    const client = makeClientMock()
+    const uploaded: string[] = []
+    eventBus.on('arsredovisning.uploaded', () => {
+      uploaded.push('uploaded')
+    })
+
+    await expect(
+      submitArsredovisning({ supabase, client, appUrl: 'https://app.test', log }, submitParams),
+    ).rejects.toMatchObject({
+      name: 'BolagsverketSubmissionError',
+      code: 'BOLAGSVERKET_ARCHIVE_FAILED',
+    })
+
+    // The filing never reached Bolagsverket (Guard Rail #7: the exact filed
+    // bytes must exist in our archive BEFORE upload).
+    expect((client as { lamnaIn: ReturnType<typeof vi.fn> }).lamnaIn).not.toHaveBeenCalled()
+    expect(uploaded).toEqual([])
+
+    // The failure is logged AND persisted on the row as status 'error'.
+    expect(log.error).toHaveBeenCalled()
+    expect(String(log.error.mock.calls[0][0])).toMatch(/archive/)
+    const errorUpdate = updates.find(
+      (u) =>
+        u.payload.status === 'error' &&
+        typeof u.payload.error_message === 'string' &&
+        (u.payload.error_message as string).includes('magic bytes rejected'),
+    )
+    expect(errorUpdate).toBeDefined()
+    expect(errorUpdate!.table).toBe('arsredovisning_submissions')
+    expect(updates.some((u) => u.payload.status === 'uploaded')).toBe(false)
+  })
+
+  it('successful path inserts payload_hash + idempotency_key and records archived_document_id (R14)', async () => {
+    const { supabase, updates, inserts } = makeRecordingSupabase([
+      { data: { org_number: '5560001111' } }, // getOrgnr
+      { data: [] },                            // no active submission
+      { data: { id: 'acc-1' } },               // avtal acceptance exists
+      { data: { id: 'sub-1' } },               // insert submission row
+      {},                                      // update → kontrollerad
       {},                                      // update → uploaded
       // ensureSubscription throws on the empty appUrl before any query.
     ])
@@ -387,19 +435,20 @@ describe('submitArsredovisning', () => {
     )
     expect(result.outcome).toBe('uploaded')
 
-    // The failure is logged AND visible on the row.
-    expect(log.error).toHaveBeenCalledTimes(1)
-    expect(log.error.mock.calls[0][0]).toMatch(/archive/)
-    const docFailureUpdate = updates.find(
-      (u) => typeof u.payload.error_message === 'string' && !u.payload.status,
-    )
-    expect(docFailureUpdate).toBeDefined()
-    expect(docFailureUpdate!.payload.error_message).toContain('magic bytes rejected')
+    // The draft row carries the exact-payload hash and a deterministic
+    // idempotency key so retrying the identical document cannot double-file.
+    const insert = inserts.find((i) => i.table === 'arsredovisning_submissions')
+    expect(insert).toBeDefined()
+    const xhtml = '<?xml version="1.0"?><html></html>'
+    const expectedHash = createHash('sha256').update(xhtml, 'utf8').digest('hex')
+    expect(insert!.payload.payload_hash).toBe(expectedHash)
+    expect(insert!.payload.idempotency_key).toBe(`period-1:${expectedHash.slice(0, 32)}`)
 
-    // The filing itself still went through with dokument_id null.
+    // The uploaded row references the archived räkenskapsinformation copy.
     const uploadedUpdate = updates.find((u) => u.payload.status === 'uploaded')
     expect(uploadedUpdate).toBeDefined()
-    expect(uploadedUpdate!.payload.dokument_id).toBeNull()
+    expect(uploadedUpdate!.payload.dokument_id).toBe('doc-1')
+    expect(uploadedUpdate!.payload.archived_document_id).toBe('doc-1')
 
     // Subscription failure (invalid appUrl) is logged, not swallowed.
     expect(log.warn.mock.calls.some(([msg]) => /prenumeration/.test(String(msg)))).toBe(true)
