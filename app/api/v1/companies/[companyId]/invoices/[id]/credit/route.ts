@@ -33,6 +33,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
 import type { AccountingMethod, CreditNote, EntityType, Invoice } from '@/types'
+import { getCompanyEntityType } from '@/lib/company/entity-type'
 
 const CreditNoteRequest = z.object({
   reason: z.string().max(2000).optional(),
@@ -277,8 +278,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const accountingMethod =
       ((settings as { accounting_method?: string } | null)?.accounting_method ??
         'accrual') as AccountingMethod
-    const entityType = ((settings as { entity_type?: string } | null)?.entity_type ??
-      'enskild_firma') as EntityType
+    // Canonical legal form (B13) — companies.entity_type, no silent fallback.
+    const entityType = await getCompanyEntityType(ctx.supabase, ctx.companyId!)
     const wouldCreateJournalEntry = accountingMethod === 'accrual'
 
     if (ctx.dryRun) {

@@ -35,15 +35,25 @@ export async function generateSIEExport(
     throw new Error('Fiscal period not found')
   }
 
-  // Fetch previous fiscal year for #RAR -1 (per SIE spec, both years should be present)
-  const { data: prevPeriod } = await supabase
+  // Fetch previous fiscal year for #RAR -1 (per SIE spec, both years should
+  // be present). Fail closed (I23): a QUERY error must block the export —
+  // writing a file with silently-missing RAR -1/UB -1/RES -1 would look
+  // valid but be wrong. "No prior period exists" is a legitimate result.
+  const { data: prevPeriod, error: prevPeriodError } = await supabase
     .from('fiscal_periods')
     .select('id, period_start, period_end')
     .eq('company_id', companyId)
     .lt('period_end', period.period_start)
     .order('period_end', { ascending: false })
     .limit(1)
-    .single()
+    .maybeSingle()
+
+  if (prevPeriodError) {
+    throw new Error(
+      `SIE-exporten avbröts: föregående räkenskapsår kunde inte läsas (${prevPeriodError.message}). ` +
+        `En fil utan korrekta #RAR -1/#UB -1/#RES -1 skulle se giltig ut men vara ofullständig.`
+    )
+  }
 
   // Fetch all accounts
   const accounts = await fetchAllRows(({ from, to }) =>
@@ -56,20 +66,25 @@ export async function generateSIEExport(
       .range(from, to)
   )
 
-  // Fetch all posted journal entries with lines
-  let entriesQuery = supabase
-    .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', options.fiscal_period_id)
-    .in('status', ['posted', 'reversed'])
-    .order('voucher_number')
+  // Fetch ALL posted journal entries with lines — paginated (I21): a period
+  // with more vouchers than PostgREST's default page must still export every
+  // #VER/#TRANS.
+  const entries = await fetchAllRows<JournalEntry>(({ from, to }) => {
+    let entriesQuery = supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', options.fiscal_period_id)
+      .in('status', ['posted', 'reversed'])
+      .order('voucher_series')
+      .order('voucher_number')
 
-  if (options.exclude_year_end_closing) {
-    entriesQuery = entriesQuery.neq('source_type', 'year_end')
-  }
+    if (options.exclude_year_end_closing) {
+      entriesQuery = entriesQuery.neq('source_type', 'year_end')
+    }
 
-  const { data: entries } = await entriesQuery
+    return entriesQuery.range(from, to)
+  })
 
   // Fetch cost centers and projects for dimension records
   const { data: costCenters } = await supabase
@@ -117,11 +132,32 @@ export async function generateSIEExport(
   const hasCostCenters = costCenters && costCenters.length > 0
   const hasProjects = projects && projects.length > 0
 
+  // Non-standard dimensions preserved from imports (line.dimensions jsonb):
+  // declare their #DIM and #OBJEKT records too so the round-trip
+  // import → export → re-import keeps all dimension metadata (I22).
+  const extraDimObjects = new Map<string, Set<string>>()
+  for (const entry of entries) {
+    for (const line of (entry.lines as JournalEntryLine[]) || []) {
+      const dims = (line as JournalEntryLine & { dimensions?: Record<string, string> | null })
+        .dimensions
+      if (!dims) continue
+      for (const [dim, code] of Object.entries(dims)) {
+        if (dim === '1' || dim === '6') continue
+        if (typeof code !== 'string' || code.length === 0) continue
+        if (!extraDimObjects.has(dim)) extraDimObjects.set(dim, new Set())
+        extraDimObjects.get(dim)!.add(code)
+      }
+    }
+  }
+
   if (hasCostCenters) {
     lines.push('#DIM 1 "Kostnadsställe"')
   }
   if (hasProjects) {
     lines.push('#DIM 6 "Projekt"')
+  }
+  for (const dim of [...extraDimObjects.keys()].sort((a, b) => Number(a) - Number(b))) {
+    lines.push(`#DIM ${dim} "Dimension ${dim}"`)
   }
 
   // === Dimension objects (#OBJEKT) ===
@@ -130,6 +166,13 @@ export async function generateSIEExport(
   }
   for (const proj of projects || []) {
     lines.push(`#OBJEKT 6 "${escapeQuotes(proj.code)}" "${escapeQuotes(proj.name)}"`)
+  }
+  for (const [dim, codes] of [...extraDimObjects.entries()].sort(
+    ([a], [b]) => Number(a) - Number(b),
+  )) {
+    for (const code of [...codes].sort()) {
+      lines.push(`#OBJEKT ${dim} "${escapeQuotes(code)}" "${escapeQuotes(code)}"`)
+    }
   }
 
   // === Chart of accounts ===
@@ -257,29 +300,70 @@ export async function generateSIEExport(
       }
     }
 
-    try {
-      const { data: prevEntries } = await supabase
+    // Fail closed (I23): a failure to read the prior year's movements blocks
+    // the export instead of emitting a seemingly-valid file with missing
+    // #RES -1 records. Paginated (I21).
+    const prevEntries = await fetchAllRows<JournalEntry>(({ from, to }) =>
+      supabase
         .from('journal_entries')
         .select('id, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
         .eq('company_id', companyId)
         .eq('fiscal_period_id', (prevPeriod as { id: string }).id)
         .in('status', ['posted', 'reversed'])
         .neq('source_type', 'year_end')
-      const prevMovements = calculateBalances((prevEntries ?? []) as JournalEntry[])
-      for (const [accountNumber, movement] of [...prevMovements.entries()].sort(([a], [b]) =>
-        a.localeCompare(b),
-      )) {
-        if (parseInt(accountNumber[0]) >= 3 && movement !== 0) {
-          lines.push(`#RES -1 ${accountNumber} ${formatAmount(movement)}`)
-        }
+        .order('id', { ascending: true })
+        .range(from, to)
+    ).catch((err: Error) => {
+      throw new Error(
+        `SIE-exporten avbröts: föregående års verifikationer kunde inte läsas (${err.message}). ` +
+          `#RES -1 skulle annars saknas eller vara felaktiga.`
+      )
+    })
+
+    const prevMovements = calculateBalances(prevEntries)
+    for (const [accountNumber, movement] of [...prevMovements.entries()].sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      if (parseInt(accountNumber[0]) >= 3 && movement !== 0) {
+        lines.push(`#RES -1 ${accountNumber} ${formatAmount(movement)}`)
       }
-    } catch {
-      // Prior-year RES is best-effort — the UB continuity rows above are the
-      // critical part for importing systems.
     }
   }
 
   return lines.join('\r\n') + '\r\n'
+}
+
+/**
+ * Encode SIE content to actual PC8/CP437 bytes (revision item I20).
+ *
+ * The file declares `#FORMAT PC8`, so the bytes on the wire must BE CP437 —
+ * shipping UTF-8 under a PC8 declaration breaks å/ä/ö in every conforming
+ * importer. The mapping mirrors the CP437 decode table in sie-parser.ts.
+ * Characters without a CP437 representation are replaced with '?'.
+ */
+const UNICODE_TO_CP437: Record<string, number> = {
+  'Ç': 0x80, 'ü': 0x81, 'é': 0x82, 'â': 0x83, 'ä': 0x84, 'à': 0x85,
+  'å': 0x86, 'ç': 0x87, 'ê': 0x88, 'ë': 0x89, 'è': 0x8a, 'ï': 0x8b,
+  'î': 0x8c, 'ì': 0x8d, 'Ä': 0x8e, 'Å': 0x8f, 'É': 0x90, 'æ': 0x91,
+  'Æ': 0x92, 'ô': 0x93, 'ö': 0x94, 'ò': 0x95, 'û': 0x96, 'ù': 0x97,
+  'ÿ': 0x98, 'Ö': 0x99, 'Ü': 0x9a, 'ø': 0x9b, '£': 0x9c, 'Ø': 0x9d,
+  '×': 0x9e, 'ƒ': 0x9f,
+  'á': 0xa0, 'í': 0xa1, 'ó': 0xa2, 'ú': 0xa3, 'ñ': 0xa4, 'Ñ': 0xa5,
+  '§': 0x15,
+}
+
+export function encodeSieToPc8(content: string): Uint8Array {
+  const bytes = new Uint8Array(content.length)
+  let n = 0
+  for (const ch of content) {
+    const code = ch.codePointAt(0)!
+    if (code < 0x80) {
+      bytes[n++] = code
+    } else {
+      bytes[n++] = UNICODE_TO_CP437[ch] ?? 0x3f // '?'
+    }
+  }
+  return bytes.subarray(0, n)
 }
 
 /**

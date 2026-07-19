@@ -102,6 +102,17 @@ ALTER TABLE public.sie_imports
 COMMENT ON COLUMN public.sie_imports.warnings IS
   'Final warning list — persisted and API responses must agree (I24).';
 
+-- Replace-in-progress rows legitimately share the file hash with the
+-- completed import they supersede (replace of the identical file). Exempt
+-- them from the active-hash unique index; finalize_sie_import serializes on
+-- an advisory lock and marks the old import 'replaced' in the same
+-- transaction, so no two ACTIVE non-replace imports can share a hash.
+DROP INDEX IF EXISTS sie_imports_company_id_file_hash_active_idx;
+CREATE UNIQUE INDEX sie_imports_company_id_file_hash_active_idx
+  ON public.sie_imports (company_id, file_hash)
+  WHERE status NOT IN ('replaced', 'failed', 'undone')
+    AND replaces_import_id IS NULL;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4. Staging table — vouchers are written here in resumable batches, then
 --    posted atomically by finalize_sie_import (I05, I06).

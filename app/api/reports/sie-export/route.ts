@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { generateSIEExport } from '@/lib/reports/sie-export'
+import { generateSIEExport, encodeSieToPc8 } from '@/lib/reports/sie-export'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
@@ -36,10 +36,12 @@ export const GET = withRouteContext(
         exclude_year_end_closing: excludeClosing,
       })
 
-      return new NextResponse(sieContent, {
+      // The file declares #FORMAT PC8, so the bytes must BE CP437 (I20).
+      const pc8Bytes = encodeSieToPc8(sieContent)
+      return new NextResponse(Buffer.from(pc8Bytes), {
         status: 200,
         headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Type': 'application/octet-stream',
           'Content-Disposition': `attachment; filename="export_${periodId}.se"`,
           'X-Request-Id': requestId,
         },

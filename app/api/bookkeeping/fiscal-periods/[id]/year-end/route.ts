@@ -39,10 +39,10 @@ export const GET = withRouteContext(
   },
 )
 
-/** POST: actually run year-end closing. */
+/** POST: actually run year-end closing (atomic, idempotent — B01/B09). */
 export const POST = withRouteContext(
   'period.year_end',
-  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
@@ -54,7 +54,15 @@ export const POST = withRouteContext(
       })
       if (!access.allowed) return yearEndAccessDeniedResponse()
 
-      const result = await executeYearEndClosing(supabase, companyId!, user.id, id)
+      // Client-supplied idempotency key (optional). The default is
+      // deterministic per period so a retried POST replays the completed
+      // close instead of erroring or duplicating (B09).
+      const idempotencyKey =
+        request.headers.get('idempotency-key')?.slice(0, 128) ?? undefined
+
+      const result = await executeYearEndClosing(supabase, companyId!, user.id, id, {
+        idempotencyKey,
+      })
       return NextResponse.json({ data: result })
     } catch (err) {
       opLog.error('year-end execution failed', err as Error)

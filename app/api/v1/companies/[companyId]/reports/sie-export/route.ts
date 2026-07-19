@@ -12,7 +12,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ErrorResponse } from '@/lib/api/v1/errors'
 import { loadPeriodFromQuery, safeGenerate } from '@/lib/api/v1/report-period'
-import { generateSIEExport } from '@/lib/reports/sie-export'
+import { generateSIEExport, encodeSieToPc8 } from '@/lib/reports/sie-export'
 
 registerEndpoint({
   operation: 'reports.sie-export',
@@ -85,10 +85,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // is belt-and-suspenders.
     const safeId = period.period.id.replace(/[^0-9a-fA-F-]/g, '')
 
-    return new NextResponse(gen.result, {
+    // The file declares #FORMAT PC8, so the bytes must BE CP437 (I20).
+    return new NextResponse(Buffer.from(encodeSieToPc8(gen.result)), {
       status: 200,
       headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Type': 'application/octet-stream',
         'Content-Disposition': `attachment; filename="export_${safeId}.se"`,
         'X-Request-Id': ctx.requestId,
       },

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { getOpeningBalances } from '@/lib/reports/opening-balances'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
+import { getCompanyEntityType } from '@/lib/company/entity-type'
 import { createLogger } from '@/lib/logger'
 import type { JournalEntry, CreateJournalEntryLineInput } from '@/types'
 
@@ -45,14 +46,11 @@ export async function planResultAppropriation(
   companyId: string,
   periodId: string,
 ): Promise<ResultAppropriationPlan | null> {
-  // Aktiebolag only. Same resolution as previewYearEndClosing's closing-account
-  // decision, so the omföring runs exactly when the result was posted to 2099.
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  const entityType = settings?.entity_type ?? 'aktiebolag'
+  // Aktiebolag only. Canonical legal form (B13) — companies.entity_type, no
+  // silent AB fallback: same resolution as previewYearEndClosing's
+  // closing-account decision, so the omföring runs exactly when the result
+  // was posted to 2099.
+  const entityType = await getCompanyEntityType(supabase, companyId)
   if (entityType !== 'aktiebolag') return null
 
   // Idempotency: never plan a second omföring for a period that already has one.

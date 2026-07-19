@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { parseSIEFile, detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
+import { z } from 'zod'
+import { parseSIEFile, validateSIEFile, detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
 import { suggestMappings } from '@/lib/import/account-mapper'
 import { executeSIEImport, checkDuplicateImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
@@ -9,6 +10,47 @@ import type { AccountMapping, SIEAccountMappingRecord } from '@/lib/import/types
 
 // SIE imports with many vouchers need extended execution time
 export const maxDuration = 300
+
+/** 20 MB — same ceiling as the parse endpoint. */
+const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
+
+/**
+ * Strict runtime schemas (revision item I14): unknown or malformed option
+ * and mapping fields produce clear validation errors instead of being
+ * silently accepted.
+ */
+const optionsSchema = z
+  .object({
+    createFiscalPeriod: z.boolean().default(true),
+    importOpeningBalances: z.boolean().default(true),
+    importTransactions: z.boolean().default(true),
+    voucherSeries: z
+      .string()
+      .regex(/^[A-ZÅÄÖ]$/i, 'voucherSeries måste vara en enda bokstav')
+      .optional(),
+    updateAccountNames: z.boolean().default(true),
+    onExistingPeriod: z.enum(['block', 'replace']).default('block'),
+    /** Explicit approvals for the strict difference policy (I15/I16/I19). */
+    approveOreRounding: z.boolean().default(false),
+    approveSkippedVouchers: z.boolean().default(false),
+    approveMigrationAdjustment: z.boolean().default(false),
+    ignoreKsummaMismatch: z.boolean().default(false),
+  })
+  .strict()
+
+const mappingSchema = z
+  .object({
+    sourceAccount: z.string().min(1).max(10),
+    sourceName: z.string().max(200).optional().nullable(),
+    targetAccount: z
+      .string()
+      .regex(/^\d{4}$/, 'Målkonto måste vara ett fyrsiffrigt BAS-konto')
+      .nullable(),
+    confidence: z.union([z.number(), z.string()]).optional().nullable(),
+    method: z.string().max(50).optional().nullable(),
+    targetName: z.string().max(200).optional().nullable(),
+  })
+  .passthrough()
 
 /** POST /api/import/sie/execute — execute the SIE import. */
 export const POST = withRouteContext(
@@ -27,11 +69,49 @@ export const POST = withRouteContext(
 
     const opLog = log.child({ filename: file.name, sizeBytes: file.size })
 
+    // Server-side file validation on execute (I13): the client can never
+    // bypass type/size/emptiness checks by skipping the parse endpoint.
+    if (file.size === 0) {
+      return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+        requestId,
+        details: { reason: 'Filen är tom' },
+      })
+    }
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+        requestId,
+        details: { reason: `Filen är för stor (max ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB)` },
+      })
+    }
+
     try {
-      // The voucherSeries option is a fallback for vouchers that arrive without
-      // a series (SIE4I subsystem files); the import engine preserves each
-      // #VER's source series per voucher.
-      const parsedOptions = optionsJson ? JSON.parse(optionsJson) : null
+      // Strict options schema (I14).
+      let rawOptions: unknown = {}
+      if (optionsJson) {
+        try {
+          rawOptions = JSON.parse(optionsJson)
+        } catch {
+          return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+            requestId,
+            details: { reason: 'options är inte giltig JSON' },
+          })
+        }
+      }
+      const optionsParse = optionsSchema.safeParse(rawOptions)
+      if (!optionsParse.success) {
+        return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+          requestId,
+          details: {
+            reason: 'Ogiltiga importalternativ',
+            issues: optionsParse.error.issues.map((i) => ({
+              path: i.path.join('.'),
+              message: i.message,
+            })),
+          },
+        })
+      }
+      const options = optionsParse.data
+
       const { data: companySettings } = await supabase
         .from('company_settings')
         .select('default_voucher_series')
@@ -39,32 +119,61 @@ export const POST = withRouteContext(
         .maybeSingle()
       const companyDefaultSeries = companySettings?.default_voucher_series || 'B'
 
-      const options = parsedOptions ?? {
-        createFiscalPeriod: true,
-        importOpeningBalances: true,
-        importTransactions: true,
-        voucherSeries: companyDefaultSeries,
-        updateAccountNames: true,
-      }
-
       const arrayBuffer = await file.arrayBuffer()
+      const rawBytes = new Uint8Array(arrayBuffer)
       const encoding = detectEncoding(arrayBuffer)
       const content = decodeBuffer(arrayBuffer, encoding)
 
+      // Full server-side re-parse AND re-validation of the original file
+      // (I13): the execute endpoint never trusts client-parsed data.
       const parsed = parseSIEFile(content)
-
-      const duplicate = await checkDuplicateImport(supabase, companyId!, content)
-      if (duplicate) {
-        return errorResponseFromCode('SIE_DUPLICATE_FILE', opLog, {
+      const validation = validateSIEFile(parsed)
+      if (!validation.valid) {
+        return errorResponseFromCode('VALIDATION_FAILED', opLog, {
           requestId,
-          details: { importId: duplicate.id, importedAt: duplicate.imported_at },
+          details: {
+            reason: 'SIE-filen klarade inte server-valideringen',
+            errors: validation.errors.slice(0, 20),
+          },
         })
+      }
+
+      if (options.onExistingPeriod !== 'replace') {
+        const duplicate = await checkDuplicateImport(supabase, companyId!, content)
+        if (duplicate) {
+          return errorResponseFromCode('SIE_DUPLICATE_FILE', opLog, {
+            requestId,
+            details: { importId: duplicate.id, importedAt: duplicate.imported_at },
+          })
+        }
       }
 
       let mappings: AccountMapping[]
 
       if (mappingsJson) {
-        mappings = JSON.parse(mappingsJson)
+        let rawMappings: unknown
+        try {
+          rawMappings = JSON.parse(mappingsJson)
+        } catch {
+          return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+            requestId,
+            details: { reason: 'mappings är inte giltig JSON' },
+          })
+        }
+        const mappingsParse = z.array(mappingSchema).safeParse(rawMappings)
+        if (!mappingsParse.success) {
+          return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+            requestId,
+            details: {
+              reason: 'Ogiltig kontomappning',
+              issues: mappingsParse.error.issues.slice(0, 10).map((i) => ({
+                path: i.path.join('.'),
+                message: i.message,
+              })),
+            },
+          })
+        }
+        mappings = mappingsParse.data as unknown as AccountMapping[]
       } else {
         const { data: storedMappings } = await supabase
           .from('sie_account_mappings')
@@ -108,7 +217,13 @@ export const POST = withRouteContext(
           importOpeningBalances: options.importOpeningBalances,
           importTransactions: options.importTransactions,
           voucherSeries: options.voucherSeries || companyDefaultSeries,
-          updateAccountNames: options.updateAccountNames ?? true,
+          updateAccountNames: options.updateAccountNames,
+          onExistingPeriod: options.onExistingPeriod,
+          approveOreRounding: options.approveOreRounding,
+          approveSkippedVouchers: options.approveSkippedVouchers,
+          approveMigrationAdjustment: options.approveMigrationAdjustment,
+          ignoreKsummaMismatch: options.ignoreKsummaMismatch,
+          rawFileBytes: rawBytes,
         },
       )
 

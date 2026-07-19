@@ -1,17 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
-import { createLogger } from '@/lib/logger'
-
-const log = createLogger('year-end-service')
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { lockPeriod, closePeriod, createNextPeriod, findNextPeriod } from './period-service'
+import { findNextPeriod } from './period-service'
 import {
   previewCurrencyRevaluation,
-  executeCurrencyRevaluation,
+  buildRevaluationRpcPayload,
+  computeRevaluationSnapshotKey,
 } from '@/lib/bookkeeping/currency-revaluation'
+import { getCompanyEntityType } from '@/lib/company/entity-type'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 import type {
   YearEndValidation,
@@ -74,26 +73,38 @@ export async function validateYearEndReadiness(
     errors.push('Year-end closing entry already exists for this period')
   }
 
-  // Check: no draft entries
-  const { count: draftCount } = await supabase
+  // Check: no draft entries. Fails closed (B04): a query error blocks.
+  const { count: draftCount, error: draftError } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
     .eq('status', 'draft')
 
+  if (draftError) {
+    errors.push(
+      `Kontrollen av utkast till verifikationer kunde inte slutföras (${draftError.message}). Bokslut blockeras tills kontrollen kan köras.`
+    )
+  }
+
   const drafts = draftCount ?? 0
   if (drafts > 0) {
     errors.push(`${drafts} draft journal entries must be posted or deleted before closing`)
   }
 
-  // Check: voucher continuity across all series
+  // Check: voucher continuity across all series. Fails closed (B04).
   let voucherGaps: VoucherGap[] = []
-  const { data: seriesRows } = await supabase
+  const { data: seriesRows, error: seriesError } = await supabase
     .from('voucher_sequences')
     .select('voucher_series')
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
+
+  if (seriesError) {
+    errors.push(
+      `Verifikationsserierna kunde inte läsas (${seriesError.message}). Bokslut blockeras tills kontrollen kan köras.`
+    )
+  }
 
   const seriesToCheck = seriesRows && seriesRows.length > 0
     ? seriesRows.map((r: { voucher_series: string }) => r.voucher_series)
@@ -106,7 +117,15 @@ export async function validateYearEndReadiness(
       p_series: series,
     })
 
-    if (!gapsError && gaps && gaps.length > 0) {
+    if (gapsError) {
+      // Fail closed (B04): an unverifiable gap check is a blocker, not a pass.
+      errors.push(
+        `Verifikationsnummerkontrollen för serie ${series} kunde inte slutföras (${gapsError.message}). Bokslut blockeras tills kontrollen kan köras.`
+      )
+      continue
+    }
+
+    if (gaps && gaps.length > 0) {
       const tagged = (gaps as Array<{ gap_start: number; gap_end: number }>).map((g) => ({
         ...g,
         series,
@@ -295,14 +314,8 @@ export async function previewYearEndClosing(
   fiscalPeriodId: string
 ): Promise<YearEndPreview> {
 
-  // Get entity type to determine closing account
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type')
-    .eq('company_id', companyId)
-    .single()
-
-  const entityType = settings?.entity_type ?? 'aktiebolag'
+  // Canonical legal form (B13) — companies.entity_type, no silent AB fallback.
+  const entityType = await getCompanyEntityType(supabase, companyId)
   const closingAccount = entityType === 'enskild_firma' ? '2010' : '2099'
   const closingAccountName =
     entityType === 'enskild_firma'
@@ -413,202 +426,146 @@ export async function previewYearEndClosing(
 }
 
 /**
- * Execute year-end closing for a fiscal period.
+ * Execute year-end closing for a fiscal period — ATOMIC (B01, B02, B09).
  *
- * 1. Validate readiness
- * 2. Run currency revaluation (FX gains/losses to 3960/7960)
- * 3. Generate closing preview and check öre balance
- * 4. Create closing entry (zeros class 3-8 accounts)
- * 5. Set closing_entry_id on the period
- * 6. Resolve next fiscal period (reuse existing or create new)
- * 7. Lock the period
- * 8. Close the period (irreversible — every guard must run before this)
- * 9. Generate opening balances in next period
- * 10. Validate IB/UB continuity
+ * The entire close (in-transaction readiness re-check, currency revaluation,
+ * closing entry, period lock+close, next-period resolution, opening balances,
+ * deterministic FX reversal in the next period, exact continuity check) runs
+ * inside ONE database transaction via the execute_year_end_closing RPC,
+ * serialized by an advisory lock. The close ends in exactly one of two
+ * states: fully open (rolled back) or fully closed.
+ *
+ * Idempotency (B09): the default idempotency key is deterministic per
+ * period, so a retry after a timeout replays the completed run instead of
+ * creating duplicates. Failed attempts are recorded in year_end_runs so the
+ * UI can show and recover from them (B10).
  */
 export async function executeYearEndClosing(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
+  options?: { idempotencyKey?: string }
 ): Promise<YearEndResult> {
-  // 1. Validate readiness
-  const validation = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
-  if (!validation.ready) {
-    throw new Error(`Year-end closing not ready: ${validation.errors.join('; ')}`)
-  }
+  const idempotencyKey = options?.idempotencyKey ?? `close:${fiscalPeriodId}`
 
-  // Fetch the period for dates
-  const { data: period } = await supabase
+  // Fetch the period for the balance date. The RPC re-validates everything
+  // inside its locked transaction (B03) — this fetch only feeds the FX
+  // preview computation.
+  const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
     .select('*')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .single()
 
-  if (!period) {
+  if (periodError || !period) {
     throw new Error('Fiscal period not found')
   }
 
-  // 2. Execute currency revaluation BEFORE closing entry
-  //    Revaluation posts to 3960/7960 (class 3/7 result accounts) which
-  //    the closing entry then zeros out.
-  const revaluationResult = await executeCurrencyRevaluation(
+  // Compute the currency revaluation underlag (historical open items as of
+  // the balance date, B06/B07) and its deterministic snapshot key (B05).
+  // Rates come from Riksbanken; the RPC persists the snapshot and posts the
+  // entry inside the same transaction as the close (B01).
+  const revalPreview = await previewCurrencyRevaluation(
     supabase,
     companyId,
-    period.period_end,
-    fiscalPeriodId,
-    userId
+    period.period_end
   )
+  const revaluationPayload =
+    revalPreview.items.length > 0
+      ? buildRevaluationRpcPayload(companyId, period.period_end, revalPreview)
+      : {
+          balance_date: period.period_end,
+          snapshot_key: computeRevaluationSnapshotKey(companyId, period.period_end, []),
+          lines: [],
+          items: [],
+        }
 
-  // 3. Get closing preview (now includes revaluation effects in trial balance)
-  const preview = await previewYearEndClosing(supabase, companyId, userId, fiscalPeriodId)
-
-  if (preview.closingLines.length === 0) {
-    throw new Error('No result accounts to close — period has no activity')
-  }
-
-  // 3a. INVARIANT: closing entry must balance to the öre before commit.
-  // This guards against rounding drift in previewYearEndClosing — the DB
-  // balance trigger would catch it too, but we want a clear Swedish error
-  // surfaced to the user, not a generic Postgres exception.
-  const preCommitDebit = roundOre(
-    preview.closingLines.reduce((s, l) => s + l.debit_amount, 0)
-  )
-  const preCommitCredit = roundOre(
-    preview.closingLines.reduce((s, l) => s + l.credit_amount, 0)
-  )
-  if (Math.abs(preCommitDebit - preCommitCredit) > ORE_TOLERANCE) {
-    throw new Error(
-      `Bokslutsverifikationen balanserar inte: debet=${preCommitDebit}, kredit=${preCommitCredit}`
-    )
-  }
-
-  // 4. Create closing entry via the journal engine
-  const closingEntry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: period.period_end,
-    description: `Årsbokslut ${period.name}`,
-    source_type: 'year_end',
-    voucher_series: 'A',
-    lines: preview.closingLines,
+  const { data: rpcResult, error: rpcError } = await supabase.rpc('execute_year_end_closing', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+    p_user_id: userId,
+    p_idempotency_key: idempotencyKey,
+    p_revaluation: revaluationPayload,
   })
 
-  // 4a. INVARIANT: after the closing entry, class 3-8 net must be exactly 0
-  // (to the öre). If not, we have a logic bug — fail loud rather than
-  // proceed into IB generation with a corrupt trial balance.
-  // createJournalEntry has no transactional grouping with the next call;
-  // the engine commits atomically per-entry via commit_journal_entry RPC,
-  // so a failure here means we need to reverse the just-committed entry.
-  try {
-    const postCloseTB = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
-    let resultNet = 0
-    for (const row of postCloseTB.rows) {
-      if (row.account_class >= 3 && row.account_class <= 8) {
-        resultNet += row.closing_debit - row.closing_credit
-      }
+  if (rpcError) {
+    // Record the failed attempt for visibility/recovery (B10). Best-effort:
+    // the failure itself is the primary signal.
+    try {
+      await supabase.from('year_end_runs').insert({
+        company_id: companyId,
+        fiscal_period_id: fiscalPeriodId,
+        status: 'failed',
+        idempotency_key: idempotencyKey,
+        error_message: rpcError.message.slice(0, 2000),
+        created_by: userId,
+        finished_at: new Date().toISOString(),
+      })
+    } catch {
+      // swallow — the thrown error below carries the diagnostic
     }
-    resultNet = roundOre(resultNet)
-    if (Math.abs(resultNet) > ORE_TOLERANCE) {
-      throw new Error(
-        `Resultatkonton (klass 3-8) saknar nollställning efter bokslut: nettot är ${resultNet} SEK`
-      )
-    }
-  } catch (err) {
-    // Best-effort reversal of the closing entry before re-throwing.
-    await safeReverse(supabase, companyId, userId, closingEntry.id, 'closing entry')
-    throw err
+    throw new Error(`Year-end closing failed: ${rpcError.message}`)
   }
 
-  // 5. Update fiscal period with closing_entry_id
-  const { error: updateError } = await supabase
-    .from('fiscal_periods')
-    .update({ closing_entry_id: closingEntry.id })
-    .eq('id', fiscalPeriodId)
-    .eq('company_id', companyId)
-
-  if (updateError) {
-    throw new Error(`Failed to set closing_entry_id: ${updateError.message}`)
+  const result = rpcResult as {
+    run_id: string
+    closing_entry_id: string
+    opening_balance_entry_id: string
+    next_period_id: string
+    revaluation_entry_id: string | null
+    revaluation_reversal_entry_id: string | null
+    idempotent: boolean
   }
 
-  // 6. Resolve the next period BEFORE locking/closing this one. A pre-existing
-  //    next period is common (SIE import, manual creation, prior partial
-  //    year-end run); reusing it is fine as long as no IB has been booked
-  //    into it. Doing this check after closePeriod would leave the books in
-  //    a half-closed state if a concurrent process posted IB into the next
-  //    period between validateYearEndReadiness and step 8 (TOCTOU race).
-  //
-  //    The thrown error is intentionally a stable English string with no
-  //    DB-sourced data interpolated — the route layer maps it to a
-  //    structured error code, and the next period name (if any) is surfaced
-  //    only through the structured details payload after explicit checks.
-  const existingNextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
-  let nextPeriod
-  if (existingNextPeriod) {
-    if (existingNextPeriod.opening_balance_entry_id) {
-      throw new Error(
-        'Next fiscal period already has opening balance entry posted; reverse it before re-running year-end'
-      )
-    }
-    nextPeriod = existingNextPeriod
-  } else {
-    nextPeriod = await createNextPeriod(supabase, companyId, userId, fiscalPeriodId)
+  // Assemble the YearEndResult from the committed state.
+  const [closingEntryRes, obEntryRes, nextPeriodRes, revalEntryRes] = await Promise.all([
+    supabase
+      .from('journal_entries')
+      .select('*')
+      .eq('id', result.closing_entry_id)
+      .eq('company_id', companyId)
+      .single(),
+    supabase
+      .from('journal_entries')
+      .select('*')
+      .eq('id', result.opening_balance_entry_id)
+      .eq('company_id', companyId)
+      .single(),
+    supabase
+      .from('fiscal_periods')
+      .select('*')
+      .eq('id', result.next_period_id)
+      .eq('company_id', companyId)
+      .single(),
+    result.revaluation_entry_id
+      ? supabase
+          .from('journal_entries')
+          .select('*')
+          .eq('id', result.revaluation_entry_id)
+          .eq('company_id', companyId)
+          .single()
+      : Promise.resolve({ data: null, error: null }),
+  ])
+
+  if (closingEntryRes.error || !closingEntryRes.data) {
+    throw new Error('Year-end closed but the closing entry could not be fetched')
+  }
+  if (obEntryRes.error || !obEntryRes.data) {
+    throw new Error('Year-end closed but the opening balance entry could not be fetched')
+  }
+  if (nextPeriodRes.error || !nextPeriodRes.data) {
+    throw new Error('Year-end closed but the next period could not be fetched')
   }
 
-  // 7. Lock the period
-  await lockPeriod(supabase, companyId, userId, fiscalPeriodId)
-
-  // 8. Close the period — irreversible per BFL. Every guard that can fail
-  //    on prior state must run before this point.
-  await closePeriod(supabase, companyId, userId, fiscalPeriodId)
-
-  // 9. Generate opening balances in next period
-  const openingBalanceEntry = await generateOpeningBalances(
+  // Independent continuity verification for the result payload. The RPC
+  // already enforced exactness inside the transaction.
+  const continuity = await validateBalanceContinuity(
     supabase,
     companyId,
-    userId,
-    fiscalPeriodId,
-    nextPeriod.id
+    result.next_period_id
   )
-
-  // 10. Validate IB/UB continuity and persist result.
-  // INVARIANT: any account differing by more than ORE_TOLERANCE is a hard
-  // failure. Best-effort rollback of both the IB entry and the closing
-  // entry so the user sees a clean state and can re-run the wizard.
-  //
-  // Note on atomicity: createJournalEntry uses an atomic commit_journal_entry
-  // RPC per entry, but the closing + IB entries are two separate commits with
-  // a period lock/close in between. Once committed, posted entries are
-  // immutable by DB trigger — true rollback isn't possible. reverseEntry()
-  // posts a compensating storno entry instead. The closed period was also
-  // locked & closed, but reverseEntry uses an entry_date that — under the
-  // period-lock trigger — may be blocked. We attempt reversal but tolerate
-  // failure, surfacing the original continuity error either way.
-  const continuity = await validateBalanceContinuity(supabase, companyId, nextPeriod.id)
-
-  await supabase
-    .from('fiscal_periods')
-    .update({ continuity_verified: continuity.valid })
-    .eq('id', nextPeriod.id)
-    .eq('company_id', companyId)
-
-  const overTolerance = continuity.discrepancies.filter(
-    (d) => Math.abs(d.difference) > ORE_TOLERANCE
-  )
-  if (overTolerance.length > 0) {
-    await safeReverse(supabase, companyId, userId, openingBalanceEntry.id, 'opening balance entry')
-    await safeReverse(supabase, companyId, userId, closingEntry.id, 'closing entry')
-
-    throw new Error(
-      `IB/UB-kontinuitet misslyckades: ${overTolerance.length} konto(n) avviker. ` +
-        overTolerance
-          .map(
-            (d) =>
-              `${d.account_number}: UB=${d.previous_ub_net}, IB=${d.current_ib_net}, diff=${d.difference}`
-          )
-          .join('; ')
-    )
-  }
 
   // Fetch the now-closed period for the event payload
   const { data: closedPeriod } = await supabase
@@ -618,7 +575,7 @@ export async function executeYearEndClosing(
     .eq('company_id', companyId)
     .single()
 
-  if (closedPeriod) {
+  if (closedPeriod && !result.idempotent) {
     await eventBus.emit({
       type: 'period.year_closed',
       payload: { period: closedPeriod as FiscalPeriod, companyId, userId },
@@ -626,10 +583,10 @@ export async function executeYearEndClosing(
   }
 
   return {
-    closingEntry,
-    nextPeriod,
-    openingBalanceEntry,
-    revaluationEntry: revaluationResult?.entry ?? null,
+    closingEntry: closingEntryRes.data as JournalEntry,
+    nextPeriod: nextPeriodRes.data as FiscalPeriod,
+    openingBalanceEntry: obEntryRes.data as JournalEntry,
+    revaluationEntry: (revalEntryRes.data as JournalEntry | null) ?? null,
     continuity,
   }
 }
@@ -736,31 +693,3 @@ export async function generateOpeningBalances(
   return openingEntry
 }
 
-/**
- * Best-effort reversal used by executeYearEndClosing's rollback paths.
- *
- * Posted journal entries are immutable per DB trigger — we can't truly
- * roll them back, only post a compensating storno via reverseEntry().
- * Closed/locked periods may also block the reversal date. We swallow
- * failures here so the caller can re-throw the original invariant error
- * with maximum diagnostic value; the orphaned entries (if any) become
- * a manual cleanup task documented in the surfaced Swedish error.
- */
-async function safeReverse(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  entryId: string,
-  label: string
-): Promise<void> {
-  try {
-    await reverseEntry(supabase, companyId, userId, entryId)
-  } catch (err) {
-    log.error(`year-end rollback: could not reverse ${label}`, err as Error, {
-      operation: 'year_end.rollback',
-      companyId,
-      entityType: 'journal_entry',
-      entityId: entryId,
-    })
-  }
-}

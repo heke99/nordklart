@@ -12,8 +12,9 @@
     "predev": "npm run setup:extensions && node scripts/inject-public-branding.mjs",
     "dev": "next dev",
     "prebuild": "npm run setup:extensions && node scripts/inject-public-branding.mjs",
-    "build": "next build",
+    "build": "NODE_OPTIONS=--max-old-space-size=4096 next build",
     "start": "next start",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint",
     "check:guards": "node scripts/checks/no-new-antipatterns.mjs",
     "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
@@ -94,6 +95,7 @@
     "eslint-config-next": "16.2.9",
     "pg": "^8.21.0",
     "tailwindcss": "^4",
+    "tsx": "4.23.1",
     "typescript": "^5",
     "vitest": "^4.0.18"
   },

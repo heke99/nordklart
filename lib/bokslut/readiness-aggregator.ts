@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
+import { getCompanyEntityType } from '@/lib/company/entity-type'
 import type { YearEndValidation } from '@/types'
 
 export type ReminderSeverity = 'info' | 'warning'
@@ -16,15 +17,27 @@ export interface BokslutReminder {
   href?: string
 }
 
+export interface BokslutBlockerDetail {
+  /** Stable machine code from year_end_db_blockers. */
+  code: string
+  message: string
+  /** Exact total count for count-based checks (B11) — never a capped sample. */
+  count: number
+  /** Whether the underlying check completed. False ⇒ the check itself failed
+   *  and the close is blocked until it can run (fail closed, B04). */
+  checkCompleted: boolean
+}
+
 export interface BokslutReadinessReport {
-  /** Mirrors validateYearEndReadiness.ready — true ⇔ no blocking errors. */
+  /** True ⇔ no blocking errors AND every check completed. */
   ready: boolean
-  /** Blocking errors that prevent year-end execution (from year-end-service). */
+  /** Blocking errors that prevent year-end execution. */
   blockers: string[]
+  /** Structured blocker details with exact counts (B11). */
+  blockerDetails: BokslutBlockerDetail[]
   /** Non-blocking warnings (from year-end-service). */
   warnings: string[]
-  /** Soft reminders (Phase 2+ features not yet shipped, manual steps the user
-   *  should consider). Never blockers — surfaced so users know what's manual. */
+  /** Soft reminders (manual steps the user should consider). */
   reminders: BokslutReminder[]
   /** Convenience counts for the UI header. */
   draftCount: number
@@ -56,148 +69,12 @@ export interface BokslutReadinessReport {
 /**
  * Single-fetch aggregator that drives the bokslut wizard's preflight step.
  *
- * Wraps validateYearEndReadiness (which owns the legally-required checks) and
- * layers on:
- *   - bank reconciliation snapshot for the period (informational warning if
- *     unmatched transactions exist — not a legal blocker)
- *   - soft reminders for Phase 2+ features that ship later (depreciation,
- *     accruals, tax provision). These tell the user what's manual today.
- *
- * Phase 2 will replace each reminder with a concrete proposal once the
- * relevant calculator ships.
+ * The blocking checks are computed by year_end_db_blockers() — the SAME
+ * database function the atomic close RPC re-runs inside its locked
+ * transaction (B03), so what the UI approves is exactly what the close
+ * enforces. Every check fails CLOSED (B04): a database error or unknown
+ * result becomes a blocker with a clear explanation, never an empty list.
  */
-
-async function buildAssetReadinessBlockers(
-  supabase: SupabaseClient,
-  companyId: string,
-  fiscalPeriodId: string,
-  periodEnd: string,
-): Promise<string[]> {
-  const blockers: string[] = []
-  try {
-    const [companyResult, assetsResult, schedulesResult] = await Promise.all([
-      supabase.from('companies').select('accounting_framework').eq('id', companyId).maybeSingle(),
-      supabase
-        .from('assets')
-        .select('id, name, category, acquisition_date, disposed_at, land_value, building_value, k3_components')
-        .eq('company_id', companyId),
-      supabase
-        .from('depreciation_schedules')
-        .select('asset_id, journal_entry_id')
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', fiscalPeriodId),
-    ])
-
-    const company = companyResult?.data
-    const assets = assetsResult?.data ?? []
-    const schedules = schedulesResult?.data ?? []
-    const scheduledAssetIds = new Set((schedules ?? []).map((row: { asset_id: string }) => row.asset_id))
-    const isK3 = company?.accounting_framework === 'k3'
-
-    for (const asset of assets ?? []) {
-      if (asset.acquisition_date && asset.acquisition_date > periodEnd) continue
-      if (asset.disposed_at && asset.disposed_at < periodEnd) continue
-      if (asset.category === 'building') {
-        const hasSplit = Number(asset.land_value ?? 0) > 0 || Number(asset.building_value ?? 0) > 0
-        if (!hasSplit) {
-          blockers.push(`Tillgången "${asset.name}" är byggnad/fastighet men saknar fördelning mellan mark och byggnad.`)
-        }
-        if (isK3 && (!Array.isArray(asset.k3_components) || asset.k3_components.length === 0)) {
-          blockers.push(`Tillgången "${asset.name}" är K3-byggnad men saknar komponentanalys.`)
-        }
-      }
-      if (!scheduledAssetIds.has(asset.id)) {
-        blockers.push(`Tillgången "${asset.name}" saknar avskrivningsförslag/bokning för perioden.`)
-      }
-    }
-  } catch {
-    // Asset readiness is a non-blocking enrichment. Older test doubles and
-    // partially migrated tenants may not expose the fixed-assets tables yet;
-    // the core year-end validator remains the source of blocking truth.
-    return []
-  }
-
-  return blockers
-}
-
-/**
- * Operational blockers beyond the core legal validator:
- *   - unresolved pending operations dated in the period (approve/reject
- *     before closing — a staged categorization or invoice match left open
- *     means the books are known-incomplete),
- *   - non-completed SIE imports for the period (a pending/failed import
- *     slot must be resolved or undone),
- *   - unbooked bank transactions in the period (bank reconciliation
- *     blocker — every transaction must be booked, matched or explicitly
- *     ignored before closing, BFL 5 kap).
- *
- * Fails soft: a query error never blocks year-end by itself (the core
- * validator remains the legal source of truth).
- */
-async function buildOperationalBlockers(
-  supabase: SupabaseClient,
-  companyId: string,
-  periodStart: string,
-  periodEnd: string,
-): Promise<string[]> {
-  const blockers: string[] = []
-
-  try {
-    const { count: pendingOps } = await supabase
-      .from('pending_operations')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .in('status', ['pending', 'committing'])
-    if ((pendingOps ?? 0) > 0) {
-      blockers.push(
-        `${pendingOps} väntande åtgärder (pending operations) måste godkännas eller avvisas innan bokslut.`,
-      )
-    }
-  } catch {
-    // soft
-  }
-
-  try {
-    const { data: sieRows } = await supabase
-      .from('sie_imports')
-      .select('id, status, fiscal_year_start, fiscal_year_end')
-      .eq('company_id', companyId)
-      .in('status', ['pending', 'mapped', 'failed'])
-      .gte('fiscal_year_end', periodStart)
-      .lte('fiscal_year_start', periodEnd)
-      .limit(5)
-    if (sieRows && sieRows.length > 0) {
-      blockers.push(
-        `${sieRows.length} SIE-import(er) för perioden är inte slutförda (status: ${[...new Set(sieRows.map((r) => (r as { status: string }).status))].join(', ')}). Slutför eller ångra dem innan bokslut.`,
-      )
-    }
-  } catch {
-    // soft
-  }
-
-  try {
-    const { count: unbookedTx } = await supabase
-      .from('transactions')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .gte('date', periodStart)
-      .lte('date', periodEnd)
-      .is('journal_entry_id', null)
-      .is('invoice_id', null)
-      .is('supplier_invoice_id', null)
-      .eq('is_ignored', false)
-    if ((unbookedTx ?? 0) > 0) {
-      blockers.push(
-        `${unbookedTx} banktransaktioner i perioden är varken bokförda, matchade eller ignorerade. Avstäm banken innan bokslut (BFL 5 kap).`,
-      )
-    }
-  } catch {
-    // soft
-  }
-
-  return blockers
-}
-
 export async function buildBokslutReadinessReport(
   supabase: SupabaseClient,
   companyId: string,
@@ -205,18 +82,18 @@ export async function buildBokslutReadinessReport(
   fiscalPeriodId: string,
 ): Promise<BokslutReadinessReport> {
   // Fetch period + entity type in parallel with the heavy validation.
-  const [periodResult, settingsResult, validation] = await Promise.all([
+  const [periodResult, entityTypeResult, validation] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('id, name, period_start, period_end, is_closed, locked_at, closing_entry_id')
       .eq('id', fiscalPeriodId)
       .eq('company_id', companyId)
       .single(),
-    supabase
-      .from('company_settings')
-      .select('entity_type')
-      .eq('company_id', companyId)
-      .maybeSingle(),
+    // Canonical legal form (B13) — companies.entity_type, no silent fallback.
+    getCompanyEntityType(supabase, companyId).then(
+      (t) => ({ ok: true as const, value: t }),
+      (err: Error) => ({ ok: false as const, error: err.message }),
+    ),
     validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId),
   ])
 
@@ -225,11 +102,57 @@ export async function buildBokslutReadinessReport(
   }
 
   const period = periodResult.data
-  const entityType = (settingsResult.data?.entity_type ?? 'aktiebolag') as BokslutReadinessReport['entityType']
 
-  // Bank reconciliation snapshot for the period. Run after period fetch so we
-  // know the date range. Failure here must not break the report — fall back
-  // to null so the UI degrades gracefully.
+  const blockerDetails: BokslutBlockerDetail[] = []
+
+  if (!entityTypeResult.ok) {
+    // Missing/unreadable legal form blocks the close with a clear explanation
+    // (B13) — never a silent AB assumption.
+    blockerDetails.push({
+      code: 'entity_type_missing',
+      message: entityTypeResult.error,
+      count: 0,
+      checkCompleted: false,
+    })
+  }
+  const entityType = (entityTypeResult.ok
+    ? entityTypeResult.value
+    : 'aktiebolag') as BokslutReadinessReport['entityType']
+
+  // Operational + asset blockers from the database — the same function the
+  // atomic close re-runs inside its transaction. A query failure here is a
+  // BLOCKER (fail closed, B04), not a silent pass.
+  const { data: dbBlockers, error: dbBlockersError } = await supabase.rpc(
+    'year_end_db_blockers',
+    { p_company_id: companyId, p_fiscal_period_id: fiscalPeriodId },
+  )
+
+  if (dbBlockersError) {
+    blockerDetails.push({
+      code: 'readiness_check_failed',
+      message: `Beredskapskontrollen kunde inte slutföras (${dbBlockersError.message}). Bokslut blockeras tills kontrollen kan köras.`,
+      count: 0,
+      checkCompleted: false,
+    })
+  } else {
+    for (const row of (dbBlockers ?? []) as Array<{
+      code: string
+      message: string
+      detail_count: number | null
+    }>) {
+      blockerDetails.push({
+        code: row.code,
+        message: row.message,
+        count: row.detail_count ?? 0,
+        checkCompleted: true,
+      })
+    }
+  }
+
+  // Bank reconciliation snapshot for the period (B12): the strict
+  // is_reconciled from the reconciliation module (zero difference AND zero
+  // unmatched rows on both sides). A failure to compute the snapshot is a
+  // blocker — fail closed.
   let reconciliation: BokslutReadinessReport['reconciliation'] = null
   try {
     const status = await getReconciliationStatus(
@@ -244,8 +167,13 @@ export async function buildBokslutReadinessReport(
       unmatched_gl_line_count: status.unmatched_gl_line_count,
       difference: status.difference,
     }
-  } catch {
-    reconciliation = null
+  } catch (err) {
+    blockerDetails.push({
+      code: 'reconciliation_check_failed',
+      message: `Bankavstämningen kunde inte kontrolleras (${err instanceof Error ? err.message : 'okänt fel'}). Bokslut blockeras tills kontrollen kan köras.`,
+      count: 0,
+      checkCompleted: false,
+    })
   }
 
   const reminders: BokslutReminder[] = []
@@ -257,7 +185,9 @@ export async function buildBokslutReadinessReport(
       message:
         reconciliation.unmatched_transaction_count > 0
           ? `${reconciliation.unmatched_transaction_count} banktransaktioner är inte matchade. Avstäm banken innan bokslut.`
-          : `Bankavstämningen visar en differens på ${reconciliation.difference.toFixed(2)} kr.`,
+          : reconciliation.unmatched_gl_line_count > 0
+            ? `${reconciliation.unmatched_gl_line_count} huvudboksrader på bankkontot är inte matchade. Avstäm banken innan bokslut.`
+            : `Bankavstämningen visar en differens på ${reconciliation.difference.toFixed(2)} kr.`,
       href: '/reconciliation/bank',
     })
   }
@@ -288,7 +218,7 @@ export async function buildBokslutReadinessReport(
 
     // Surface a soft warning when kapitalunderlag is missing AND the booked
     // surplus is large enough to make positive räntefördelning meaningful
-    // (> 50 000 kr — the spärrbelopp). This is non-blocking but actionable:
+    // (> 50 000 kr — the spärrbeloppet). This is non-blocking but actionable:
     // the user should enter their IB equity on the dispositions step.
     try {
       const preview = await computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId)
@@ -305,18 +235,18 @@ export async function buildBokslutReadinessReport(
     }
   }
 
-  const assetBlockers = await buildAssetReadinessBlockers(supabase, companyId, fiscalPeriodId, period.period_end)
-  const operationalBlockers = await buildOperationalBlockers(
-    supabase,
-    companyId,
-    period.period_start,
-    period.period_end,
-  )
-  const blockers = [...validation.errors, ...assetBlockers, ...operationalBlockers]
+  // De-duplicate: the legal validator and the DB function overlap on several
+  // checks (drafts, gaps, TB, next-period OB). The message texts differ, so
+  // keep validator errors verbatim and DB blockers by code.
+  const blockers = [
+    ...validation.errors,
+    ...blockerDetails.map((d) => d.message),
+  ]
 
   return {
     ready: blockers.length === 0,
     blockers,
+    blockerDetails,
     warnings: validation.warnings,
     reminders,
     draftCount: validation.draftCount,
