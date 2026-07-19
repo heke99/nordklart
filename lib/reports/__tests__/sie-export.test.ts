@@ -13,6 +13,9 @@ function makeBuilder() {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
+  // Prior-period lookup uses .maybeSingle() — no prior period is a legitimate
+  // null result, but a QUERY error must fail the export closed (I23).
+  b.maybeSingle = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
 }
@@ -28,7 +31,7 @@ function makeClient() {
   } as any
 }
 
-import { generateSIEExport } from '../sie-export'
+import { generateSIEExport, encodeSieToPc8 } from '../sie-export'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 
 let supabase: ReturnType<typeof makeClient>
@@ -62,11 +65,11 @@ describe('generateSIEExport', () => {
     results = [
       // 0: fiscal_periods
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
-      // 1: previous fiscal period (#RAR -1)
+      // 1: previous fiscal period (#RAR -1) via maybeSingle
       { data: null, error: null },
-      // 2: chart_of_accounts (empty)
+      // 2: chart_of_accounts (empty — fetchAllRows ends on empty page)
       { data: [], error: null },
-      // 3: journal_entries (empty)
+      // 3: journal_entries (empty — fetchAllRows ends on empty page)
       { data: [], error: null },
       // 4: cost_centers (empty)
       { data: [], error: null },
@@ -106,6 +109,19 @@ describe('generateSIEExport', () => {
     })
 
     expect(output).not.toContain('#ORGNR')
+  })
+
+  it('fails closed when the prior-period lookup errors (I23)', async () => {
+    // "No prior period" is a legitimate null — but a QUERY error must block
+    // the export: a file with silently-missing #RAR -1/#UB -1/#RES -1 would
+    // look valid but be wrong.
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: { message: 'connection reset' } }, // prevPeriod query error
+    ]
+
+    await expect(generateSIEExport(supabase, 'company-1', baseOptions))
+      .rejects.toThrow(/föregående räkenskapsår kunde inte läsas.*connection reset/)
   })
 
   it('generates #KONTO and #SRU for accounts', async () => {
@@ -172,6 +188,46 @@ describe('generateSIEExport', () => {
     expect(output).toContain('}')
   })
 
+  it('exports every voucher when journal entries span multiple pagination pages (I21)', async () => {
+    // fetchAllRows keeps requesting ranges until a page returns fewer than
+    // 1000 rows — a period with more vouchers than PostgREST's default page
+    // must still export every #VER/#TRANS.
+    const makeEntry = (n: number) => ({
+      id: `e${n}`,
+      entry_date: '2024-06-15',
+      voucher_number: n,
+      voucher_series: 'A',
+      description: `V${n}`,
+      status: 'posted',
+      lines: [
+        { account_number: '1930', debit_amount: 1, credit_amount: 0, line_description: null, cost_center: null, project: null },
+        { account_number: '3001', debit_amount: 0, credit_amount: 1, line_description: null, cost_center: null, project: null },
+      ],
+    })
+    const page1 = Array.from({ length: 1000 }, (_, i) => makeEntry(i + 1))
+    const page2 = [makeEntry(1001)]
+
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      { data: page1, error: null }, // journal_entries page 1 (full → keep going)
+      { data: page2, error: null }, // journal_entries page 2 (partial → stop)
+      { data: [], error: null }, // cost_centers
+      { data: [], error: null }, // projects
+      { data: [], error: null }, // RPC fallback
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    expect(output).toContain('#VER "A" 1 20240615 "V1"')
+    expect(output).toContain('#VER "A" 1000 20240615 "V1000"')
+    expect(output).toContain('#VER "A" 1001 20240615 "V1001"')
+    // Balances aggregate across BOTH pages: 1001 × 1 kr.
+    expect(output).toContain('#UB 0 1930 1001.00')
+    expect(output).toContain('#RES 0 3001 -1001.00')
+  })
+
   it('generates #DIM and #OBJEKT for dimensions', async () => {
     results = [
       { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
@@ -199,6 +255,81 @@ describe('generateSIEExport', () => {
     expect(output).toContain('#DIM 6 "Projekt"')
     expect(output).toContain('#OBJEKT 1 "CC1" "Avdelning 1"')
     expect(output).toContain('#OBJEKT 6 "P001" "Projekt Alpha"')
+  })
+
+  it('declares #DIM/#OBJEKT for non-standard dimensions from line.dimensions jsonb (I22)', async () => {
+    // Extra dimensions preserved from imports must be re-declared so the
+    // round-trip import → export → re-import keeps all dimension metadata.
+    // Codes are deduplicated and dimensions sorted numerically.
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: null, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      {
+        data: [
+          {
+            id: 'e1',
+            entry_date: '2024-03-15',
+            voucher_number: 1,
+            voucher_series: 'A',
+            description: 'Extra dims',
+            status: 'posted',
+            lines: [
+              {
+                account_number: '5010',
+                debit_amount: 500,
+                credit_amount: 0,
+                line_description: null,
+                cost_center: null,
+                project: null,
+                dimensions: { '10': 'F1', '7': 'ANST1' },
+              },
+              {
+                account_number: '5010',
+                debit_amount: 500,
+                credit_amount: 0,
+                line_description: null,
+                cost_center: null,
+                project: null,
+                // duplicate code F1 on dim 10 — must not duplicate the #OBJEKT
+                dimensions: { '10': 'F1' },
+              },
+              {
+                account_number: '1930',
+                debit_amount: 0,
+                credit_amount: 1000,
+                line_description: null,
+                cost_center: null,
+                project: null,
+                dimensions: null,
+              },
+            ],
+          },
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // cost_centers
+      { data: [], error: null }, // projects
+      { data: [], error: null }, // RPC fallback
+    ]
+
+    const output = await generateSIEExport(supabase, 'company-1', baseOptions)
+
+    // Numeric sort: 7 before 10 (lexicographic would put "10" first).
+    const dim7Idx = output.indexOf('#DIM 7 "Dimension 7"')
+    const dim10Idx = output.indexOf('#DIM 10 "Dimension 10"')
+    expect(dim7Idx).toBeGreaterThan(-1)
+    expect(dim10Idx).toBeGreaterThan(-1)
+    expect(dim7Idx).toBeLessThan(dim10Idx)
+
+    expect(output).toContain('#OBJEKT 7 "ANST1" "ANST1"')
+    expect(output).toContain('#OBJEKT 10 "F1" "F1"')
+    // Dedup: one #OBJEKT per (dimension, code) even when two lines carry it.
+    expect(output.match(/#OBJEKT 10 "F1" "F1"/g)).toHaveLength(1)
+
+    // The extra dims also ride on the #TRANS object list (integer-like jsonb
+    // keys iterate in ascending numeric order per JS object semantics).
+    expect(output).toContain('\t#TRANS 5010 {7 "ANST1" 10 "F1"} 500.00 20240315')
   })
 
   it('includes dimension objects in #TRANS lines', async () => {
@@ -498,7 +629,7 @@ describe('generateSIEExport', () => {
       { data: [], error: null }, // projects
       // compute_prior_opening_balances RPC → IB 0 (= UB -1 by continuity)
       { data: [{ account_number: '1930', debit: 5000, credit: 0 }], error: null },
-      // prior-period journal entries for #RES -1
+      // prior-period journal entries for #RES -1 (fetchAllRows page 1)
       {
         data: [
           {
@@ -518,7 +649,10 @@ describe('generateSIEExport', () => {
     expect(output).toContain('#RAR -1 20230101 20231231')
     expect(output).toContain('#UB -1 1930 5000.00')
     expect(output).toContain('#RES -1 3001 -8000.00')
-    // The full dimension list (incl. non-standard dim 8) survives export.
+    // The extra dimension is declared (I22)…
+    expect(output).toContain('#DIM 8 "Dimension 8"')
+    expect(output).toContain('#OBJEKT 8 "E7" "E7"')
+    // …and the full dimension list (incl. non-standard dim 8) survives export.
     expect(output).toContain('{1 "100" 6 "P1" 8 "E7"}')
 
     // Roundtrip: the exported file parses without errors and preserves the
@@ -532,5 +666,55 @@ describe('generateSIEExport', () => {
       { dimension: '8', code: 'E7' },
     ])
     expect(reparsed.header.fiscalYears).toHaveLength(2)
+  })
+
+  it('fails closed when the prior-year entries fetch errors (I23)', async () => {
+    // A failure to read the prior year's movements must block the export
+    // instead of emitting a seemingly-valid file with missing #RES -1.
+    results = [
+      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31' }, error: null },
+      { data: { id: 'period-0', period_start: '2023-01-01', period_end: '2023-12-31' }, error: null }, // prevPeriod
+      { data: [], error: null }, // accounts
+      { data: [], error: null }, // journal_entries current period
+      { data: [], error: null }, // cost_centers
+      { data: [], error: null }, // projects
+      { data: [], error: null }, // RPC fallback (empty IB)
+      { data: null, error: { message: 'statement timeout' } }, // prior-year entries fetch fails
+    ]
+
+    await expect(generateSIEExport(supabase, 'company-1', baseOptions))
+      .rejects.toThrow(/föregående års verifikationer kunde inte läsas.*statement timeout/)
+  })
+})
+
+describe('encodeSieToPc8 (I20)', () => {
+  it('encodes Swedish characters as real CP437 bytes, byte for byte', () => {
+    // The file declares #FORMAT PC8 — the bytes on the wire must BE CP437.
+    // Shipping UTF-8 under a PC8 declaration breaks å/ä/ö in every
+    // conforming importer.
+    const bytes = encodeSieToPc8('åäöÅÄÖ')
+    expect(Array.from(bytes)).toEqual([0x86, 0x84, 0x94, 0x8f, 0x8e, 0x99])
+  })
+
+  it('passes ASCII through unchanged', () => {
+    const content = '#FLAGGA 0\r\n#SIETYP 4'
+    const bytes = encodeSieToPc8(content)
+    expect(Array.from(bytes)).toEqual(content.split('').map((c) => c.charCodeAt(0)))
+  })
+
+  it('encodes a realistic SIE line with mixed ASCII and Swedish characters', () => {
+    const bytes = encodeSieToPc8('#KONTO 1930 "Företagskonto"')
+    // "F" then ö (CP437 0x94) then "retagskonto"
+    const expected = [
+      ...'#KONTO 1930 "F'.split('').map((c) => c.charCodeAt(0)),
+      0x94,
+      ...'retagskonto"'.split('').map((c) => c.charCodeAt(0)),
+    ]
+    expect(Array.from(bytes)).toEqual(expected)
+  })
+
+  it('replaces characters without a CP437 representation with "?"', () => {
+    const bytes = encodeSieToPc8('a€b')
+    expect(Array.from(bytes)).toEqual([0x61, 0x3f, 0x62])
   })
 })
