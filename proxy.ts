@@ -1,7 +1,10 @@
 import { type NextRequest } from 'next/server'
 import { updateSession } from '@/lib/supabase/middleware'
 
-export async function middleware(request: NextRequest) {
+// Next.js 16: `proxy.ts` replaces the deprecated `middleware.ts` (T05).
+// Same behavior, Node runtime; the session/company-context logic lives in
+// lib/supabase/middleware.ts unchanged.
+export async function proxy(request: NextRequest) {
   return await updateSession(request)
 }
 

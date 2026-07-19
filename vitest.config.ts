@@ -30,12 +30,18 @@ const pgRealProject = {
   },
 }
 
-// Only register the pg-real project when DATABASE_URL is set. Local devs
-// running a bare `vitest run` would otherwise hit the schema sanity check
-// against a non-existent DB. `npm run test:pg` is the opt-in entry point.
-const projects = process.env.DATABASE_URL
-  ? [unitProject, pgRealProject]
-  : [unitProject]
+// The pg-real project is ALWAYS registered so `npm run test:pg` is a real,
+// working entry point (T02) — `vitest run --project pg-real` previously
+// failed with "project not found" when DATABASE_URL was unset. The suite
+// connects to DATABASE_URL (default postgresql://postgres:postgres@localhost:5432/postgres)
+// and fails loudly via the schema sanity check in tests/pg/setup.ts when the
+// database is missing or migrations have not been applied. Bootstrap a local
+// database with scripts/pg-test-db.sh. A bare `vitest run` still only runs
+// the unit project unless DATABASE_URL is exported.
+const projects =
+  process.env.DATABASE_URL || process.env.VITEST_PG_REAL
+    ? [unitProject, pgRealProject]
+    : [unitProject]
 
 export default defineConfig({
   resolve: { alias },
