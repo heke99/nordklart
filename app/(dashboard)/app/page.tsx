@@ -236,6 +236,7 @@ export default async function DashboardPage() {
   if (bankConnectionsResult.error) {
     dataErrors.bank = 'Banksaldot kunde inte laddas'
   }
+  const nowMs = new Date().getTime()
   let bankBalance: number | null = null
   let bankBalanceStale = false
   let bankBalanceAsOf: string | null = null
@@ -274,11 +275,10 @@ export default async function DashboardPage() {
       // Cached balance older than 48h is flagged stale.
       bankBalanceStale =
         bankBalanceAsOf !== null &&
-        Date.now() - new Date(bankBalanceAsOf).getTime() > 48 * 60 * 60 * 1000
+        nowMs - new Date(bankBalanceAsOf).getTime() > 48 * 60 * 60 * 1000
     }
   }
 
-  const nowMs = new Date().getTime()
   const expiringBankConnections = (bankConnections || [])
     .filter(conn => {
       if (!conn.consent_expires) return false

@@ -144,11 +144,16 @@ export default function BankFileColumnMappingStep({
     if (dateCol !== -1 || descCol !== -1 || amountCol !== -1) return
     if (dataRows.length === 0) return
 
-    const suggestion = suggestColumnMapping(hasHeader ? columnHeaders : null, dataRows)
-    if (suggestion.date >= 0) setDateCol(suggestion.date)
-    if (suggestion.description >= 0) setDescCol(suggestion.description)
-    if (suggestion.amount >= 0) setAmountCol(suggestion.amount)
-    if (suggestion.balance >= 0) setBalanceCol(suggestion.balance)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const suggestion = suggestColumnMapping(hasHeader ? columnHeaders : null, dataRows)
+      if (suggestion.date >= 0) setDateCol(suggestion.date)
+      if (suggestion.description >= 0) setDescCol(suggestion.description)
+      if (suggestion.amount >= 0) setAmountCol(suggestion.amount)
+      if (suggestion.balance >= 0) setBalanceCol(suggestion.balance)
+    }, 0)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dataRows, hasHeader, columnHeaders])
 

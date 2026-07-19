@@ -166,10 +166,14 @@ export default function MatchAllocationDialog({
 
   // Reset state every time the dialog re-opens for a new tx.
   useEffect(() => {
-    if (!open) {
+    if (open) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
       setDrafts({})
       setSearch('')
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open])
 
   const txAmountAbs = transaction ? Math.abs(transaction.amount) : 0

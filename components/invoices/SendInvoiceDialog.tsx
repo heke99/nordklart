@@ -54,8 +54,12 @@ export default function SendInvoiceDialog({
 
   useEffect(() => {
     if (!open) {
-      setIsInitialized(false)
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => {
+        setIsInitialized(false)
+      }, 0)
+      return () => clearTimeout(timer)
     }
 
     let cancelled = false

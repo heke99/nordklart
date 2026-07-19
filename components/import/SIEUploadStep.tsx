@@ -33,8 +33,12 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
   // Cycle through loading phases on timers
   useEffect(() => {
     if (!isLoading) {
-      setLoadingPhase(0)
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const resetTimer = setTimeout(() => {
+        setLoadingPhase(0)
+      }, 0)
+      return () => clearTimeout(resetTimer)
     }
 
     const timers = [

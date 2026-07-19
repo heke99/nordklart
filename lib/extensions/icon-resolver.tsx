@@ -35,7 +35,10 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
-const ICON_MAP: Record<string, LucideIcon> = {
+// Exported so callers can resolve icons with a plain lookup. The react-hooks
+// static-components rule treats a call-result component (`resolveIcon(...)`)
+// as "created during render", while a static map lookup is accepted.
+export const EXTENSION_ICON_MAP: Record<string, LucideIcon> = {
   Camera,
   Wand,
   MessageSquare,
@@ -71,6 +74,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   MessageCircle,
 }
 
+export const FALLBACK_EXTENSION_ICON: LucideIcon = Puzzle
+
 export function resolveIcon(name: string): LucideIcon {
-  return ICON_MAP[name] ?? Puzzle
+  return EXTENSION_ICON_MAP[name] ?? FALLBACK_EXTENSION_ICON
 }

@@ -256,18 +256,23 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   }, [])
 
   useEffect(() => {
-    fetchItems()
-    fetchInboxAddress()
-    // Resolve the company's bookkeeping method — drives CTA hierarchy.
-    fetch('/api/settings')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        const method = body?.data?.accounting_method
-        if (method === 'cash' || method === 'accrual') {
-          setAccountingMethod(method)
-        }
-      })
-      .catch(() => { /* keep 'accrual' default */ })
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchItems does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchItems()
+      fetchInboxAddress()
+      // Resolve the company's bookkeeping method — drives CTA hierarchy.
+      fetch('/api/settings')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((body) => {
+          const method = body?.data?.accounting_method
+          if (method === 'cash' || method === 'accrual') {
+            setAccountingMethod(method)
+          }
+        })
+        .catch(() => { /* keep 'accrual' default */ })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchItems, fetchInboxAddress])
 
   // Realtime: refetch when any invoice_inbox_items row changes for this
@@ -301,13 +306,18 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // (SSR-safe — no window access during initial render).
   useEffect(() => {
     if (typeof window === 'undefined') return
-    try {
-      setOnboardingDismissed(
-        window.localStorage.getItem('nordklart.inbox.onboarding.dismissed') === '1'
-      )
-    } catch {
-      // private browsing — keep default (show card)
-    }
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      try {
+        setOnboardingDismissed(
+          window.localStorage.getItem('nordklart.inbox.onboarding.dismissed') === '1'
+        )
+      } catch {
+        // private browsing — keep default (show card)
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [])
 
   const handleDismissOnboarding = useCallback(() => {
@@ -1831,12 +1841,17 @@ export function EditableFieldsList({
 
   // Reset drafts when the user switches to a different inbox item.
   useEffect(() => {
-    const seeded = Object.fromEntries(
-      FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])
-    ) as Record<FieldKey, string>
-    setDrafts(seeded)
-    lastServerRef.current = seeded
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const seedTimer = setTimeout(() => {
+      const seeded = Object.fromEntries(
+        FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])
+      ) as Record<FieldKey, string>
+      setDrafts(seeded)
+      lastServerRef.current = seeded
+    }, 0)
     return () => {
+      clearTimeout(seedTimer)
       for (const t of Object.values(timersRef.current)) {
         if (t) clearTimeout(t)
       }

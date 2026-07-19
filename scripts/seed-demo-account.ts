@@ -1387,7 +1387,7 @@ async function seedFY2026Konsult(
   // 18 weekly Klient AB Jan–Apr 2026 (16 weeks * but 18 invoices means biweekly-ish)
   // Distribute 18 weekly across 16 weeks Jan 6 – Apr 27
   const klientDates: { date: string; week: number }[] = []
-  let kd = new Date('2026-01-06')
+  const kd = new Date('2026-01-06')
   for (let i = 0; i < 18; i++) {
     klientDates.push({ date: kd.toISOString().slice(0, 10), week: i + 2 })
     kd.setDate(kd.getDate() + 7)

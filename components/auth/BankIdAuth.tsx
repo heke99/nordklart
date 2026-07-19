@@ -54,7 +54,11 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
   const abortRef = useRef<AbortController | null>(null)
   const lastStartRef = useRef<number>(0)
   const onCompleteRef = useRef(onComplete)
-  onCompleteRef.current = onComplete
+  // Keep the latest callback in a ref via an effect — writing during render
+  // violates the react-hooks/refs rule.
+  useEffect(() => {
+    onCompleteRef.current = onComplete
+  }, [onComplete])
 
   const pollFailureCount = useRef(0)
 

@@ -36,17 +36,17 @@ export function TaxPaymentPanel({
   const { toast } = useToast()
   const [downloading, setDownloading] = useState(false)
   const [marking, setMarking] = useState(false)
-  const [paymentDeadline, setPaymentDeadline] = useState<string>('')
 
-  useEffect(() => {
-    const m = /^(\d{4})-(\d{2})$/.exec(period)
-    if (!m) return
-    const year = parseInt(m[1], 10)
-    const month = parseInt(m[2], 10)
+  // Derived during render — the deadline is a pure function of `period`.
+  const periodMatch = /^(\d{4})-(\d{2})$/.exec(period)
+  let paymentDeadline = ''
+  if (periodMatch) {
+    const year = parseInt(periodMatch[1], 10)
+    const month = parseInt(periodMatch[2], 10)
     const dlMonth = month === 12 ? 1 : month + 1
     const dlYear = month === 12 ? year + 1 : year
-    setPaymentDeadline(`${dlYear}-${String(dlMonth).padStart(2, '0')}-12`)
-  }, [period])
+    paymentDeadline = `${dlYear}-${String(dlMonth).padStart(2, '0')}-12`
+  }
 
   const totalAmount = Math.round((totalTax + totalAvgifter) * 100) / 100
 

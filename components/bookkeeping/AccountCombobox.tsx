@@ -36,7 +36,12 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
 
   // Sync external value changes into the search field
   useEffect(() => {
-    setSearch(value)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setSearch(value)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [value])
 
   // Filter accounts based on search input
@@ -85,7 +90,12 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
 
   // Reset highlight when filtered results change
   useEffect(() => {
-    setHighlightedIndex(0)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setHighlightedIndex(0)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [filteredAccounts])
 
   // Scroll highlighted item into view

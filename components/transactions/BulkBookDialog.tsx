@@ -139,16 +139,21 @@ export default function BulkBookDialog({
 
   // Reset state when dialog closes so the next open starts clean.
   useEffect(() => {
-    if (!open) {
-      setTab('template')
-      setSelectedTemplateId(null)
-      setMode('one_line_per_tx')
-      setDescription('')
-      setManualLines([])
-    } else if (sharedDate) {
-      // Pre-fill description with a sensible default the user can edit.
-      setDescription(t('default_description', { date: sharedDate }))
-    }
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      if (!open) {
+        setTab('template')
+        setSelectedTemplateId(null)
+        setMode('one_line_per_tx')
+        setDescription('')
+        setManualLines([])
+      } else if (sharedDate) {
+        // Pre-fill description with a sensible default the user can edit.
+        setDescription(t('default_description', { date: sharedDate }))
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, sharedDate, t])
 
   // Pre-fill the bank side from the txs (one line per tx on 1930 with
@@ -162,24 +167,29 @@ export default function BulkBookDialog({
     if (tab !== 'manual') return
     if (manualLines.length > 0) return
     if (transactions.length === 0) return
-    const isIncome = direction === 'income'
-    const bankLines: ManualLine[] = transactions.map((tx) => ({
-      id: newManualLineId(),
-      account_number: '1930',
-      debit_amount: isIncome ? Math.abs(tx.amount).toFixed(2).replace('.', ',') : '',
-      credit_amount: isIncome ? '' : Math.abs(tx.amount).toFixed(2).replace('.', ','),
-      line_description: (tx.description || '').slice(0, 40).trim(),
-    }))
-    // One empty counterpart row to scaffold the next entry. Account
-    // left blank — user must choose, which avoids the no-VAT trap.
-    const counterpart: ManualLine = {
-      id: newManualLineId(),
-      account_number: '',
-      debit_amount: '',
-      credit_amount: '',
-      line_description: '',
-    }
-    setManualLines([...bankLines, counterpart])
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const isIncome = direction === 'income'
+      const bankLines: ManualLine[] = transactions.map((tx) => ({
+        id: newManualLineId(),
+        account_number: '1930',
+        debit_amount: isIncome ? Math.abs(tx.amount).toFixed(2).replace('.', ',') : '',
+        credit_amount: isIncome ? '' : Math.abs(tx.amount).toFixed(2).replace('.', ','),
+        line_description: (tx.description || '').slice(0, 40).trim(),
+      }))
+      // One empty counterpart row to scaffold the next entry. Account
+      // left blank — user must choose, which avoids the no-VAT trap.
+      const counterpart: ManualLine = {
+        id: newManualLineId(),
+        account_number: '',
+        debit_amount: '',
+        credit_amount: '',
+        line_description: '',
+      }
+      setManualLines([...bankLines, counterpart])
+    }, 0)
+    return () => clearTimeout(timer)
   }, [tab, manualLines.length, transactions, direction])
 
   // Live line preview — driven by either the template/mode pair (template

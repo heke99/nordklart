@@ -1,6 +1,6 @@
 import { getTranslations } from 'next-intl/server'
 import { Card, CardContent } from '@/components/ui/card'
-import { resolveIcon } from '@/lib/extensions/icon-resolver'
+import { EXTENSION_ICON_MAP, FALLBACK_EXTENSION_ICON } from '@/lib/extensions/icon-resolver'
 import { extensionNameKey, extensionDescriptionKey } from '@/lib/extensions/i18n'
 import type { ExtensionDefinition } from '@/lib/extensions/types'
 import CategoryBadge from './CategoryBadge'
@@ -14,7 +14,9 @@ export default async function ExtensionCard({ extension }: { extension: Extensio
   const name = nameKey ? t(nameKey) : extension.name
   const description = descriptionKey ? t(descriptionKey) : extension.description
 
-  const Icon = resolveIcon(extension.icon)
+  // Static map lookup instead of a call — the static-components rule treats a
+  // call-result component as created during render.
+  const Icon = EXTENSION_ICON_MAP[extension.icon] ?? FALLBACK_EXTENSION_ICON
 
   return (
     <Card className="group relative">

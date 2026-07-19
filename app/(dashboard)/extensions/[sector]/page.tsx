@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
 import { getSector } from '@/lib/extensions/sectors'
-import { resolveIcon } from '@/lib/extensions/icon-resolver'
+import { EXTENSION_ICON_MAP, FALLBACK_EXTENSION_ICON } from '@/lib/extensions/icon-resolver'
 import { sectorNameKey, sectorDescriptionKey } from '@/lib/extensions/i18n'
 import type { SectorSlug } from '@/lib/extensions/types'
 import ExtensionCard from '@/components/extensions/ExtensionCard'
@@ -25,7 +25,7 @@ export default async function SectorExtensionsPage({
   const sectorDescription = descriptionKey ? t(descriptionKey) : sector.description
 
 
-  const Icon = resolveIcon(sector.icon)
+  const Icon = EXTENSION_ICON_MAP[sector.icon] ?? FALLBACK_EXTENSION_ICON
 
   return (
     <div>

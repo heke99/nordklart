@@ -62,22 +62,27 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
   const [viewMode, setViewMode] = useState<'simplified' | 'detailed'>('simplified')
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    fetch(`/api/reports/trial-balance?period_id=${periodId}`)
-      .then((res) => res.json())
-      .then((result) => {
-        if (result.error) {
-          setError(result.error)
-        } else {
-          setData(result.data)
-        }
-        setLoading(false)
-      })
-      .catch(() => {
-        setError('Kunde inte hämta saldobalans')
-        setLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      setError(null)
+      fetch(`/api/reports/trial-balance?period_id=${periodId}`)
+        .then((res) => res.json())
+        .then((result) => {
+          if (result.error) {
+            setError(result.error)
+          } else {
+            setData(result.data)
+          }
+          setLoading(false)
+        })
+        .catch(() => {
+          setError('Kunde inte hämta saldobalans')
+          setLoading(false)
+        })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId])
 
   if (loading) {
@@ -378,38 +383,43 @@ export function IncomeStatementView({ periodId, dateRange, onNavigateToAccount }
   const reportQs = reportQuery(periodId, dateRange)
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    setMonthlyLoading(true)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      setError(null)
+      setMonthlyLoading(true)
 
-    fetch(`/api/reports/income-statement?${reportQs}`)
-      .then((res) => res.json())
-      .then((result) => {
-        if (result.error) {
-          setError(result.error)
-        } else {
-          setData(result.data)
-        }
-        setLoading(false)
-      })
-      .catch(() => {
-        setError('Kunde inte hämta resultaträkning')
-        setLoading(false)
-      })
+      fetch(`/api/reports/income-statement?${reportQs}`)
+        .then((res) => res.json())
+        .then((result) => {
+          if (result.error) {
+            setError(result.error)
+          } else {
+            setData(result.data)
+          }
+          setLoading(false)
+        })
+        .catch(() => {
+          setError('Kunde inte hämta resultaträkning')
+          setLoading(false)
+        })
 
-    // Monthly breakdown is full-period by design (it IS the per-month view),
-    // so the date range only affects the headline numbers above the chart.
-    fetch(`/api/reports/monthly-breakdown?period_id=${periodId}`)
-      .then((res) => res.json())
-      .then((result) => {
-        if (result.data?.months) {
-          setMonthlyData(result.data.months)
-        }
-        setMonthlyLoading(false)
-      })
-      .catch(() => {
-        setMonthlyLoading(false)
-      })
+      // Monthly breakdown is full-period by design (it IS the per-month view),
+      // so the date range only affects the headline numbers above the chart.
+      fetch(`/api/reports/monthly-breakdown?period_id=${periodId}`)
+        .then((res) => res.json())
+        .then((result) => {
+          if (result.data?.months) {
+            setMonthlyData(result.data.months)
+          }
+          setMonthlyLoading(false)
+        })
+        .catch(() => {
+          setMonthlyLoading(false)
+        })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId, reportQs])
 
   if (loading) {
@@ -534,22 +544,27 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
   const reportQs = reportQuery(periodId, dateRange)
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    fetch(`/api/reports/balance-sheet?${reportQs}`)
-      .then((res) => res.json())
-      .then((result) => {
-        if (result.error) {
-          setError(result.error)
-        } else {
-          setData(result.data)
-        }
-        setLoading(false)
-      })
-      .catch(() => {
-        setError('Kunde inte hämta balansräkning')
-        setLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      setError(null)
+      fetch(`/api/reports/balance-sheet?${reportQs}`)
+        .then((res) => res.json())
+        .then((result) => {
+          if (result.error) {
+            setError(result.error)
+          } else {
+            setData(result.data)
+          }
+          setLoading(false)
+        })
+        .catch(() => {
+          setError('Kunde inte hämta balansräkning')
+          setLoading(false)
+        })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId, reportQs])
 
   if (loading) {
@@ -655,22 +670,27 @@ export function ResultatrapportView({ periodId, dateRange, onNavigateToAccount }
   const reportQs = reportQuery(periodId, dateRange)
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    fetch(`/api/reports/resultatrapport?${reportQs}`)
-      .then((res) => res.json())
-      .then((result) => {
-        if (result.error) {
-          setError(result.error)
-        } else {
-          setData(result.data)
-        }
-        setLoading(false)
-      })
-      .catch(() => {
-        setError('Kunde inte hämta resultatrapport')
-        setLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      setError(null)
+      fetch(`/api/reports/resultatrapport?${reportQs}`)
+        .then((res) => res.json())
+        .then((result) => {
+          if (result.error) {
+            setError(result.error)
+          } else {
+            setData(result.data)
+          }
+          setLoading(false)
+        })
+        .catch(() => {
+          setError('Kunde inte hämta resultatrapport')
+          setLoading(false)
+        })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId, reportQs])
 
   if (loading) {
@@ -793,22 +813,27 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
   const reportQs = reportQuery(periodId, dateRange)
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    fetch(`/api/reports/balansrapport?${reportQs}`)
-      .then((res) => res.json())
-      .then((result) => {
-        if (result.error) {
-          setError(result.error)
-        } else {
-          setData(result.data)
-        }
-        setLoading(false)
-      })
-      .catch(() => {
-        setError('Kunde inte hämta balansrapport')
-        setLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      setError(null)
+      fetch(`/api/reports/balansrapport?${reportQs}`)
+        .then((res) => res.json())
+        .then((result) => {
+          if (result.error) {
+            setError(result.error)
+          } else {
+            setData(result.data)
+          }
+          setLoading(false)
+        })
+        .catch(() => {
+          setError('Kunde inte hämta balansrapport')
+          setLoading(false)
+        })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId, reportQs])
 
   if (loading) {
@@ -1063,13 +1088,18 @@ export function VatDeclarationView({
 
   // Reset period when type changes
   useEffect(() => {
-    if (periodType === 'monthly') {
-      setPeriod(currentMonth)
-    } else if (periodType === 'quarterly') {
-      setPeriod(currentQuarter)
-    } else {
-      setPeriod(1)
-    }
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      if (periodType === 'monthly') {
+        setPeriod(currentMonth)
+      } else if (periodType === 'quarterly') {
+        setPeriod(currentQuarter)
+      } else {
+        setPeriod(1)
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodType, currentMonth, currentQuarter])
 
   // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar year.
@@ -1553,7 +1583,13 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
   }
 
   useEffect(() => {
-    if (periodId) fetchData()
+    if (!periodId) return
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchData does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchData()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId])
 
   if (loading) {
@@ -1815,13 +1851,18 @@ export function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId
 
   // When initialAccountFilter changes (drill-down from another report), apply it
   useEffect(() => {
-    if (initialAccountFilter) {
-      setAccountFrom(initialAccountFilter)
-      setAccountTo(initialAccountFilter)
-      fetchData(initialAccountFilter, initialAccountFilter)
-    } else {
-      fetchData()
-    }
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchData does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      if (initialAccountFilter) {
+        setAccountFrom(initialAccountFilter)
+        setAccountTo(initialAccountFilter)
+        fetchData(initialAccountFilter, initialAccountFilter)
+      } else {
+        fetchData()
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId, initialAccountFilter])
 
   if (loading) {
@@ -2009,7 +2050,13 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
   }
 
   useEffect(() => {
-    if (periodId) fetchData()
+    if (!periodId) return
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchData does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchData()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId])
 
   const toggleEntry = (index: number) => {
@@ -2308,7 +2355,13 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
   }
 
   useEffect(() => {
-    if (periodId) fetchData()
+    if (!periodId) return
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchData does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchData()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId])
 
   const toggleCustomer = (customerId: string) => {

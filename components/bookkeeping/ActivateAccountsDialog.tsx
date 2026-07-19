@@ -43,22 +43,27 @@ export function ActivateAccountsDialog({
   useEffect(() => {
     if (!open || accountNumbers.length === 0) return
     let cancelled = false
-    setLoading(true)
-    fetch(`/api/bookkeeping/accounts/bas-lookup?numbers=${encodeURIComponent(accountNumbers.join(','))}`)
-      .then((r) => r.json())
-      .then((body) => {
-        if (cancelled) return
-        setRows((body?.data as BasLookupRow[]) || [])
-      })
-      .catch(() => {
-        if (cancelled) return
-        setRows(accountNumbers.map((n) => ({ account_number: n, account_name: null, known: false })))
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      fetch(`/api/bookkeeping/accounts/bas-lookup?numbers=${encodeURIComponent(accountNumbers.join(','))}`)
+        .then((r) => r.json())
+        .then((body) => {
+          if (cancelled) return
+          setRows((body?.data as BasLookupRow[]) || [])
+        })
+        .catch(() => {
+          if (cancelled) return
+          setRows(accountNumbers.map((n) => ({ account_number: n, account_name: null, known: false })))
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [open, accountNumbers])
 

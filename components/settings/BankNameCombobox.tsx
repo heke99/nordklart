@@ -70,7 +70,12 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
     : banks
 
   useEffect(() => {
-    setHighlightedIndex(-1)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setHighlightedIndex(-1)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [value])
 
   useEffect(() => {

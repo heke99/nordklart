@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { getHistoricalOpenSupplierInvoices } from '@/lib/invoices/historical-open-items'
+import { roundOre } from '@/lib/money'
 
 export interface ReconciliationResult {
   supplier_ledger_total: number
@@ -60,9 +61,9 @@ export async function generateReconciliation(
       continue
     }
     const sek = isFx
-      ? Math.round(item.open_amount * (item.exchange_rate as number) * 100) / 100
+      ? roundOre(item.open_amount * (item.exchange_rate as number))
       : item.open_amount
-    supplierLedgerTotal = Math.round((supplierLedgerTotal + sek) * 100) / 100
+    supplierLedgerTotal = roundOre(supplierLedgerTotal + sek)
   }
 
   // Unrealized FX revaluations on 2440 (A08). For payables the revaluation
@@ -81,9 +82,9 @@ export async function generateReconciliation(
     throw new Error(`Valutaomvärderingsunderlaget kunde inte läsas: ${revalError.message}`)
   }
   for (const item of revalItems ?? []) {
-    fxAdjustment = Math.round((fxAdjustment + (Number(item.unrealized_diff_sek) || 0)) * 100) / 100
+    fxAdjustment = roundOre(fxAdjustment + (Number(item.unrealized_diff_sek) || 0))
   }
-  supplierLedgerTotal = Math.round((supplierLedgerTotal + fxAdjustment) * 100) / 100
+  supplierLedgerTotal = roundOre(supplierLedgerTotal + fxAdjustment)
 
   // GL: CLOSING balance of 2440 (credit-normal) as of the same date.
   const { rows } = await generateTrialBalance(supabase, companyId, periodId, {
@@ -93,15 +94,15 @@ export async function generateReconciliation(
   for (const row of rows) {
     if (row.account_number === '2440') {
       account2440Balance =
-        Math.round((account2440Balance + row.closing_credit - row.closing_debit) * 100) / 100
+        roundOre(account2440Balance + row.closing_credit - row.closing_debit)
     }
   }
 
-  const difference = Math.round((supplierLedgerTotal - account2440Balance) * 100) / 100
+  const difference = roundOre(supplierLedgerTotal - account2440Balance)
 
   return {
-    supplier_ledger_total: Math.round(supplierLedgerTotal * 100) / 100,
-    account_2440_balance: Math.round(account2440Balance * 100) / 100,
+    supplier_ledger_total: roundOre(supplierLedgerTotal),
+    account_2440_balance: roundOre(account2440Balance),
     difference,
     is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
     as_of_date: effectiveAsOf,

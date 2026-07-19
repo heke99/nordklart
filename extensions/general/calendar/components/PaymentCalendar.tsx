@@ -27,11 +27,10 @@ export function PaymentCalendar({
   onDeadlineCreate,
   onDeadlineToggle,
 }: PaymentCalendarProps) {
-  const today = new Date()
-  const [year, setYear] = useState(today.getFullYear())
-  const [month, setMonth] = useState(today.getMonth())
+  const [year, setYear] = useState(() => new Date().getFullYear())
+  const [month, setMonth] = useState(() => new Date().getMonth())
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month')
-  const [selectedDate, setSelectedDate] = useState<Date>(today)
+  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date())
   const [showDayModal, setShowDayModal] = useState(false)
   const [modalDate, setModalDate] = useState<Date | null>(null)
   const [showDeadlineForm, setShowDeadlineForm] = useState(false)

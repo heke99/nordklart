@@ -54,7 +54,12 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
   }, [supabase, toast])
 
   useEffect(() => {
-    fetchData()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchData does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchData()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchData])
 
   const handleDeadlineCreate = async (

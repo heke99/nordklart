@@ -1870,30 +1870,39 @@ export default function ImportPage() {
   const searchParams = useSearchParams()
   useEffect(() => {
     if (isSandbox) return
-    if (searchParams.get('migration')) {
-      setMode('migration')
-    } else {
-      const modeParam = searchParams.get('mode')
-      if (modeParam && ['psd2', 'bank', 'sie', 'csv_data', 'migration'].includes(modeParam)) {
-        setMode(modeParam as ImportMode)
+    // Defer to the next macrotask so the synchronous setState calls do not
+    // run directly within the effect body.
+    const timer = setTimeout(() => {
+      if (searchParams.get('migration')) {
+        setMode('migration')
+      } else {
+        const modeParam = searchParams.get('mode')
+        if (modeParam && ['psd2', 'bank', 'sie', 'csv_data', 'migration'].includes(modeParam)) {
+          setMode(modeParam as ImportMode)
+        }
       }
-    }
-    const viewParam = searchParams.get('view')
-    if (viewParam === 'export' || viewParam === 'import') {
-      setView(viewParam)
-    }
+      const viewParam = searchParams.get('view')
+      if (viewParam === 'export' || viewParam === 'import') {
+        setView(viewParam)
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [isSandbox, searchParams])
 
   // Hash-based deep links (#cloud-backup, #sie-export) → switch to export tab and scroll
   useEffect(() => {
     if (typeof window === 'undefined') return
     const hash = window.location.hash
-    if (hash === '#cloud-backup' || hash === '#sie-export') {
+    if (hash !== '#cloud-backup' && hash !== '#sie-export') return
+    // Defer to the next macrotask so setView does not run synchronously
+    // within the effect body.
+    const timer = setTimeout(() => {
       setView('export')
       setTimeout(() => {
         document.querySelector(hash)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       }, 50)
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [])
 
   const handleViewChange = (next: string) => {

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { getHistoricalOpenInvoices } from '@/lib/invoices/historical-open-items'
+import { roundOre } from '@/lib/money'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
@@ -73,9 +74,9 @@ export async function generateARReconciliation(
       continue
     }
     const sek = isFx
-      ? Math.round(item.open_amount * (item.exchange_rate as number) * 100) / 100
+      ? roundOre(item.open_amount * (item.exchange_rate as number))
       : item.open_amount
-    arLedgerTotal = Math.round((arLedgerTotal + sek) * 100) / 100
+    arLedgerTotal = roundOre(arLedgerTotal + sek)
   }
 
   // Unrealized FX adjustments posted to 1510 (A08): the GL balance includes
@@ -93,9 +94,9 @@ export async function generateARReconciliation(
     throw new Error(`Valutaomvärderingsunderlaget kunde inte läsas: ${revalError.message}`)
   }
   for (const item of revalItems ?? []) {
-    fxAdjustment = Math.round((fxAdjustment + (Number(item.unrealized_diff_sek) || 0)) * 100) / 100
+    fxAdjustment = roundOre(fxAdjustment + (Number(item.unrealized_diff_sek) || 0))
   }
-  arLedgerTotal = Math.round((arLedgerTotal + fxAdjustment) * 100) / 100
+  arLedgerTotal = roundOre(arLedgerTotal + fxAdjustment)
 
   // GL: CLOSING balance of 1510 + 1513 as of the same date (opening +
   // movements), via the paginated trial balance (A06/A07).
@@ -106,15 +107,15 @@ export async function generateARReconciliation(
   for (const row of rows) {
     if (row.account_number === '1510' || row.account_number === '1513') {
       account1510Balance =
-        Math.round((account1510Balance + row.closing_debit - row.closing_credit) * 100) / 100
+        roundOre(account1510Balance + row.closing_debit - row.closing_credit)
     }
   }
 
-  const difference = Math.round((arLedgerTotal - account1510Balance) * 100) / 100
+  const difference = roundOre(arLedgerTotal - account1510Balance)
 
   return {
-    ar_ledger_total: Math.round(arLedgerTotal * 100) / 100,
-    account_1510_balance: Math.round(account1510Balance * 100) / 100,
+    ar_ledger_total: roundOre(arLedgerTotal),
+    account_1510_balance: roundOre(account1510Balance),
     difference,
     // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
     // any row was excluded for a missing exchange rate, the calculation is

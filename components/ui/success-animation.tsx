@@ -23,12 +23,19 @@ export function SuccessAnimation({
 
   useEffect(() => {
     if (show) {
-      setVisible(true)
-      const timer = setTimeout(() => {
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const showTimer = setTimeout(() => {
+        setVisible(true)
+      }, 0)
+      const hideTimer = setTimeout(() => {
         setVisible(false)
         onComplete?.()
       }, 2000)
-      return () => clearTimeout(timer)
+      return () => {
+        clearTimeout(showTimer)
+        clearTimeout(hideTimer)
+      }
     }
   }, [show, onComplete])
 

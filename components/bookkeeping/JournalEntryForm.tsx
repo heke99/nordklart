@@ -158,61 +158,76 @@ export default function JournalEntryForm({
   }
 
   useEffect(() => {
-    fetchPeriods()
-    fetchAccounts()
-    // Fetch default voucher series from company settings — prefer the
-    // per-source-type mapping when present; fall back to the legacy
-    // default_voucher_series, then to 'A'.
-    if (!embedded) {
-      fetch('/api/settings').then(r => r.json()).then(({ data }) => {
-        if (!data) return
-        const effectiveSourceType = sourceType ?? 'manual'
-        const perSource = resolveDefaultSeriesForSource(
-          data as { default_voucher_series_per_source_type?: Record<string, string> | null } | null,
-          effectiveSourceType,
-        )
-        const fallback = data.default_voucher_series || 'A'
-        setVoucherSeries(perSource !== 'A' ? perSource : fallback)
-      }).catch(() => {/* keep 'A' */})
-    }
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchPeriods/fetchAccounts does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchPeriods()
+      fetchAccounts()
+      // Fetch default voucher series from company settings — prefer the
+      // per-source-type mapping when present; fall back to the legacy
+      // default_voucher_series, then to 'A'.
+      if (!embedded) {
+        fetch('/api/settings').then(r => r.json()).then(({ data }) => {
+          if (!data) return
+          const effectiveSourceType = sourceType ?? 'manual'
+          const perSource = resolveDefaultSeriesForSource(
+            data as { default_voucher_series_per_source_type?: Record<string, string> | null } | null,
+            effectiveSourceType,
+          )
+          const fallback = data.default_voucher_series || 'A'
+          setVoucherSeries(perSource !== 'A' ? perSource : fallback)
+        }).catch(() => {/* keep 'A' */})
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [embedded, sourceType])
 
   // Auto-select period when entry date changes
   useEffect(() => {
     if (periods.length === 0) return
-    const match = periods.find(
-      (p) => entryDate >= p.period_start && entryDate <= p.period_end
-    )
-    if (match) {
-      setSelectedPeriod(match.id)
-      setPeriodMismatch(null)
-    } else {
-      setPeriodMismatch('no_period')
-    }
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const match = periods.find(
+        (p) => entryDate >= p.period_start && entryDate <= p.period_end
+      )
+      if (match) {
+        setSelectedPeriod(match.id)
+        setPeriodMismatch(null)
+      } else {
+        setPeriodMismatch('no_period')
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [entryDate, periods])
 
   // Preview the upcoming voucher number for the selected period + series.
   // Read-only hint; the actual number is reserved atomically at commit time,
   // so this may shift by one if another entry lands first.
   useEffect(() => {
-    if (embedded || !selectedPeriod || !voucherSeries) {
-      setNextVoucherNumber(null)
-      return
-    }
     let cancelled = false
-    const qs = new URLSearchParams({ period_id: selectedPeriod, series: voucherSeries })
-    fetch(`/api/bookkeeping/voucher-sequences/next?${qs}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        if (cancelled) return
-        const next = body?.data?.next
-        setNextVoucherNumber(typeof next === 'number' ? next : null)
-      })
-      .catch(() => {
-        if (!cancelled) setNextVoucherNumber(null)
-      })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      if (embedded || !selectedPeriod || !voucherSeries) {
+        setNextVoucherNumber(null)
+        return
+      }
+      const qs = new URLSearchParams({ period_id: selectedPeriod, series: voucherSeries })
+      fetch(`/api/bookkeeping/voucher-sequences/next?${qs}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((body) => {
+          if (cancelled) return
+          const next = body?.data?.next
+          setNextVoucherNumber(typeof next === 'number' ? next : null)
+        })
+        .catch(() => {
+          if (!cancelled) setNextVoucherNumber(null)
+        })
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [embedded, selectedPeriod, voucherSeries])
 
@@ -236,9 +251,13 @@ export default function JournalEntryForm({
   }, [entryDate])
 
   useEffect(() => {
-    if (entryCurrency !== 'SEK') {
+    if (entryCurrency === 'SEK') return
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchRate does not run directly within the effect body.
+    const timer = setTimeout(() => {
       fetchRate(entryCurrency)
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [entryCurrency, fetchRate])
 
   // Stable key of selected account numbers across all lines, sorted + deduped.
@@ -258,18 +277,23 @@ export default function JournalEntryForm({
   // the draft lines the user is typing, by design.
   useEffect(() => {
     if (!accountsKey) {
-      setAccountBalances({})
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => setAccountBalances({}), 0)
+      return () => clearTimeout(timer)
     }
     const accountList = accountsKey.split(',')
     // Carry forward any previously-known balances for these accounts so the
     // value doesn't blank out on re-fetch; mark genuinely new accounts as
-    // loading (null).
-    setAccountBalances((prev) => {
-      const next: Record<string, number | null> = {}
-      for (const a of accountList) next[a] = a in prev ? prev[a] : null
-      return next
-    })
+    // loading (null). Deferred a macrotask so the setState does not run
+    // synchronously within the effect body.
+    const seedTimer = setTimeout(() => {
+      setAccountBalances((prev) => {
+        const next: Record<string, number | null> = {}
+        for (const a of accountList) next[a] = a in prev ? prev[a] : null
+        return next
+      })
+    }, 0)
 
     let cancelled = false
     const handle = setTimeout(async () => {
@@ -307,6 +331,7 @@ export default function JournalEntryForm({
 
     return () => {
       cancelled = true
+      clearTimeout(seedTimer)
       clearTimeout(handle)
     }
   }, [accountsKey, entryDate])
@@ -388,13 +413,18 @@ export default function JournalEntryForm({
   // other's result — making it idempotent and safe under StrictMode's dev-only
   // double-invoke (no runaway append, no double blank row).
   useEffect(() => {
-    setLines((prev) => {
-      const last = prev[prev.length - 1]
-      if (!last) return prev
-      const trailingBlank =
-        last.account_number === '' && last.debit_amount === '' && last.credit_amount === ''
-      return trailingBlank ? prev : [...prev, { ...BLANK_LINE }]
-    })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLines((prev) => {
+        const last = prev[prev.length - 1]
+        if (!last) return prev
+        const trailingBlank =
+          last.account_number === '' && last.debit_amount === '' && last.credit_amount === ''
+        return trailingBlank ? prev : [...prev, { ...BLANK_LINE }]
+      })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [lines])
 
   // Only lines with both an account and a non-zero amount end up in the submit

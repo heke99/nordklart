@@ -48,7 +48,12 @@ export default function MunicipalityCombobox({
 
   // Sync external value changes into the search field
   useEffect(() => {
-    setSearch(value)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setSearch(value)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [value])
 
   // Load the municipality list once per year
@@ -77,7 +82,12 @@ export default function MunicipalityCombobox({
   }, [kommuner, search])
 
   useEffect(() => {
-    setHighlightedIndex(0)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setHighlightedIndex(0)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [filtered])
 
   useEffect(() => {

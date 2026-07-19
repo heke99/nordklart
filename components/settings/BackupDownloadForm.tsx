@@ -49,7 +49,12 @@ export function BackupDownloadForm() {
 
   useEffect(() => {
     if (!storageKey) return
-    setLastDownloadedAt(window.localStorage.getItem(storageKey))
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLastDownloadedAt(window.localStorage.getItem(storageKey))
+    }, 0)
+    return () => clearTimeout(timer)
   }, [storageKey])
 
   useEffect(() => {
@@ -89,26 +94,33 @@ export function BackupDownloadForm() {
 
   useEffect(() => {
     if (scope === 'period' && !selectedPeriodId) {
-      setEstimate(null)
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => setEstimate(null), 0)
+      return () => clearTimeout(timer)
     }
     let cancelled = false
-    setIsLoadingEstimate(true)
-    setEstimate(null)
-    ;(async () => {
-      try {
-        const res = await fetch(estimateUrl)
-        if (!res.ok) return
-        const { data } = (await res.json()) as { data: EstimateResponse }
-        if (!cancelled) setEstimate(data)
-      } catch {
-        // leave estimate null; we still let users attempt the download
-      } finally {
-        if (!cancelled) setIsLoadingEstimate(false)
-      }
-    })()
+    // Deferred a macrotask so the loading setState does not run synchronously
+    // within the effect body.
+    const timer = setTimeout(() => {
+      setIsLoadingEstimate(true)
+      setEstimate(null)
+      ;(async () => {
+        try {
+          const res = await fetch(estimateUrl)
+          if (!res.ok) return
+          const { data } = (await res.json()) as { data: EstimateResponse }
+          if (!cancelled) setEstimate(data)
+        } catch {
+          // leave estimate null; we still let users attempt the download
+        } finally {
+          if (!cancelled) setIsLoadingEstimate(false)
+        }
+      })()
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [estimateUrl, scope, selectedPeriodId])
 

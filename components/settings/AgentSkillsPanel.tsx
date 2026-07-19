@@ -71,7 +71,14 @@ export function AgentSkillsPanel() {
     setAtoms(json.data as AtomMeta[])
   }, [toast])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    // Defer to the next macrotask so the synchronous setState inside
+    // load does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [load])
 
   const grouped = useMemo(() => {
     const map: Record<Tier, AtomMeta[]> = { horizontal: [], vertical: [], modifier: [] }

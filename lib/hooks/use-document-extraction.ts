@@ -39,13 +39,14 @@ export function useDocumentExtraction(documentId: string | null | undefined): St
 
   useEffect(() => {
     if (!documentId) {
-      setState({ status: 'idle', elapsedMs: 0 })
-      return
+      // Defer to the next macrotask so the synchronous reset does not run
+      // directly within the effect body.
+      const idleTimer = setTimeout(() => setState({ status: 'idle', elapsedMs: 0 }), 0)
+      return () => clearTimeout(idleTimer)
     }
 
     let cancelled = false
     const startedAt = Date.now()
-    setState({ status: 'running', elapsedMs: 0 })
 
     async function tick(): Promise<void> {
       if (cancelled) return
@@ -81,10 +82,16 @@ export function useDocumentExtraction(documentId: string | null | undefined): St
       }, POLL_INTERVAL_MS)
     }
 
-    void tick()
+    // Defer the initial "running" state + first poll to the next macrotask so
+    // the synchronous setState does not run directly within the effect body.
+    const startTimer = setTimeout(() => {
+      setState({ status: 'running', elapsedMs: 0 })
+      void tick()
+    }, 0)
 
     return () => {
       cancelled = true
+      clearTimeout(startTimer)
     }
   }, [documentId])
 

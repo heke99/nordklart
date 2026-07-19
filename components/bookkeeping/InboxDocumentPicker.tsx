@@ -91,25 +91,30 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
   // Reset + fetch each time the dialog opens.
   useEffect(() => {
     if (!open) return
-    setSearch('')
-    setItems([])
-    setPreviewItem(null)
-    setLoading(true)
     let cancelled = false
-    ;(async () => {
-      try {
-        const res = await fetch('/api/documents/inbox-available')
-        const json = (await res.json().catch(() => ({}))) as { data?: AvailableInboxDoc[] }
-        if (cancelled) return
-        setItems(json.data ?? [])
-      } catch {
-        if (!cancelled) setItems([])
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    })()
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setSearch('')
+      setItems([])
+      setPreviewItem(null)
+      setLoading(true)
+      ;(async () => {
+        try {
+          const res = await fetch('/api/documents/inbox-available')
+          const json = (await res.json().catch(() => ({}))) as { data?: AvailableInboxDoc[] }
+          if (cancelled) return
+          setItems(json.data ?? [])
+        } catch {
+          if (!cancelled) setItems([])
+        } finally {
+          if (!cancelled) setLoading(false)
+        }
+      })()
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [open])
 

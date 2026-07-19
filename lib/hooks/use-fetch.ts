@@ -23,8 +23,9 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  *    result while the new request is in flight (keep-previous-data), so lists
  *    don't blank out on refresh. Read `loading` to show a pending indicator.
  *  - When `url`/`enabled` start inactive and later become active, `loading`
- *    flips true on the effect tick, not synchronously on the activating render.
- *    Pair with `DataState` (which branches on `loading` first) to avoid a flash.
+ *    flips true on the macrotask after the effect tick, not synchronously on
+ *    the activating render. Pair with `DataState` (which branches on `loading`
+ *    first) to avoid a flash.
  *
  * Response convention: the JSON body is returned as-is, typed as `T`. Most
  * Nordklart routes wrap payloads as `{ data: ... }`, so the common usage is
@@ -61,11 +62,16 @@ export function useFetch<T = unknown, R = T>(
   const { enabled = true, select, init } = options
   const locale = useLocale() as ErrorLocale
 
-  // Keep select/init out of the effect deps without re-running on every render.
+  // Keep select/init out of the fetch effect's deps without re-running it on
+  // every render. Synced in an effect (not during render) so render stays
+  // pure; the refs are only read inside the deferred fetch callback below,
+  // which always runs after this sync effect.
   const selectRef = useRef(select)
-  selectRef.current = select
   const initRef = useRef(init)
-  initRef.current = init
+  useEffect(() => {
+    selectRef.current = select
+    initRef.current = init
+  })
 
   const active = enabled && url != null
   const [data, setData] = useState<R | null>(null)
@@ -77,35 +83,44 @@ export function useFetch<T = unknown, R = T>(
 
   useEffect(() => {
     if (!active || url == null) {
-      setLoading(false)
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const idleTimer = setTimeout(() => setLoading(false), 0)
+      return () => clearTimeout(idleTimer)
     }
 
     const controller = new AbortController()
-    setLoading(true)
-    setError(null)
+    // Defer the request start to the next macrotask for the same reason; the
+    // cleanup clears the timer so a cancelled effect never starts the fetch.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      setError(null)
 
-    ;(async () => {
-      try {
-        const res = await fetch(url, { ...initRef.current, signal: controller.signal })
-        const body = await res.json().catch(() => null)
-        if (!res.ok) {
-          throw new Error(
-            getErrorMessage(body ?? { error: res.statusText }, { locale, statusCode: res.status }),
-          )
+      ;(async () => {
+        try {
+          const res = await fetch(url, { ...initRef.current, signal: controller.signal })
+          const body = await res.json().catch(() => null)
+          if (!res.ok) {
+            throw new Error(
+              getErrorMessage(body ?? { error: res.statusText }, { locale, statusCode: res.status }),
+            )
+          }
+          if (controller.signal.aborted) return
+          const transform = selectRef.current
+          setData((transform ? transform(body as T) : (body as unknown as R)))
+        } catch (err) {
+          if (controller.signal.aborted || (err as Error)?.name === 'AbortError') return
+          setError(getErrorMessage(err, { locale }))
+        } finally {
+          if (!controller.signal.aborted) setLoading(false)
         }
-        if (controller.signal.aborted) return
-        const transform = selectRef.current
-        setData((transform ? transform(body as T) : (body as unknown as R)))
-      } catch (err) {
-        if (controller.signal.aborted || (err as Error)?.name === 'AbortError') return
-        setError(getErrorMessage(err, { locale }))
-      } finally {
-        if (!controller.signal.aborted) setLoading(false)
-      }
-    })()
+      })()
+    }, 0)
 
-    return () => controller.abort()
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
   }, [url, active, nonce, locale])
 
   return { data, loading, error, refetch }

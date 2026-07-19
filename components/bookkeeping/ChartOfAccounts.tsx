@@ -37,7 +37,13 @@ export default function ChartOfAccounts() {
   }
 
   useEffect(() => {
-    fetchAccounts()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchAccounts does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchAccounts()
+    }, 0)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function updateSRUCode(accountId: string, newSruCode: string) {

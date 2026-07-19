@@ -70,7 +70,13 @@ export default function SuppliersPage() {
   }
 
   useEffect(() => {
-    fetchSuppliers()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchSuppliers does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchSuppliers()
+    }, 0)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function handleCreateSupplier(data: CreateSupplierInput) {

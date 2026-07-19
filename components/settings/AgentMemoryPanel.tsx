@@ -81,7 +81,14 @@ export function AgentMemoryPanel() {
     setRows(json.data as AgentMemoryRow[])
   }, [includeDismissed, kindFilter, toast])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    // Defer to the next macrotask so the synchronous setState inside
+    // load does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [load])
 
   const counts = useMemo(() => {
     const active = rows?.filter((r) => r.is_active).length ?? 0

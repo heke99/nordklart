@@ -29,11 +29,6 @@ export function CalendarFeedSettings() {
   const [copied, setCopied] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
-  useEffect(() => {
-    fetchFeed()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   const fetchFeed = async () => {
     setIsLoading(true)
 
@@ -43,6 +38,16 @@ export function CalendarFeedSettings() {
     setFeed(data)
     setIsLoading(false)
   }
+
+  useEffect(() => {
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchFeed does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchFeed()
+    }, 0)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const createFeed = async () => {
     setIsSaving(true)

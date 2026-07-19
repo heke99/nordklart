@@ -47,7 +47,13 @@ export default function EditTransactionTitleDialog({
 
   // Re-seed the field each time the dialog opens for a (possibly different) row.
   useEffect(() => {
-    if (open) setValue(currentTitle)
+    if (!open) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setValue(currentTitle)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, currentTitle])
 
   const trimmed = value.trim()

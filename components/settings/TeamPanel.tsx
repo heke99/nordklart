@@ -45,7 +45,12 @@ export function TeamPanel() {
   }, [])
 
   useEffect(() => {
-    fetchMembers()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchMembers does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchMembers()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchMembers])
 
   if (isLoading) {

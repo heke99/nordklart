@@ -71,11 +71,18 @@ export default function ImportReviewStep({
 
   useEffect(() => {
     if (!company?.id) return
-    setSeriesLoaded(false)
+    // Captured so the narrowed id survives into the async function below.
+    const companyId = company.id
     const supabase = createClient()
 
     let cancelled = false
-    ;(async () => {
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setSeriesLoaded(false)
+      void loadSeries()
+    }, 0)
+    async function loadSeries() {
       const [
         { data: settingsData, error: settingsError },
         { data: sequencesData, error: sequencesError },
@@ -83,12 +90,12 @@ export default function ImportReviewStep({
         supabase
           .from('company_settings')
           .select('default_voucher_series')
-          .eq('company_id', company.id)
+          .eq('company_id', companyId)
           .maybeSingle(),
         supabase
           .from('voucher_sequences')
           .select('voucher_series')
-          .eq('company_id', company.id),
+          .eq('company_id', companyId),
       ])
 
       if (cancelled) return
@@ -109,10 +116,11 @@ export default function ImportReviewStep({
       const initial = companyDefault || (sequences.has('B') ? 'B' : Array.from(sequences).sort()[0]) || 'A'
       setOptions((prev) => ({ ...prev, voucherSeries: initial }))
       setSeriesLoaded(true)
-    })()
+    }
 
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [company?.id])
 
@@ -121,14 +129,21 @@ export default function ImportReviewStep({
 
   // Elapsed time counter during import
   useEffect(() => {
-    if (isLoading) {
-      setElapsed(0)
-      intervalRef.current = setInterval(() => setElapsed((s) => s + 1), 1000)
-    } else {
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      if (isLoading) {
+        setElapsed(0)
+        intervalRef.current = setInterval(() => setElapsed((s) => s + 1), 1000)
+      } else {
+        if (intervalRef.current) clearInterval(intervalRef.current)
+        setElapsed(0)
+      }
+    }, 0)
+    return () => {
+      clearTimeout(timer)
       if (intervalRef.current) clearInterval(intervalRef.current)
-      setElapsed(0)
     }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
   }, [isLoading])
 
   const handleExecute = () => {

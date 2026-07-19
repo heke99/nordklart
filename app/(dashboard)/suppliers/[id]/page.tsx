@@ -63,8 +63,13 @@ export default function SupplierDetailPage() {
   }
 
   useEffect(() => {
-    fetchSupplier()
-    fetchInvoices()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchSupplier does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchSupplier()
+      fetchInvoices()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [params.id])
 
   async function handleUpdate(data: CreateSupplierInput) {

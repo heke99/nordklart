@@ -117,10 +117,15 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   // Auto-select matching fiscal period when disposalDate changes.
   useEffect(() => {
     if (!disposalDate || periods.length === 0) return
-    const match = periods.find(
-      (p) => disposalDate >= p.period_start && disposalDate <= p.period_end,
-    )
-    if (match && match.id !== periodId) setPeriodId(match.id)
+    // Defer to the next macrotask so setPeriodId does not run synchronously
+    // within the effect body.
+    const timer = setTimeout(() => {
+      const match = periods.find(
+        (p) => disposalDate >= p.period_start && disposalDate <= p.period_end,
+      )
+      if (match && match.id !== periodId) setPeriodId(match.id)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [disposalDate, periods, periodId])
 
   // Derived: VAT rate from treatment
@@ -135,13 +140,17 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
 
   // Auto-fill VAT amount when auto-calc is on.
   useEffect(() => {
-    if (vatAutoCalc) {
+    if (!vatAutoCalc) return
+    // Defer to the next macrotask so setVatAmount does not run synchronously
+    // within the effect body.
+    const timer = setTimeout(() => {
       if (selectedVatOpt && selectedVatOpt.rate !== null) {
         setVatAmount(String(computedVat))
       } else {
         setVatAmount('0')
       }
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [computedVat, selectedVatOpt, vatAutoCalc])
 
   // Jämkning eligibility — derived from asset + disposal date.
@@ -158,9 +167,13 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
 
   // Auto-enable jämkning toggle when disposal falls within the correction period.
   useEffect(() => {
-    if (eligibility?.withinCorrectionPeriod && !jamkningEnabled) {
+    if (!eligibility?.withinCorrectionPeriod || jamkningEnabled) return
+    // Defer to the next macrotask so setJamkningEnabled does not run
+    // synchronously within the effect body.
+    const timer = setTimeout(() => {
       setJamkningEnabled(true)
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [eligibility?.withinCorrectionPeriod, jamkningEnabled])
 
   const originalInputVatNum = Number(originalInputVat) || 0

@@ -68,6 +68,15 @@ const CURRENCY_DEFAULTS: Record<string, string> = {
   GBP: '1934',
 }
 
+// Custom-date picker bounds, computed once at module load: today (max) back to
+// one year ago (min). Computed here rather than in render because render must
+// stay pure (react-hooks/purity); a session spanning midnight keeps the
+// previous day's bounds, which is harmless for a backfill start-date picker.
+const CUSTOM_DATE_MAX = new Date().toISOString().split('T')[0]
+const CUSTOM_DATE_MIN = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .split('T')[0]
+
 export function AccountPickerDialog({
   open,
   onOpenChange,
@@ -98,7 +107,13 @@ export function AccountPickerDialog({
   const [progressOpen, setProgressOpen] = useState(false)
   const [progressState, setProgressState] = useState<SyncProgressState>({ kind: 'syncing' })
 
-  useEffect(() => {
+  // Reset the editable state whenever the dialog (re)opens or the account
+  // list changes while open. Done during render with the prev-comparison
+  // pattern (react.dev "adjusting state when a prop changes") instead of an
+  // effect, so the reset lands in the same render pass.
+  const [prevSync, setPrevSync] = useState<{ open: boolean; accounts: StoredAccount[] } | null>(null)
+  if (prevSync === null || prevSync.open !== open || prevSync.accounts !== accounts) {
+    setPrevSync({ open, accounts })
     if (open) {
       const initial = new Set<string>(
         accounts.filter(a => a.enabled !== false).map(a => a.uid)
@@ -118,7 +133,7 @@ export function AccountPickerDialog({
       }
       setLedgerByUid(initialLedger)
     }
-  }, [open, accounts])
+  }
 
   // Load fiscal_year_start_month + entity_type so "Sedan räkenskapsårets början"
   // resolves to the right date for non-calendar fiscal years.
@@ -142,8 +157,10 @@ export function AccountPickerDialog({
   // initial activation flow — selection edits don't re-run sync.
   useEffect(() => {
     if (!open || !isInitialSelection || !company?.id) {
-      setSieLastDate(null)
-      return
+      // Defer to the next macrotask so the synchronous reset does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => setSieLastDate(null), 0)
+      return () => clearTimeout(timer)
     }
     let cancelled = false
     ;(async () => {
@@ -202,6 +219,43 @@ export function AccountPickerDialog({
       .filter(([, currencies]) => currencies.size > 1)
       .map(([ledger, currencies]) => ({ ledger, currencies: Array.from(currencies) }))
   }, [accounts, selected, ledgerByUid])
+
+  const dayAfterSie = useMemo(() => {
+    if (!sieLastDate) return null
+    const d = new Date(sieLastDate)
+    d.setDate(d.getDate() + 1)
+    return d.toISOString().split('T')[0]
+  }, [sieLastDate])
+
+  const fiscalYearStart = useMemo(
+    () => getCurrentFiscalYearStart(companySettings),
+    [companySettings],
+  )
+
+  const previousFiscalYearStart = useMemo(
+    () => getPreviousFiscalYearStart(companySettings),
+    [companySettings],
+  )
+
+  // Resolve mode → concrete request payload and a "resolved from-date" for display.
+  // Declared before handleSave, which reads it — a forward reference would keep
+  // the React Compiler from preserving this memoization.
+  const lookback = useMemo(() => {
+    if (lookbackMode === 'fast') {
+      return { body: { initial_lookback_days: 90 }, fromDate: null as string | null, days: 90 }
+    }
+    if (lookbackMode === 'fiscal-year') {
+      return { body: { initial_lookback_from_date: fiscalYearStart }, fromDate: fiscalYearStart, days: daysBetween(fiscalYearStart) }
+    }
+    // custom
+    const date = customSubMode === 'previous-fiscal-year' ? previousFiscalYearStart : customDate
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return { body: { initial_lookback_from_date: date }, fromDate: date, days: daysBetween(date) }
+    }
+    return { body: null as Record<string, string | number> | null, fromDate: null as string | null, days: 0 }
+  }, [lookbackMode, customSubMode, customDate, fiscalYearStart, previousFiscalYearStart])
+
+  const showLongRangeHelper = lookback.days > 90
 
   function toggle(uid: string) {
     setSelected(prev => {
@@ -326,41 +380,6 @@ export function AccountPickerDialog({
       setIsSaving(false)
     }
   }
-
-  const dayAfterSie = useMemo(() => {
-    if (!sieLastDate) return null
-    const d = new Date(sieLastDate)
-    d.setDate(d.getDate() + 1)
-    return d.toISOString().split('T')[0]
-  }, [sieLastDate])
-
-  const fiscalYearStart = useMemo(
-    () => getCurrentFiscalYearStart(companySettings),
-    [companySettings],
-  )
-
-  const previousFiscalYearStart = useMemo(
-    () => getPreviousFiscalYearStart(companySettings),
-    [companySettings],
-  )
-
-  // Resolve mode → concrete request payload and a "resolved from-date" for display.
-  const lookback = useMemo(() => {
-    if (lookbackMode === 'fast') {
-      return { body: { initial_lookback_days: 90 }, fromDate: null as string | null, days: 90 }
-    }
-    if (lookbackMode === 'fiscal-year') {
-      return { body: { initial_lookback_from_date: fiscalYearStart }, fromDate: fiscalYearStart, days: daysBetween(fiscalYearStart) }
-    }
-    // custom
-    const date = customSubMode === 'previous-fiscal-year' ? previousFiscalYearStart : customDate
-    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return { body: { initial_lookback_from_date: date }, fromDate: date, days: daysBetween(date) }
-    }
-    return { body: null as Record<string, string | number> | null, fromDate: null as string | null, days: 0 }
-  }, [lookbackMode, customSubMode, customDate, fiscalYearStart, previousFiscalYearStart])
-
-  const showLongRangeHelper = lookback.days > 90
 
   return (
     <>
@@ -491,8 +510,8 @@ export function AccountPickerDialog({
                           type="date"
                           value={customDate}
                           onChange={(e) => setCustomDate(e.target.value)}
-                          max={new Date().toISOString().split('T')[0]}
-                          min={new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+                          max={CUSTOM_DATE_MAX}
+                          min={CUSTOM_DATE_MIN}
                           disabled={isSaving}
                           className="tabular-nums"
                         />

@@ -49,26 +49,31 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    fetch(`/api/bookkeeping/fiscal-periods/${periodId}/accruals`)
-      .then(async (res) => {
-        const body = await res.json()
-        if (cancelled) return
-        if (!res.ok) {
-          setError(body?.error?.message ?? 'Kunde inte ladda periodiseringar')
-          return
-        }
-        setProposal(body.data as AccrualsProposal)
-      })
-      .catch(() => {
-        if (!cancelled) setError('Kunde inte ladda periodiseringar')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      setError(null)
+      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/accruals`)
+        .then(async (res) => {
+          const body = await res.json()
+          if (cancelled) return
+          if (!res.ok) {
+            setError(body?.error?.message ?? 'Kunde inte ladda periodiseringar')
+            return
+          }
+          setProposal(body.data as AccrualsProposal)
+        })
+        .catch(() => {
+          if (!cancelled) setError('Kunde inte ladda periodiseringar')
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [periodId])
 

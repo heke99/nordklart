@@ -79,7 +79,12 @@ export function PeriodiskSammanstallningView() {
       ]
 
   useEffect(() => {
-    setPeriod(periodType === 'monthly' ? currentMonth : currentQuarter)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setPeriod(periodType === 'monthly' ? currentMonth : currentQuarter)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodType, currentMonth, currentQuarter])
 
   const fetchReport = async () => {

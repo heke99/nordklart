@@ -46,24 +46,36 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
   // Reset to the original date each time the dialog opens.
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
       setNewDate(entry.entry_date)
       setPreview(null)
       setPreviewError(null)
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, entry.entry_date])
 
   // Resolve the target period status whenever a valid, changed date is entered.
   useEffect(() => {
     if (!open) return
     if (!ISO_DATE.test(newDate) || newDate === entry.entry_date) {
-      setPreview(null)
-      setPreviewError(null)
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => {
+        setPreview(null)
+        setPreviewError(null)
+      }, 0)
+      return () => clearTimeout(timer)
     }
     let cancelled = false
-    setPreviewLoading(true)
-    setPreviewError(null)
+    // Deferred a macrotask so the loading setState does not run synchronously
+    // within the effect body.
+    const loadingTimer = setTimeout(() => {
+      setPreviewLoading(true)
+      setPreviewError(null)
+    }, 0)
     const handle = setTimeout(async () => {
       try {
         const res = await fetch(
@@ -86,6 +98,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
     }, 250)
     return () => {
       cancelled = true
+      clearTimeout(loadingTimer)
       clearTimeout(handle)
     }
   }, [newDate, open, entry.entry_date])

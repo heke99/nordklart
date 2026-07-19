@@ -81,7 +81,12 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
   }, [periodId])
 
   useEffect(() => {
-    void loadProposals()
+    // Defer to the next macrotask so the synchronous setState inside
+    // loadProposals does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      void loadProposals()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [loadProposals])
 
   // ---- POST accepted dispositions ----

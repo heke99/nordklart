@@ -287,22 +287,28 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
   const { toast } = useToast()
 
   // Convert stored UTC hour to the user's local hour for display.
-  const initialLocalHour =
+  const scheduleEnabled = schedule?.enabled ?? false
+  const scheduleLocalHour =
     schedule && typeof schedule.hour_utc === 'number'
       ? utcHourToLocalHour(schedule.hour_utc)
       : utcHourToLocalHour(3)
-  const [enabled, setEnabled] = useState(schedule?.enabled ?? false)
-  const [localHour, setLocalHour] = useState(initialLocalHour)
+  const [enabled, setEnabled] = useState(scheduleEnabled)
+  const [localHour, setLocalHour] = useState(scheduleLocalHour)
   const [isSaving, setIsSaving] = useState(false)
 
-  useEffect(() => {
-    setEnabled(schedule?.enabled ?? false)
-    setLocalHour(
-      schedule && typeof schedule.hour_utc === 'number'
-        ? utcHourToLocalHour(schedule.hour_utc)
-        : utcHourToLocalHour(3)
-    )
-  }, [schedule?.enabled, schedule?.hour_utc])
+  // Re-sync the local edit state whenever the server schedule changes (e.g.
+  // after onUpdated() refetches). Adjusting state during render with the
+  // prev-comparison pattern (react.dev "adjusting state when a prop changes")
+  // replaces the previous effect, applying the reset in the same render pass.
+  const [prevSchedule, setPrevSchedule] = useState({
+    enabled: scheduleEnabled,
+    localHour: scheduleLocalHour,
+  })
+  if (prevSchedule.enabled !== scheduleEnabled || prevSchedule.localHour !== scheduleLocalHour) {
+    setPrevSchedule({ enabled: scheduleEnabled, localHour: scheduleLocalHour })
+    setEnabled(scheduleEnabled)
+    setLocalHour(scheduleLocalHour)
+  }
 
   const save = useCallback(
     async (nextEnabled: boolean, nextLocalHour: number) => {

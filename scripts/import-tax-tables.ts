@@ -172,9 +172,9 @@ function main() {
   const totalRows = tables.reduce((sum, t) => sum + t.rows.length, 0)
   console.log(`Parsed ${tables.length} tables (${tables.map(t => t.tableNumber).join(', ')}), ${totalRows} B-rows total`)
 
-  const module = emitModule(year, tables)
-  writeFileSync(outputPath, module, 'utf-8')
-  console.log(`Wrote ${outputPath} (${module.length.toLocaleString()} bytes)`)
+  const moduleSource = emitModule(year, tables)
+  writeFileSync(outputPath, moduleSource, 'utf-8')
+  console.log(`Wrote ${outputPath} (${moduleSource.length.toLocaleString()} bytes)`)
 }
 
 main()

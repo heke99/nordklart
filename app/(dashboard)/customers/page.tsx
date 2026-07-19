@@ -66,6 +66,37 @@ function compareStrings(a: string, b: string): number {
   return a.localeCompare(b, 'sv', { sensitivity: 'base' })
 }
 
+function SortableHeader({
+  column,
+  label,
+  className,
+  sortColumn,
+  sortDir,
+  onSort,
+}: {
+  column: SortColumn
+  label: string
+  className?: string
+  sortColumn: SortColumn
+  sortDir: SortDir
+  onSort: (column: SortColumn) => void
+}) {
+  const isActive = sortColumn === column
+  const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {label}
+        <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
+      </button>
+    </TableHead>
+  )
+}
+
 function CustomersPageInner() {
   const { company } = useCompany()
   const { canWrite } = useCanWrite()
@@ -126,7 +157,12 @@ function CustomersPageInner() {
   }
 
   useEffect(() => {
-    fetchCustomers()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchCustomers does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchCustomers()
+    }, 0)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -210,31 +246,6 @@ function CustomersPageInner() {
     })
     return arr
   }, [filteredCustomers, sortColumn, sortDir])
-
-  function SortableHeader({
-    column,
-    label,
-    className,
-  }: {
-    column: SortColumn
-    label: string
-    className?: string
-  }) {
-    const isActive = sortColumn === column
-    const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
-    return (
-      <TableHead className={className}>
-        <button
-          type="button"
-          onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {label}
-          <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
-        </button>
-      </TableHead>
-    )
-  }
 
   return (
     <div className="space-y-8">
@@ -327,15 +338,48 @@ function CustomersPageInner() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <SortableHeader column="name" label={t('col_name')} />
-                    <SortableHeader column="customer_type" label={t('col_type')} />
-                    <SortableHeader column="identifier" label={t('col_identifier')} />
-                    <SortableHeader column="email" label={t('col_email')} />
-                    <SortableHeader column="city" label={t('col_city')} />
+                    <SortableHeader
+                      column="name"
+                      label={t('col_name')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
+                    <SortableHeader
+                      column="customer_type"
+                      label={t('col_type')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
+                    <SortableHeader
+                      column="identifier"
+                      label={t('col_identifier')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
+                    <SortableHeader
+                      column="email"
+                      label={t('col_email')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
+                    <SortableHeader
+                      column="city"
+                      label={t('col_city')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
                     <SortableHeader
                       column="created_at"
                       label={t('col_created')}
                       className="text-right"
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
                     />
                   </TableRow>
                 </TableHeader>

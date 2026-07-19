@@ -14,6 +14,7 @@ import type {
   CreateJournalEntryLineInput,
   JournalEntry,
 } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
  * Currency revaluation (revision items B05–B08, B14).
@@ -32,7 +33,6 @@ import type {
  *     period exactly once (B08).
  */
 
-const round2 = (x: number): number => Math.round(x * 100) / 100
 
 /**
  * Open foreign-currency receivables at `asOfDate` — canonical historical
@@ -148,9 +148,9 @@ export async function previewCurrencyRevaluation(
     const amountInCurrency = item.open_amount
     if (amountInCurrency <= 0) return
 
-    const originalSek = round2(amountInCurrency * item.exchange_rate)
-    const closingSek = round2(amountInCurrency * closingRate)
-    const difference = round2(closingSek - originalSek)
+    const originalSek = roundOre(amountInCurrency * item.exchange_rate)
+    const closingSek = roundOre(amountInCurrency * closingRate)
+    const difference = roundOre(closingSek - originalSek)
 
     if (Math.abs(difference) < 0.01) return
 
@@ -209,7 +209,7 @@ export async function previewCurrencyRevaluation(
   if (debit1510 > 0) {
     lines.push({
       account_number: '1510',
-      debit_amount: round2(debit1510),
+      debit_amount: roundOre(debit1510),
       credit_amount: 0,
       line_description: 'Omvärdering kundfordringar — orealiserad kursvinst',
     })
@@ -218,14 +218,14 @@ export async function previewCurrencyRevaluation(
     lines.push({
       account_number: '1510',
       debit_amount: 0,
-      credit_amount: round2(credit1510),
+      credit_amount: roundOre(credit1510),
       line_description: 'Omvärdering kundfordringar — orealiserad kursförlust',
     })
   }
   if (debit2440 > 0) {
     lines.push({
       account_number: '2440',
-      debit_amount: round2(debit2440),
+      debit_amount: roundOre(debit2440),
       credit_amount: 0,
       line_description: 'Omvärdering leverantörsskulder — orealiserad kursvinst',
     })
@@ -234,7 +234,7 @@ export async function previewCurrencyRevaluation(
     lines.push({
       account_number: '2440',
       debit_amount: 0,
-      credit_amount: round2(credit2440),
+      credit_amount: roundOre(credit2440),
       line_description: 'Omvärdering leverantörsskulder — orealiserad kursförlust',
     })
   }
@@ -242,22 +242,22 @@ export async function previewCurrencyRevaluation(
     lines.push({
       account_number: '3960',
       debit_amount: 0,
-      credit_amount: round2(credit3960),
+      credit_amount: roundOre(credit3960),
       line_description: 'Orealiserade valutakursvinster',
     })
   }
   if (debit7960 > 0) {
     lines.push({
       account_number: '7960',
-      debit_amount: round2(debit7960),
+      debit_amount: roundOre(debit7960),
       credit_amount: 0,
       line_description: 'Orealiserade valutakursförluster',
     })
   }
 
-  const totalGain = round2(credit3960)
-  const totalLoss = round2(debit7960)
-  const netEffect = round2(totalGain - totalLoss)
+  const totalGain = roundOre(credit3960)
+  const totalLoss = roundOre(debit7960)
+  const netEffect = roundOre(totalGain - totalLoss)
 
   return {
     items,

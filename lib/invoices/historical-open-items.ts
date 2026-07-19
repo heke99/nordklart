@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
 
 /**
  * Historical open-item reconstruction (revision items B06, B07, B14, A06, A09).
@@ -39,7 +40,6 @@ export interface HistoricalOpenItem {
   current_status: string
 }
 
-const round2 = (x: number): number => Math.round(x * 100) / 100
 
 interface InvoiceRow {
   id: string
@@ -115,7 +115,7 @@ export async function getHistoricalOpenInvoices(
     if (!p.invoice_id) continue
     paidByInvoice.set(
       p.invoice_id,
-      round2((paidByInvoice.get(p.invoice_id) ?? 0) + (Number(p.amount) || 0)),
+      roundOre((paidByInvoice.get(p.invoice_id) ?? 0) + (Number(p.amount) || 0)),
     )
   }
 
@@ -126,7 +126,7 @@ export async function getHistoricalOpenInvoices(
     if (!inv.credited_invoice_id) continue
     creditByInvoice.set(
       inv.credited_invoice_id,
-      round2((creditByInvoice.get(inv.credited_invoice_id) ?? 0) + Math.abs(Number(inv.total) || 0)),
+      roundOre((creditByInvoice.get(inv.credited_invoice_id) ?? 0) + Math.abs(Number(inv.total) || 0)),
     )
   }
 
@@ -138,7 +138,7 @@ export async function getHistoricalOpenInvoices(
     const total = Number(inv.total) || 0
     const paid = paidByInvoice.get(inv.id) ?? 0
     const credited = creditByInvoice.get(inv.id) ?? 0
-    const open = round2(total - paid - credited)
+    const open = roundOre(total - paid - credited)
     if (Math.abs(open) < 0.005) continue
 
     items.push({
@@ -196,7 +196,7 @@ export async function getHistoricalOpenSupplierInvoices(
     if (!p.supplier_invoice_id) continue
     paidByInvoice.set(
       p.supplier_invoice_id,
-      round2((paidByInvoice.get(p.supplier_invoice_id) ?? 0) + (Number(p.amount) || 0)),
+      roundOre((paidByInvoice.get(p.supplier_invoice_id) ?? 0) + (Number(p.amount) || 0)),
     )
   }
 
@@ -205,7 +205,7 @@ export async function getHistoricalOpenSupplierInvoices(
     if (!si.is_credit_note || !si.credited_invoice_id) continue
     creditByInvoice.set(
       si.credited_invoice_id,
-      round2(
+      roundOre(
         (creditByInvoice.get(si.credited_invoice_id) ?? 0) + Math.abs(Number(si.total) || 0),
       ),
     )
@@ -218,7 +218,7 @@ export async function getHistoricalOpenSupplierInvoices(
     const total = Number(si.total) || 0
     const paid = paidByInvoice.get(si.id) ?? 0
     const credited = creditByInvoice.get(si.id) ?? 0
-    const open = round2(total - paid - credited)
+    const open = roundOre(total - paid - credited)
     if (Math.abs(open) < 0.005) continue
 
     items.push({

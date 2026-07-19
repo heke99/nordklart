@@ -93,7 +93,7 @@ export async function validateYearEndReadiness(
   }
 
   // Check: voucher continuity across all series. Fails closed (B04).
-  let voucherGaps: VoucherGap[] = []
+  const voucherGaps: VoucherGap[] = []
   const { data: seriesRows, error: seriesError } = await supabase
     .from('voucher_sequences')
     .select('voucher_series')
@@ -135,7 +135,7 @@ export async function validateYearEndReadiness(
   }
 
   // Check gap explanations — unexplained gaps block year-end (BFNAR 2013:2 punkt 5.8)
-  let unexplainedGaps: VoucherGap[] = []
+  const unexplainedGaps: VoucherGap[] = []
   if (voucherGaps.length > 0) {
     const { data: explanations } = await supabase
       .from('voucher_gap_explanations')

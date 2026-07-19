@@ -21,22 +21,32 @@ interface VoucherSeriesManagerProps {
 export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProps) {
   const t = useTranslations('settings_voucher_series')
   const { company } = useCompany()
+  // Extracted so the memoized callback depends on the primitive id — the
+  // compiler otherwise infers the whole `company` object as the dependency.
+  const companyId = company?.id
   const [series, setSeries] = useState<VoucherSeries[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   const fetchSeries = useCallback(async () => {
-    if (!company?.id) return
+    if (!companyId) return
     const supabase = createClient()
     const { data } = await supabase
       .from('voucher_sequences')
       .select('voucher_series, last_number, fiscal_period_id')
-      .eq('company_id', company.id)
+      .eq('company_id', companyId)
       .order('voucher_series')
     setSeries(data || [])
     setIsLoading(false)
-  }, [company?.id])
+  }, [companyId])
 
-  useEffect(() => { fetchSeries() }, [fetchSeries])
+  useEffect(() => {
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchSeries does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchSeries()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [fetchSeries])
 
   // Group by series letter, show the highest last_number
   const grouped = series.reduce<Record<string, number>>((acc, s) => {

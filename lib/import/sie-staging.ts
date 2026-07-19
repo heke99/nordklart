@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ParsedSIEFile } from './types'
 import { getEffectiveOpeningBalances, isBalanceSheetAccount } from './sie-parser'
 import type { CreateJournalEntryLineInput } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
  * SIE voucher staging (revision items I01–I06, I11, I12, I15, I16).
@@ -23,7 +24,6 @@ import type { CreateJournalEntryLineInput } from '@/types'
  *      prior import (I06) and the N→N+1 opening balance resync (I12).
  */
 
-const round2 = (x: number): number => Math.round(x * 100) / 100
 
 /** Auto-adjusted öresutjämning tolerance: 1 öre (documented, I15). */
 export const SIE_ORE_AUTO_TOLERANCE = 0.01
@@ -153,7 +153,7 @@ export function prepareStagedVouchers(
       if (line.amount > 0) {
         lines.push({
           account_number: targetAccount,
-          debit_amount: round2(line.amount),
+          debit_amount: roundOre(line.amount),
           credit_amount: 0,
           line_description: line.description || null,
           cost_center: costCenter,
@@ -164,7 +164,7 @@ export function prepareStagedVouchers(
         lines.push({
           account_number: targetAccount,
           debit_amount: 0,
-          credit_amount: round2(Math.abs(line.amount)),
+          credit_amount: roundOre(Math.abs(line.amount)),
           line_description: line.description || null,
           cost_center: costCenter,
           project,
@@ -209,9 +209,9 @@ export function prepareStagedVouchers(
       continue
     }
 
-    const totalDebit = round2(lines.reduce((s, l) => s + l.debit_amount, 0))
-    const totalCredit = round2(lines.reduce((s, l) => s + l.credit_amount, 0))
-    const balanceDiff = round2(Math.abs(totalDebit - totalCredit))
+    const totalDebit = roundOre(lines.reduce((s, l) => s + l.debit_amount, 0))
+    const totalCredit = roundOre(lines.reduce((s, l) => s + l.credit_amount, 0))
+    const balanceDiff = roundOre(Math.abs(totalDebit - totalCredit))
 
     // Single-line vouchers cannot balance — treat under the skip policy.
     if (lines.length === 1) {
@@ -287,7 +287,7 @@ export function prepareStagedVouchers(
         continue
       }
 
-      const signedDiff = round2(totalDebit - totalCredit)
+      const signedDiff = roundOre(totalDebit - totalCredit)
       lines.push({
         account_number: '3741',
         debit_amount: signedDiff > 0 ? 0 : Math.abs(signedDiff),
@@ -430,7 +430,7 @@ export function buildNextPeriodObLines(
 
   const totalDebit = lines.reduce((s, l) => s + l.debit_amount, 0)
   const totalCredit = lines.reduce((s, l) => s + l.credit_amount, 0)
-  const diff = round2(totalDebit - totalCredit)
+  const diff = roundOre(totalDebit - totalCredit)
   if (Math.abs(diff) > 0.005) {
     lines.push({
       account_number: '2099',

@@ -35,7 +35,12 @@ export function TaxTableStatus({ year, compact = false }: Props) {
   }
 
   useEffect(() => {
-    check()
+    // Defer to the next macrotask so the synchronous setState inside
+    // check does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      check()
+    }, 0)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [year])
 

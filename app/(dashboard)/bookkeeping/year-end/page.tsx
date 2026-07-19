@@ -117,27 +117,32 @@ export default function YearEndPage() {
   useEffect(() => {
     if (!selectedPeriodId) return
     let cancelled = false
-    setReportLoading(true)
-    setReportError(null)
-    setReport(null)
-    fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/bokslut-readiness`)
-      .then(async (res) => {
-        const body = await res.json()
-        if (cancelled) return
-        if (!res.ok) {
-          setReportError(body?.error?.message ?? 'Kunde inte ladda bokslutskontroll')
-          return
-        }
-        setReport(body.data as BokslutReadinessReport)
-      })
-      .catch(() => {
-        if (!cancelled) setReportError('Kunde inte ladda bokslutskontroll')
-      })
-      .finally(() => {
-        if (!cancelled) setReportLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState calls do not
+    // run directly within the effect body.
+    const timer = setTimeout(() => {
+      setReportLoading(true)
+      setReportError(null)
+      setReport(null)
+      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/bokslut-readiness`)
+        .then(async (res) => {
+          const body = await res.json()
+          if (cancelled) return
+          if (!res.ok) {
+            setReportError(body?.error?.message ?? 'Kunde inte ladda bokslutskontroll')
+            return
+          }
+          setReport(body.data as BokslutReadinessReport)
+        })
+        .catch(() => {
+          if (!cancelled) setReportError('Kunde inte ladda bokslutskontroll')
+        })
+        .finally(() => {
+          if (!cancelled) setReportLoading(false)
+        })
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [selectedPeriodId])
 
@@ -162,6 +167,7 @@ export default function YearEndPage() {
     }
   }, [selectedPeriodId])
 
+  const reportPeriodName = report?.period.name
   const executeYearEnd = useCallback(async () => {
     if (!selectedPeriodId) return
     setExecuting(true)
@@ -182,14 +188,14 @@ export default function YearEndPage() {
       setStep('result')
       toast({
         title: 'Bokslut verkställt',
-        description: `${report?.period.name ?? 'Perioden'} är stängd.`,
+        description: `${reportPeriodName ?? 'Perioden'} är stängd.`,
       })
     } catch (err) {
       setExecuteError(getErrorMessage(err))
     } finally {
       setExecuting(false)
     }
-  }, [selectedPeriodId, report?.period.name, toast])
+  }, [selectedPeriodId, reportPeriodName, toast])
 
   const currentStepIndex = STEP_ORDER.indexOf(step)
   const progressValue = ((currentStepIndex + 1) / STEP_ORDER.length) * 100

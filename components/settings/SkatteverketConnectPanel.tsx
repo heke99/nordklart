@@ -28,6 +28,10 @@ export function SkatteverketConnectPanel() {
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
+  // Captured once per mount so render stays pure (no Date.now() during
+  // render). Status is fetched on mount, so the drift is negligible for the
+  // "expires in X min" hint.
+  const [renderedAt] = useState(() => Date.now())
 
   // docs: https://www7.skatteverket.se/portal-wapi/open/apier-och-oppna-data/utvecklarportalen/v1/getFile/tjanstebeskrivning-skattekonto-hamta-huvudmans-saldo-och-transaktioner-v101
   const SCOPE_LABELS: Record<string, string> = {
@@ -56,7 +60,13 @@ export function SkatteverketConnectPanel() {
   }
 
   useEffect(() => {
-    loadStatus()
+    // Defer to the next macrotask so the synchronous setState inside
+    // loadStatus does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      loadStatus()
+    }, 0)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function startConnect() {
@@ -130,7 +140,7 @@ export function SkatteverketConnectPanel() {
   const scopes = (status.scope || '').split(/\s+/).filter(Boolean)
   const expiresAtDate = new Date(status.expiresAt)
   const expiresInMinutes = Math.round(
-    (expiresAtDate.getTime() - Date.now()) / 60_000,
+    (expiresAtDate.getTime() - renderedAt) / 60_000,
   )
 
   return (

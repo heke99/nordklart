@@ -84,10 +84,14 @@ export default function PaymentBookingDialog({
   // Load accounts and settings when dialog opens
   useEffect(() => {
     if (!open) {
-      setIsInitialized(false)
-      setDuplicateCandidates(null)
-      setTab('new')
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => {
+        setIsInitialized(false)
+        setDuplicateCandidates(null)
+        setTab('new')
+      }, 0)
+      return () => clearTimeout(timer)
     }
 
     let cancelled = false

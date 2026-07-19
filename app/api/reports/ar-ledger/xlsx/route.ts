@@ -110,7 +110,7 @@ export async function GET(request: Request) {
           currencyColumn('Totalt utestående'),
         ],
         rows: agingRows,
-        mapRow: (r) => [
+        mapRow: (r: AgingRow) => [
           r.customer_name,
           r.current,
           r.days_1_30,
@@ -135,7 +135,7 @@ export async function GET(request: Request) {
           textColumn('Valuta'),
         ],
         rows: invoiceRows,
-        mapRow: (r) => [
+        mapRow: (r: InvoiceRow) => [
           r.customer_name,
           r.invoice_number,
           r.invoice_date instanceof Date ? r.invoice_date : null,

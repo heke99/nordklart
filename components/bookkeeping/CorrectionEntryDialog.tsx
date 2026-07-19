@@ -46,8 +46,21 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
     .slice()
     .sort((a, b) => a.sort_order - b.sort_order)
 
+  async function fetchAccounts() {
+    try {
+      const res = await fetch('/api/bookkeeping/accounts')
+      const { data } = await res.json()
+      setAccounts(data || [])
+    } catch {
+      // Accounts will be empty — user can still type account numbers manually
+    }
+  }
+
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
       // Pre-fill with original entry's lines
       setLines(
         originalLines.map((l) => ({
@@ -58,18 +71,9 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         }))
       )
       fetchAccounts()
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, entry.id]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function fetchAccounts() {
-    try {
-      const res = await fetch('/api/bookkeeping/accounts')
-      const { data } = await res.json()
-      setAccounts(data || [])
-    } catch {
-      // Accounts will be empty — user can still type account numbers manually
-    }
-  }
 
   const updateLine = (index: number, field: keyof CorrectionLine, value: string) => {
     setLines((prev) => prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)))

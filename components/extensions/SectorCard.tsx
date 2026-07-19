@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
 import { Card, CardContent } from '@/components/ui/card'
-import { resolveIcon } from '@/lib/extensions/icon-resolver'
+import { EXTENSION_ICON_MAP, FALLBACK_EXTENSION_ICON } from '@/lib/extensions/icon-resolver'
 import { sectorNameKey, sectorDescriptionKey } from '@/lib/extensions/i18n'
 import type { Sector } from '@/lib/extensions/types'
 
@@ -13,7 +13,9 @@ export default async function SectorCard({ sector }: { sector: Sector }) {
   const name = nameKey ? t(nameKey) : sector.name
   const description = descriptionKey ? t(descriptionKey) : sector.description
 
-  const Icon = resolveIcon(sector.icon)
+  // Static map lookup instead of a call — the static-components rule treats a
+  // call-result component as created during render.
+  const Icon = EXTENSION_ICON_MAP[sector.icon] ?? FALLBACK_EXTENSION_ICON
 
   return (
     <Link href={`/extensions/${sector.slug}`} className="h-full">

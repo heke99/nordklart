@@ -36,10 +36,6 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
   const [reason, setReason] = useState('')
   const [confirmText, setConfirmText] = useState('')
 
-  useEffect(() => {
-    fetchInvoice()
-  }, [id])
-
   async function fetchInvoice() {
     setIsLoading(true)
 
@@ -93,6 +89,15 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
     setReason(t('reason_default', { number: data.invoice_number ?? '' }))
     setIsLoading(false)
   }
+
+  useEffect(() => {
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchInvoice does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchInvoice()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [id])
 
   async function handleSubmit() {
     if (!invoice) return

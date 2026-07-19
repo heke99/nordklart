@@ -126,23 +126,35 @@ export default function SupplierInvoiceDetailPage() {
   }
 
   useEffect(() => {
-    fetchInvoice()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchInvoice does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchInvoice()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [params.id])
 
   // When the dialog closes, drop any in-progress edits so reopening starts
   // from the server's default booking again.
   useEffect(() => {
-    if (!isPayDialogOpen) {
+    if (isPayDialogOpen) return
+    // Defer to the next macrotask so the synchronous setState calls do not
+    // run directly within the effect body.
+    const timer = setTimeout(() => {
       setIsEditingLines(false)
       setEditLines([])
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [isPayDialogOpen])
 
   // Mirror the preview into the editable working copy. Only resets when not
   // currently editing — otherwise typing in the inputs would clobber on
   // every keystroke since the preview refetches on input change.
   useEffect(() => {
-    if (!isEditingLines && markPaidPreview) {
+    if (isEditingLines || !markPaidPreview) return
+    // Defer to the next macrotask so setEditLines does not run synchronously
+    // within the effect body.
+    const timer = setTimeout(() => {
       setEditLines(
         markPaidPreview.lines.map((l) => {
           const isDebit = l.debit_amount > 0
@@ -154,7 +166,8 @@ export default function SupplierInvoiceDetailPage() {
           }
         }),
       )
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [markPaidPreview, isEditingLines])
 
   const editValidation = useMemo(() => {
@@ -198,43 +211,48 @@ export default function SupplierInvoiceDetailPage() {
   // user changes amount or payment account so the displayed Debet/Kredit
   // lines always reflect the current dialog inputs.
   useEffect(() => {
-    if (!isPayDialogOpen || !invoice) {
-      setMarkPaidPreview(null)
-      setMarkPaidPreviewFailed(false)
-      return
-    }
-    const amountNum = Number(payAmount)
-    if (!Number.isFinite(amountNum) || amountNum <= 0) {
-      setMarkPaidPreview(null)
-      return
-    }
     let cancelled = false
     const ctrl = new AbortController()
-    ;(async () => {
-      setMarkPaidPreviewFailed(false)
-      try {
-        const qs = new URLSearchParams({
-          amount: String(amountNum),
-          payment_account: paymentAccount,
-        })
-        const res = await fetch(
-          `/api/supplier-invoices/${invoice.id}/mark-paid/preview?${qs.toString()}`,
-          { signal: ctrl.signal },
-        )
-        if (!res.ok) {
-          if (!cancelled) setMarkPaidPreviewFailed(true)
-          return
-        }
-        const data = (await res.json()) as MarkPaidPreview
-        if (!cancelled) setMarkPaidPreview(data)
-      } catch (err) {
-        if ((err as Error)?.name === 'AbortError') return
-        if (!cancelled) setMarkPaidPreviewFailed(true)
+    // Defer to the next macrotask so the synchronous setState calls do not
+    // run directly within the effect body.
+    const timer = setTimeout(() => {
+      if (!isPayDialogOpen || !invoice) {
+        setMarkPaidPreview(null)
+        setMarkPaidPreviewFailed(false)
+        return
       }
-    })()
+      const amountNum = Number(payAmount)
+      if (!Number.isFinite(amountNum) || amountNum <= 0) {
+        setMarkPaidPreview(null)
+        return
+      }
+      void (async () => {
+        setMarkPaidPreviewFailed(false)
+        try {
+          const qs = new URLSearchParams({
+            amount: String(amountNum),
+            payment_account: paymentAccount,
+          })
+          const res = await fetch(
+            `/api/supplier-invoices/${invoice.id}/mark-paid/preview?${qs.toString()}`,
+            { signal: ctrl.signal },
+          )
+          if (!res.ok) {
+            if (!cancelled) setMarkPaidPreviewFailed(true)
+            return
+          }
+          const data = (await res.json()) as MarkPaidPreview
+          if (!cancelled) setMarkPaidPreview(data)
+        } catch (err) {
+          if ((err as Error)?.name === 'AbortError') return
+          if (!cancelled) setMarkPaidPreviewFailed(true)
+        }
+      })()
+    }, 0)
     return () => {
       cancelled = true
       ctrl.abort()
+      clearTimeout(timer)
     }
   }, [isPayDialogOpen, invoice, payAmount, paymentAccount])
 

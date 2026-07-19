@@ -1530,7 +1530,7 @@ export async function executeSIEImport(
     let ibRoundingAdjustment = 0
     let ibExplanation: 'unallocated_result' | 'excluded_accounts' | 'rounding' | null = null
     let migrationAdjustmentInfo = { created: false, deltaAccounts: 0, entryId: null as string | null }
-    let voucherNumberMapping: Array<{ sourceId: string; series: string; targetNumber: number }> = []
+    const voucherNumberMapping: Array<{ sourceId: string; series: string; targetNumber: number }> = []
     let voucherSeriesUsed: string[] = []
     let voucherStats = {
       total: parsed.vouchers.length,

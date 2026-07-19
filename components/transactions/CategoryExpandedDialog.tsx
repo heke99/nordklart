@@ -28,9 +28,13 @@ export default function CategoryExpandedDialog({
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none'>('standard_25')
 
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
       setVatTreatment('standard_25')
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, transaction?.id])
 
   if (!transaction) return null

@@ -14,6 +14,15 @@ const eslintConfig = defineConfig([
       }],
     },
   },
+  // CommonJS scripts (.cjs) are executed directly by node in ops tooling and
+  // cannot use ESM imports; `require()` is the only correct module mechanism
+  // there. Scoped, technically motivated exception per audit item T01.
+  {
+    files: ["**/*.cjs"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
   // No raw console.* in lib/ or app/api/. Use createLogger from @/lib/logger
   // so log lines carry requestId + structured context. lib/logger.ts and
   // app/api/log/route.ts are the two intentional exemptions because they ARE
