@@ -240,6 +240,13 @@ export async function submitArsredovisning(
 
   const fileBase64 = Buffer.from(xhtml, 'utf8').toString('base64')
 
+  // R14: hash the EXACT payload and derive a deterministic idempotency key.
+  // A retry of the identical document maps to the same key; the partial
+  // unique index on active submissions makes a double-filing impossible even
+  // if the app-level guard above is bypassed.
+  const payloadHash = createHash('sha256').update(xhtml, 'utf8').digest('hex')
+  const idempotencyKey = `${params.fiscalPeriodId}:${payloadHash.slice(0, 32)}`
+
   // 5. Create the submission row (draft) before talking to Bolagsverket so
   //    every attempt is traceable.
   const { data: submissionRow, error: insertError } = await supabase
@@ -258,6 +265,8 @@ export async function submitArsredovisning(
       undertecknare_pnr_hash: hashPnr(params.companyId, params.undertecknare.pnr),
       avsandare_pnr_hash: hashPnr(params.companyId, params.avsandarePnr),
       kontrollsumma,
+      payload_hash: payloadHash,
+      idempotency_key: idempotencyKey,
     })
     .select('id')
     .single()
@@ -302,20 +311,28 @@ export async function submitArsredovisning(
       )
       dokumentId = doc.id
     } catch (err) {
-      // Storage failure must not block the filing, but it MUST be visible:
-      // without the stored bytes the legally-filed document is not
-      // reproducible from our archive (Guard Rail #7).
-      dokumentId = null
+      // R14: an archiving failure BLOCKS the filing. Without the stored
+      // bytes the legally-filed document is not reproducible from our
+      // archive (Guard Rail #7 / BFL 7 kap) — the submission must not
+      // proceed and the row is marked error for a clean retry.
       const message = err instanceof Error ? err.message : String(err)
-      log.error('failed to archive the filed .xhtml as räkenskapsinformation', {
+      log.error('failed to archive the filed .xhtml as räkenskapsinformation — blocking submission', {
         submissionId,
         companyId: params.companyId,
         error: message,
       })
       await supabase
         .from('arsredovisning_submissions')
-        .update({ error_message: `Dokumentarkivering misslyckades: ${message}`.slice(0, 2_000) })
+        .update({
+          status: 'error',
+          error_message: `Dokumentarkivering misslyckades — inlämningen blockerades: ${message}`.slice(0, 2_000),
+        })
         .eq('id', submissionId)
+      throw new BolagsverketSubmissionError(
+        'BOLAGSVERKET_ARCHIVE_FAILED',
+        'Dokumentet kunde inte arkiveras som räkenskapsinformation — inlämningen avbröts. Försök igen.',
+        { submission_id: submissionId },
+      )
     }
 
     // 8. Lämna in till eget utrymme.
@@ -335,6 +352,7 @@ export async function submitArsredovisning(
         sha256_checksumma: svar.handlingsinfo.sha256checksumma,
         bolagsverket_url: svar.url,
         dokument_id: dokumentId,
+        archived_document_id: dokumentId,
         uploaded_at: new Date().toISOString(),
       })
       .eq('id', submissionId)

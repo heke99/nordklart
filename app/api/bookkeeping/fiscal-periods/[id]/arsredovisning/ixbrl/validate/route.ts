@@ -76,6 +76,17 @@ export const GET = withRouteContext(
       if (/not found/i.test(message)) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
       }
+      // R12: K3 digital submission is explicitly unsupported — surface a
+      // structured capability error, never a false "supported" state.
+      if (/Digital inlämning stöds ännu inte för K3/i.test(message)) {
+        return errorResponseFromCode('VALIDATION_FAILED', log, {
+          requestId,
+          details: {
+            code: 'K3_DIGITAL_SUBMISSION_NOT_SUPPORTED',
+            reason: message,
+          },
+        })
+      }
       return errorResponse(err, log, { requestId })
     }
   },

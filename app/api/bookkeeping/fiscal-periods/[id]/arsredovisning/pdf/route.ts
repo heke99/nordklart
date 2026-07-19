@@ -8,7 +8,7 @@ import { ArsredovisningK3PDF } from '@/lib/bokslut/arsredovisning/arsredovisning
 
 export const GET = withRouteContext(
   'period.arsredovisning_pdf',
-  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
     const { user, supabase, companyId, log, requestId } = ctx
     try {
@@ -22,21 +22,61 @@ export const GET = withRouteContext(
       // inside buildArsredovisningData. The URL stays clean — no narrative
       // text in query params, access logs, or browser history.
       const data = await buildArsredovisningData(supabase, companyId, id)
+
+      // Draft vs final (R11): the document is a DRAFT — with a visible
+      // watermark — until (a) the period is closed, (b) no flerårsöversikt
+      // row is missing data, and (c) no förvaltningsberättelse field rests
+      // on unconfirmed boilerplate (R10). `?final=true` requests the final
+      // document and is BLOCKED with the outstanding checks until they pass.
+      const { data: periodRow } = await supabase
+        .from('fiscal_periods')
+        .select('is_closed')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const blockers: string[] = []
+      if (!periodRow?.is_closed) {
+        blockers.push('Räkenskapsåret är inte stängt (bokslut saknas).')
+      }
+      if (data.forvaltningsberattelse.flerarsoversikt.some((r) => r.data_missing)) {
+        blockers.push('Flerårsöversikten saknar underlag för ett eller flera år.')
+      }
+      if (data.unconfirmed_defaults.length > 0) {
+        blockers.push(
+          `Obekräftade standardtexter i förvaltningsberättelsen: ${data.unconfirmed_defaults.join(', ')}.`,
+        )
+      }
+      if (data.signatures.length === 0) {
+        blockers.push('Inga undertecknare är registrerade.')
+      }
+
+      const url = new URL(request.url)
+      const wantsFinal = url.searchParams.get('final') === 'true'
+      if (wantsFinal && blockers.length > 0) {
+        return errorResponseFromCode('VALIDATION_FAILED', log, {
+          requestId,
+          details: {
+            reason: 'Slutlig årsredovisning kan inte genereras ännu',
+            blockers,
+          },
+        })
+      }
+      const isDraft = !wantsFinal || blockers.length > 0
+
       // Dispatch on the framework recorded in the data. K3 documents need
       // the additional kassaflöde + equity-changes pages + richer noter
-      // that ArsredovisningK3PDF renders. K2 (the default) keeps the
-      // existing template byte-for-byte unchanged.
+      // that ArsredovisningK3PDF renders.
       const PdfComponent =
         data.accounting_framework === 'k3'
           ? ArsredovisningK3PDF
           : ArsredovisningPDF
-      const pdfBuffer = await renderToBuffer(PdfComponent({ data }))
-      // "-utkast" suffix mirrors the existing PDF routes; the file becomes
-      // "fastställd" only after the signature flow records all signatures.
+      const pdfBuffer = await renderToBuffer(
+        PdfComponent({ data, isDraft, draftBlockers: blockers }),
+      )
       // Sanitize the dynamic segment so a stray quote / newline in the date
       // (defensive — unlikely to ever happen) can't break the header.
       const safePeriodEnd = data.fiscal_period.period_end.replace(/[^\w.-]/g, '_')
-      const filename = `arsredovisning-${safePeriodEnd}-utkast.pdf`
+      const filename = `arsredovisning-${safePeriodEnd}${isDraft ? '-utkast' : ''}.pdf`
       return new Response(new Uint8Array(pdfBuffer), {
         headers: {
           'Content-Type': 'application/pdf',

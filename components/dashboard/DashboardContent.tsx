@@ -27,11 +27,18 @@ interface DashboardContentProps {
   summary: {
     ytd: { income: number; expenses: number; net: number }
     mtd: { income: number; expenses: number; net: number }
+    /** Active fiscal year start (R15) — YTD follows the räkenskapsår. */
+    fiscalYearStart?: string | null
+    /** Per-KPI load errors (R20): shown as errors, never rendered as 0 kr. */
+    dataErrors?: { result?: string; invoices?: string; bank?: string }
     unpaidInvoicesCount: number
     unpaidInvoicesTotal: number
     unpaidVatTotal: number
     overdueInvoicesCount: number
     bankBalance: number | null
+    /** Balance freshness (R19). */
+    bankBalanceStale?: boolean
+    bankBalanceAsOf?: string | null
     expiringBankConnections?: { id: string; bank_name: string; days_left: number }[]
     deadlines: Deadline[]
     staleUncategorizedCount: number
@@ -210,16 +217,24 @@ export default function DashboardContent({
           <Card>
             <CardContent className="p-4">
               <p className="text-xs text-muted-foreground mb-2">{t('result')}</p>
-              <p className={cn(
-                'font-display text-xl font-medium tabular-nums leading-tight',
-                summary.mtd.net >= 0 ? 'text-success' : 'text-destructive'
-              )}>
-                {formatLargeNumber(summary.mtd.net)}
-                <span className="text-sm ml-0.5 text-muted-foreground font-normal">kr</span>
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {formatCurrency(summary.ytd.net)} {t('this_year_short')}
-              </p>
+              {summary.dataErrors?.result ? (
+                <p className="text-sm font-medium text-destructive" role="alert">
+                  {summary.dataErrors.result}
+                </p>
+              ) : (
+                <>
+                  <p className={cn(
+                    'font-display text-xl font-medium tabular-nums leading-tight',
+                    summary.mtd.net >= 0 ? 'text-success' : 'text-destructive'
+                  )}>
+                    {formatLargeNumber(summary.mtd.net)}
+                    <span className="text-sm ml-0.5 text-muted-foreground font-normal">kr</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {formatCurrency(summary.ytd.net)} {t('this_year_short')}
+                  </p>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -230,18 +245,35 @@ export default function DashboardContent({
                   <p className="text-xs text-muted-foreground mb-2">{t('to_be_paid')}</p>
                   <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
                 </div>
-                <p className="font-display text-xl font-medium tabular-nums leading-tight">
-                  {summary.unpaidInvoicesCount}
-                  {t('units') && <span className="text-sm ml-0.5 text-muted-foreground font-normal">{t('units')}</span>}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {formatCurrency(summary.unpaidInvoicesTotal)}
-                </p>
+                {summary.dataErrors?.invoices ? (
+                  <p className="text-sm font-medium text-destructive" role="alert">
+                    {summary.dataErrors.invoices}
+                  </p>
+                ) : (
+                  <>
+                    <p className="font-display text-xl font-medium tabular-nums leading-tight">
+                      {summary.unpaidInvoicesCount}
+                      {t('units') && <span className="text-sm ml-0.5 text-muted-foreground font-normal">{t('units')}</span>}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {formatCurrency(summary.unpaidInvoicesTotal)}
+                    </p>
+                  </>
+                )}
               </CardContent>
             </Card>
           </Link>
 
-          {summary.bankBalance !== null ? (
+          {summary.dataErrors?.bank ? (
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs text-muted-foreground mb-2">{t('bank_balance')}</p>
+                <p className="text-sm font-medium text-destructive" role="alert">
+                  {summary.dataErrors.bank}
+                </p>
+              </CardContent>
+            </Card>
+          ) : summary.bankBalance !== null ? (
             <Card>
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground mb-2">{t('bank_balance')}</p>
@@ -249,6 +281,11 @@ export default function DashboardContent({
                   {formatLargeNumber(summary.bankBalance)}
                   <span className="text-sm ml-0.5 text-muted-foreground font-normal">kr</span>
                 </p>
+                {summary.bankBalanceStale && summary.bankBalanceAsOf ? (
+                  <p className="text-xs text-warning-foreground mt-1">
+                    Cachelagrat saldo från {new Date(summary.bankBalanceAsOf).toLocaleDateString('sv-SE')} — synka banken för aktuellt saldo
+                  </p>
+                ) : null}
               </CardContent>
             </Card>
           ) : (

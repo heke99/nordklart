@@ -149,17 +149,38 @@ function fmt(amount: number): string {
 function PageChrome({
   data,
   pageLabel,
+  isDraft = false,
 }: {
   data: ArsredovisningData
   pageLabel?: string
+  isDraft?: boolean
 }) {
   return (
     <>
+      {isDraft ? (
+        <Text
+          fixed
+          style={{
+            position: 'absolute',
+            top: 320,
+            left: 60,
+            fontSize: 90,
+            color: '#e5e7eb',
+            transform: 'rotate(-30deg)',
+            fontFamily: 'Helvetica-Bold',
+          }}
+        >
+          UTKAST
+        </Text>
+      ) : null}
       <View style={styles.pageHeader} fixed>
         <Text>
           {data.company.name} · {data.company.org_number}
         </Text>
-        <Text>Årsredovisning {data.fiscal_period.name}</Text>
+        <Text>
+          Årsredovisning {data.fiscal_period.name}
+          {isDraft ? ' — UTKAST' : ''}
+        </Text>
       </View>
       <Text style={styles.pageFooter} fixed>
         {pageLabel ?? ''}
@@ -168,12 +189,21 @@ function PageChrome({
   )
 }
 
-export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
+export function ArsredovisningK3PDF({
+  data,
+  isDraft = true,
+  draftBlockers = [],
+}: {
+  data: ArsredovisningData
+  /** R11: drafts carry a visible UTKAST watermark + blocker list. */
+  isDraft?: boolean
+  draftBlockers?: string[]
+}) {
   return (
     <Document>
       {/* Cover */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Försättssida" />
+        <PageChrome data={data} isDraft={isDraft} pageLabel="Försättssida" />
         <View>
           <Text style={styles.title}>Årsredovisning</Text>
           <Text style={styles.subtitle}>
@@ -190,7 +220,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
 
       {/* Förvaltningsberättelse */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Förvaltningsberättelse" />
+        <PageChrome data={data} isDraft={isDraft} pageLabel="Förvaltningsberättelse" />
         <Text style={styles.sectionTitle}>Förvaltningsberättelse</Text>
 
         <Text style={styles.sectionTitle}>Verksamhet</Text>
@@ -232,27 +262,38 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
 
       {/* Resultaträkning */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Resultaträkning" />
+        <PageChrome data={data} isDraft={isDraft} pageLabel="Resultaträkning" />
         <Text style={styles.sectionTitle}>Resultaträkning (kr)</Text>
         <View style={styles.tableHeader}>
           <Text style={styles.colLabel}>Post</Text>
           <Text style={styles.colAmount}>{data.fiscal_period.name}</Text>
+          {data.prior_period ? (
+            <Text style={styles.colAmount}>{data.prior_period.name}</Text>
+          ) : null}
         </View>
         {data.resultatrakning.map((line, i) => (
           <View key={i} style={line.is_total ? styles.tableRowTotal : styles.tableRow}>
             <Text style={styles.colLabel}>{line.label}</Text>
             <Text style={styles.colAmount}>{fmt(line.amount)}</Text>
+            {data.prior_period ? (
+              <Text style={styles.colAmount}>
+                {line.prior_amount != null ? fmt(line.prior_amount) : '—'}
+              </Text>
+            ) : null}
           </View>
         ))}
       </Page>
 
       {/* Balansräkning */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Balansräkning" />
+        <PageChrome data={data} isDraft={isDraft} pageLabel="Balansräkning" />
         <Text style={styles.sectionTitle}>Tillgångar (kr)</Text>
         <View style={styles.tableHeader}>
           <Text style={styles.colLabel}>Post</Text>
           <Text style={styles.colAmount}>{data.fiscal_period.period_end}</Text>
+          {data.prior_period ? (
+            <Text style={styles.colAmount}>{data.prior_period.name}</Text>
+          ) : null}
         </View>
         {data.balansrakning.assets.map((line, i) => (
           <View key={i} style={line.is_total ? styles.tableRowTotal : styles.tableRow}>
@@ -260,11 +301,23 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
               {line.label}
             </Text>
             <Text style={styles.colAmount}>{fmt(line.amount)}</Text>
+            {data.prior_period ? (
+              <Text style={styles.colAmount}>
+                {line.prior_amount != null ? fmt(line.prior_amount) : '—'}
+              </Text>
+            ) : null}
           </View>
         ))}
         <View style={styles.tableRowTotal}>
           <Text style={styles.colLabel}>Summa tillgångar</Text>
           <Text style={styles.colAmount}>{fmt(data.balansrakning.total_assets)}</Text>
+          {data.prior_period ? (
+            <Text style={styles.colAmount}>
+              {data.balansrakning.total_assets_prior != null
+                ? fmt(data.balansrakning.total_assets_prior)
+                : '—'}
+            </Text>
+          ) : null}
         </View>
 
         <Text style={styles.sectionTitle}>Eget kapital och skulder (kr)</Text>
@@ -274,11 +327,23 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
               {line.label}
             </Text>
             <Text style={styles.colAmount}>{fmt(line.amount)}</Text>
+            {data.prior_period ? (
+              <Text style={styles.colAmount}>
+                {line.prior_amount != null ? fmt(line.prior_amount) : '—'}
+              </Text>
+            ) : null}
           </View>
         ))}
         <View style={styles.tableRowTotal}>
           <Text style={styles.colLabel}>Summa eget kapital och skulder</Text>
           <Text style={styles.colAmount}>{fmt(data.balansrakning.total_equity_liabilities)}</Text>
+          {data.prior_period ? (
+            <Text style={styles.colAmount}>
+              {data.balansrakning.total_equity_liabilities_prior != null
+                ? fmt(data.balansrakning.total_equity_liabilities_prior)
+                : '—'}
+            </Text>
+          ) : null}
         </View>
       </Page>
 
@@ -287,7 +352,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
           template. */}
       {data.kassaflodesanalys && (
         <Page size="A4" style={styles.page}>
-          <PageChrome data={data} pageLabel="Kassaflödesanalys" />
+          <PageChrome data={data} isDraft={isDraft} pageLabel="Kassaflödesanalys" />
           <Text style={styles.sectionTitle}>Kassaflödesanalys (kr)</Text>
           <Text style={[styles.paragraph, { fontSize: 9, color: '#666' }]}>
             Indirekt metod enligt BFNAR 2012:1 kap 7.
@@ -431,7 +496,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
       {/* Förändring av eget kapital — K3 separate statement */}
       {data.equity_changes_statement && (
         <Page size="A4" style={styles.page}>
-          <PageChrome data={data} pageLabel="Förändring av eget kapital" />
+          <PageChrome data={data} isDraft={isDraft} pageLabel="Förändring av eget kapital" />
           <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
           {data.equity_changes_statement.rows.map((row, i) => {
             // Heuristic: "Summa" rows are subtotals/totals; render them
@@ -453,7 +518,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
 
       {/* Noter */}
       <Page size="A4" style={styles.page} wrap>
-        <PageChrome data={data} pageLabel="Noter" />
+        <PageChrome data={data} isDraft={isDraft} pageLabel="Noter" />
         <Text style={styles.sectionTitle}>Noter</Text>
         {data.noter.map((note) => (
           <View key={note.number} style={{ marginBottom: 16 }} wrap>
@@ -467,26 +532,32 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
 
       {/* Underskrifter */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Underskrifter" />
+        <PageChrome data={data} isDraft={isDraft} pageLabel="Underskrifter" />
         <Text style={styles.sectionTitle}>Underskrifter</Text>
         <Text style={styles.paragraph}>
           {data.company.city ? `${data.company.city}, ` : ''}
           {data.fiscal_period.period_end}
         </Text>
-        {(data.signatures.length > 0
-          ? data.signatures
-          : [
-              { role: 'Styrelseledamot', name: '', signed_at: null },
-              { role: 'Styrelseledamot', name: '', signed_at: null },
-            ]
-        ).map((sig, i) => (
-          <View key={i} style={styles.signatureLine}>
-            <View style={styles.signatureSlot}>
-              <Text>{sig.name || ' '}</Text>
+        {data.signatures.length > 0 ? (
+          data.signatures.map((sig, i) => (
+            <View key={i} style={styles.signatureLine}>
+              <View style={styles.signatureSlot}>
+                <Text>{sig.name || ' '}</Text>
+              </View>
+              <Text style={{ width: 180 }}>
+                {sig.role}
+                {sig.signed_at
+                  ? ` — signerad ${sig.signed_at.slice(0, 10)}`
+                  : ' — ej signerad'}
+              </Text>
             </View>
-            <Text style={{ width: 120 }}>{sig.role}</Text>
-          </View>
-        ))}
+          ))
+        ) : (
+          <Text style={styles.paragraph}>
+            Inga undertecknare är registrerade. Registrera styrelseledamöter/VD
+            innan dokumentet kan färdigställas.
+          </Text>
+        )}
       </Page>
 
       {/*
@@ -495,7 +566,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         remains "Styrelseledamot (närvarande vid stämman)".
       */}
       <Page size="A4" style={styles.page}>
-        <PageChrome data={data} pageLabel="Fastställelseintyg" />
+        <PageChrome data={data} isDraft={isDraft} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
         <Text style={styles.paragraph}>
           Undertecknad styrelseledamot, närvarande vid årsstämman, intygar härmed
