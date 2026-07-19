@@ -51,6 +51,14 @@ export interface ARLedgerReport {
 /**
  * Generate AR ledger (kundreskontra) with aging analysis.
  * BFL 5 kap. 4 § — sidoordnad bokföring: outstanding customer invoices with aging.
+ *
+ * With `asOfDate` the ledger is HISTORICAL (A09): the invoice set and the
+ * outstanding amounts are reconstructed as they were on that date — invoices
+ * open then but settled later are included with the amount open on the date;
+ * invoices created after the date are excluded. Aging is computed from the
+ * reconstructed snapshot.
+ *
+ * Fails closed (A10): database errors throw — never an empty zero report.
  */
 export async function generateARLedger(
   supabase: SupabaseClient,
@@ -59,28 +67,23 @@ export async function generateARLedger(
 ): Promise<ARLedgerReport> {
   const refDate = asOfDate ? new Date(asOfDate) : new Date()
 
-  // Fetch all unpaid/sent/overdue invoices with customer info
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let invoices: any[]
-  try {
-    invoices = await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('invoices')
-        .select('*, customer:customers(id, name)')
-        .eq('company_id', companyId)
-        .in('status', ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready', 'credited'])
-        .range(from, to)
-    )
-  } catch {
-    return {
-      entries: [],
-      total_outstanding: 0,
-      total_current: 0,
-      total_overdue: 0,
-      unpaid_count: 0,
-      unconverted_fx_count: 0,
-    }
+  if (asOfDate) {
+    return generateHistoricalARLedger(supabase, companyId, asOfDate)
   }
+
+  // Current ledger: open statuses with current remaining amounts. Throws on
+  // query errors (A10).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const invoices: any[] = await fetchAllRows(({ from, to }) =>
+    supabase
+      .from('invoices')
+      .select('*, customer:customers(id, name)')
+      .eq('company_id', companyId)
+      .in('status', ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready', 'credited'])
+      .range(from, to)
+  ).catch((err: Error) => {
+    throw new Error(`Kundreskontran kunde inte läsas: ${err.message}`)
+  })
 
   // Group by customer and calculate aging
   const byCustomer = new Map<string, ARLedgerEntry>()
@@ -176,6 +179,124 @@ export async function generateARLedger(
     .filter((entry) => entry.total_outstanding !== 0)
 
   // Sort by total outstanding descending
+  entries.sort((a, b) => b.total_outstanding - a.total_outstanding)
+
+  const total_outstanding = entries.reduce((sum, e) => sum + e.total_outstanding, 0)
+  const total_current = entries.reduce((sum, e) => sum + e.current, 0)
+  const total_overdue = total_outstanding - total_current
+  const unpaid_count = entries.reduce(
+    (sum, e) => sum + e.invoices.filter((i) => i.outstanding !== 0).length,
+    0
+  )
+
+  return {
+    entries,
+    total_outstanding: Math.round(total_outstanding * 100) / 100,
+    total_current: Math.round(total_current * 100) / 100,
+    total_overdue: Math.round(total_overdue * 100) / 100,
+    unpaid_count,
+    unconverted_fx_count: unconvertedFxCount,
+  }
+}
+
+/**
+ * Historical AR ledger (A09): reconstruct which invoices were open — and with
+ * what remaining amount — on `asOfDate`, then age from that snapshot.
+ */
+async function generateHistoricalARLedger(
+  supabase: SupabaseClient,
+  companyId: string,
+  asOfDate: string,
+): Promise<ARLedgerReport> {
+  const { getHistoricalOpenInvoices } = await import('@/lib/invoices/historical-open-items')
+  const openItems = await getHistoricalOpenInvoices(supabase, companyId, asOfDate)
+
+  // Resolve customer names in one paginated query.
+  const customerIds = [...new Set(openItems.map((i) => i.customer_id).filter(Boolean))] as string[]
+  const customerNames = new Map<string, string>()
+  if (customerIds.length > 0) {
+    const customers = await fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
+      supabase
+        .from('customers')
+        .select('id, name')
+        .eq('company_id', companyId)
+        .in('id', customerIds)
+        .range(from, to)
+    ).catch((err: Error) => {
+      throw new Error(`Kundregistret kunde inte läsas: ${err.message}`)
+    })
+    for (const c of customers) customerNames.set(c.id, c.name)
+  }
+
+  const refDate = new Date(asOfDate)
+  const byCustomer = new Map<string, ARLedgerEntry>()
+  let unconvertedFxCount = 0
+
+  for (const item of openItems) {
+    const customerId = item.customer_id ?? 'unknown'
+    if (!byCustomer.has(customerId)) {
+      byCustomer.set(customerId, {
+        customer_id: customerId,
+        customer_name: customerNames.get(customerId) ?? 'Okänd kund',
+        invoices: [],
+        current: 0,
+        days_1_30: 0,
+        days_31_60: 0,
+        days_61_90: 0,
+        days_90_plus: 0,
+        total_outstanding: 0,
+      })
+    }
+    const entry = byCustomer.get(customerId)!
+    const dueDate = item.due_date ? new Date(item.due_date) : refDate
+    const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / 86400000)
+
+    const isFx = item.currency !== 'SEK'
+    const hasRate = item.exchange_rate != null && item.exchange_rate > 0
+    const outstandingSek = isFx
+      ? hasRate
+        ? Math.round(item.open_amount * (item.exchange_rate as number) * 100) / 100
+        : null
+      : item.open_amount
+    if (outstandingSek === null) unconvertedFxCount += 1
+
+    entry.invoices.push({
+      invoice_id: item.id,
+      invoice_number: item.reference,
+      invoice_date: item.invoice_date,
+      due_date: item.due_date ?? '',
+      total: item.total,
+      paid_amount: Math.round((item.total - item.open_amount) * 100) / 100,
+      outstanding: item.open_amount,
+      outstanding_sek: outstandingSek,
+      days_overdue: Math.max(0, daysOverdue),
+      currency: item.currency,
+    })
+
+    if (outstandingSek === null) continue
+
+    if (daysOverdue <= 0) entry.current += outstandingSek
+    else if (daysOverdue <= 30) entry.days_1_30 += outstandingSek
+    else if (daysOverdue <= 60) entry.days_31_60 += outstandingSek
+    else if (daysOverdue <= 90) entry.days_61_90 += outstandingSek
+    else entry.days_90_plus += outstandingSek
+
+    entry.total_outstanding += outstandingSek
+  }
+
+  const entries = Array.from(byCustomer.values())
+    .map((entry) => ({
+      ...entry,
+      invoices: entry.invoices.sort((a, b) => a.due_date.localeCompare(b.due_date)),
+      current: Math.round(entry.current * 100) / 100,
+      days_1_30: Math.round(entry.days_1_30 * 100) / 100,
+      days_31_60: Math.round(entry.days_31_60 * 100) / 100,
+      days_61_90: Math.round(entry.days_61_90 * 100) / 100,
+      days_90_plus: Math.round(entry.days_90_plus * 100) / 100,
+      total_outstanding: Math.round(entry.total_outstanding * 100) / 100,
+    }))
+    .filter((entry) => entry.total_outstanding !== 0)
+
   entries.sort((a, b) => b.total_outstanding - a.total_outstanding)
 
   const total_outstanding = entries.reduce((sum, e) => sum + e.total_outstanding, 0)
