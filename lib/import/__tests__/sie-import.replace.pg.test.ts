@@ -60,11 +60,21 @@ async function insertPostedEntry(params: {
   entryDate?: string
 }): Promise<string> {
   const id = randomUUID()
+  // Entry + balanced lines in ONE statement — the deferred
+  // check_balance_on_posted_insert trigger requires balance at commit.
   await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'Test entry', $8, 'posted')`,
+    `WITH e AS (
+       INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Test entry', $8, 'posted')
+       RETURNING id
+     )
+     INSERT INTO public.journal_entry_lines
+       (journal_entry_id, account_number, debit_amount, credit_amount)
+     SELECT id, '1930', 100, 0 FROM e
+     UNION ALL
+     SELECT id, '3001', 0, 100 FROM e`,
     [
       id,
       params.userId,
@@ -75,13 +85,6 @@ async function insertPostedEntry(params: {
       params.entryDate ?? '2026-06-01',
       params.sourceType,
     ],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '1930', 100, 0),
-            ($1, '3001', 0, 100)`,
-    [id],
   )
   return id
 }
