@@ -113,6 +113,38 @@ export default function YearEndPage() {
     router.replace(`/bookkeeping/year-end?${params.toString()}`, { scroll: false })
   }, [selectedPeriodId, router, searchParams])
 
+  // ---- Failed year-end runs (B10): surface failed attempts so the user can
+  // see what happened and retry through the wizard (the close is atomic and
+  // idempotent, so a retry is always safe). ----
+  const [failedRuns, setFailedRuns] = useState<
+    { id: string; status: string; error_message: string | null; started_at: string }[]
+  >([])
+  useEffect(() => {
+    if (!selectedPeriodId) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end/runs`)
+        .then(async (res) => {
+          if (cancelled || !res.ok) return
+          const body = await res.json()
+          const runs = (body.data ?? []) as {
+            id: string
+            status: string
+            error_message: string | null
+            started_at: string
+          }[]
+          setFailedRuns(runs.filter((r) => r.status === 'failed'))
+        })
+        .catch(() => {
+          // Non-blocking enrichment.
+        })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [selectedPeriodId])
+
   // ---- Fetch readiness report whenever selected period changes ----
   useEffect(() => {
     if (!selectedPeriodId) return
@@ -297,6 +329,28 @@ export default function YearEndPage() {
               ))}
             </div>
             <Progress value={progressValue} className="h-2" />
+          </CardContent>
+        </Card>
+      )}
+
+      {showWizard && step === 'preflight' && failedRuns.length > 0 && (
+        <Card className="border-destructive/50">
+          <CardContent className="p-4 text-sm">
+            <p className="font-medium text-destructive">
+              {failedRuns.length} tidigare bokslutsförsök misslyckades
+            </p>
+            <p className="text-muted-foreground mt-1">
+              Bokslutet är atomiskt — ett misslyckat försök lämnar inga halvfärdiga
+              poster. Åtgärda felet nedan och kör om guiden.
+            </p>
+            <ul className="mt-2 space-y-1 text-muted-foreground">
+              {failedRuns.slice(0, 3).map((run) => (
+                <li key={run.id}>
+                  {new Date(run.started_at).toLocaleString('sv-SE')}:{' '}
+                  {run.error_message ?? 'Okänt fel'}
+                </li>
+              ))}
+            </ul>
           </CardContent>
         </Card>
       )}

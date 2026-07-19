@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 /**
  * GET: list year-end runs for a fiscal period (revision item B10).
@@ -14,9 +15,15 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 export const GET = withRouteContext(
   'period.year_end_runs',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     const { id } = await params
     const opLog = log.child({ periodId: id })
+
+    const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+      operation: 'period.year_end_runs',
+      requestId,
+    })
+    if (!access.allowed) return yearEndAccessDeniedResponse()
 
     const { data, error } = await supabase
       .from('year_end_runs')
