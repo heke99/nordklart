@@ -56,7 +56,7 @@ export const POST = withRouteContext(
         .select('id, status, imported_count, created_at')
         .eq('company_id', companyId)
         .eq('file_hash', fileHash)
-        .single()
+        .maybeSingle()
 
       if (existingImport && existingImport.status === 'completed') {
         return errorResponseFromCode('BANK_FILE_DUPLICATE', opLog, {
@@ -74,6 +74,51 @@ export const POST = withRouteContext(
         : detectFileFormat(content, file.name)
 
       const parseResult = parseBankFile(content, file.name, formatOverride || undefined)
+
+      // Archive the ORIGINAL file (K03): the execute endpoint re-parses this
+      // archived copy server-side and never trusts a client-supplied
+      // transaction list. Idempotent — the same content hash maps to the
+      // same storage path.
+      const storagePath = `${companyId}/${fileHash}.dat`
+      const { error: archiveError } = await supabase.storage
+        .from('bank-files')
+        .upload(storagePath, new Blob([content], { type: 'text/plain' }), { upsert: false })
+      if (archiveError && !/already exists|duplicate/i.test(archiveError.message)) {
+        opLog.error('bank file archive failed', new Error(archiveError.message))
+        return errorResponseFromCode('BANK_FILE_PARSE_FAILED', opLog, {
+          requestId,
+          details: { reason: `Originalfilen kunde inte arkiveras: ${archiveError.message}` },
+        })
+      }
+
+      // Create/refresh the import row now (status pending) so execute can
+      // resolve the archived file by hash without any client-trusted data.
+      const resolvedFormat = detectedFormat?.id || formatOverride || parseResult.format
+      const { error: importRowError } = await supabase
+        .from('bank_file_imports')
+        .upsert(
+          {
+            user_id: ctx.user.id,
+            company_id: companyId,
+            filename: file.name,
+            file_hash: fileHash,
+            file_format: resolvedFormat,
+            transaction_count: parseResult.transactions.length,
+            total_rows: parseResult.transactions.length,
+            status: 'pending',
+            file_storage_path: storagePath,
+            date_from: parseResult.date_from || null,
+            date_to: parseResult.date_to || null,
+          },
+          { onConflict: 'company_id,file_hash' },
+        )
+      if (importRowError) {
+        opLog.error('bank file import row create failed', new Error(importRowError.message))
+        return errorResponseFromCode('BANK_FILE_PARSE_FAILED', opLog, {
+          requestId,
+          details: { reason: importRowError.message },
+        })
+      }
 
       let existingCount = 0
       if (parseResult.transactions.length > 0) {
@@ -108,4 +153,6 @@ export const POST = withRouteContext(
       })
     }
   },
+  // One viewer policy (K08): importing bank data is a write operation.
+  { requireWrite: true },
 )

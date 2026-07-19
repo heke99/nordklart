@@ -3166,8 +3166,11 @@ export interface IngestOptions {
    * Used when importing to a secondary bank account (e.g., 1931). */
   settlementAccount?: string
   /** Only INSERT transactions + dedup. Skip reconciliation, invoice matching,
-   * supplier matching, and auto-categorization. For viewer imports. */
+   * supplier matching, and auto-categorization. */
   rawInsertOnly?: boolean
+  /** Honor the import contract flag auto_categorize=false (K01): no
+   * automation (categorization, matching effects, booking) runs at all. */
+  disableAutomation?: boolean
 }
 
 /** Result of the transaction ingestion pipeline */
@@ -3181,6 +3184,25 @@ export interface IngestResult {
   transaction_ids: string[]
   /** First insert error encountered, surfaced for debugging. Optional. */
   first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
+  /** Post-insert automation failures (K16) — the transaction survives with
+   * automation_status='failed' and can be retried; the sync/import result
+   * must surface the failure instead of summarizing success. */
+  automation_errors: number
+  /** Rows blocked from automatic booking because the bank account lacks a
+   * 19xx ledger mapping (K07). */
+  mapping_required: number
+  /** Per-row outcome keyed by external_id — powers row-level import status
+   * and idempotent retries (K04, K14). */
+  row_results: IngestRowResult[]
+}
+
+export interface IngestRowResult {
+  external_id: string
+  status: 'imported' | 'duplicate' | 'error'
+  transaction_id: string | null
+  error: string | null
+  /** True when post-insert automation failed for this row (K16). */
+  automation_failed?: boolean
 }
 
 // ── Invoice extraction (used by invoice-inbox extension and core utils) ──

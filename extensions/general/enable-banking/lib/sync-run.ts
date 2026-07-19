@@ -11,7 +11,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  */
 
 export type SyncTrigger = 'manual' | 'cron' | 'initial_backfill' | 'file_import'
-export type SyncRunStatus = 'success' | 'partial' | 'failed'
+export type SyncRunStatus = 'success' | 'partial' | 'failed' | 'auth_required' | 'rate_limited'
 
 export async function startSyncRun(
   supabase: SupabaseClient,

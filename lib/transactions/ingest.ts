@@ -11,7 +11,7 @@ import {
   type SupplierInvoiceMatchInput,
 } from '@/lib/automation/bank-transaction-automation'
 import { checkSieOverlapForDates } from '@/lib/automation/sie-overlap'
-import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
+import type { Transaction, RawTransaction, IngestResult, IngestRowResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
 // Re-export types for backward compatibility
 export type { RawTransaction, IngestResult } from '@/types'
@@ -74,14 +74,28 @@ async function buildExistingTransactionMaps(
   const dateFrom = dates[0]
   const dateTo = dates[dates.length - 1]
 
-  try {
-    const { data: bookedRows } = await supabase
-      .from('transactions')
-      .select('date, amount, original_description, description, cash_account_id')
-      .eq('company_id', companyId)
-      .not('journal_entry_id', 'is', null)
-      .gte('date', dateFrom)
-      .lte('date', dateTo)
+  {
+    // Fail closed (K06): a dedup query error must never be interpreted as
+    // "no duplicates" — paginated so large histories are fully covered.
+    const bookedRows = await fetchAllRows<{
+      date: string
+      amount: number
+      original_description: string | null
+      description: string
+      cash_account_id: string | null
+    }>(({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('date, amount, original_description, description, cash_account_id')
+        .eq('company_id', companyId)
+        .not('journal_entry_id', 'is', null)
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+        .order('id', { ascending: true })
+        .range(from, to)
+    ).catch((err: Error) => {
+      throw new Error(`Dubblettkontrollen kunde inte slutföras (bokförda transaktioner): ${err.message}`)
+    })
 
     if (bookedRows) {
       for (const tx of bookedRows) {
@@ -98,19 +112,29 @@ async function buildExistingTransactionMaps(
         )
       }
     }
-  } catch {
-    // Non-critical — content-based dedup will be skipped
   }
 
-  try {
-    const { data: unbookedBank } = await supabase
-      .from('transactions')
-      .select('date, amount, original_description, description, cash_account_id')
-      .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .eq('import_source', 'enable_banking')
-      .gte('date', dateFrom)
-      .lte('date', dateTo)
+  {
+    const unbookedBank = await fetchAllRows<{
+      date: string
+      amount: number
+      original_description: string | null
+      description: string
+      cash_account_id: string | null
+    }>(({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('date, amount, original_description, description, cash_account_id')
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .eq('import_source', 'enable_banking')
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+        .order('id', { ascending: true })
+        .range(from, to)
+    ).catch((err: Error) => {
+      throw new Error(`Dubblettkontrollen kunde inte slutföras (obokförda banktransaktioner): ${err.message}`)
+    })
 
     if (unbookedBank) {
       for (const tx of unbookedBank) {
@@ -125,8 +149,6 @@ async function buildExistingTransactionMaps(
         )
       }
     }
-  } catch {
-    // Non-critical — reconnect dedup will be skipped
   }
 
   return { booked, unbookedEnableBanking }
@@ -166,6 +188,9 @@ export async function ingestTransactions(
     auto_matched_invoices: 0,
     errors: 0,
     transaction_ids: [],
+    automation_errors: 0,
+    mapping_required: 0,
+    row_results: [],
   }
 
   // Pre-fetch existing transactions for content-based dedup
@@ -188,7 +213,7 @@ export async function ingestTransactions(
   // every decision is recorded in automation_decisions.
   let automationSettings: CompanyAutomationSettings | null = null
   let sieOverlap = false
-  if (!options?.rawInsertOnly && rawTransactions.length > 0) {
+  if (!options?.rawInsertOnly && !options?.disableAutomation && rawTransactions.length > 0) {
     automationSettings = await loadAutomationSettings(supabase, companyId)
     try {
       const overlap = await checkSieOverlapForDates(
@@ -263,11 +288,17 @@ export async function ingestTransactions(
   const externalIds = rawTransactions.map(t => t.external_id)
   for (let i = 0; i < externalIds.length; i += 500) {
     const chunk = externalIds.slice(i, i + 500)
-    const { data } = await supabase
+    const { data, error: dedupError } = await supabase
       .from('transactions')
       .select('external_id')
       .eq('company_id', companyId)
       .in('external_id', chunk)
+    if (dedupError) {
+      // Fail closed (K06): a failed dedup query must never be read as
+      // "no duplicates" — the (company_id, external_id) unique index is the
+      // last line of defense, but we abort before mass-inserting.
+      throw new Error(`Dubblettkontrollen kunde inte slutföras: ${dedupError.message}`)
+    }
     data?.forEach(r => existingExternalIds.add(r.external_id))
   }
 
@@ -307,6 +338,12 @@ export async function ingestTransactions(
     // 1. Check for duplicates via external_id (batch pre-fetched)
     if (existingExternalIds.has(raw.external_id)) {
       result.duplicates++
+      result.row_results.push({
+        external_id: raw.external_id,
+        status: 'duplicate',
+        transaction_id: null,
+        error: null,
+      })
       continue
     }
 
@@ -362,6 +399,12 @@ export async function ingestTransactions(
       consumeBridgingTwin(existingMaps.unbookedEnableBanking)
     ) {
       result.duplicates++
+      result.row_results.push({
+        external_id: raw.external_id,
+        status: 'duplicate',
+        transaction_id: null,
+        error: null,
+      })
       continue
     }
 
@@ -406,6 +449,12 @@ export async function ingestTransactions(
 
     if (insertError || !newTransaction) {
       result.errors++
+      result.row_results.push({
+        external_id: raw.external_id,
+        status: 'error',
+        transaction_id: null,
+        error: insertError?.message ?? 'insert failed',
+      })
       if (!result.first_error && insertError) {
         result.first_error = {
           message: insertError.message,
@@ -419,9 +468,33 @@ export async function ingestTransactions(
 
     result.imported++
     result.transaction_ids.push(newTransaction.id)
+    const rowResult: IngestRowResult = {
+      external_id: raw.external_id,
+      status: 'imported',
+      transaction_id: newTransaction.id as string,
+      error: null,
+    }
+    result.row_results.push(rowResult)
 
     // rawInsertOnly: skip invoice matching, and auto-categorization
     if (options?.rawInsertOnly) continue
+
+    // auto_categorize=false (K01): the import contract says NO automatic
+    // categorization or booking — honor it end to end.
+    if (options?.disableAutomation) continue
+
+    // Missing cash-account mapping (K07): never auto-book against an
+    // arbitrary default account. The transaction stays for manual review
+    // with automation_status='needs_review'.
+    if (!options?.settlementAccount && raw.import_source === 'enable_banking') {
+      result.mapping_required++
+      await supabase
+        .from('transactions')
+        .update({ automation_status: 'needs_review' })
+        .eq('id', newTransaction.id)
+        .eq('company_id', companyId)
+      continue
+    }
 
     // Reconciliation against existing GL lines is intentionally NOT run on
     // import — auto-linking made imported transactions appear "bokförda" to
@@ -524,9 +597,23 @@ export async function ingestTransactions(
         ) {
           result.auto_categorized++
         }
-      } catch {
-        // Automation is best-effort — an engine failure must never lose the
-        // imported transaction. It stays unprocessed for manual review.
+      } catch (automationErr) {
+        // Automation failure must never lose the imported transaction (K16):
+        // the row survives, is marked automation_status='failed' for retry,
+        // and the sync/import result surfaces the failure.
+        result.automation_errors++
+        rowResult.automation_failed = true
+        try {
+          await supabase
+            .from('transactions')
+            .update({ automation_status: 'failed' })
+            .eq('id', newTransaction.id)
+            .eq('company_id', companyId)
+        } catch {
+          // The automation_status stamp is best-effort — the counter above
+          // is the authoritative signal.
+        }
+        void automationErr
       }
     }
   }

@@ -109,6 +109,7 @@ function BankFileImportWizard() {
 
   // Parse results
   const [parseResult, setParseResult] = useState<BankFileParseResult | null>(null)
+  const [columnMapping, setColumnMapping] = useState<GenericCSVColumnMapping | null>(null)
   const [detectedFormat, setDetectedFormat] = useState<string | null>(null)
   const [detectedFormatName, setDetectedFormatName] = useState<string | null>(null)
   const [fileHash, setFileHash] = useState<string>('')
@@ -217,12 +218,14 @@ function BankFileImportWizard() {
     } finally {
       setBankIsLoading(false)
     }
-  }, [toast])
+  }, [toast, columnMapping])
 
   const handleColumnMappingConfirm = useCallback(async (mapping: GenericCSVColumnMapping) => {
-    // Re-parse with mapping via the generic CSV parser
+    // Re-parse with mapping via the generic CSV parser (preview only — the
+    // server re-applies the same mapping to the archived original at execute).
     const { parseGenericCSV } = await import('@/lib/import/bank-file/formats/generic-csv')
     const result = parseGenericCSV(rawFileContent, mapping)
+    setColumnMapping(mapping)
     setParseResult(result)
     setBankStep('confirm')
   }, [rawFileContent])
@@ -234,14 +237,14 @@ function BankFileImportWizard() {
     setBankError(null)
 
     try {
+      // The server re-parses the ARCHIVED original file (K03) — only the
+      // hash and the import options are sent.
       const res = await fetch('/api/import/bank-file/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transactions: parseResult.transactions,
-          format: parseResult.format,
-          filename,
           file_hash: fileHash,
+          ...(columnMapping ? { column_mapping: columnMapping } : {}),
           ...options,
         }),
       })

@@ -31,6 +31,15 @@ export interface SyncResult {
   imported: number
   duplicates: number
   errors: number
+  /** Post-insert automation failures (K16) — transactions survive with
+   * automation_status='failed' and can be retried. */
+  automationErrors: number
+  /** Rows blocked from auto-booking because the account lacks a 19xx
+   * ledger mapping (K07). */
+  mappingRequired: number
+  /** Raw PSD2 response pages that could not be archived (K09) — a non-zero
+   * count makes the sync partial, never a clean success. */
+  archiveErrors: number
   /** Earliest booking date the ASPSP returned. Undefined when no transactions came back. */
   returnedMinBookingDate?: string
   /** Latest booking date the ASPSP returned. Undefined when no transactions came back. */
@@ -194,7 +203,10 @@ export async function syncAccountTransactions(
     errors: ingestResult.errors,
   })
 
-  // Archive raw PSD2 API responses as räkenskapsinformation (BFL 7 kap)
+  // Archive raw PSD2 API responses as räkenskapsinformation (BFL 7 kap).
+  // Archive failures are COUNTED (K09): the caller must summarize the sync
+  // as partial, never as a clean success, when raw underlag is missing.
+  let archiveErrors = 0
   for (let i = 0; i < rawPages.length; i++) {
     try {
       const fileName = `psd2-response_${connectionId}_${account.uid}_${new Date().toISOString().replace(/[:.]/g, '-')}_p${i + 1}.json`
@@ -204,8 +216,8 @@ export async function syncAccountTransactions(
         { upload_source: 'api' }
       )
     } catch (archiveError) {
+      archiveErrors++
       console.error(`[enable-banking] Failed to archive raw response page ${i + 1}:`, archiveError)
-      // Archival failure must not fail the sync
     }
   }
 
@@ -222,6 +234,9 @@ export async function syncAccountTransactions(
     imported: ingestResult.imported,
     duplicates: ingestResult.duplicates,
     errors: ingestResult.errors,
+    automationErrors: ingestResult.automation_errors ?? 0,
+    mappingRequired: ingestResult.mapping_required ?? 0,
+    archiveErrors,
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
   }

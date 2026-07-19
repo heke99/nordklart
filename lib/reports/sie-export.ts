@@ -303,16 +303,20 @@ export async function generateSIEExport(
     // Fail closed (I23): a failure to read the prior year's movements blocks
     // the export instead of emitting a seemingly-valid file with missing
     // #RES -1 records. Paginated (I21).
-    const prevEntries = await fetchAllRows<JournalEntry>(({ from, to }) =>
-      supabase
-        .from('journal_entries')
-        .select('id, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', (prevPeriod as { id: string }).id)
-        .in('status', ['posted', 'reversed'])
-        .neq('source_type', 'year_end')
-        .order('id', { ascending: true })
-        .range(from, to)
+    const prevEntries = await fetchAllRows<JournalEntry>(
+      ({ from, to }) =>
+        supabase
+          .from('journal_entries')
+          .select('id, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', (prevPeriod as { id: string }).id)
+          .in('status', ['posted', 'reversed'])
+          .neq('source_type', 'year_end')
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: JournalEntry[] | null
+          error: { message: string } | null
+        }>,
     ).catch((err: Error) => {
       throw new Error(
         `SIE-exporten avbröts: föregående års verifikationer kunde inte läsas (${err.message}). ` +
