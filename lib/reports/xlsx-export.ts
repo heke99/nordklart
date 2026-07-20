@@ -22,10 +22,16 @@ export interface SheetSpec<TRow> {
   name: string
   columns: ColumnSpec[]
   rows: TRow[]
-  mapRow: (row: TRow) => CellValue[]
+  // Method (not property) syntax on purpose: method parameters are checked
+  // bivariantly, which lets a SheetSpec<ConcreteRow> flow into the
+  // heterogeneous WorkbookSheetSpec (= SheetSpec<unknown>) below.
+  mapRow(row: TRow): CellValue[]
 }
 
-export type WorkbookSheetSpec = SheetSpec<any>
+// Heterogeneous workbooks (sheets with different row types) fit here thanks to
+// the bivariant `mapRow` method check; annotate the `mapRow` parameter type
+// explicitly at such call sites.
+export type WorkbookSheetSpec = SheetSpec<unknown>
 
 export const UTF8_BOM = '\uFEFF'
 

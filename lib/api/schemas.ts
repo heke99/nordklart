@@ -1264,6 +1264,9 @@ export const BankLinkSchema = z.object({
     .string()
     .regex(/^[0-9]{4}$/, 'Kontonummer måste vara 4 siffror')
     .optional(),
+  // Explicit N:1/partial difference flow (A05): amount mismatches are
+  // rejected unless the user explicitly opts in.
+  allow_amount_mismatch: z.boolean().optional(),
 })
 
 export const BankUnlinkSchema = z.object({

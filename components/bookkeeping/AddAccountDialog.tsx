@@ -48,13 +48,18 @@ export function AddAccountDialog({
   // the user doesn't retype what the combobox already captured.
   useEffect(() => {
     if (!open) return
-    const num = (initialAccountNumber ?? '').replace(/\D/g, '').slice(0, 4)
-    setAccountNumber(num)
-    setAccountName(initialAccountName ?? '')
-    setError('')
-    if (num.length === 4) {
-      setNormalBalance(classifyAccount(num).normal_balance)
-    }
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const num = (initialAccountNumber ?? '').replace(/\D/g, '').slice(0, 4)
+      setAccountNumber(num)
+      setAccountName(initialAccountName ?? '')
+      setError('')
+      if (num.length === 4) {
+        setNormalBalance(classifyAccount(num).normal_balance)
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, initialAccountNumber, initialAccountName])
 
   const isBASMatch = accountNumber.length === 4 && isStandardBASAccount(accountNumber)

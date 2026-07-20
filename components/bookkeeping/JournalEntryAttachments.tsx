@@ -86,7 +86,9 @@ export default function JournalEntryAttachments({
   const replaceTargetIdRef = useRef<string | null>(null)
 
   const onCountChangeRef = useRef(onCountChange)
-  onCountChangeRef.current = onCountChange
+  useEffect(() => {
+    onCountChangeRef.current = onCountChange
+  }, [onCountChange])
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -104,18 +106,27 @@ export default function JournalEntryAttachments({
   }, [journalEntryId])
 
   useEffect(() => {
-    fetchDocuments()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchDocuments does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchDocuments()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchDocuments])
 
   // Refresh documents when uploads complete
   useEffect(() => {
     const allDone = uploadFiles.length > 0 && uploadFiles.every((f) => f.status !== 'uploading')
     const hasUploaded = uploadFiles.some((f) => f.status === 'uploaded')
-    if (allDone && hasUploaded) {
+    if (!(allDone && hasUploaded)) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
       fetchDocuments()
       setUploadFiles([])
       setShowUpload(false)
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [uploadFiles, fetchDocuments])
 
   const handleDownload = async (docId: string) => {

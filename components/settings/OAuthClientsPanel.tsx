@@ -53,7 +53,12 @@ export function OAuthClientsPanel() {
   }, [toast, t])
 
   useEffect(() => {
-    fetchClients()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchClients does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchClients()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchClients])
 
   async function handleCreate() {

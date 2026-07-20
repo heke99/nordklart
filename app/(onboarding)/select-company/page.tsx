@@ -160,7 +160,8 @@ export default async function SelectCompanyPage() {
 
   const enrichmentTimestamp = enrichmentRow?.updated_at ?? enrichmentRow?.created_at ?? null
   const enrichmentStale = enrichmentTimestamp
-    ? Date.now() - new Date(enrichmentTimestamp).getTime() > ENRICHMENT_TTL_DAYS * 24 * 60 * 60 * 1000
+    ? new Date().getTime() - new Date(enrichmentTimestamp).getTime() >
+      ENRICHMENT_TTL_DAYS * 24 * 60 * 60 * 1000
     : false
 
   return (

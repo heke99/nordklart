@@ -111,7 +111,13 @@ export default function InvoicesPage() {
   }
 
   useEffect(() => {
-    fetchInvoices()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchInvoices does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchInvoices()
+    }, 0)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const filteredInvoices = invoices.filter((invoice) => {

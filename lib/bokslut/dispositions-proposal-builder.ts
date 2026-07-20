@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { getCompanyEntityType } from '@/lib/company/entity-type'
 import { calculateBolagsskatt } from './tax-provision/bolagsskatt-calculator'
 import { calculateSarskildLoneskatt } from './tax-provision/sarskild-loneskatt-calculator'
 import {
@@ -40,12 +41,11 @@ export async function buildDispositionsProposal(
     throw new Error('Fiscal period not found')
   }
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  const entityType = (settings?.entity_type ?? 'aktiebolag') as DispositionsProposal['entityType']
+  // Canonical legal form (B13) — companies.entity_type, no silent AB fallback.
+  const entityType = (await getCompanyEntityType(
+    supabase,
+    companyId,
+  )) as DispositionsProposal['entityType']
 
   if (entityType !== 'aktiebolag') {
     // Non-AB entities (enskild firma, handelsbolag, etc.) do not produce

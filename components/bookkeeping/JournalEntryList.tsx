@@ -133,7 +133,12 @@ export default function JournalEntryList({ periodId }: Props) {
   }, [])
 
   useEffect(() => {
-    fetchNoDocRequired()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchNoDocRequired does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchNoDocRequired()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchNoDocRequired])
 
   async function fetchEntries() {
@@ -165,7 +170,12 @@ export default function JournalEntryList({ periodId }: Props) {
   }
 
   useEffect(() => {
-    fetchEntries()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchEntries does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchEntries()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [periodId, page, sortBy, dateFrom, dateTo, seriesFilter])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {

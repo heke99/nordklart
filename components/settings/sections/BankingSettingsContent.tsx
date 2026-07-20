@@ -102,15 +102,20 @@ export function BankingSettingsContent() {
       try { errorMsg = decodeURIComponent(bankError) } catch { errorMsg = bankError }
       const bankName = searchParams.get('bank_name')
       const errorCode = searchParams.get('bank_error_code')
-      toast({
-        title: t('connect_failed_title'),
-        description: errorMsg,
-        variant: 'destructive',
-      })
-      setBankConnectionError(errorMsg)
-      if (bankName) setFailedBankName(bankName)
-      if (errorCode === 'access_denied') setIsAccessDenied(true)
-      router.replace('/settings/banking')
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => {
+        toast({
+          title: t('connect_failed_title'),
+          description: errorMsg,
+          variant: 'destructive',
+        })
+        setBankConnectionError(errorMsg)
+        if (bankName) setFailedBankName(bankName)
+        if (errorCode === 'access_denied') setIsAccessDenied(true)
+        router.replace('/settings/banking')
+      }, 0)
+      return () => clearTimeout(timer)
     }
   }, [searchParams, router, toast, t])
 

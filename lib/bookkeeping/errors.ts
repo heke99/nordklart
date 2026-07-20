@@ -239,6 +239,8 @@ export type BookkeepingOperation =
   | 'fetch_currency_receivables'
   | 'fetch_currency_payables'
   | 'check_existing_revaluation'
+  | 'post_currency_revaluation'
+  | 'fetch_revaluation_entry'
 
 export class BookkeepingDatabaseError extends Error {
   readonly code = BOOKKEEPING_DATABASE_ERROR

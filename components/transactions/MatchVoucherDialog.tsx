@@ -139,17 +139,27 @@ export function MatchVoucherDialog({
   // the user toggles already-matched vouchers in/out.
   useEffect(() => {
     if (!open || !transaction) return
-    void loadCandidates(transaction, wideRange, includeMatched)
+    // Defer to the next macrotask so the synchronous setState inside
+    // loadCandidates does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      void loadCandidates(transaction, wideRange, includeMatched)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, transaction, wideRange, includeMatched, loadCandidates])
 
   // Reset transient state when the dialog closes so the next open starts clean.
   useEffect(() => {
     if (open) return
-    setGlLines([])
-    setSelected('')
-    setWideRange(false)
-    setIncludeMatched(false)
-    setAccountFallback(false)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setGlLines([])
+      setSelected('')
+      setWideRange(false)
+      setIncludeMatched(false)
+      setAccountFallback(false)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open])
 
   if (!transaction) return null

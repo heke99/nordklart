@@ -54,10 +54,17 @@ export default function KpiPage() {
   useEffect(() => {
     if (!selectedPeriod) return
     let cancelled = false
-    fetchReport(selectedPeriod).then(() => {
-      if (cancelled) setReport(null)
-    })
-    return () => { cancelled = true }
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchReport does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchReport(selectedPeriod).then(() => {
+        if (cancelled) setReport(null)
+      })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [selectedPeriod, fetchReport])
 
   async function handleSavePreferences(prefs: KPIPreferences) {

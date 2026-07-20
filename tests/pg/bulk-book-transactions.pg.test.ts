@@ -421,21 +421,25 @@ describe('bulk_book_transactions — document inheritance (PR #608)', () => {
     const doc2 = await insertDocumentForTx({ userId, companyId, txId: tx2 })
 
     // Manually pre-post a day-summary verifikat the user wants the txs
-    // linked to. Bank net must equal sum(tx.amount) = 300.
+    // linked to. Bank net must equal sum(tx.amount) = 300. Entry + lines go
+    // in ONE statement so the deferred check_balance_on_posted_insert
+    // trigger sees balanced lines at commit.
     const jeId = randomUUID()
     await getPool().query(
-      `INSERT INTO public.journal_entries
-         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-          entry_date, description, source_type, status)
-       VALUES ($1, $2, $3, $4, 1, 'A', '2026-06-05', 'Manual day summary', 'manual', 'posted')`,
+      `WITH e AS (
+         INSERT INTO public.journal_entries
+           (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+            entry_date, description, source_type, status)
+         VALUES ($1, $2, $3, $4, 1, 'A', '2026-06-05', 'Manual day summary', 'manual', 'posted')
+         RETURNING id
+       )
+       INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount, currency, sort_order)
+       SELECT id, '1930', 300, 0, 'SEK', 0 FROM e
+       UNION ALL
+       SELECT id, '3001', 0, 240, 'SEK', 1 FROM e
+       UNION ALL
+       SELECT id, '2611', 0, 60, 'SEK', 2 FROM e`,
       [jeId, userId, companyId, fiscalPeriodId],
-    )
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount, currency, sort_order)
-       VALUES ($1, '1930', 300, 0, 'SEK', 0),
-              ($1, '3001', 0, 240, 'SEK', 1),
-              ($1, '2611', 0, 60,  'SEK', 2)`,
-      [jeId],
     )
 
     await withUserContext(userId, async (client) => {

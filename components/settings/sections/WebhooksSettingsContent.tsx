@@ -82,7 +82,12 @@ export function WebhooksSettingsContent() {
   }, [])
 
   useEffect(() => {
-    void reload()
+    // Defer to the next macrotask so the synchronous setState inside
+    // reload does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      void reload()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [reload])
 
   async function handleCreate() {

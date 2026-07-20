@@ -486,13 +486,18 @@ export default function TransactionsPage() {
 
   // Auto-fetch suggestions when transactions load
   useEffect(() => {
-    const uncatIds = transactions
-      .filter((t) => t.is_business === null)
-      .map((t) => t.id)
-      .slice(0, 50)
-    if (uncatIds.length > 0) {
-      fetchCategorySuggestions(uncatIds)
-    }
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchCategorySuggestions does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      const uncatIds = transactions
+        .filter((t) => t.is_business === null)
+        .map((t) => t.id)
+        .slice(0, 50)
+      if (uncatIds.length > 0) {
+        fetchCategorySuggestions(uncatIds)
+      }
+    }, 0)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transactions.length])
 

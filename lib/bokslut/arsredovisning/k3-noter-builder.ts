@@ -114,6 +114,12 @@ export interface EquityChangesSummary {
   changes: {
     nyemission: number
     utdelning: number
+    /** Aktieägartillskott received during the year (R07). */
+    aktieagartillskott?: number
+    /** Fondemission — transfer from fritt to bundet kapital (R07). */
+    fondemission?: number
+    /** Other equity movements (corrections, transfers) not classified above. */
+    ovriga_forandringar?: number
     /** Årets resultat — added to balanserade vinstmedel next year, shown on
      *  its own line in the change statement. */
     arets_resultat: number
@@ -166,6 +172,15 @@ export function buildEquityChangesNote(
     // free to pass either sign; we just render what we got.
     rows.push({ label: 'Utdelning', amount: changes.utdelning })
   }
+  if (changes.aktieagartillskott) {
+    rows.push({ label: 'Aktieägartillskott', amount: changes.aktieagartillskott })
+  }
+  if (changes.fondemission) {
+    rows.push({ label: 'Fondemission', amount: changes.fondemission })
+  }
+  if (changes.ovriga_forandringar) {
+    rows.push({ label: 'Övriga förändringar', amount: changes.ovriga_forandringar })
+  }
   rows.push({ label: 'Årets resultat', amount: changes.arets_resultat })
 
   // Closing balance — uses standard accounting roll-forward.
@@ -173,6 +188,8 @@ export function buildEquityChangesNote(
     openingTotal +
     changes.nyemission +
     changes.utdelning +
+    (changes.aktieagartillskott ?? 0) +
+    (changes.ovriga_forandringar ?? 0) +
     changes.arets_resultat
   rows.push({
     label: 'Summa utgående eget kapital',

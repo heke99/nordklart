@@ -152,34 +152,39 @@ export default function PeriodiseringWizardPage() {
   useEffect(() => {
     if (!selectedPeriodId) return
     let cancelled = false
-    setLoading(true)
-    setLoadError(null)
-    setProposal(null)
-    fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/accruals`)
-      .then(async (res) => {
-        const body = await res.json()
-        if (cancelled) return
-        if (!res.ok) {
-          setLoadError(body?.error?.message ?? 'Kunde inte ladda periodiseringar')
-          return
-        }
-        const data = body.data as ProposalResponse
-        setProposal(data)
-        // Default-check all high-confidence suggestions.
-        const initial: Record<string, boolean> = {}
-        for (const s of data.autoDetected ?? []) {
-          initial[suggestionKey(s)] = s.confidence === 'high'
-        }
-        setAutoState({ selections: initial })
-      })
-      .catch(() => {
-        if (!cancelled) setLoadError('Kunde inte ladda periodiseringar')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState calls do not
+    // run directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      setLoadError(null)
+      setProposal(null)
+      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/accruals`)
+        .then(async (res) => {
+          const body = await res.json()
+          if (cancelled) return
+          if (!res.ok) {
+            setLoadError(body?.error?.message ?? 'Kunde inte ladda periodiseringar')
+            return
+          }
+          const data = body.data as ProposalResponse
+          setProposal(data)
+          // Default-check all high-confidence suggestions.
+          const initial: Record<string, boolean> = {}
+          for (const s of data.autoDetected ?? []) {
+            initial[suggestionKey(s)] = s.confidence === 'high'
+          }
+          setAutoState({ selections: initial })
+        })
+        .catch(() => {
+          if (!cancelled) setLoadError('Kunde inte ladda periodiseringar')
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [selectedPeriodId])
 

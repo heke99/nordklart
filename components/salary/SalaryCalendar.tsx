@@ -166,7 +166,12 @@ export function SalaryCalendar({
   }
 
   useEffect(() => {
-    load()
+    // Defer to the next macrotask so the synchronous setState inside
+    // load does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      load()
+    }, 0)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeId, salaryType, visibleMonth.getFullYear(), visibleMonth.getMonth()])
 

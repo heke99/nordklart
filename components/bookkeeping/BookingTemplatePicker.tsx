@@ -45,9 +45,13 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
   // opens. Only when provided — callers without a known amount (e.g. the
   // journal-entry form) keep the blank-then-type behaviour.
   useEffect(() => {
-    if (open && defaultAmount != null && defaultAmount > 0) {
+    if (!(open && defaultAmount != null && defaultAmount > 0)) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
       setAmount(String(Math.round(defaultAmount * 100) / 100))
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, defaultAmount])
 
   const fetchTemplates = useCallback(async (signal?: AbortSignal) => {
@@ -67,8 +71,15 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
   useEffect(() => {
     if (!open) return
     const controller = new AbortController()
-    fetchTemplates(controller.signal)
-    return () => { controller.abort() }
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchTemplates does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchTemplates(controller.signal)
+    }, 0)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
   }, [open, fetchTemplates])
 
   const filtered = useMemo(() => {

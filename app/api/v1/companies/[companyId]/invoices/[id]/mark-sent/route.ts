@@ -43,6 +43,7 @@ import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { eventBus } from '@/lib/events'
 import type { EntityType, Invoice } from '@/types'
+import { getCompanyEntityType } from '@/lib/company/entity-type'
 
 // Explicit projection — drops user_id, company_id (internal scoping).
 const INVOICE_MARK_SENT_RESPONSE_COLUMNS =
@@ -209,7 +210,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
     const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
-    const entityType = ((settings as { entity_type?: string } | null)?.entity_type ?? 'enskild_firma') as EntityType
+    // Canonical legal form (B13) — companies.entity_type, no silent fallback.
+    const entityType = await getCompanyEntityType(ctx.supabase, ctx.companyId!)
     const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
     const wouldCreateJournalEntry = isRealInvoice && accountingMethod === 'accrual'
 

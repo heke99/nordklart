@@ -58,23 +58,18 @@ function makeSupabase(opts: {
         }),
       }
     }
-    if (table === 'company_settings') {
+    if (table === 'companies') {
+      // The builder hits `companies` twice: the canonical entity_type read
+      // (B13, `.single()`) and the accounting_framework lookup
+      // (`.maybeSingle()`).
       return {
         select: () => ({
           eq: () => ({
-            maybeSingle: () =>
+            single: () =>
               Promise.resolve({
                 data: { entity_type: opts.entityType },
                 error: null,
               }),
-          }),
-        }),
-      }
-    }
-    if (table === 'companies') {
-      return {
-        select: () => ({
-          eq: () => ({
             maybeSingle: () =>
               Promise.resolve({
                 data: { accounting_framework: opts.accountingFramework },

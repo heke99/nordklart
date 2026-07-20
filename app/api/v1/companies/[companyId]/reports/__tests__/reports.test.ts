@@ -53,9 +53,15 @@ vi.mock('@/lib/reports/trial-balance', () => ({
 vi.mock('@/lib/reports/income-statement', () => ({
   generateIncomeStatement: mocks.generateIncomeStatement,
 }))
-vi.mock('@/lib/reports/sie-export', () => ({
-  generateSIEExport: mocks.generateSIEExport,
-}))
+// Keep the real encodeSieToPc8 (I20: the response bytes must BE CP437)
+// while mocking the expensive generator.
+vi.mock('@/lib/reports/sie-export', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reports/sie-export')>()
+  return {
+    ...actual,
+    generateSIEExport: mocks.generateSIEExport,
+  }
+})
 vi.mock('@/lib/reports/vat-declaration', () => ({
   calculateVatDeclaration: mocks.calculateVatDeclaration,
 }))
@@ -334,7 +340,7 @@ describe('GET /reports/income-statement', () => {
 })
 
 describe('GET /reports/sie-export', () => {
-  it('returns the SIE content with text/plain Content-Type + attachment Content-Disposition', async () => {
+  it('returns CP437-encoded SIE bytes with octet-stream Content-Type + attachment Content-Disposition (I20)', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -354,7 +360,7 @@ describe('GET /reports/sie-export', () => {
         },
       }),
     )
-    mocks.generateSIEExport.mockResolvedValue('#FLAGGA 0\n#PROGRAM Nordklart\n')
+    mocks.generateSIEExport.mockResolvedValue('#FLAGGA 0\n#FNAMN "Söder AB"\n')
 
     const res = await sieExport(
       makeReq(
@@ -364,10 +370,14 @@ describe('GET /reports/sie-export', () => {
     )
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('Content-Type')).toMatch(/text\/plain/)
+    expect(res.headers.get('Content-Type')).toMatch(/application\/octet-stream/)
     expect(res.headers.get('Content-Disposition')).toMatch(/attachment.*\.se/)
-    const body = await res.text()
-    expect(body).toContain('#FLAGGA')
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    const ascii = Buffer.from(bytes).toString('latin1')
+    expect(ascii).toContain('#FLAGGA')
+    // 'ö' must be the CP437 byte 0x94, not UTF-8 (0xC3 0xB6).
+    expect(bytes).toContain(0x94)
+    expect(ascii).not.toContain('\u00c3')
   })
 })
 

@@ -177,41 +177,13 @@
     ]
   },
   "naiveOreRound": {
-    "count": 665
+    "count": 653
   },
   "migrationsMissingRls": {
-    "count": 30,
+    "count": 2,
     "entries": [
       "supabase/migrations/20260321120000_oauth_used_codes.sql#oauth_used_codes",
-      "supabase/migrations/20260421130000_drop_legacy_supplier_invoice_user_id_uniqueness.sql#used",
-      "supabase/migrations/20260527000001_seed_agent_atom_bodies.sql#account_dimension_settings",
-      "supabase/migrations/20260527000001_seed_agent_atom_bodies.sql#cost_centers",
-      "supabase/migrations/20260527000001_seed_agent_atom_bodies.sql#journal_entry_lines",
-      "supabase/migrations/20260527000001_seed_agent_atom_bodies.sql#project_budgets",
-      "supabase/migrations/20260527000001_seed_agent_atom_bodies.sql#project_time_entries",
-      "supabase/migrations/20260527000001_seed_agent_atom_bodies.sql#project_wip_snapshots",
-      "supabase/migrations/20260527000001_seed_agent_atom_bodies.sql#projects",
-      "supabase/migrations/20260613120002_seed_agent_atom_bodies.sql#account_dimension_settings",
-      "supabase/migrations/20260613120002_seed_agent_atom_bodies.sql#cost_centers",
-      "supabase/migrations/20260613120002_seed_agent_atom_bodies.sql#journal_entry_lines",
-      "supabase/migrations/20260613120002_seed_agent_atom_bodies.sql#project_budgets",
-      "supabase/migrations/20260613120002_seed_agent_atom_bodies.sql#project_time_entries",
-      "supabase/migrations/20260613120002_seed_agent_atom_bodies.sql#project_wip_snapshots",
-      "supabase/migrations/20260613120002_seed_agent_atom_bodies.sql#projects",
-      "supabase/migrations/20260705120001_seed_agent_atom_bodies.sql#account_dimension_settings",
-      "supabase/migrations/20260705120001_seed_agent_atom_bodies.sql#cost_centers",
-      "supabase/migrations/20260705120001_seed_agent_atom_bodies.sql#journal_entry_lines",
-      "supabase/migrations/20260705120001_seed_agent_atom_bodies.sql#project_budgets",
-      "supabase/migrations/20260705120001_seed_agent_atom_bodies.sql#project_time_entries",
-      "supabase/migrations/20260705120001_seed_agent_atom_bodies.sql#project_wip_snapshots",
-      "supabase/migrations/20260705120001_seed_agent_atom_bodies.sql#projects",
-      "supabase/migrations/20260708120001_seed_agent_atom_bodies.sql#account_dimension_settings",
-      "supabase/migrations/20260708120001_seed_agent_atom_bodies.sql#cost_centers",
-      "supabase/migrations/20260708120001_seed_agent_atom_bodies.sql#journal_entry_lines",
-      "supabase/migrations/20260708120001_seed_agent_atom_bodies.sql#project_budgets",
-      "supabase/migrations/20260708120001_seed_agent_atom_bodies.sql#project_time_entries",
-      "supabase/migrations/20260708120001_seed_agent_atom_bodies.sql#project_wip_snapshots",
-      "supabase/migrations/20260708120001_seed_agent_atom_bodies.sql#projects"
+      "supabase/migrations/20260421130000_drop_legacy_supplier_invoice_user_id_uniqueness.sql#used"
     ]
   }
 }

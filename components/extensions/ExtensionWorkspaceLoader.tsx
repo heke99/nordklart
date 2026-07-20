@@ -1,7 +1,7 @@
 'use client'
 
 import type { ExtensionDefinition } from '@/lib/extensions/types'
-import { getWorkspaceComponent } from '@/lib/extensions/workspace-registry'
+import { WORKSPACES } from '@/lib/extensions/_generated/workspace-map'
 import ExtensionWorkspaceShell from './ExtensionWorkspaceShell'
 import EmptyExtensionState from './shared/EmptyExtensionState'
 
@@ -20,7 +20,9 @@ export default function ExtensionWorkspaceLoader({
   definition: ExtensionDefinition
   userId: string
 }) {
-  const WorkspaceComponent = getWorkspaceComponent(sector, slug)
+  // Static map lookup instead of a call — the static-components rule treats a
+  // call-result component as created during render.
+  const WorkspaceComponent = WORKSPACES[`${sector}/${slug}`] ?? null
   const isFullScreen = FULLSCREEN_WORKSPACES.has(`${sector}/${slug}`)
 
   if (isFullScreen && WorkspaceComponent) {

@@ -125,27 +125,35 @@ export function ReportDateRange({
 }: Props) {
   const t = useTranslations('reports')
   const { company } = useCompany()
+  // Extracted so the memoized callback depends on the primitive id — the
+  // compiler otherwise infers the whole `company` object as the dependency.
+  const companyId = company?.id
   const [preset, setPreset] = useState<Preset>('ytd')
 
   // Restore last-used preset per company, then resolve it against the
   // current fiscal period. The period selector lives upstream — when it
   // changes, we re-resolve so the dates always sit inside the visible year.
   useEffect(() => {
-    if (!company?.id || typeof window === 'undefined') return
-    const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id) as Preset | null
-    const initial: Preset = stored && PRESETS.includes(stored) ? stored : 'ytd'
-    setPreset(initial)
-    if (initial !== 'custom') {
-      onChange(resolvePreset(initial, periodStart, periodEnd, todayIso()))
-    }
+    if (!companyId || typeof window === 'undefined') return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + companyId) as Preset | null
+      const initial: Preset = stored && PRESETS.includes(stored) ? stored : 'ytd'
+      setPreset(initial)
+      if (initial !== 'custom') {
+        onChange(resolvePreset(initial, periodStart, periodEnd, todayIso()))
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, periodStart, periodEnd])
+  }, [companyId, periodStart, periodEnd])
 
   const handlePreset = useCallback(
     (next: Preset) => {
       setPreset(next)
-      if (company?.id && typeof window !== 'undefined') {
-        window.localStorage.setItem(STORAGE_KEY_PREFIX + company.id, next)
+      if (companyId && typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEY_PREFIX + companyId, next)
       }
       if (next === 'custom') {
         // Seed the custom inputs with whatever is currently active so the
@@ -157,7 +165,7 @@ export function ReportDateRange({
       }
       onChange(resolvePreset(next, periodStart, periodEnd, todayIso()))
     },
-    [company?.id, onChange, periodEnd, periodStart, value.fromDate, value.toDate],
+    [companyId, onChange, periodEnd, periodStart, value.fromDate, value.toDate],
   )
 
   const handleFromChange = (raw: string) => {

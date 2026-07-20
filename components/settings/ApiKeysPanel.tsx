@@ -323,7 +323,12 @@ export function ApiKeysPanel() {
   }, [toast, t])
 
   useEffect(() => {
-    fetchKeys()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchKeys does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchKeys()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchKeys])
 
   async function handleCreate() {

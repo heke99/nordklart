@@ -12,6 +12,7 @@ import {
   unlinkReconciliation,
   getReconciliationStatus,
   scopeTransactionsToAccount,
+  fetchUnlinkedGLLines,
 } from '../bank-reconciliation'
 import type { UnlinkedGLLine } from '../bank-reconciliation'
 import { makeTransaction } from '@/tests/helpers'
@@ -445,13 +446,40 @@ describe('runReconciliation', () => {
     enqueue({ data: [glLine] })
     // from('transactions') returns unmatched transactions
     enqueue({ data: [tx] })
-    // Update transaction with link
-    enqueue({ data: null, error: null })
+    // Optimistic-lock update (A04): `.is('journal_entry_id', null).select('id')`
+    // returns the claimed row — a non-empty array means we won the claim.
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
 
     const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: false })
 
     expect(result.matches).toHaveLength(1)
     expect(result.applied).toBe(1)
+    expect(result.errors).toBe(0)
+  })
+
+  it('skips (not applies, not errors) a match claimed by a concurrent winner', async () => {
+    // A04: the UPDATE carries `.is('journal_entry_id', null)` — when another
+    // process linked the transaction in between, zero rows come back and the
+    // match is skipped silently instead of overwriting the concurrent link.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, date: '2024-06-15', currency: 'SEK' })
+    const glLine: UnlinkedGLLine = makeGLLine({
+      line_id: 'line-1',
+      journal_entry_id: 'je-1',
+      credit_amount: 500,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [glLine] })
+    enqueue({ data: [tx] })
+    // Update returns ZERO claimed rows — concurrent winner.
+    enqueue({ data: [], error: null })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', { dryRun: false })
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.applied).toBe(0)
     expect(result.errors).toBe(0)
   })
 })
@@ -561,16 +589,20 @@ describe('manualLink', () => {
 
   it('succeeds when all validations pass (line on selected account)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
+    // A05: amount + direction must agree with the voucher's bank line(s) —
+    // a 1000 SEK deposit against a 1000 net debit on 1930.
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, amount: 1000, date: '2024-06-15' })
 
     // Transaction found (cash_account_id null → cross-check skipped)
     enqueue({ data: tx })
     // Journal entry found
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
-    // Line exists on the selected account
+    // Line exists on the selected account (matching amount + direction)
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // Update succeeds
-    enqueue({ data: null, error: null })
+    // Date-tolerance lookup (A05): entry_date within 90 days of tx.date
+    enqueue({ data: { entry_date: '2024-06-15' } })
+    // Optimistic-lock update (A04) returns the claimed row
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
 
@@ -583,16 +615,20 @@ describe('manualLink', () => {
       id: 'tx-1',
       journal_entry_id: null,
       cash_account_id: 'ca-1930',
+      amount: 1000,
+      date: '2024-06-15',
     })
 
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     // Cross-check: cash account maps to the account being reconciled
     enqueue({ data: { ledger_account: '1930' } })
-    // Line exists on 1930
+    // Line exists on 1930 (matching amount + direction)
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // Update succeeds
-    enqueue({ data: null, error: null })
+    // Date-tolerance lookup
+    enqueue({ data: { entry_date: '2024-06-16' } })
+    // Optimistic-lock update returns the claimed row
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
 
@@ -606,17 +642,172 @@ describe('manualLink', () => {
     // that — several bank transactions may settle one verifikat (a salary run
     // paid in multiple transfers). The only per-transaction guard is that THIS
     // transaction isn't already linked (tx.journal_entry_id), still enforced.
-    const tx = makeTransaction({ id: 'tx-2', journal_entry_id: null })
+    const tx = makeTransaction({ id: 'tx-2', journal_entry_id: null, amount: 1000, date: '2024-06-15' })
 
     enqueue({ data: tx })
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    // Date-tolerance lookup
+    enqueue({ data: { entry_date: '2024-06-15' } })
     // Update succeeds — note there is NO existing-link lookup in the sequence.
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'tx-2' }], error: null })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-2', 'je-1', 'user-1', '1930')
 
     expect(result.success).toBe(true)
+  })
+
+  // ------------------------------------------------------------------
+  // A05: manual match verification (amount, direction, currency, date)
+  // ------------------------------------------------------------------
+  it('rejects when the transaction amount differs from the voucher bank-line net', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, amount: 1000, date: '2024-06-15' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    // Bank line nets to 800 — 200 kr off the transaction.
+    enqueue({ data: [{ debit_amount: 800, credit_amount: 0, account_number: '1930' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('differens')
+    expect(result.error).toContain('200.00')
+  })
+
+  it('rejects when the direction is wrong (deposit against a credited bank account)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // Deposit (+1000) must correspond to a net DEBIT on the bank account;
+    // this voucher credits it (money out) — a mirror-image mis-pick.
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, amount: 1000, date: '2024-06-15' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 1000, account_number: '1930' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Riktningen stämmer inte')
+  })
+
+  it('rejects when the direction is wrong (withdrawal against a debited bank account)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, amount: -1000, date: '2024-06-15' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Riktningen stämmer inte')
+  })
+
+  it('rejects an FX transaction that has no amount_sek (cannot verify against the voucher)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({
+      id: 'tx-1',
+      journal_entry_id: null,
+      amount: 100,
+      currency: 'EUR',
+      amount_sek: null,
+      date: '2024-06-15',
+    })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1100, credit_amount: 0, account_number: '1930' }] })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('EUR')
+    expect(result.error).toContain('SEK-belopp')
+  })
+
+  it('verifies an FX transaction via amount_sek when present', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({
+      id: 'tx-1',
+      journal_entry_id: null,
+      amount: 100,
+      currency: 'EUR',
+      amount_sek: 1150,
+      date: '2024-06-15',
+    })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    // Bank line matches the SEK amount, not the EUR amount.
+    enqueue({ data: [{ debit_amount: 1150, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: { entry_date: '2024-06-15' } })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects when the voucher entry_date is more than 90 days from the transaction date', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, amount: 1000, date: '2024-06-15' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    // Amount + direction fine — only the date is off.
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    // Date-tolerance lookup: 166 days apart.
+    enqueue({ data: { entry_date: '2024-01-01' } })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('dagar isär')
+    expect(result.error).toContain('max 90')
+  })
+
+  it('permits an amount mismatch when allowAmountMismatch is set (explicit N:1 partial flow)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // One of several transfers settling a 3000 kr salary voucher: the
+    // individual transaction (-1000) deviates from the bank-line net (-3000).
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, amount: -1000, date: '2024-06-15' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 0, credit_amount: 3000, account_number: '1930' }] })
+    // Date-tolerance lookup
+    enqueue({ data: { entry_date: '2024-06-15' } })
+    // Optimistic-lock update
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const result = await manualLink(
+      supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930',
+      { allowAmountMismatch: true },
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  it('reports a conflict when a concurrent link wins the optimistic lock (zero rows claimed)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, amount: 1000, date: '2024-06-15' })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    enqueue({ data: { entry_date: '2024-06-15' } })
+    // Update claims ZERO rows — someone else linked the transaction meanwhile.
+    enqueue({ data: [], error: null })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe(
+      'Transaktionen matchades av någon annan medan du arbetade — ladda om listan.',
+    )
   })
 })
 
@@ -899,5 +1090,109 @@ describe('getReconciliationStatus', () => {
     expect(status.gl_1930_period_movement).toBe(0)
     expect(status.difference).toBe(0)
     expect(status.is_reconciled).toBe(true)
+  })
+
+  it('is NOT reconciled when two offsetting unmatched rows net the difference to zero (A02 strict)', async () => {
+    // Strictness regression: one unmatched +500 bank transaction and one
+    // unmatched 500 debit GL line cancel out in the difference — but neither
+    // side is actually matched. A zero difference alone must never turn the
+    // status green; both unmatched counts must be zero too.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // 1) transactions: one UNMATCHED +500 deposit
+    enqueue({
+      data: [{ amount: 500, journal_entry_id: null, reconciliation_method: null }],
+    })
+    // 2) GL lines: one posted 500 debit with no bank link
+    enqueue({
+      data: [
+        { debit_amount: 500, credit_amount: 0, journal_entries: { status: 'posted', source_type: 'manual' } },
+      ],
+    })
+    // 3) RPC: that GL line is still unlinked
+    enqueue({
+      data: [makeGLLine({ line_id: 'line-open', debit_amount: 500, entry_date: '2024-06-15' })],
+    })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.difference).toBe(0)
+    expect(status.unmatched_transaction_count).toBe(1)
+    expect(status.unmatched_gl_line_count).toBe(1)
+    expect(status.is_reconciled).toBe(false)
+  })
+})
+
+// ============================================================
+// fetchUnlinkedGLLines — fail-closed + pagination (A01/A03/A10)
+// ============================================================
+
+describe('fetchUnlinkedGLLines', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  function createQueueMockSupabase() {
+    const resultQueue: { data: unknown; error: unknown }[] = []
+    const enqueue = (...results: { data?: unknown; error?: unknown }[]) => {
+      for (const r of results) resultQueue.push({ data: r.data ?? null, error: r.error ?? null })
+    }
+    const buildChain = (): unknown => {
+      const handler: ProxyHandler<object> = {
+        get(_target, prop) {
+          if (prop === 'then') {
+            const next = resultQueue.shift() ?? { data: null, error: null }
+            return (resolve: (v: unknown) => void) => resolve(next)
+          }
+          return (..._args: unknown[]) => buildChain()
+        },
+      }
+      return new Proxy({}, handler)
+    }
+    const supabase = {
+      from: vi.fn().mockImplementation(() => buildChain()),
+      rpc: vi.fn().mockImplementation(() => buildChain()),
+    }
+    return { supabase, enqueue }
+  }
+
+  it('THROWS on an RPC error instead of returning [] (fail closed)', async () => {
+    // A query error read as "no unmatched GL lines" would falsely flip
+    // is_reconciled to true — the error must propagate.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: null, error: { message: 'permission denied' } })
+
+    await expect(
+      fetchUnlinkedGLLines(supabase as never, 'company-1'),
+    ).rejects.toThrow('Omatchade huvudboksrader kunde inte läsas: permission denied')
+  })
+
+  it('paginates the RPC in pages of 1000 and concatenates all rows', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const fullPage = Array.from({ length: 1000 }, (_, i) =>
+      makeGLLine({ line_id: `line-${i}`, debit_amount: 100 }),
+    )
+    const lastPage = [makeGLLine({ line_id: 'line-1000', debit_amount: 100 })]
+    enqueue({ data: fullPage })
+    enqueue({ data: lastPage })
+
+    const lines = await fetchUnlinkedGLLines(supabase as never, 'company-1')
+
+    expect(lines).toHaveLength(1001)
+    expect(lines[0].line_id).toBe('line-0')
+    expect(lines[1000].line_id).toBe('line-1000')
+    // Two RPC round-trips: the full first page forces a second fetch.
+    expect(supabase.rpc).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops after one round-trip when the first page is short', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [makeGLLine({ line_id: 'only', debit_amount: 100 })] })
+
+    const lines = await fetchUnlinkedGLLines(supabase as never, 'company-1')
+
+    expect(lines).toHaveLength(1)
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
   })
 })

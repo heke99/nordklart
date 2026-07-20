@@ -160,12 +160,16 @@ export default function InvoiceMatchDialog({
 
   useEffect(() => {
     if (!open || !transactionId) {
-      setPreview(null)
-      setPreviewFailed(false)
-      setIsEditing(false)
-      setEditLines([])
-      setManualRate('')
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => {
+        setPreview(null)
+        setPreviewFailed(false)
+        setIsEditing(false)
+        setEditLines([])
+        setManualRate('')
+      }, 0)
+      return () => clearTimeout(timer)
     }
     let cancelled = false
     const previewUrl = isCustomerInvoice && invoiceId
@@ -174,9 +178,11 @@ export default function InvoiceMatchDialog({
         ? `/api/transactions/${transactionId}/match-supplier-invoice/preview?supplier_invoice_id=${supplierInvoiceId}`
         : null
     if (!previewUrl) {
-      setPreview(null)
-      setPreviewFailed(false)
-      return
+      const timer = setTimeout(() => {
+        setPreview(null)
+        setPreviewFailed(false)
+      }, 0)
+      return () => clearTimeout(timer)
     }
     async function loadPreview() {
       setPreviewFailed(false)
@@ -195,16 +201,25 @@ export default function InvoiceMatchDialog({
         if (!cancelled) setPreviewFailed(true)
       }
     }
-    loadPreview()
+    // Defer to the next macrotask so the synchronous setState inside
+    // loadPreview does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      loadPreview()
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [open, transactionId, isCustomerInvoice, isSupplierInvoice, invoiceId, supplierInvoiceId])
 
   useEffect(() => {
     if (!open || !transactionId || !isCustomerInvoice || !onLinkToExisting) {
-      setCandidate(null)
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => {
+        setCandidate(null)
+      }, 0)
+      return () => clearTimeout(timer)
     }
     let cancelled = false
     async function check() {
@@ -220,9 +235,14 @@ export default function InvoiceMatchDialog({
         if (!cancelled) setIsCheckingDuplicate(false)
       }
     }
-    check()
+    // Defer to the next macrotask so the synchronous setState inside
+    // check does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      check()
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [open, transactionId, isCustomerInvoice, onLinkToExisting])
 

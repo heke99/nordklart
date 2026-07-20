@@ -163,6 +163,10 @@ export async function insertTransaction(params: {
 
 // Insert a draft journal entry and return its id. Uses a placeholder
 // voucher_number=0 which commit_journal_entry() will overwrite on commit.
+// When status='posted', the deferred check_balance_on_posted_insert
+// constraint trigger requires balanced non-zero lines at COMMIT, so the
+// entry and a balanced line pair are inserted in ONE statement (= one
+// implicit transaction on the pool).
 export async function insertDraftJournalEntry(params: {
   userId: string
   companyId: string
@@ -174,23 +178,43 @@ export async function insertDraftJournalEntry(params: {
   voucherNumber?: number
 }): Promise<string> {
   const id = randomUUID()
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', $9)`,
-    [
-      id,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      params.voucherNumber ?? 0,
-      params.voucherSeries ?? 'A',
-      params.entryDate ?? '2026-06-01',
-      params.description ?? 'Test entry',
-      params.status ?? 'draft',
-    ],
-  )
+  const status = params.status ?? 'draft'
+  const values = [
+    id,
+    params.userId,
+    params.companyId,
+    params.fiscalPeriodId,
+    params.voucherNumber ?? 0,
+    params.voucherSeries ?? 'A',
+    params.entryDate ?? '2026-06-01',
+    params.description ?? 'Test entry',
+    status,
+  ]
+  if (status === 'posted') {
+    await getPool().query(
+      `WITH e AS (
+         INSERT INTO public.journal_entries
+           (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+            entry_date, description, source_type, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', $9)
+         RETURNING id
+       )
+       INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       SELECT id, '1930', 1000, 0 FROM e
+       UNION ALL
+       SELECT id, '3001', 0, 1000 FROM e`,
+      values,
+    )
+  } else {
+    await getPool().query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', $9)`,
+      values,
+    )
+  }
   return id
 }
 

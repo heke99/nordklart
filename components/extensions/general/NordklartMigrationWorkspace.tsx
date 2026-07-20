@@ -1704,7 +1704,12 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
   }, [])
 
   useEffect(() => {
-    fetchStatus()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchStatus does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchStatus()
+    }, 0)
+    return () => clearTimeout(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1915,7 +1920,12 @@ export default function NordklartMigrationWorkspace(_props: WorkspaceComponentPr
 
   // Check for OAuth callback on mount (fallback for non-popup flow)
   useEffect(() => {
-    handleOAuthReturn()
+    // Defer to the next macrotask so the synchronous setState inside
+    // handleOAuthReturn does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      handleOAuthReturn()
+    }, 0)
+    return () => clearTimeout(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

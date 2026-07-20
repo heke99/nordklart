@@ -77,6 +77,8 @@ function createQueueMockSupabase() {
   // Captures .insert() payloads keyed by table, so tests can assert what was
   // written (e.g. cash_account_id stamping).
   const inserts: Record<string, unknown[]> = {}
+  // Captures .update() payloads keyed by table (e.g. automation_status stamps).
+  const updates: Record<string, unknown[]> = {}
 
   /**
    * Push one or more results onto the queue.
@@ -101,6 +103,12 @@ function createQueueMockSupabase() {
             return buildChain(table)
           }
         }
+        if (prop === 'update') {
+          return (payload: unknown) => {
+            ;(updates[table] ??= []).push(payload)
+            return buildChain(table)
+          }
+        }
         return (..._args: unknown[]) => buildChain(table)
       },
     }
@@ -112,7 +120,7 @@ function createQueueMockSupabase() {
     rpc: vi.fn().mockImplementation(() => buildChain('rpc')),
   }
 
-  return { supabase, enqueue, inserts }
+  return { supabase, enqueue, inserts, updates }
 }
 
 // ---------------------------------------------------------------------------
@@ -962,6 +970,9 @@ describe('ingestTransactions', () => {
       auto_matched_invoices: 0,
       errors: 0,
       transaction_ids: [],
+      automation_errors: 0,
+      mapping_required: 0,
+      row_results: [],
     })
   })
 
@@ -1326,26 +1337,224 @@ describe('ingestTransactions', () => {
     expect(mockFetchExchangeRate).not.toHaveBeenCalled()
   })
 
-  it('continues normally when booked transaction map query fails', async () => {
+  // -----------------------------------------------------------------------
+  // Fail-closed dedup (K06): a dedup query error must never be read as
+  // "no duplicates" — the ingest aborts BEFORE mass-inserting.
+  // -----------------------------------------------------------------------
+  it('THROWS when the booked content-dedup pre-fetch fails (fail closed)', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -200 })
-    const inserted = makeTransaction({ id: 'tx-mapfail', amount: -200 })
 
-    // Booked map query throws (caught by try/catch in buildExistingTransactionMap)
+    // Booked map query errors — nothing else may run.
     enqueue({ error: { message: 'Query failed' } })
-    // Unbooked bank-synced transaction map query
-    enqueue({ data: [], error: null })
-    // Supplier invoices fetch
-    enqueue({ data: [], error: null })
-    // Batch external_id dedup query (no matches)
-    enqueue({ data: [], error: null })
-    // Insert
-    enqueue({ data: inserted, error: null })
 
+    await expect(
+      ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw]),
+    ).rejects.toThrow(/Dubblettkontrollen kunde inte slutföras \(bokförda transaktioner\): Query failed/)
+  })
+
+  it('THROWS when the unbooked bank content-dedup pre-fetch fails (fail closed)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -200 })
+
+    // Booked map succeeds; unbooked enable_banking map errors.
+    enqueue({ data: [], error: null })
+    enqueue({ error: { message: 'timeout' } })
+
+    await expect(
+      ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw]),
+    ).rejects.toThrow(/Dubblettkontrollen kunde inte slutföras \(obokförda banktransaktioner\): timeout/)
+  })
+
+  it('THROWS when the external_id dedup pre-fetch fails (fail closed)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -200 })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    // Batch external_id dedup query errors.
+    enqueue({ data: null, error: { message: 'connection reset' } })
+
+    await expect(
+      ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw]),
+    ).rejects.toThrow('Dubblettkontrollen kunde inte slutföras: connection reset')
+  })
+
+  // -----------------------------------------------------------------------
+  // disableAutomation (K01): the import contract auto_categorize=false means
+  // NO automation runs at all — settings are not even loaded.
+  // -----------------------------------------------------------------------
+  it('runs no automation when disableAutomation is set', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+    const inserted = makeTransaction({ id: 'tx-noauto', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+
+    const result = await ingestTransactions(
+      supabase as never, COMPANY_ID, USER_ID, [raw],
+      { disableAutomation: true },
+    )
+
+    expect(result.imported).toBe(1)
+    expect(result.auto_categorized).toBe(0)
+    expect(result.auto_matched_invoices).toBe(0)
+    expect(mockLoadAutomationSettings).not.toHaveBeenCalled()
+    expect(mockProcessAutomation).not.toHaveBeenCalled()
+    // The row is still imported and tracked.
+    expect(result.row_results).toEqual([
+      { external_id: raw.external_id, status: 'imported', transaction_id: 'tx-noauto', error: null },
+    ])
+  })
+
+  // -----------------------------------------------------------------------
+  // K07: missing cash-account mapping on an enable_banking row — never
+  // auto-book against an arbitrary default account. The row is flagged for
+  // manual review and counted in mapping_required.
+  // -----------------------------------------------------------------------
+  it('skips automation and flags needs_review for enable_banking rows without a settlementAccount (K07)', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100, import_source: 'enable_banking' })
+    const inserted = makeTransaction({ id: 'tx-unmapped', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    // No cash_accounts lookup — settlementAccount omitted.
+    enqueue({ data: inserted, error: null }) // insert
+    enqueue({ data: null, error: null }) // automation_status='needs_review' update
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
     expect(result.imported).toBe(1)
-    expect(result.duplicates).toBe(0)
+    expect(result.mapping_required).toBe(1)
+    // Automation never ran for the row.
+    expect(mockProcessAutomation).not.toHaveBeenCalled()
+    expect(mockMatchTransactionToPayments).not.toHaveBeenCalled()
+    // The transaction is stamped for manual review.
+    expect(updates['transactions']).toEqual([{ automation_status: 'needs_review' }])
+  })
+
+  it('does not flag mapping_required for non-enable_banking rows without a settlementAccount', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100, import_source: 'csv_lunar' })
+    const inserted = makeTransaction({ id: 'tx-csv', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.imported).toBe(1)
+    expect(result.mapping_required).toBe(0)
+    // Automation runs as normal for a CSV import (the user picked the account).
+    expect(mockProcessAutomation).toHaveBeenCalledTimes(1)
+    expect(updates['transactions']).toBeUndefined()
+  })
+
+  // -----------------------------------------------------------------------
+  // K16: an automation failure must never lose the imported transaction —
+  // it is counted, the row result is flagged, and the transaction is stamped
+  // automation_status='failed' for retry.
+  // -----------------------------------------------------------------------
+  it('counts automation_errors and stamps automation_status=failed when the engine throws (K16)', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -400 })
+    const inserted = makeTransaction({ id: 'tx-cat-err', amount: -400, external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    enqueue({ data: null, error: null }) // automation_status='failed' update
+
+    mockProcessAutomation.mockRejectedValue(new Error('Engine error'))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.imported).toBe(1)
+    expect(result.errors).toBe(0) // the transaction itself survived
+    expect(result.automation_errors).toBe(1)
+    expect(result.row_results).toEqual([
+      {
+        external_id: raw.external_id,
+        status: 'imported',
+        transaction_id: 'tx-cat-err',
+        error: null,
+        automation_failed: true,
+      },
+    ])
+    expect(updates['transactions']).toEqual([{ automation_status: 'failed' }])
+  })
+
+  // -----------------------------------------------------------------------
+  // row_results (K04/K14): every path — imported, duplicate, error — pushes
+  // a per-row outcome keyed by external_id.
+  // -----------------------------------------------------------------------
+  it('records a row_result for every raw transaction (imported, duplicate, error)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const rawNew = makeRaw({ external_id: 'ext-new', amount: -100 })
+    const rawDup = makeRaw({ external_id: 'ext-dup', amount: -150 })
+    const rawErr = makeRaw({ external_id: 'ext-err', amount: -75 })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    // external_id dedup — ext-dup already exists
+    enqueue({ data: [{ external_id: 'ext-dup' }], error: null })
+    // rawNew insert OK
+    enqueue({ data: makeTransaction({ id: 'tx-new', external_id: 'ext-new' }), error: null })
+    // rawErr insert fails
+    enqueue({ data: null, error: { message: 'Insert failed', code: '23505' } })
+
+    const result = await ingestTransactions(
+      supabase as never, COMPANY_ID, USER_ID, [rawNew, rawDup, rawErr],
+    )
+
+    expect(result.row_results).toEqual([
+      { external_id: 'ext-new', status: 'imported', transaction_id: 'tx-new', error: null },
+      { external_id: 'ext-dup', status: 'duplicate', transaction_id: null, error: null },
+      { external_id: 'ext-err', status: 'error', transaction_id: null, error: 'Insert failed' },
+    ])
+    // first_error carries the details of the failed insert.
+    expect(result.first_error).toMatchObject({ message: 'Insert failed', code: '23505' })
+  })
+
+  it('records a duplicate row_result for content-dedup hits too', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2024-06-15',
+      amount: -250.0,
+      description: 'ICA Maxi Solna',
+      external_id: 'lunar_csvhash123',
+      import_source: 'csv_lunar',
+    })
+
+    enqueue({ data: [], error: null }) // booked map
+    // Unbooked enable_banking twin — content dedup consumes it.
+    enqueue({
+      data: [{ date: '2024-06-15', amount: -250.0, description: 'ICA Maxi Solna' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup — no match
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.duplicates).toBe(1)
+    expect(result.row_results).toEqual([
+      { external_id: 'lunar_csvhash123', status: 'duplicate', transaction_id: null, error: null },
+    ])
   })
 })

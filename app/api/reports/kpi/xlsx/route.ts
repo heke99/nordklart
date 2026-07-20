@@ -197,19 +197,19 @@ export async function GET(request: Request) {
         name: 'Nyckeltal (kr)',
         columns: [textColumn('Nyckeltal'), currencyColumn('Värde')],
         rows: currencyKpis,
-        mapRow: (r) => [r.label, r.value],
+        mapRow: (r: KpiKv) => [r.label, r.value],
       },
       {
         name: 'Nyckeltal (%)',
         columns: [textColumn('Nyckeltal'), percentColumn('Värde')],
         rows: percentKpis,
-        mapRow: (r) => [r.label, r.value],
+        mapRow: (r: KpiKv) => [r.label, r.value],
       },
       {
         name: 'Nyckeltal (övrigt)',
         columns: [textColumn('Nyckeltal'), integerColumn('Värde')],
         rows: integerKpis,
-        mapRow: (r) => [r.label, r.value],
+        mapRow: (r: KpiKv) => [r.label, r.value],
       },
       {
         name: 'Månadsbrytning',
@@ -220,19 +220,19 @@ export async function GET(request: Request) {
           currencyColumn('Netto'),
         ],
         rows: monthRows,
-        mapRow: (m) => [m.label, m.income, m.expenses, m.net],
+        mapRow: (m: MonthRow) => [m.label, m.income, m.expenses, m.net],
       },
       {
         name: 'Kostnadssammansättning',
         columns: [textColumn('Kontoklass'), currencyColumn('Belopp')],
         rows: compositionRows,
-        mapRow: (r) => [r.klass, r.amount],
+        mapRow: (r: CompositionRow) => [r.klass, r.amount],
       },
       {
         name: 'Topp leverantörer',
         columns: [textColumn('Leverantör'), currencyColumn('Totalt')],
         rows: supplierRows,
-        mapRow: (r) => [r.supplier_name, r.total],
+        mapRow: (r: SupplierRow) => [r.supplier_name, r.total],
       },
     ])
 

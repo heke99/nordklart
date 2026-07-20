@@ -115,6 +115,32 @@ export async function buildIxbrlInput(
   )
   warnings.push(...mapping.warnings)
 
+  // Shared totals control (R05): the PDF (buildArsredovisningData) and the
+  // iXBRL taxonomy mapping must agree on the headline figures — årets
+  // resultat and balansomslutning. A divergence means the two documents
+  // would present different numbers for the same year; that BLOCKS
+  // generation instead of shipping inconsistent filings. Tolerance 1 kr:
+  // iXBRL rounds to whole SEK, the PDF keeps öre.
+  const pdfNetResult =
+    pdfData.resultatrakning.find((l) => l.label === 'Årets resultat')?.amount ?? null
+  if (
+    pdfNetResult !== null &&
+    Math.abs(Math.round(pdfNetResult) - mapping.totals.aretsResultat.current) > 1
+  ) {
+    throw new Error(
+      `PDF och iXBRL är inte samstämmiga: årets resultat är ${Math.round(pdfNetResult)} kr i PDF-underlaget ` +
+        `men ${mapping.totals.aretsResultat.current} kr i iXBRL-mappningen. Kontrollera kontoklassificeringen innan dokumentet genereras.`,
+    )
+  }
+  if (
+    Math.abs(Math.round(pdfData.balansrakning.total_assets) - mapping.totals.tillgangar.current) > 1
+  ) {
+    throw new Error(
+      `PDF och iXBRL är inte samstämmiga: balansomslutningen är ${Math.round(pdfData.balansrakning.total_assets)} kr i PDF-underlaget ` +
+        `men ${mapping.totals.tillgangar.current} kr i iXBRL-mappningen. Kontrollera kontoklassificeringen innan dokumentet genereras.`,
+    )
+  }
+
   // ---- flerårsöversikt (reuse PDF rows; whole SEK) -------------------------
   // PDF rows are oldest-first; iXBRL columns newest-first. Each row needs the
   // matching fiscal-period range so the document can declare period2/3 +

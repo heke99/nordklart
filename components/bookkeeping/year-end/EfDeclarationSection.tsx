@@ -82,15 +82,20 @@ export function EfDeclarationSection({
   // Restore overrides from localStorage on mount.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    try {
-      const raw = window.localStorage.getItem(storageKey)
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<EfOverrideInputs>
-        setOverrides({ ...DEFAULT_OVERRIDES, ...parsed })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      try {
+        const raw = window.localStorage.getItem(storageKey)
+        if (raw) {
+          const parsed = JSON.parse(raw) as Partial<EfOverrideInputs>
+          setOverrides({ ...DEFAULT_OVERRIDES, ...parsed })
+        }
+      } catch {
+        // Ignore — start with defaults.
       }
-    } catch {
-      // Ignore — start with defaults.
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [storageKey])
 
   // Persist overrides on change.

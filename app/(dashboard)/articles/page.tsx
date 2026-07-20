@@ -56,6 +56,37 @@ function compareStrings(a: string, b: string): number {
   return a.localeCompare(b, 'sv', { sensitivity: 'base' })
 }
 
+function SortableHeader({
+  column,
+  label,
+  className,
+  sortColumn,
+  sortDir,
+  onSort,
+}: {
+  column: SortColumn
+  label: string
+  className?: string
+  sortColumn: SortColumn
+  sortDir: SortDir
+  onSort: (column: SortColumn) => void
+}) {
+  const isActive = sortColumn === column
+  const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {label}
+        <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
+      </button>
+    </TableHead>
+  )
+}
+
 function ArticlesPageInner() {
   const { company } = useCompany()
   const { canWrite } = useCanWrite()
@@ -117,7 +148,12 @@ function ArticlesPageInner() {
   }
 
   useEffect(() => {
-    fetchArticles()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchArticles does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchArticles()
+    }, 0)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -206,31 +242,6 @@ function ArticlesPageInner() {
     })
     return arr
   }, [filteredArticles, sortColumn, sortDir])
-
-  function SortableHeader({
-    column,
-    label,
-    className,
-  }: {
-    column: SortColumn
-    label: string
-    className?: string
-  }) {
-    const isActive = sortColumn === column
-    const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
-    return (
-      <TableHead className={className}>
-        <button
-          type="button"
-          onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
-        >
-          {label}
-          <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
-        </button>
-      </TableHead>
-    )
-  }
 
   return (
     <div className="space-y-8">
@@ -329,19 +340,49 @@ function ArticlesPageInner() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <SortableHeader column="article_number" label={t('col_number')} />
-                    <SortableHeader column="name" label={t('col_name')} />
-                    <SortableHeader column="type" label={t('col_type')} />
-                    <SortableHeader column="unit" label={t('col_unit')} />
+                    <SortableHeader
+                      column="article_number"
+                      label={t('col_number')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
+                    <SortableHeader
+                      column="name"
+                      label={t('col_name')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
+                    <SortableHeader
+                      column="type"
+                      label={t('col_type')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
+                    <SortableHeader
+                      column="unit"
+                      label={t('col_unit')}
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
+                    />
                     <SortableHeader
                       column="price_excl_vat"
                       label={t('col_price')}
                       className="text-right"
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
                     />
                     <SortableHeader
                       column="vat_rate"
                       label={t('col_vat')}
                       className="text-right"
+                      sortColumn={sortColumn}
+                      sortDir={sortDir}
+                      onSort={updateSort}
                     />
                     <TableHead className="text-right">{t('col_status')}</TableHead>
                   </TableRow>

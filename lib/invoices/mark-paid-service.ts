@@ -34,6 +34,7 @@ import {
 import { eventBus } from '@/lib/events'
 import { computePreviousAttributes } from '@/lib/webhooks/diff'
 import { createLogger } from '@/lib/logger'
+import { getCompanyEntityType } from '@/lib/company/entity-type'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
 const log = createLogger('invoices/mark-paid')
@@ -178,13 +179,13 @@ export async function prepareMarkInvoicePaid(
 
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('accounting_method, entity_type')
+    .select('accounting_method')
     .eq('company_id', companyId)
     .maybeSingle()
   const accountingMethod =
     (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
-  const entityType = ((settings as { entity_type?: string } | null)?.entity_type ??
-    'enskild_firma') as EntityType
+  // Canonical legal form (B13) — companies.entity_type, no silent fallback.
+  const entityType = await getCompanyEntityType(supabase, companyId)
 
   const invoiceAlreadyBooked = !!(typed as { journal_entry_id?: string | null }).journal_entry_id
   const useCashEntryCandidate = !invoiceAlreadyBooked && accountingMethod === 'cash'

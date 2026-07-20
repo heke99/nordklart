@@ -80,11 +80,17 @@ export function KassaflodesanalysClient() {
   }, [])
 
   useEffect(() => {
-    if (selectedPeriod) {
-      loadReport(selectedPeriod)
-    } else {
-      setReport(null)
-    }
+    // Defer to the next macrotask so the synchronous setState inside
+    // loadReport (and the reset branch) does not run directly within the
+    // effect body.
+    const timer = setTimeout(() => {
+      if (selectedPeriod) {
+        loadReport(selectedPeriod)
+      } else {
+        setReport(null)
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [selectedPeriod, loadReport])
 
   const handleDownloadPdf = useCallback(() => {

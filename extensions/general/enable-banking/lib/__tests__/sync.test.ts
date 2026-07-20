@@ -38,7 +38,18 @@ describe('syncAccountTransactions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockGetAccountBalance.mockRejectedValue(new Error('skip'))
-    mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: ['tx-1'] })
+    mockIngest.mockResolvedValue({
+      imported: 1,
+      duplicates: 0,
+      errors: 0,
+      reconciled: 0,
+      auto_categorized: 0,
+      auto_matched_invoices: 0,
+      transaction_ids: ['tx-1'],
+      automation_errors: 0,
+      mapping_required: 0,
+      row_results: [{ external_id: 'ext-1', status: 'imported', transaction_id: 'tx-1', error: null }],
+    })
   })
 
   it('calls uploadDocument for each raw page with correct filename pattern', async () => {
@@ -88,7 +99,7 @@ describe('syncAccountTransactions', () => {
     expect(secondCall[3].name).toMatch(/^psd2-response_conn-1_acc-uid-1_.*_p2\.json$/)
   })
 
-  it('completes sync even if uploadDocument throws', async () => {
+  it('completes sync but counts the failure in archiveErrors when uploadDocument throws (K09)', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' } }],
       rawPages: ['{"transactions":[]}'],
@@ -121,12 +132,82 @@ describe('syncAccountTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(result.errors).toBe(0)
+    // K09: the archive failure is no longer swallowed — the caller must see a
+    // non-zero archiveErrors count and summarize the sync as partial.
+    expect(result.archiveErrors).toBe(1)
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Failed to archive raw response'),
       expect.any(Error)
     )
 
     errorSpy.mockRestore()
+  })
+
+  it('counts one archiveError per failed raw page and zero when archiving succeeds', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2024-06-15' }],
+      rawPages: ['{"p":1}', '{"p":2}', '{"p":3}'],
+    })
+    mockConvertTransaction.mockReturnValue({
+      id: 'tx-1',
+      date: '2024-06-15',
+      booking_date: '2024-06-15',
+      amount: 100,
+      currency: 'SEK',
+      description: 'Test',
+    })
+    // Page 1 archives, page 2 fails, page 3 archives.
+    mockUploadDocument
+      .mockResolvedValueOnce({ id: 'doc-1' })
+      .mockRejectedValueOnce(new Error('Storage error'))
+      .mockResolvedValueOnce({ id: 'doc-3' })
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2024-01-01', '2024-12-31', mockIngest
+    )
+
+    expect(result.archiveErrors).toBe(1)
+    errorSpy.mockRestore()
+  })
+
+  it('passes through automation_errors and mapping_required from the ingest result', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2024-06-15' }],
+      rawPages: ['{}'],
+    })
+    mockConvertTransaction.mockReturnValue({
+      id: 'tx-1',
+      date: '2024-06-15',
+      booking_date: '2024-06-15',
+      amount: 100,
+      currency: 'SEK',
+      description: 'Test',
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockIngest.mockResolvedValue({
+      imported: 3,
+      duplicates: 1,
+      errors: 0,
+      reconciled: 0,
+      auto_categorized: 0,
+      auto_matched_invoices: 0,
+      transaction_ids: ['tx-1', 'tx-2', 'tx-3'],
+      automation_errors: 2,
+      mapping_required: 1,
+      row_results: [],
+    })
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2024-01-01', '2024-12-31', mockIngest
+    )
+
+    expect(result.automationErrors).toBe(2)
+    expect(result.mappingRequired).toBe(1)
+    expect(result.archiveErrors).toBe(0)
   })
 
   it('forwards strategy from sync options to getAllTransactionsWithRaw', async () => {

@@ -141,7 +141,12 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   }, [id, router, toast, t])
 
   useEffect(() => {
-    fetchData()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchData does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchData()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchData])
 
   if (isLoading) {

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Transaction, ReconciliationMethod } from '@/types'
 import { eventBus } from '@/lib/events/bus'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 
 // ============================================================
@@ -255,19 +256,21 @@ export async function runReconciliation(
   // Fetch unlinked GL lines via RPC
   const glLines = await fetchUnlinkedGLLines(supabase, companyId, accountNumber, dateFrom, dateTo)
 
-  // Fetch unmatched transactions, scoped to the selected cash account.
-  let query = supabase
-    .from('transactions')
-    .select('*')
-    .eq('company_id', companyId)
-    .is('journal_entry_id', null)
-    .eq('is_ignored', false)
-  query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
+  // Fetch ALL unmatched transactions, scoped to the selected cash account —
+  // paginated (A01) and fail-closed (fetchAllRows throws on query errors).
+  const transactions = await fetchAllRows<Transaction>(({ from, to }) => {
+    let query = supabase
+      .from('transactions')
+      .select('*')
+      .eq('company_id', companyId)
+      .is('journal_entry_id', null)
+      .eq('is_ignored', false)
+    query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
 
-  if (dateFrom) query = query.gte('date', dateFrom)
-  if (dateTo) query = query.lte('date', dateTo)
-
-  const { data: transactions } = await query
+    if (dateFrom) query = query.gte('date', dateFrom)
+    if (dateTo) query = query.lte('date', dateTo)
+    return query.order('id', { ascending: true }).range(from, to)
+  })
 
   if (!transactions || transactions.length === 0 || glLines.length === 0) {
     return { matches: [], applied: 0, errors: 0 }
@@ -286,7 +289,9 @@ export async function runReconciliation(
 
   for (const match of matches) {
     try {
-      const { error } = await supabase
+      // Optimistic lock (A04): only claim the row if it is STILL unmatched —
+      // a concurrent match loses cleanly instead of overwriting the link.
+      const { data: claimed, error } = await supabase
         .from('transactions')
         .update({
           journal_entry_id: match.glLine.journal_entry_id,
@@ -295,9 +300,12 @@ export async function runReconciliation(
         })
         .eq('id', match.transaction.id)
         .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .select('id')
 
-      if (error) {
-        errors++
+      if (error || !claimed || claimed.length === 0) {
+        if (error) errors++
+        // No row claimed without an error ⇒ concurrent winner; skip silently.
       } else {
         applied++
         try {
@@ -352,16 +360,23 @@ export async function getReconciliationStatus(
   // user has explicitly said they don't want them surfacing as something to
   // reconcile. Scoping by cash account (not just currency) is what stops a
   // second same-currency account from inflating bankTotal here.
-  let txQuery = supabase
-    .from('transactions')
-    .select('amount, journal_entry_id, reconciliation_method, is_ignored')
-    .eq('company_id', companyId)
-  txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
+  // Paginated (A01/A03) and fail-closed: every bank row is counted.
+  const transactions = await fetchAllRows<{
+    amount: number | string | null
+    journal_entry_id: string | null
+    reconciliation_method: string | null
+    is_ignored: boolean | null
+  }>(({ from, to }) => {
+    let txQuery = supabase
+      .from('transactions')
+      .select('id, amount, journal_entry_id, reconciliation_method, is_ignored')
+      .eq('company_id', companyId)
+    txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
 
-  if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
-  if (dateTo) txQuery = txQuery.lte('date', dateTo)
-
-  const { data: transactions } = await txQuery
+    if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
+    if (dateTo) txQuery = txQuery.lte('date', dateTo)
+    return txQuery.order('id', { ascending: true }).range(from, to)
+  })
 
   // Get GL bank account lines. Pull id/status/source_type from the join so we
   // can (a) split out lines that have no bank-feed counterpart — opening_balance
@@ -370,17 +385,22 @@ export async function getReconciliationStatus(
   // are superseded by the correction and must drop off the bank side too.
   // 'reversed' is fetched alongside 'posted' precisely to resolve those links;
   // reversed lines are NOT counted in any movement total.
-  let glQuery = supabase
-    .from('journal_entry_lines')
-    .select('debit_amount, credit_amount, journal_entries!inner(id, company_id, entry_date, status, source_type)')
-    .eq('account_number', bankAccount)
-    .eq('journal_entries.company_id', companyId)
-    .in('journal_entries.status', ['posted', 'reversed'])
+  const glLines = await fetchAllRows<{
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+    journal_entries: unknown
+  }>(({ from, to }) => {
+    let glQuery = supabase
+      .from('journal_entry_lines')
+      .select('id, debit_amount, credit_amount, journal_entries!inner(id, company_id, entry_date, status, source_type)')
+      .eq('account_number', bankAccount)
+      .eq('journal_entries.company_id', companyId)
+      .in('journal_entries.status', ['posted', 'reversed'])
 
-  if (dateFrom) glQuery = glQuery.gte('journal_entries.entry_date', dateFrom)
-  if (dateTo) glQuery = glQuery.lte('journal_entries.entry_date', dateTo)
-
-  const { data: glLines } = await glQuery
+    if (dateFrom) glQuery = glQuery.gte('journal_entries.entry_date', dateFrom)
+    if (dateTo) glQuery = glQuery.lte('journal_entries.entry_date', dateTo)
+    return glQuery.order('id', { ascending: true }).range(from, to)
+  })
 
   type GlEntry = { id?: string | null; status?: string | null; source_type?: string | null }
   type GlLineRow = {
@@ -456,7 +476,13 @@ export async function getReconciliationStatus(
     gl_1930_opening_balance: Math.round(glOpeningBalance * 100) / 100,
     gl_1930_correction_adjustment: Math.round(glCorrectionAdjustment * 100) / 100,
     difference,
-    is_reconciled: Math.abs(difference) < 0.01,
+    // Strict (A02): reconciled requires BOTH a zero difference (öre
+    // tolerance) AND zero unmatched rows on both sides. Two offsetting
+    // unmatched rows can never produce a green status.
+    is_reconciled:
+      Math.abs(difference) < 0.01 &&
+      unmatchedTransactionCount === 0 &&
+      unlinkedLines.length === 0,
     matched_count: matchedCount,
     unmatched_transaction_count: unmatchedTransactionCount,
     unmatched_gl_line_count: unlinkedLines.length,
@@ -478,6 +504,12 @@ export async function manualLink(
   journalEntryId: string,
   userId: string,
   accountNumber: string = '1930',
+  options?: {
+    /** Explicit N:1/partial flow (A05): several bank transactions settling
+     *  ONE voucher legitimately differ from the voucher's bank-line total.
+     *  Without this flag an amount mismatch is rejected. */
+    allowAmountMismatch?: boolean
+  },
 ): Promise<{ success: boolean; error?: string }> {
   // Fetch transaction
   const { data: tx, error: txError } = await supabase
@@ -543,19 +575,85 @@ export async function manualLink(
     return { success: false, error: `Verifikationen saknar rad på ${accountNumber}` }
   }
 
-  // N:1 is intentionally allowed: several bank transactions may settle ONE
-  // verifikat (a salary run paid out in multiple transfers, a supplier invoice
-  // paid in instalments). The voucher's bank line is counted once in the period
-  // movement while each transaction sums on the bank side, so correctly-summing
-  // links net to zero and any mis-link surfaces as a non-zero difference on the
-  // status card — there's no need to forbid a second link here. (A given
-  // transaction still can't be double-linked: the tx.journal_entry_id guard
-  // above already blocks that.) The candidate list only surfaces an
-  // already-matched voucher when the user opts in via "Visa även matchade
-  // verifikationer", so this can't happen by accident.
+  // ── Manual match verification (A05) ────────────────────────────────────
+  // Amount, direction, currency and date are verified before linking. A
+  // deviation requires the EXPLICIT difference flow (allowAmountMismatch),
+  // which exists for the legitimate N:1 case: several bank transactions
+  // settling one voucher (salary run in multiple transfers, instalments).
+  const bankLineNet =
+    Math.round(
+      lines.reduce(
+        (sum, l) => sum + ((Number(l.debit_amount) || 0) - (Number(l.credit_amount) || 0)),
+        0,
+      ) * 100,
+    ) / 100
 
-  // Apply link
-  const { error: updateError } = await supabase
+  // Direction: an inflow (positive bank amount) must correspond to a net
+  // DEBIT on the bank account; an outflow to a net credit.
+  const txAmount = Number(tx.amount) || 0
+  const txCurrency = (tx.currency as string | null) ?? 'SEK'
+  const txComparableSek =
+    txCurrency === 'SEK'
+      ? txAmount
+      : tx.amount_sek != null
+        ? Number(tx.amount_sek)
+        : null
+
+  if (txComparableSek === null) {
+    return {
+      success: false,
+      error: `Transaktionen är i ${txCurrency} men saknar SEK-belopp (växelkurs) — kan inte verifieras mot verifikationen.`,
+    }
+  }
+
+  if (txComparableSek > 0 && bankLineNet < 0) {
+    return {
+      success: false,
+      error: 'Riktningen stämmer inte: transaktionen är en insättning men verifikationen krediterar bankkontot.',
+    }
+  }
+  if (txComparableSek < 0 && bankLineNet > 0) {
+    return {
+      success: false,
+      error: 'Riktningen stämmer inte: transaktionen är ett uttag men verifikationen debiterar bankkontot.',
+    }
+  }
+
+  const amountDiff = Math.round(Math.abs(txComparableSek - bankLineNet) * 100) / 100
+  if (amountDiff > 0.01 && !options?.allowAmountMismatch) {
+    return {
+      success: false,
+      error:
+        `Beloppet stämmer inte: transaktionen är ${txComparableSek.toFixed(2)} kr men verifikationens bankrad(er) summerar till ${bankLineNet.toFixed(2)} kr ` +
+        `(differens ${amountDiff.toFixed(2)} kr). Använd det uttryckliga differensflödet (delbetalning/N:1) om kopplingen är avsiktlig.`,
+    }
+  }
+
+  // Date tolerance: manual links beyond ±90 days are almost certainly a
+  // mis-pick; the auto-matcher's widest window is the same bound.
+  const { data: entryDateRow } = await supabase
+    .from('journal_entries')
+    .select('entry_date')
+    .eq('id', journalEntryId)
+    .eq('company_id', companyId)
+    .single()
+  if (entryDateRow?.entry_date && tx.date) {
+    const daysApart = Math.abs(
+      (new Date(entryDateRow.entry_date as string).getTime() -
+        new Date(tx.date as string).getTime()) /
+        86400000,
+    )
+    if (daysApart > 90) {
+      return {
+        success: false,
+        error: `Datumen ligger ${Math.round(daysApart)} dagar isär (max 90). Kontrollera att rätt verifikation valts.`,
+      }
+    }
+  }
+
+  // Apply link with an optimistic lock (A04): only claim the row if it is
+  // STILL unmatched — a concurrent link loses cleanly.
+  const { data: claimed, error: updateError } = await supabase
     .from('transactions')
     .update({
       journal_entry_id: journalEntryId,
@@ -564,9 +662,17 @@ export async function manualLink(
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
+    .is('journal_entry_id', null)
+    .select('id')
 
   if (updateError) {
     return { success: false, error: 'Kunde inte koppla transaktionen. Försök igen.' }
+  }
+  if (!claimed || claimed.length === 0) {
+    return {
+      success: false,
+      error: 'Transaktionen matchades av någon annan medan du arbetade — ladda om listan.',
+    }
   }
 
   try {
@@ -857,15 +963,29 @@ export async function fetchUnlinkedGLLines(
   dateFrom?: string,
   dateTo?: string,
 ): Promise<UnlinkedGLLine[]> {
-  const { data, error } = await supabase.rpc('get_unlinked_gl_lines', {
-    p_company_id: companyId,
-    p_account_number: accountNumber,
-    p_date_from: dateFrom || null,
-    p_date_to: dateTo || null,
-  })
-
-  if (error || !data) return []
-  return data as UnlinkedGLLine[]
+  // Paginated (A01/A03) and fail-closed (A10): a query error must never be
+  // read as "no unmatched GL lines".
+  const all: UnlinkedGLLine[] = []
+  const PAGE = 1000
+  let from = 0
+  for (;;) {
+    const { data, error } = await supabase
+      .rpc('get_unlinked_gl_lines', {
+        p_company_id: companyId,
+        p_account_number: accountNumber,
+        p_date_from: dateFrom || null,
+        p_date_to: dateTo || null,
+      })
+      .range(from, from + PAGE - 1)
+    if (error) {
+      throw new Error(`Omatchade huvudboksrader kunde inte läsas: ${error.message}`)
+    }
+    const rows = (data ?? []) as UnlinkedGLLine[]
+    all.push(...rows)
+    if (rows.length < PAGE) break
+    from += PAGE
+  }
+  return all
 }
 
 /** A match candidate that carries how many transactions already point at it. */

@@ -6,6 +6,8 @@ import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { getWorklistCounts, listSuggestedMatches } from '@/lib/worklist'
 import { resolveDashboardWorkspaceState } from '@/lib/dashboard/workspace-state'
+import { generateResultatrapport } from '@/lib/reports/resultatrapport'
+import { stockholmToday, stockholmStartOfMonth } from '@/lib/dates/stockholm'
 import type { Deadline } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -27,12 +29,22 @@ export default async function DashboardPage() {
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
 
-  // Fetch current year date boundaries
-  const startOfYearStr = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0]
-  const startOfMonthStr = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
+  // Date boundaries in Europe/Stockholm (R21) — never raw UTC days.
   const now = new Date()
-  const today = now.toISOString().split('T')[0]
-  const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  const today = stockholmToday(now)
+  const startOfMonthStr = stockholmStartOfMonth(now)
+  const nextWeek = stockholmToday(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000))
+
+  // Active fiscal period (R15): YTD follows the company's räkenskapsår —
+  // which may be broken (brutet) — not the calendar year.
+  const { data: activePeriod, error: activePeriodError } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end')
+    .eq('company_id', companyId)
+    .lte('period_start', today)
+    .order('period_start', { ascending: false })
+    .limit(1)
+    .maybeSingle()
 
   // Fetch all data in parallel
   const [
@@ -41,9 +53,8 @@ export default async function DashboardPage() {
     { count: invoiceCount },
     { count: receiptCount },
     { count: transactionCount },
-    { data: journalLines },
-    { data: unpaidInvoices },
-    { data: bankConnections },
+    unpaidInvoicesResult,
+    bankConnectionsResult,
     { data: deadlines },
     { count: sieImportCount },
     { count: staleUncategorizedCount },
@@ -58,13 +69,14 @@ export default async function DashboardPage() {
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('receipts').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entry:journal_entries!inner(entry_date, status, company_id)')
-      .eq('journal_entry.status', 'posted')
-      .eq('journal_entry.company_id', companyId)
-      .gte('journal_entry.entry_date', startOfYearStr),
-    supabase.from('invoices').select('total, total_sek, vat_amount, vat_amount_sek, status').eq('company_id', companyId).in('status', ['sent', 'overdue']).is('credited_invoice_id', null),
-    supabase.from('bank_connections').select('id, accounts_data, status, consent_expires, bank_name').eq('company_id', companyId).eq('status', 'active'),
+    // Unpaid AR (R18): every open status, remaining_amount not invoice total.
+    supabase
+      .from('invoices')
+      .select('total, total_sek, paid_amount, remaining_amount, currency, exchange_rate, vat_amount, vat_amount_sek, status')
+      .eq('company_id', companyId)
+      .in('status', ['sent', 'overdue', 'partially_paid', 'disputed', 'collection_ready'])
+      .is('credited_invoice_id', null),
+    supabase.from('bank_connections').select('id, accounts_data, status, consent_expires, bank_name, last_synced_at').eq('company_id', companyId).eq('status', 'active'),
     supabase.from('deadlines').select('*, customer:customers(id, name)').eq('company_id', companyId).eq('is_completed', false)
       .or(`due_date.lt.${today},due_date.lte.${nextWeek}`).order('due_date', { ascending: true }),
     supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
@@ -112,49 +124,101 @@ export default async function DashboardPage() {
     transactionCount,
     postedEntriesCount,
     sieImportCount,
-    bankConnectionCount: bankConnections?.length ?? 0,
+    bankConnectionCount: bankConnectionsResult.data?.length ?? 0,
     skatteverketTokenCount,
   })
 
-  // Calculate totals from journal entry lines using account classes
-  const calculateTotals = (lines: typeof journalLines, fromDate: string) => {
-    const filtered = (lines || []).filter((l) => {
-      const entry = l.journal_entry as unknown as { entry_date: string; status: string }
-      return entry.entry_date >= fromDate
-    })
+  // Load errors are surfaced as errors, never silently rendered as 0 kr (R20).
+  const dataErrors: { result?: string; invoices?: string; bank?: string } = {}
 
-    let revenue = 0
-    let expenses = 0
+  // Result KPI (R16/R17): the SAME canonical report engine as the formal
+  // reports — generateResultatrapport on the active fiscal period (movement
+  // for the selected window, class 3–8 incl. financial items, year-end
+  // closing excluded, paginated trial balance underneath).
+  const sumClasses = (
+    report: Awaited<ReturnType<typeof generateResultatrapport>>,
+    classes: number[],
+  ) =>
+    Math.round(
+      report.groups
+        .filter((g) => classes.includes(g.class))
+        .reduce((sum, g) => sum + g.subtotal_current, 0) * 100,
+    ) / 100
 
-    for (const line of filtered) {
-      const acct = line.account_number
-      if (acct.startsWith('3')) {
-        // Revenue: class 3 — credit-normal accounts
-        revenue += Math.round(((line.credit_amount || 0) - (line.debit_amount || 0)) * 100) / 100
-      } else if (acct.startsWith('4') || acct.startsWith('5') || acct.startsWith('6') || acct.startsWith('7')) {
-        // Expenses: classes 4-7 — debit-normal accounts
-        expenses += Math.round(((line.debit_amount || 0) - (line.credit_amount || 0)) * 100) / 100
+  let ytdTotals: { income: number; expenses: number; net: number } | null = null
+  let mtdTotals: { income: number; expenses: number; net: number } | null = null
+  let fiscalYearStart: string | null = null
+
+  if (activePeriodError) {
+    dataErrors.result = 'Räkenskapsåret kunde inte läsas'
+  } else if (activePeriod) {
+    fiscalYearStart = activePeriod.period_start as string
+    try {
+      const clampedToday = today <= activePeriod.period_end ? today : (activePeriod.period_end as string)
+      const monthFrom =
+        startOfMonthStr >= activePeriod.period_start ? startOfMonthStr : (activePeriod.period_start as string)
+      const [ytdReport, mtdReport] = await Promise.all([
+        generateResultatrapport(supabase, companyId, activePeriod.id, { toDate: clampedToday }),
+        generateResultatrapport(supabase, companyId, activePeriod.id, {
+          fromDate: monthFrom,
+          toDate: clampedToday,
+        }),
+      ])
+      // KPI definition: "resultat" = the full net result incl. class 8
+      // (financial items, dispositions, tax) — the same net as the formal
+      // resultatrapport. income = class 3, expenses = classes 4–8 (positive).
+      ytdTotals = {
+        income: sumClasses(ytdReport, [3]),
+        expenses: Math.round(-sumClasses(ytdReport, [4, 5, 6, 7, 8]) * 100) / 100,
+        net: ytdReport.net_result_current,
       }
+      mtdTotals = {
+        income: sumClasses(mtdReport, [3]),
+        expenses: Math.round(-sumClasses(mtdReport, [4, 5, 6, 7, 8]) * 100) / 100,
+        net: mtdReport.net_result_current,
+      }
+    } catch {
+      dataErrors.result = 'Resultatet kunde inte laddas'
     }
-
-    revenue = Math.round(revenue * 100) / 100
-    expenses = Math.round(expenses * 100) / 100
-
-    return { income: revenue, expenses, net: Math.round((revenue - expenses) * 100) / 100 }
+  } else {
+    // No fiscal period yet — a legitimate empty state, not an error.
+    ytdTotals = { income: 0, expenses: 0, net: 0 }
+    mtdTotals = { income: 0, expenses: 0, net: 0 }
   }
 
-  const ytdTotals = calculateTotals(journalLines, startOfYearStr)
-  const mtdTotals = calculateTotals(journalLines, startOfMonthStr)
+  // Unpaid AR (R18): remaining_amount per open invoice, converted to SEK.
+  const unpaidInvoices = unpaidInvoicesResult.data
+  if (unpaidInvoicesResult.error) {
+    dataErrors.invoices = 'Kundfordringarna kunde inte laddas'
+  }
+  const openRemainingSek = (inv: {
+    total: number | null
+    total_sek: number | null
+    paid_amount: number | null
+    remaining_amount: number | null
+    currency: string | null
+    exchange_rate: number | null
+  }): number => {
+    const remaining = Number(
+      inv.remaining_amount ?? (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0),
+    )
+    if (!inv.currency || inv.currency === 'SEK') return remaining
+    if (inv.exchange_rate && Number(inv.exchange_rate) > 0) {
+      return Math.round(remaining * Number(inv.exchange_rate) * 100) / 100
+    }
+    // FX without a rate cannot be converted — fall back to the booked SEK
+    // proportion of the total when available.
+    if (inv.total_sek && inv.total) {
+      return Math.round(remaining * (Number(inv.total_sek) / Number(inv.total)) * 100) / 100
+    }
+    return 0
+  }
 
-  // Mirror the per-invoice öresavrundning rule used on the invoice list/detail
-  // pages: sum the displayed (rounded) SEK amount per invoice so the dashboard
-  // total matches what the user sees on the invoice list when the setting is on.
   const unpaidTotal = (unpaidInvoices || []).reduce(
-    (sum, inv) => sum + getDisplayTotal(
-      { total: Number(inv.total_sek || inv.total), currency: 'SEK' },
-      settings,
-    ).displayed,
-    0
+    (sum, inv) =>
+      sum +
+      getDisplayTotal({ total: openRemainingSek(inv), currency: 'SEK' }, settings).displayed,
+    0,
   )
 
   const unpaidVatTotal = (unpaidInvoices || []).reduce(
@@ -166,18 +230,55 @@ export default async function DashboardPage() {
     (inv) => inv.status === 'overdue'
   ).length
 
+  // Bank liquidity (R19): dedupe accounts across (re)connected connections by
+  // IBAN/uid so a reconnect never double-counts, and surface freshness.
+  const bankConnections = bankConnectionsResult.data
+  if (bankConnectionsResult.error) {
+    dataErrors.bank = 'Banksaldot kunde inte laddas'
+  }
+  const nowMs = new Date().getTime()
   let bankBalance: number | null = null
+  let bankBalanceStale = false
+  let bankBalanceAsOf: string | null = null
   if (bankConnections && bankConnections.length > 0) {
-    const allBalances = bankConnections.flatMap(conn => {
-      const accounts = conn.accounts_data as { balance: number }[] | null
-      return accounts || []
-    })
-    if (allBalances.length > 0) {
-      bankBalance = allBalances.reduce((sum, acc) => sum + (acc.balance || 0), 0)
+    type AccountData = {
+      uid?: string
+      iban?: string
+      balance?: number
+      currency?: string
+      balance_updated_at?: string
+      enabled?: boolean
+    }
+    const seen = new Map<string, AccountData & { last_synced_at: string | null }>()
+    for (const conn of bankConnections) {
+      const accounts = (conn.accounts_data as AccountData[] | null) || []
+      for (const acc of accounts) {
+        if (acc.enabled === false) continue
+        const key = (acc.iban?.replace(/\s+/g, '').toUpperCase() || acc.uid || '') as string
+        if (!key) continue
+        const existing = seen.get(key)
+        const candidate = { ...acc, last_synced_at: (conn.last_synced_at as string | null) ?? null }
+        if (
+          !existing ||
+          (candidate.balance_updated_at ?? '') > (existing.balance_updated_at ?? '')
+        ) {
+          seen.set(key, candidate)
+        }
+      }
+    }
+    if (seen.size > 0) {
+      bankBalance = [...seen.values()].reduce((sum, acc) => sum + (acc.balance || 0), 0)
+      const updatedDates = [...seen.values()]
+        .map((a) => a.balance_updated_at ?? a.last_synced_at)
+        .filter((d): d is string => Boolean(d))
+      bankBalanceAsOf = updatedDates.length > 0 ? updatedDates.reduce((a, b) => (a < b ? a : b)) : null
+      // Cached balance older than 48h is flagged stale.
+      bankBalanceStale =
+        bankBalanceAsOf !== null &&
+        nowMs - new Date(bankBalanceAsOf).getTime() > 48 * 60 * 60 * 1000
     }
   }
 
-  const nowMs = new Date().getTime()
   const expiringBankConnections = (bankConnections || [])
     .filter(conn => {
       if (!conn.consent_expires) return false
@@ -199,13 +300,17 @@ export default async function DashboardPage() {
       companyId={companyId}
       agentBuilt={agentBuilt}
       summary={{
-        ytd: ytdTotals,
-        mtd: mtdTotals,
+        ytd: ytdTotals ?? { income: 0, expenses: 0, net: 0 },
+        mtd: mtdTotals ?? { income: 0, expenses: 0, net: 0 },
+        fiscalYearStart,
+        dataErrors,
         unpaidInvoicesCount: (unpaidInvoices || []).length,
         unpaidInvoicesTotal: unpaidTotal,
         unpaidVatTotal,
         overdueInvoicesCount: overdueCount,
         bankBalance,
+        bankBalanceStale,
+        bankBalanceAsOf,
         expiringBankConnections,
         deadlines: (deadlines || []) as Deadline[],
         staleUncategorizedCount: staleUncategorizedCount || 0,

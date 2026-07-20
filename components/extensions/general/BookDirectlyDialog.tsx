@@ -184,13 +184,18 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   // Reset state when a different item opens the dialog
   useEffect(() => {
     if (!open) return
-    setEntryDate(item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10))
-    setLines(buildPrefillLines(item))
-    setSelectedTransactionId(item.matched_transaction_id)
-    const supplier = item.extracted_data?.supplier?.name?.trim() || ''
-    const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
-    setDescription([supplier, invoiceNum].filter(Boolean).join(' · ') || 'Bokföring från inkorg')
-    setNotes('')
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setEntryDate(item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10))
+      setLines(buildPrefillLines(item))
+      setSelectedTransactionId(item.matched_transaction_id)
+      const supplier = item.extracted_data?.supplier?.name?.trim() || ''
+      const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
+      setDescription([supplier, invoiceNum].filter(Boolean).join(' · ') || 'Bokföring från inkorg')
+      setNotes('')
+    }, 0)
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
 
@@ -199,22 +204,29 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   // raw foreign number). SEK / unsupported currencies skip the fetch.
   useEffect(() => {
     if (!open) return
-    setFxRate(null)
-    if (targetCurrency === 'SEK' || !['EUR', 'USD', 'GBP', 'NOK', 'DKK'].includes(targetCurrency)) {
-      return
-    }
     let cancelled = false
-    const invoiceDate = item.extracted_data?.invoice?.invoiceDate
-    const dateParam = invoiceDate ? `&date=${invoiceDate}` : ''
-    fetch(`/api/currency/rate?currency=${targetCurrency}${dateParam}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        if (cancelled) return
-        const rate = body?.data?.rate
-        if (typeof rate === 'number' && rate > 0) setFxRate(rate)
-      })
-      .catch(() => { /* leave null — ranking falls back to face amounts */ })
-    return () => { cancelled = true }
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setFxRate(null)
+      if (targetCurrency === 'SEK' || !['EUR', 'USD', 'GBP', 'NOK', 'DKK'].includes(targetCurrency)) {
+        return
+      }
+      const invoiceDate = item.extracted_data?.invoice?.invoiceDate
+      const dateParam = invoiceDate ? `&date=${invoiceDate}` : ''
+      fetch(`/api/currency/rate?currency=${targetCurrency}${dateParam}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((body) => {
+          if (cancelled) return
+          const rate = body?.data?.rate
+          if (typeof rate === 'number' && rate > 0) setFxRate(rate)
+        })
+        .catch(() => { /* leave null — ranking falls back to face amounts */ })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, targetCurrency, item.id])
 
@@ -246,17 +258,22 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     // user-entered account numbers. This handles "user typed cost account,
     // then picked an SEK-denominated transaction" — we want the SEK figure
     // to flow into the line amounts without forgetting their account pick.
-    setLines((current) => {
-      const next = buildPrefillLines(item, selectedTransactionAmount)
-      return next.map((nl, i) => {
-        const existing = current[i]
-        if (!existing) return nl
-        return {
-          ...nl,
-          account_number: existing.account_number || nl.account_number,
-        }
+    // Deferred to the next macrotask so the synchronous setState does not
+    // run directly within the effect body.
+    const timer = setTimeout(() => {
+      setLines((current) => {
+        const next = buildPrefillLines(item, selectedTransactionAmount)
+        return next.map((nl, i) => {
+          const existing = current[i]
+          if (!existing) return nl
+          return {
+            ...nl,
+            account_number: existing.account_number || nl.account_number,
+          }
+        })
       })
-    })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, item, selectedTransactionAmount])
 
   // Fetch fiscal periods and accounts on first open
@@ -284,14 +301,19 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   // Auto-select fiscal period matching the entry date
   useEffect(() => {
     if (periods.length === 0) return
-    const match = periods.find(
-      (p) => entryDate >= p.period_start && entryDate <= p.period_end
-    )
-    if (match) {
-      setPeriodId(match.id)
-    } else if (!periodId && periods.length > 0) {
-      setPeriodId(periods[0].id)
-    }
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const match = periods.find(
+        (p) => entryDate >= p.period_start && entryDate <= p.period_end
+      )
+      if (match) {
+        setPeriodId(match.id)
+      } else if (!periodId && periods.length > 0) {
+        setPeriodId(periods[0].id)
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [entryDate, periods, periodId])
 
   // Fetch unmatched transactions whenever the dialog opens — the picker
@@ -299,8 +321,13 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    setIsLoadingTransactions(true)
-    ;(async () => {
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setIsLoadingTransactions(true)
+      void loadUnmatched()
+    }, 0)
+    async function loadUnmatched() {
       try {
         const res = await fetch('/api/transactions?unmatched=true')
         const json = await res.json()
@@ -322,8 +349,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
       } finally {
         if (!cancelled) setIsLoadingTransactions(false)
       }
-    })()
-    return () => { cancelled = true }
+    }
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
   }, [open])
 
   // FX-aware ranking by closeness to the underlag's SEK value.

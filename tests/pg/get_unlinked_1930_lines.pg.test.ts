@@ -26,11 +26,24 @@ async function insertPostedJournalEntry(params: {
   // Insert as posted directly. This bypasses commit_journal_entry's voucher
   // sequencing; that's fine for testing the read-side RPC, which only cares
   // about (account_number, status, source_type, date_range, link presence).
+  // Entry + lines go in ONE statement so the deferred
+  // check_balance_on_posted_insert trigger sees balanced lines at commit.
+  // Balanced pair on 1930 + 2091 (balanserad vinst/förlust — the realistic
+  // carried-forward counterpart for an IB on a bank account; harmless for the
+  // other source_types where the test only cares about the 1930 side).
   await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'posted')`,
+    `WITH e AS (
+       INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'posted')
+       RETURNING id
+     )
+     INSERT INTO public.journal_entry_lines
+       (journal_entry_id, account_number, debit_amount, credit_amount)
+     SELECT id, '1930', $9, 0 FROM e
+     UNION ALL
+     SELECT id, '2091', 0, $9 FROM e`,
     [
       id,
       params.userId,
@@ -40,17 +53,8 @@ async function insertPostedJournalEntry(params: {
       params.entryDate,
       `Test ${params.sourceType}`,
       params.sourceType,
+      amount,
     ],
-  )
-  // Balanced pair on 1930 + 2091 (balanserad vinst/förlust — the realistic
-  // carried-forward counterpart for an IB on a bank account; harmless for the
-  // other source_types where the test only cares about the 1930 side).
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '1930', $2, 0),
-            ($1, '2091', 0, $2)`,
-    [id, amount],
   )
   return id
 }

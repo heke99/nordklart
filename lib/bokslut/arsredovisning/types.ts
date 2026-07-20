@@ -5,6 +5,9 @@
  */
 
 export interface FlerarsoversiktRow {
+  /** True when the underlying data could not be loaded (R09) — the row's
+   *  numbers are unavailable, NOT zero. Blocks the final document. */
+  data_missing?: boolean
   /** Fiscal-year name (e.g. "2025"). */
   year: string
   net_revenue: number
@@ -31,6 +34,8 @@ export interface NoteEntry {
 }
 
 export interface IncomeStatementLine {
+  /** Föregående års jämförelsetal (R03). Null when no prior period exists. */
+  prior_amount?: number | null
   label: string
   amount: number
   /** True for total / subtotal lines. */
@@ -38,6 +43,8 @@ export interface IncomeStatementLine {
 }
 
 export interface BalanceSheetLine {
+  /** Föregående års jämförelsetal (R03). Null when no prior period exists. */
+  prior_amount?: number | null
   label: string
   amount: number
   is_total?: boolean
@@ -87,6 +94,9 @@ export interface ArsredovisningData {
     total_assets: number
     equity_liabilities: BalanceSheetLine[]
     total_equity_liabilities: number
+    /** Prior-year totals for the jämförelse column (R03). */
+    total_assets_prior?: number | null
+    total_equity_liabilities_prior?: number | null
   }
   noter: NoteEntry[]
   /** K3-only: full kassaflödesanalys (indirect method) rendered as its own
@@ -100,12 +110,20 @@ export interface ArsredovisningData {
     rows: EgenKapitalRow[]
     closing_total: number
   }
-  /** Underskrifter — names of board members + VD. Filled by signature flow. */
+  /** Underskrifter — names of board members + VD from the canonical
+   *  signature model (R04). Never generic placeholder persons. */
   signatures: {
     role: string
     name: string
     signed_at: string | null
+    status?: 'pending' | 'signed' | 'declined'
   }[]
+  /** Prior period metadata for the jämförelse column (R03). */
+  prior_period?: { id: string; name: string } | null
+  /** Förvaltningsberättelse fields still on unconfirmed boilerplate (R10).
+   *  Non-empty blocks the FINAL document — standard texts asserting facts
+   *  require active user confirmation. */
+  unconfirmed_defaults: string[]
   /** Pre-download blockers / warnings the UI surfaces so the user knows the
    *  PDF is not yet Bolagsverket-fileable as-is. Examples: aktiekapital
    *  uppgifter saknas, AGM-datum saknas, K3 entity. Never an error — the

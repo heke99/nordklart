@@ -212,7 +212,10 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         trigger: isFirstSync ? 'initial_backfill' : 'cron',
       })
 
-      const syncResults = await Promise.all(
+      // Per-account isolation (K10): one account throwing must not abort the
+      // others or leave the connection in a dangling state. Each account gets
+      // its own status/checkpoint recorded in the sync run's details.
+      const settled = await Promise.allSettled(
         accounts.map(account => syncAccountTransactions(
           supabase,
           connection.company_id,
@@ -226,16 +229,53 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         ))
       )
 
+      const accountOutcomes = settled.map((outcome, i) => ({
+        account_uid: accounts[i].uid,
+        status: outcome.status === 'fulfilled'
+          ? (outcome.value.errors > 0 || outcome.value.archiveErrors > 0 ? 'partial' : 'success')
+          : 'failed',
+        imported: outcome.status === 'fulfilled' ? outcome.value.imported : 0,
+        duplicates: outcome.status === 'fulfilled' ? outcome.value.duplicates : 0,
+        errors: outcome.status === 'fulfilled' ? outcome.value.errors : 1,
+        automation_errors: outcome.status === 'fulfilled' ? outcome.value.automationErrors : 0,
+        archive_errors: outcome.status === 'fulfilled' ? outcome.value.archiveErrors : 0,
+        mapping_required: outcome.status === 'fulfilled' ? outcome.value.mappingRequired : 0,
+        error: outcome.status === 'rejected'
+          ? (outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason))
+          : null,
+      }))
+
+      const syncResults = settled.flatMap(o => (o.status === 'fulfilled' ? [o.value] : []))
+      const rejectedAccounts = settled.filter(o => o.status === 'rejected').length
       const totalImported = syncResults.reduce((sum, r) => sum + r.imported, 0)
       const totalDuplicates = syncResults.reduce((sum, r) => sum + r.duplicates, 0)
-      const totalErrors = syncResults.reduce((sum, r) => sum + r.errors, 0)
+      const totalErrors = syncResults.reduce((sum, r) => sum + r.errors, 0) + rejectedAccounts
+      const totalArchiveErrors = syncResults.reduce((sum, r) => sum + r.archiveErrors, 0)
+      const totalAutomationErrors = syncResults.reduce((sum, r) => sum + r.automationErrors, 0)
+
+      // K12: a run with row or account failures is never 'success'.
+      const runStatus =
+        rejectedAccounts === accounts.length && accounts.length > 0
+          ? 'failed'
+          : totalErrors > 0 || totalArchiveErrors > 0
+            ? 'partial'
+            : 'success'
 
       await finishSyncRun(supabase, syncRunId, {
-        status: totalErrors > 0 ? 'partial' : 'success',
-        accountsSynced: accounts.length,
+        status: runStatus,
+        accountsSynced: accounts.length - rejectedAccounts,
         transactionsImported: totalImported,
         transactionsDeduplicated: totalDuplicates,
-        errorMessage: totalErrors > 0 ? `${totalErrors} kontofel under synk` : null,
+        errorMessage: totalErrors > 0
+          ? `${totalErrors} kontofel under synk`
+          : totalArchiveErrors > 0
+            ? `${totalArchiveErrors} råsvarssidor kunde inte arkiveras`
+            : null,
+        details: {
+          accounts: accountOutcomes,
+          automation_errors: totalAutomationErrors,
+          archive_errors: totalArchiveErrors,
+        },
       })
 
       // Batch reconciliation sweep when SIE overlap detected
@@ -250,11 +290,16 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         }
       }
 
-      // Successful sync: update connection and clear any previous error state.
-      // Write allAccounts (not accounts) so disabled accounts stay in the row.
+      // Update connection metadata. Write allAccounts (not accounts) so
+      // disabled accounts stay in the row.
+      //
+      // K11: initial_sync_completed_at is set ONLY when the initial sync was
+      // fully clean (no row errors, no rejected accounts) — otherwise the
+      // next cron run keeps the full 90-day window instead of shrinking to 7.
       const completedAt = new Date().toISOString()
+      const initialSyncClean = isFirstSync && totalErrors === 0 && rejectedAccounts === 0
       let initialSyncFields: Record<string, unknown> = {}
-      if (isFirstSync) {
+      if (initialSyncClean) {
         // Aggregate returned booking dates across enabled accounts so the UI
         // can show "we requested X but the bank returned Y to Z".
         const minDates = syncResults.map(r => r.returnedMinBookingDate).filter((d): d is string => !!d)
@@ -267,18 +312,53 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           initial_sync_lookback_days: lookbackDays,
         }
       }
-      await supabase
+      const { error: metadataError } = await supabase
         .from('bank_connections')
         .update({
           accounts_data: allAccounts,
           last_synced_at: completedAt,
-          sync_status: totalErrors > 0 ? 'error' : 'success',
+          sync_status: runStatus === 'success' ? 'success' : 'error',
           consent_status: 'active',
           last_sync_error: totalErrors > 0 ? `${totalErrors} kontofel under synk` : null,
           ...initialSyncFields,
           ...(connection.error_message ? { error_message: null } : {}),
         })
         .eq('id', connection.id)
+
+      // K13: a failed metadata commit must not produce a success event —
+      // the run is downgraded to failed and surfaced.
+      if (metadataError) {
+        ctx.log.error('bank connection metadata update failed', new Error(metadataError.message), {
+          connectionId: connection.id,
+        })
+        await finishSyncRun(supabase, syncRunId, {
+          status: 'failed',
+          accountsSynced: accounts.length - rejectedAccounts,
+          transactionsImported: totalImported,
+          transactionsDeduplicated: totalDuplicates,
+          errorMessage: `Metadata kunde inte sparas: ${metadataError.message}`,
+        })
+        await eventBus.emit({
+          type: 'bank_sync.failed',
+          payload: {
+            connectionId: connection.id,
+            syncRunId,
+            error: `Metadata kunde inte sparas: ${metadataError.message}`,
+            userId: connection.user_id,
+            companyId: connection.company_id,
+          },
+        })
+        results.push({
+          connectionId: connection.id,
+          userId: connection.user_id,
+          bankName: connection.bank_name,
+          imported: totalImported,
+          duplicates: totalDuplicates,
+          errors: totalErrors + 1,
+          status: 'error',
+        })
+        continue
+      }
 
       results.push({
         connectionId: connection.id,

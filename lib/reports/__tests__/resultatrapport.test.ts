@@ -15,8 +15,15 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+/**
+ * P&L fixture rows carry the PERIOD MOVEMENT in period_debit/period_credit
+ * (R02): the report renders `period_credit - period_debit`, never the
+ * cumulative closing balance. For a full fiscal year the movement equals
+ * the closing balance on P&L accounts (opening is zero), so closing_* is
+ * mirrored for realism.
+ */
 function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
-  return {
+  const base: TrialBalanceRow = {
     account_number: '3001',
     account_name: 'Test',
     account_class: 3,
@@ -28,6 +35,10 @@ function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
     closing_credit: 0,
     ...overrides,
   }
+  // Default closing to the movement when the caller only set period_*.
+  if (overrides.closing_debit === undefined) base.closing_debit = base.period_debit
+  if (overrides.closing_credit === undefined) base.closing_credit = base.period_credit
+  return base
 }
 
 function tb(rows: TrialBalanceRow[]) {
@@ -51,9 +62,9 @@ describe('generateResultatrapport', () => {
 
     mockTrialBalance.mockResolvedValueOnce(
       tb([
-        makeRow({ account_number: '3001', account_name: 'Försäljning 25%', account_class: 3, closing_credit: 100000 }),
-        makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 30000 }),
-        makeRow({ account_number: '7210', account_name: 'Löner', account_class: 7, closing_debit: 50000 }),
+        makeRow({ account_number: '3001', account_name: 'Försäljning 25%', account_class: 3, period_credit: 100000 }),
+        makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, period_debit: 30000 }),
+        makeRow({ account_number: '7210', account_name: 'Löner', account_class: 7, period_debit: 50000 }),
       ])
     )
 
@@ -68,7 +79,7 @@ describe('generateResultatrapport', () => {
       current_period: 100000,
       prior_period: 0,
     })
-    // Expense rows shown as negative (credit - debit)
+    // Expense rows shown as negative (period_credit - period_debit)
     expect(report.groups[1].rows[0].current_period).toBe(-30000)
     expect(report.groups[2].rows[0].current_period).toBe(-50000)
 
@@ -76,6 +87,172 @@ describe('generateResultatrapport', () => {
     expect(report.net_result_current).toBe(20000)
     expect(report.net_result_prior).toBe(0)
     expect(report.prior_period).toBeNull()
+  })
+
+  it('excludes the year-end closing entry from the trial balance (R01)', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: 'period-0' },
+      error: null,
+    })
+    q.enqueue({
+      data: { period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+
+    mockTrialBalance
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, period_credit: 100000 })])
+      )
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, period_credit: 80000 })])
+      )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    // Both the current AND the prior period trial balance must exclude the
+    // year-end closing verifikat (which zeros classes 3–8 into 8999/2099).
+    expect(mockTrialBalance).toHaveBeenCalledTimes(2)
+    expect(mockTrialBalance).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      'company-1',
+      'period-1',
+      expect.objectContaining({ excludeYearEndClosing: true })
+    )
+    expect(mockTrialBalance).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'company-1',
+      'period-0',
+      expect.objectContaining({ excludeYearEndClosing: true })
+    )
+  })
+
+  it('uses the period MOVEMENT, not the cumulative closing balance (R02)', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+
+    // A row where the YTD closing balance (120 000) differs from the window
+    // movement (10 000): the report must show the movement.
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({
+          account_number: '3001',
+          account_name: 'Försäljning',
+          account_class: 3,
+          period_credit: 10000,
+          closing_credit: 120000,
+        }),
+        makeRow({
+          account_number: '5010',
+          account_name: 'Lokalhyra',
+          account_class: 5,
+          period_debit: 4000,
+          closing_debit: 48000,
+        }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.groups[0].rows[0].current_period).toBe(10000)
+    expect(report.groups[1].rows[0].current_period).toBe(-4000)
+    expect(report.net_result_current).toBe(6000)
+  })
+
+  it('a sub-range (March) reflects only that month\'s movement and drops the prior column', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: 'period-0' },
+      error: null,
+    })
+
+    // March movement only: 15 000 revenue, 5 000 rent — while the account
+    // has accumulated much more YTD (closing_*).
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({
+          account_number: '3001',
+          account_name: 'Försäljning',
+          account_class: 3,
+          period_credit: 15000,
+          closing_credit: 45000,
+        }),
+        makeRow({
+          account_number: '5010',
+          account_name: 'Lokalhyra',
+          account_class: 5,
+          period_debit: 5000,
+          closing_debit: 15000,
+        }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1', {
+      fromDate: '2026-03-01',
+      toDate: '2026-03-31',
+    })
+
+    // The date window is forwarded to the trial balance, still excluding
+    // the year-end closing entry.
+    expect(mockTrialBalance).toHaveBeenCalledTimes(1)
+    expect(mockTrialBalance).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'period-1',
+      { fromDate: '2026-03-01', toDate: '2026-03-31', excludeYearEndClosing: true }
+    )
+
+    // Only March's rörelser — never the cumulative YTD balance.
+    expect(report.groups[0].rows[0].current_period).toBe(15000)
+    expect(report.groups[1].rows[0].current_period).toBe(-5000)
+    expect(report.net_result_current).toBe(10000)
+    expect(report.period).toEqual({ start: '2026-03-01', end: '2026-03-31' })
+
+    // A narrowed window drops the full-year prior comparison entirely.
+    expect(report.prior_period).toBeNull()
+    expect(report.net_result_prior).toBe(0)
+    expect(report.groups[0].rows[0].prior_period).toBe(0)
+  })
+
+  it('report after year-end closing matches the pre-closing report', async () => {
+    // Simulates excludeYearEndClosing: the trial balance the report consumes
+    // is identical before and after the closing verifikat (which zeroed
+    // classes 3–8 into 8999/2099), because the closing entry is filtered out.
+    const preClosingRows = [
+      makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, period_credit: 100000 }),
+      makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, period_debit: 30000 }),
+    ]
+
+    const runReport = async () => {
+      const q = createQueuedMockSupabase()
+      q.enqueue({
+        data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+        error: null,
+      })
+      mockTrialBalance.mockResolvedValueOnce(tb(preClosingRows.map((r) => ({ ...r }))))
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+    }
+
+    const before = await runReport()
+    // After bokslut, generateTrialBalance({ excludeYearEndClosing: true })
+    // returns the SAME P&L movements as before the closing entry.
+    const after = await runReport()
+
+    expect(after).toEqual(before)
+    expect(after.net_result_current).toBe(70000)
+    // Both invocations requested the year-end closing exclusion.
+    for (const call of mockTrialBalance.mock.calls) {
+      expect(call[3]).toEqual(expect.objectContaining({ excludeYearEndClosing: true }))
+    }
   })
 
   it('joins prior-period values onto current accounts', async () => {
@@ -92,14 +269,14 @@ describe('generateResultatrapport', () => {
     mockTrialBalance
       .mockResolvedValueOnce(
         tb([
-          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 200000 }),
-          makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 60000 }),
+          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, period_credit: 200000 }),
+          makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, period_debit: 60000 }),
         ])
       )
       .mockResolvedValueOnce(
         tb([
-          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 150000 }),
-          makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 45000 }),
+          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, period_credit: 150000 }),
+          makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, period_debit: 45000 }),
         ])
       )
 
@@ -133,14 +310,14 @@ describe('generateResultatrapport', () => {
     mockTrialBalance
       .mockResolvedValueOnce(
         tb([
-          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 100000 }),
+          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, period_credit: 100000 }),
         ])
       )
       .mockResolvedValueOnce(
         tb([
-          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 80000 }),
+          makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, period_credit: 80000 }),
           // Account discontinued this year
-          makeRow({ account_number: '3002', account_name: 'Gammal intäkt', account_class: 3, closing_credit: 5000 }),
+          makeRow({ account_number: '3002', account_name: 'Gammal intäkt', account_class: 3, period_credit: 5000 }),
         ])
       )
 
@@ -163,8 +340,8 @@ describe('generateResultatrapport', () => {
 
     mockTrialBalance.mockResolvedValueOnce(
       tb([
-        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 100000 }),
-        makeRow({ account_number: '8999', account_name: 'Årets resultat', account_class: 8, closing_debit: 100000 }),
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, period_credit: 100000 }),
+        makeRow({ account_number: '8999', account_name: 'Årets resultat', account_class: 8, period_debit: 100000 }),
       ])
     )
 
@@ -185,9 +362,9 @@ describe('generateResultatrapport', () => {
 
     mockTrialBalance.mockResolvedValueOnce(
       tb([
-        makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, closing_debit: 50000 }),
-        makeRow({ account_number: '2440', account_name: 'Lev.skuld', account_class: 2, closing_credit: 10000 }),
-        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 40000 }),
+        makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, period_debit: 50000 }),
+        makeRow({ account_number: '2440', account_name: 'Lev.skuld', account_class: 2, period_credit: 10000 }),
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, period_credit: 40000 }),
       ])
     )
 
@@ -207,8 +384,8 @@ describe('generateResultatrapport', () => {
 
     mockTrialBalance.mockResolvedValueOnce(
       tb([
-        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 50000 }),
-        makeRow({ account_number: '3002', account_name: 'Tom rad', account_class: 3, closing_credit: 0 }),
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, period_credit: 50000 }),
+        makeRow({ account_number: '3002', account_name: 'Tom rad', account_class: 3, period_credit: 0 }),
       ])
     )
 

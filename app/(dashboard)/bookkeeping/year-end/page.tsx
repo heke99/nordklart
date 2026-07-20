@@ -113,31 +113,68 @@ export default function YearEndPage() {
     router.replace(`/bookkeeping/year-end?${params.toString()}`, { scroll: false })
   }, [selectedPeriodId, router, searchParams])
 
+  // ---- Failed year-end runs (B10): surface failed attempts so the user can
+  // see what happened and retry through the wizard (the close is atomic and
+  // idempotent, so a retry is always safe). ----
+  const [failedRuns, setFailedRuns] = useState<
+    { id: string; status: string; error_message: string | null; started_at: string }[]
+  >([])
+  useEffect(() => {
+    if (!selectedPeriodId) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end/runs`)
+        .then(async (res) => {
+          if (cancelled || !res.ok) return
+          const body = await res.json()
+          const runs = (body.data ?? []) as {
+            id: string
+            status: string
+            error_message: string | null
+            started_at: string
+          }[]
+          setFailedRuns(runs.filter((r) => r.status === 'failed'))
+        })
+        .catch(() => {
+          // Non-blocking enrichment.
+        })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [selectedPeriodId])
+
   // ---- Fetch readiness report whenever selected period changes ----
   useEffect(() => {
     if (!selectedPeriodId) return
     let cancelled = false
-    setReportLoading(true)
-    setReportError(null)
-    setReport(null)
-    fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/bokslut-readiness`)
-      .then(async (res) => {
-        const body = await res.json()
-        if (cancelled) return
-        if (!res.ok) {
-          setReportError(body?.error?.message ?? 'Kunde inte ladda bokslutskontroll')
-          return
-        }
-        setReport(body.data as BokslutReadinessReport)
-      })
-      .catch(() => {
-        if (!cancelled) setReportError('Kunde inte ladda bokslutskontroll')
-      })
-      .finally(() => {
-        if (!cancelled) setReportLoading(false)
-      })
+    // Defer to the next macrotask so the synchronous setState calls do not
+    // run directly within the effect body.
+    const timer = setTimeout(() => {
+      setReportLoading(true)
+      setReportError(null)
+      setReport(null)
+      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/bokslut-readiness`)
+        .then(async (res) => {
+          const body = await res.json()
+          if (cancelled) return
+          if (!res.ok) {
+            setReportError(body?.error?.message ?? 'Kunde inte ladda bokslutskontroll')
+            return
+          }
+          setReport(body.data as BokslutReadinessReport)
+        })
+        .catch(() => {
+          if (!cancelled) setReportError('Kunde inte ladda bokslutskontroll')
+        })
+        .finally(() => {
+          if (!cancelled) setReportLoading(false)
+        })
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [selectedPeriodId])
 
@@ -162,6 +199,7 @@ export default function YearEndPage() {
     }
   }, [selectedPeriodId])
 
+  const reportPeriodName = report?.period.name
   const executeYearEnd = useCallback(async () => {
     if (!selectedPeriodId) return
     setExecuting(true)
@@ -182,14 +220,14 @@ export default function YearEndPage() {
       setStep('result')
       toast({
         title: 'Bokslut verkställt',
-        description: `${report?.period.name ?? 'Perioden'} är stängd.`,
+        description: `${reportPeriodName ?? 'Perioden'} är stängd.`,
       })
     } catch (err) {
       setExecuteError(getErrorMessage(err))
     } finally {
       setExecuting(false)
     }
-  }, [selectedPeriodId, report?.period.name, toast])
+  }, [selectedPeriodId, reportPeriodName, toast])
 
   const currentStepIndex = STEP_ORDER.indexOf(step)
   const progressValue = ((currentStepIndex + 1) / STEP_ORDER.length) * 100
@@ -291,6 +329,28 @@ export default function YearEndPage() {
               ))}
             </div>
             <Progress value={progressValue} className="h-2" />
+          </CardContent>
+        </Card>
+      )}
+
+      {showWizard && step === 'preflight' && failedRuns.length > 0 && (
+        <Card className="border-destructive/50">
+          <CardContent className="p-4 text-sm">
+            <p className="font-medium text-destructive">
+              {failedRuns.length} tidigare bokslutsförsök misslyckades
+            </p>
+            <p className="text-muted-foreground mt-1">
+              Bokslutet är atomiskt — ett misslyckat försök lämnar inga halvfärdiga
+              poster. Åtgärda felet nedan och kör om guiden.
+            </p>
+            <ul className="mt-2 space-y-1 text-muted-foreground">
+              {failedRuns.slice(0, 3).map((run) => (
+                <li key={run.id}>
+                  {new Date(run.started_at).toLocaleString('sv-SE')}:{' '}
+                  {run.error_message ?? 'Okänt fel'}
+                </li>
+              ))}
+            </ul>
           </CardContent>
         </Card>
       )}

@@ -31,7 +31,14 @@ export function AccountSettingsContent() {
   const tSettings = useTranslations('settings')
   const [savingLocale, setSavingLocale] = useState(false)
 
-  useEffect(() => { setMounted(true) }, [])
+  useEffect(() => {
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setMounted(true)
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [])
 
   async function handleLogout() {
     clearRecaptIdentity()

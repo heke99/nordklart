@@ -25,14 +25,6 @@ export function PushPrompt({ onSubscribed, onDismissed }: PushPromptProps) {
   const [isSupported, setIsSupported] = useState(false)
   const [isSubscribed, setIsSubscribed] = useState(false)
 
-  useEffect(() => {
-    // Check if push notifications are supported
-    if ('serviceWorker' in navigator && 'PushManager' in window) {
-      setIsSupported(true)
-      checkSubscription()
-    }
-  }, [])
-
   const checkSubscription = async () => {
     try {
       const registration = await navigator.serviceWorker.ready
@@ -42,6 +34,20 @@ export function PushPrompt({ onSubscribed, onDismissed }: PushPromptProps) {
       console.error('Error checking push subscription:', error)
     }
   }
+
+  useEffect(() => {
+    // Check if push notifications are supported. Deferred to the next
+    // macrotask so the synchronous setState does not run directly within
+    // the effect body.
+    const timer = setTimeout(() => {
+      if ('serviceWorker' in navigator && 'PushManager' in window) {
+        setIsSupported(true)
+        checkSubscription()
+      }
+    }, 0)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const requestPermission = async () => {
     if (!isSupported) return

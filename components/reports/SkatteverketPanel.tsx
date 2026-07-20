@@ -121,12 +121,20 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   >({})
 
   useEffect(() => {
-    if (!hasRcBasisWarning) {
-      setGaps([])
-      return
-    }
     let cancelled = false
-    setGapsLoading(true)
+    if (!hasRcBasisWarning) {
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const timer = setTimeout(() => {
+        setGaps([])
+      }, 0)
+      return () => clearTimeout(timer)
+    }
+    // Deferred a macrotask so the loading setState does not run synchronously
+    // within the effect body.
+    const loadingTimer = setTimeout(() => {
+      if (!cancelled) setGapsLoading(true)
+    }, 0)
     fetch(
       `/api/reports/vat-declaration/rc-basis-gaps?periodType=${periodType}&year=${year}&period=${period}`,
     )
@@ -145,6 +153,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
       })
     return () => {
       cancelled = true
+      clearTimeout(loadingTimer)
     }
   }, [hasRcBasisWarning, periodType, year, period])
 
@@ -208,25 +217,30 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   }, [])
 
   useEffect(() => {
-    fetchStatus()
-
-    // Check URL params for OAuth callback results
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('skv_connected') === 'true') {
-      setSuccess('Ansluten till Skatteverket')
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchStatus does not run directly within the effect body.
+    const timer = setTimeout(() => {
       fetchStatus()
-      // Clean URL
-      const url = new URL(window.location.href)
-      url.searchParams.delete('skv_connected')
-      window.history.replaceState({}, '', url.toString())
-    }
-    const skvError = params.get('skv_error')
-    if (skvError) {
-      setError(decodeURIComponent(skvError))
-      const url = new URL(window.location.href)
-      url.searchParams.delete('skv_error')
-      window.history.replaceState({}, '', url.toString())
-    }
+
+      // Check URL params for OAuth callback results
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('skv_connected') === 'true') {
+        setSuccess('Ansluten till Skatteverket')
+        fetchStatus()
+        // Clean URL
+        const url = new URL(window.location.href)
+        url.searchParams.delete('skv_connected')
+        window.history.replaceState({}, '', url.toString())
+      }
+      const skvError = params.get('skv_error')
+      if (skvError) {
+        setError(decodeURIComponent(skvError))
+        const url = new URL(window.location.href)
+        url.searchParams.delete('skv_error')
+        window.history.replaceState({}, '', url.toString())
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchStatus])
 
   const handleConnect = () => {

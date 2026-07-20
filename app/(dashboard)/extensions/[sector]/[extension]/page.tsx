@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
 import { getExtensionDefinition, getSector } from '@/lib/extensions/sectors'
-import { resolveIcon } from '@/lib/extensions/icon-resolver'
+import { EXTENSION_ICON_MAP, FALLBACK_EXTENSION_ICON } from '@/lib/extensions/icon-resolver'
 import {
   extensionNameKey,
   extensionDescriptionKey,
@@ -41,7 +41,7 @@ export default async function ExtensionDetailPage({
     return key ? t(key) : sector.name
   })()
 
-  const Icon = resolveIcon(definition.icon)
+  const Icon = EXTENSION_ICON_MAP[definition.icon] ?? FALLBACK_EXTENSION_ICON
 
   const hasWorkspace = `${sectorSlug}/${extensionSlug}` in WORKSPACES
 

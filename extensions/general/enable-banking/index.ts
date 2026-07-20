@@ -315,14 +315,21 @@ export const enableBankingExtension: Extension = {
           // Detect SIE overlap — skip auto-categorization if the sync range
           // overlaps with a completed SIE import to prevent double-booking.
           // Reconciliation still links bank transactions to existing GL lines.
-          const { data: sieOverlap } = await supabase
+          // Correct interval intersection (K15):
+          // period_start <= toDate AND period_end >= fromDate. The old query
+          // only checked fiscal_year_end >= fromDate, which also matched
+          // FUTURE fiscal years and suppressed automation for the wrong
+          // sync windows. Fail closed on query errors.
+          const { data: sieOverlap, error: sieOverlapError } = await supabase
             .from('sie_imports')
             .select('id')
             .eq('company_id', companyId)
             .eq('status', 'completed')
             .gte('fiscal_year_end', fromDate)
+            .lte('fiscal_year_start', toDate)
             .limit(1)
             .maybeSingle()
+          const sieOverlapEffective = sieOverlapError ? { id: 'query-error' } : sieOverlap
 
           // Check if user is a viewer — viewers get rawInsertOnly (no categorization)
           const { data: membership } = await supabase
@@ -338,14 +345,14 @@ export const enableBankingExtension: Extension = {
           // (initial sync, manual backfill). Short windows get the implicit
           // default since there's no older data to surface.
           const syncOptions = {
-            ...(sieOverlap ? { skipAutoCategorization: true } : {}),
+            ...(sieOverlapEffective ? { skipAutoCategorization: true } : {}),
             ...(isViewer ? { rawInsertOnly: true } : {}),
             ...(days_back >= 30 ? { strategy: 'longest' as const } : {}),
           }
 
-          if (sieOverlap) {
+          if (sieOverlapEffective) {
             log.info('SIE import overlap detected — suppressing auto-categorization', {
-              sieImportId: sieOverlap.id,
+              sieImportId: sieOverlapEffective.id,
               fromDate,
               toDate,
             })
@@ -386,13 +393,19 @@ export const enableBankingExtension: Extension = {
 
           const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
           const totalDuplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
+          // K14: inspect row-level results even when the account promise
+          // fulfilled — an insert error or a failed raw archive makes the
+          // run partial, never a clean success.
+          const totalRowErrors = results.reduce((sum, r) => sum + r.errors, 0)
+          const totalArchiveErrors = results.reduce((sum, r) => sum + r.archiveErrors, 0)
+          const totalAutomationErrors = results.reduce((sum, r) => sum + r.automationErrors, 0)
 
           // When SIE overlap is detected, run a batch reconciliation sweep.
           // The greedy algorithm considers all candidates globally (highest-
           // confidence first) and catches matches the inline per-transaction
           // pass may have missed due to processing order.
           // Skip for viewers — reconciliation updates transactions which viewers cannot do.
-          if (sieOverlap && totalImported > 0 && !isViewer) {
+          if (sieOverlapEffective && totalImported > 0 && !isViewer) {
             try {
               const reconResult = await runReconciliation(supabase, companyId, user.id, {
                 dateFrom: fromDate,
@@ -410,8 +423,9 @@ export const enableBankingExtension: Extension = {
           }
 
           const syncedAt = new Date().toISOString()
-          const partial = failedAccounts.length > 0
-          await supabase
+          const partial =
+            failedAccounts.length > 0 || totalRowErrors > 0 || totalArchiveErrors > 0
+          const { error: metadataError } = await supabase
             .from('bank_connections')
             .update({
               accounts_data: allAccounts,
@@ -424,12 +438,29 @@ export const enableBankingExtension: Extension = {
               // Structured per-account error state: cleared on a fully
               // successful sync, populated when some account failed.
               error_message: partial
-                ? `Delvis synk: ${failedAccounts.length} konto(n) misslyckades — ${failedAccounts
-                    .map(f => f.account_name || f.account_uid || 'okänt konto')
-                    .join(', ')}`
+                ? failedAccounts.length > 0
+                  ? `Delvis synk: ${failedAccounts.length} konto(n) misslyckades — ${failedAccounts
+                      .map(f => f.account_name || f.account_uid || 'okänt konto')
+                      .join(', ')}`
+                  : `Delvis synk: ${totalRowErrors} radfel, ${totalArchiveErrors} arkiveringsfel`
                 : null,
             })
             .eq('id', connection.id)
+
+          // K13: a failed metadata commit must never produce a success event.
+          if (metadataError) {
+            await finishSyncRun(supabase, syncRunId, {
+              status: 'failed',
+              accountsSynced: results.length,
+              transactionsImported: totalImported,
+              transactionsDeduplicated: totalDuplicates,
+              errorMessage: `Metadata kunde inte sparas: ${metadataError.message}`,
+            })
+            return NextResponse.json(
+              { error: `Synk genomförd men metadata kunde inte sparas: ${metadataError.message}` },
+              { status: 500 },
+            )
+          }
 
           await finishSyncRun(supabase, syncRunId, {
             status: partial ? 'partial' : 'success',
@@ -437,9 +468,16 @@ export const enableBankingExtension: Extension = {
             transactionsImported: totalImported,
             transactionsDeduplicated: totalDuplicates,
             errorMessage: partial
-              ? `Delvis synk: ${failedAccounts.length} konto(n) misslyckades`
+              ? failedAccounts.length > 0
+                ? `Delvis synk: ${failedAccounts.length} konto(n) misslyckades`
+                : `Delvis synk: ${totalRowErrors} radfel, ${totalArchiveErrors} arkiveringsfel`
               : null,
-            details: partial ? { failed_accounts: failedAccounts } : {},
+            details: {
+              ...(failedAccounts.length > 0 ? { failed_accounts: failedAccounts } : {}),
+              row_errors: totalRowErrors,
+              archive_errors: totalArchiveErrors,
+              automation_errors: totalAutomationErrors,
+            },
           })
 
           {

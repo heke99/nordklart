@@ -85,7 +85,12 @@ export function CompanyMembersSection() {
   }, [])
 
   useEffect(() => {
-    fetchMembers()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchMembers does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchMembers()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchMembers])
 
   const handleInvite = async (e: React.FormEvent) => {

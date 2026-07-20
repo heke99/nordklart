@@ -41,7 +41,12 @@ export function BankIdSettings() {
   }, [])
 
   useEffect(() => {
-    fetchIdentity()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchIdentity does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchIdentity()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchIdentity])
 
   const handleLinkComplete = async (result: BankIdResult) => {

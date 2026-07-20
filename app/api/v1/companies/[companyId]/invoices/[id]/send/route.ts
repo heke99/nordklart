@@ -53,6 +53,7 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
+import { getCompanyEntityType } from '@/lib/company/entity-type'
 
 const INVOICE_SEND_RESPONSE_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
@@ -461,7 +462,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           ctx.companyId!,
           ctx.userId,
           renderableInvoice,
-          (settings.entity_type ?? 'enskild_firma') as EntityType,
+          await getCompanyEntityType(ctx.supabase, ctx.companyId!),
           customer.name,
         )
         if (entry) {

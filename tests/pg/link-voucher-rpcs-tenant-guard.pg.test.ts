@@ -81,30 +81,35 @@ async function seedPostedVoucher(params: {
 }): Promise<string> {
   const id = randomUUID()
   const amount = params.amount ?? 1000
+  // AR settle: debit 1930 / credit 1510. AP settle: debit 2440 / credit 1930.
+  // Entry + balanced lines in ONE statement — the deferred
+  // check_balance_on_posted_insert trigger requires balance at commit.
+  const debitAccount = params.side === 'ar' ? '1930' : '2440'
+  const creditAccount = params.side === 'ar' ? '1510' : '1930'
   await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Betalning', 'manual', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, Math.floor(Math.random() * 100000)],
+    `WITH e AS (
+       INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Betalning', 'manual', 'posted')
+       RETURNING id
+     )
+     INSERT INTO public.journal_entry_lines
+       (journal_entry_id, account_number, debit_amount, credit_amount)
+     SELECT id, $6, $8, 0 FROM e
+     UNION ALL
+     SELECT id, $7, 0, $8 FROM e`,
+    [
+      id,
+      params.userId,
+      params.companyId,
+      params.fiscalPeriodId,
+      Math.floor(Math.random() * 100000),
+      debitAccount,
+      creditAccount,
+      amount,
+    ],
   )
-  if (params.side === 'ar') {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, '1930', $2, 0),
-              ($1, '1510', 0, $2)`,
-      [id, amount],
-    )
-  } else {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, '2440', $2, 0),
-              ($1, '1930', 0, $2)`,
-      [id, amount],
-    )
-  }
   return id
 }
 

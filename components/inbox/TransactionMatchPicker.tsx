@@ -149,10 +149,15 @@ export default function TransactionMatchPicker({
   // ── Reset transient state each time the dialog opens ─────────
   useEffect(() => {
     if (!open) return
-    setSearch('')
-    setDebouncedSearch('')
-    setRawRows([])
-    setLoading(true)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setSearch('')
+      setDebouncedSearch('')
+      setRawRows([])
+      setLoading(true)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open])
 
   // ── Debounce the search term feeding the server query ────────
@@ -164,22 +169,27 @@ export default function TransactionMatchPicker({
   // ── Fetch the underlag's FX rate (foreign currency only) ─────
   useEffect(() => {
     if (!open) return
-    setFxRate(null)
-    if (receiptCurrency === 'SEK' || !SUPPORTED_FX.includes(receiptCurrency)) return
     let cancelled = false
-    const dateParam = hasInvoiceDate && rawInvoiceDate ? `&date=${rawInvoiceDate}` : ''
-    fetch(`/api/currency/rate?currency=${receiptCurrency}${dateParam}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        if (cancelled) return
-        const rate = body?.data?.rate
-        if (typeof rate === 'number' && rate > 0) setFxRate(rate)
-      })
-      .catch(() => {
-        /* leave null — cross-currency amount signal simply drops out */
-      })
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setFxRate(null)
+      if (receiptCurrency === 'SEK' || !SUPPORTED_FX.includes(receiptCurrency)) return
+      const dateParam = hasInvoiceDate && rawInvoiceDate ? `&date=${rawInvoiceDate}` : ''
+      fetch(`/api/currency/rate?currency=${receiptCurrency}${dateParam}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((body) => {
+          if (cancelled) return
+          const rate = body?.data?.rate
+          if (typeof rate === 'number' && rate > 0) setFxRate(rate)
+        })
+        .catch(() => {
+          /* leave null — cross-currency amount signal simply drops out */
+        })
+    }, 0)
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [open, receiptCurrency, hasInvoiceDate, rawInvoiceDate])
 
@@ -187,9 +197,16 @@ export default function TransactionMatchPicker({
   useEffect(() => {
     if (!open) return
     if (!company) return // provider still hydrating
+    // Captured so the narrowed id survives into the async function below.
+    const companyId = company.id
     let cancelled = false
-    setLoading(true)
-    ;(async () => {
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      void loadCandidateRows()
+    }, 0)
+    async function loadCandidateRows() {
       // Strip PostgREST filter-DSL structural chars before interpolating into
       // `.or()`. Commas separate OR-conditions and parentheses group nested
       // filters, so leaving them in would let a search term inject a synthetic
@@ -209,7 +226,7 @@ export default function TransactionMatchPicker({
         .select(
           'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate',
         )
-        .eq('company_id', company.id)
+        .eq('company_id', companyId)
         .is('journal_entry_id', null)
 
       if (searchMode) {
@@ -236,9 +253,10 @@ export default function TransactionMatchPicker({
       }
       setRawRows((data ?? []) as RawTransaction[])
       setLoading(false)
-    })()
+    }
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [open, supabase, company, debouncedSearch, toast])
 

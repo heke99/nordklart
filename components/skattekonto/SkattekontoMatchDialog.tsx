@@ -64,15 +64,26 @@ export function SkattekontoMatchDialog({
 
   useEffect(() => {
     if (!open || !row) {
-      setCandidates(null)
-      return
+      // Defer to the next macrotask so the synchronous setState does not run
+      // directly within the effect body.
+      const resetTimer = setTimeout(() => {
+        setCandidates(null)
+      }, 0)
+      return () => clearTimeout(resetTimer)
     }
+    // Captured so the narrowed id survives into the async function below.
+    const rowId = row.id
     let cancelled = false
-    setLoading(true)
-    ;(async () => {
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setLoading(true)
+      void loadCandidates()
+    }, 0)
+    async function loadCandidates() {
       try {
         const res = await fetch(
-          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match-candidates`,
+          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${rowId}/match-candidates`,
         )
         const json = await res.json()
         if (cancelled) return
@@ -91,9 +102,10 @@ export function SkattekontoMatchDialog({
       } finally {
         if (!cancelled) setLoading(false)
       }
-    })()
+    }
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [open, row, toast, onClose, t])
 

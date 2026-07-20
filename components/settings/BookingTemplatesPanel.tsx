@@ -52,7 +52,14 @@ export function BookingTemplatesPanel() {
     }
   }, [toast, t])
 
-  useEffect(() => { fetchTemplates() }, [fetchTemplates])
+  useEffect(() => {
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchTemplates does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchTemplates()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [fetchTemplates])
 
   async function handleDelete(id: string) {
     setDeletingId(id)

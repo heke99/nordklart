@@ -164,11 +164,16 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
   // Load cached profile from extension data
   useEffect(() => {
     if (isDataLoading) return
-    const cached = getByKey('company_profile')
-    if (cached?.value) {
-      setProfile(cached.value as unknown as TICCompanyProfile)
-    }
-    setInitialLoad(false)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const cached = getByKey('company_profile')
+      if (cached?.value) {
+        setProfile(cached.value as unknown as TICCompanyProfile)
+      }
+      setInitialLoad(false)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [isDataLoading, getByKey])
 
   const fetchProfile = useCallback(async () => {
@@ -216,7 +221,12 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
   // Auto-fetch on first visit when no cached data
   useEffect(() => {
     if (!initialLoad && !profile && !noOrgNumber && !isFetching && !fetchFailed) {
-      fetchProfile()
+      // Defer to the next macrotask so the synchronous setState inside
+      // fetchProfile does not run directly within the effect body.
+      const timer = setTimeout(() => {
+        fetchProfile()
+      }, 0)
+      return () => clearTimeout(timer)
     }
   }, [initialLoad, profile, noOrgNumber, isFetching, fetchFailed, fetchProfile])
 

@@ -67,7 +67,12 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
   }, [periodId])
 
   useEffect(() => {
-    void load()
+    // Defer to the next macrotask so the synchronous setState inside
+    // load does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [load])
 
   const handlePost = useCallback(async () => {

@@ -11,9 +11,13 @@ import { dirname, resolve } from 'node:path'
 const errors = await import('@/lib/docs/content/errors')
 const reference = await import('@/lib/docs/content/reference')
 
-const buildErrorReferenceMd = errors.buildErrorReferenceMd ?? (errors as any).default?.buildErrorReferenceMd
-const buildResourcePages = reference.buildResourcePages ?? (reference as any).default?.buildResourcePages
-const buildReferenceOverviewMd = reference.buildReferenceOverviewMd ?? (reference as any).default?.buildReferenceOverviewMd
+// Depending on interop, the builders may land on the namespace or on `default`.
+const errorsDefault = (errors as { default?: typeof errors }).default
+const referenceDefault = (reference as { default?: typeof reference }).default
+
+const buildErrorReferenceMd = errors.buildErrorReferenceMd ?? errorsDefault?.buildErrorReferenceMd
+const buildResourcePages = reference.buildResourcePages ?? referenceDefault?.buildResourcePages
+const buildReferenceOverviewMd = reference.buildReferenceOverviewMd ?? referenceDefault?.buildReferenceOverviewMd
 
 if (!buildErrorReferenceMd || !buildResourcePages || !buildReferenceOverviewMd) {
   console.error('Missing builder exports. Inspect:', {

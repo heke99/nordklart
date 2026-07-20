@@ -1,17 +1,21 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
   generateImportPreview,
   validateIBBalance,
   isBalanceSheetAccount,
   ensureFiscalPeriod,
-  importVouchers,
+  buildOpeningBalancePayload,
   computeVoucherNumberRanges,
   linkOpeningBalanceEntryToPeriod,
   companyHasPriorActivity,
 } from '../sie-import'
+import {
+  prepareStagedVouchers,
+  buildNextPeriodObLines,
+  type SieImportPolicy,
+} from '../sie-staging'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { ParsedSIEFile, AccountMapping } from '../types'
-import type { SupabaseClient } from '@supabase/supabase-js'
 
 // --- Helpers ---
 
@@ -793,98 +797,15 @@ describe('computeVoucherNumberRanges', () => {
   })
 })
 
-describe('importVouchers — per-voucher series preservation', () => {
-  // Captures the rows passed to `.insert()` so the test can assert on
-  // voucher_series per inserted record. Uses a hand-rolled mock rather than
-  // createQueuedMockSupabase because we need to inspect arguments, not just
-  // return queued data.
-  function buildCapturingSupabase() {
-    const journalEntryInserts: Array<Record<string, unknown>> = []
-    const journalEntryLineInserts: Array<Record<string, unknown>> = []
-    const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = []
-
-    // Each `next_voucher_number` RPC call auto-increments per series, matching
-    // the DB function's ON CONFLICT behavior.
-    const nextNumberBySeries = new Map<string, number>()
-
-    let syntheticEntryId = 1
-
-    const supabase = {
-      from: vi.fn((table: string) => {
-        if (table === 'chart_of_accounts') {
-          // Return all accounts used in test vouchers as if already active
-          return {
-            select: () => ({
-              eq: () => ({
-                in: (_col: string, accountNumbers: string[]) => ({
-                  then: (resolve: (v: { data: { id: string; account_number: string }[]; error: null }) => void) =>
-                    resolve({
-                      data: accountNumbers.map((num, i) => ({ id: `acc-${i}`, account_number: num })),
-                      error: null,
-                    }),
-                }),
-              }),
-            }),
-          }
-        }
-
-        if (table === 'journal_entries') {
-          return {
-            insert: (rows: Array<Record<string, unknown>>) => {
-              journalEntryInserts.push(...rows)
-              return {
-                select: () => ({
-                  then: (resolve: (v: { data: { id: string }[]; error: null }) => void) =>
-                    resolve({
-                      data: rows.map(() => ({ id: `entry-${syntheticEntryId++}` })),
-                      error: null,
-                    }),
-                }),
-              }
-            },
-          }
-        }
-
-        if (table === 'journal_entry_lines') {
-          return {
-            insert: (rows: Array<Record<string, unknown>>) => {
-              journalEntryLineInserts.push(...rows)
-              return Promise.resolve({ error: null })
-            },
-          }
-        }
-
-        throw new Error(`Unexpected table: ${table}`)
-      }),
-
-      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
-        rpcCalls.push({ name, args })
-        if (name === 'next_voucher_number') {
-          const series = args.p_series as string
-          const current = nextNumberBySeries.get(series) ?? 0
-          const next = current + 1
-          nextNumberBySeries.set(series, next)
-          return { data: next, error: null }
-        }
-        if (name === 'reserve_voucher_range') {
-          const series = args.p_series as string
-          const highest = args.p_highest_used as number
-          nextNumberBySeries.set(series, highest)
-          return { data: null, error: null }
-        }
-        if (name === 'release_voucher_range') {
-          return { data: null, error: null }
-        }
-        throw new Error(`Unexpected RPC: ${name}`)
-      }),
-    }
-
-    return {
-      supabase: supabase as unknown as SupabaseClient,
-      journalEntryInserts,
-      journalEntryLineInserts,
-      rpcCalls,
-    }
+describe('prepareStagedVouchers — per-voucher series preservation', () => {
+  // Voucher posting now happens inside the finalize_sie_import RPC (atomic,
+  // per-series sequential numbering — I01–I03). What the unit tests assert
+  // is the staged payload contract produced by the pure
+  // prepareStagedVouchers(): series routing, source traceability and the
+  // strict tolerance policy (audit I15).
+  const strictPolicy: SieImportPolicy = {
+    approveOreRounding: false,
+    approveSkippedVouchers: false,
   }
 
   function makeVoucher(
@@ -909,8 +830,7 @@ describe('importVouchers — per-voucher series preservation', () => {
     ['3001', '3001'],
   ])
 
-  it('routes each voucher to its source series (B, C, V → B, C, V)', async () => {
-    const { supabase, journalEntryInserts, rpcCalls } = buildCapturingSupabase()
+  it('routes each voucher to its source series (B, C, V → B, C, V)', () => {
     const parsed = makeParsedFile({
       vouchers: [
         makeVoucher('B', 1),
@@ -920,29 +840,16 @@ describe('importVouchers — per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'B', // fallback (should not be used here — all vouchers have series)
-    )
+    // fallback 'B' should not be used here — all vouchers carry a series
+    const result = prepareStagedVouchers(parsed, baseMap, 'B', strictPolicy)
 
-    expect(result.created).toBe(4)
+    expect(result.blockingErrors).toEqual([])
+    expect(result.staged).toHaveLength(4)
     expect(new Set(result.seriesUsed)).toEqual(new Set(['B', 'C', 'V']))
-
-    const seriesInInserts = journalEntryInserts.map((r) => r.voucher_series)
-    expect(seriesInInserts).toEqual(['B', 'B', 'C', 'V'])
-
-    // Each series reserves its own voucher-number range independently
-    const reserveCalls = rpcCalls.filter((c) => c.name === 'reserve_voucher_range')
-    expect(reserveCalls.map((c) => c.args.p_series)).toEqual(['B', 'C', 'V'])
+    expect(result.staged.map((s) => s.voucher_series)).toEqual(['B', 'B', 'C', 'V'])
   })
 
-  it('falls back to defaultSeries when source voucher has empty series (SIE4I)', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
+  it('falls back to defaultSeries when source voucher has empty series (SIE4I)', () => {
     const parsed = makeParsedFile({
       vouchers: [
         { ...makeVoucher('', 1) },
@@ -950,23 +857,34 @@ describe('importVouchers — per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'V', // fallback used because source series is empty
-    )
+    // fallback used because source series is empty
+    const result = prepareStagedVouchers(parsed, baseMap, 'V', strictPolicy)
 
-    expect(result.created).toBe(2)
+    expect(result.staged).toHaveLength(2)
     expect(result.seriesUsed).toEqual(['V'])
-    expect(journalEntryInserts.every((r) => r.voucher_series === 'V')).toBe(true)
+    expect(result.staged.every((s) => s.voucher_series === 'V')).toBe(true)
   })
 
-  it('records source series in voucherNumberMapping for audit trail', async () => {
-    const { supabase } = buildCapturingSupabase()
+  it('builds the idempotency key external_reference as `series:number:date`', () => {
+    // finalize_sie_import skips already-posted external references on retry
+    // (I05), so the key must be stable and unique per source voucher.
+    // Series-less vouchers key on the default series.
+    const parsed = makeParsedFile({
+      vouchers: [makeVoucher('B', 7), { ...makeVoucher('', 3) }],
+    })
+
+    const result = prepareStagedVouchers(parsed, baseMap, 'V', strictPolicy)
+
+    expect(result.staged.map((s) => s.external_reference)).toEqual([
+      'B:7:2024-01-15',
+      'V:3:2024-01-15',
+    ])
+  })
+
+  it('records source series/number on each staged payload for the audit trail', () => {
+    // The voucherNumberMapping documentation is now built from the posted
+    // entries after finalize — the staged payload must therefore carry the
+    // source identity that the RPC persists on each journal entry.
     const parsed = makeParsedFile({
       vouchers: [
         makeVoucher('B', 1),
@@ -974,60 +892,53 @@ describe('importVouchers — per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'B',
-    )
+    const result = prepareStagedVouchers(parsed, baseMap, 'B', strictPolicy)
 
-    expect(result.voucherNumberMapping).toEqual([
-      { sourceId: 'B1', series: 'B', targetNumber: 1 },
-      { sourceId: 'C7', series: 'C', targetNumber: 1 },
+    expect(
+      result.staged.map((s) => ({
+        series: s.source_voucher_series,
+        number: s.source_voucher_number,
+      })),
+    ).toEqual([
+      { series: 'B', number: 1 },
+      { series: 'C', number: 7 },
     ])
   })
 
-  it('assigns independent sequential target numbers per series', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
+  it('converts signed SIE amounts to debit/credit lines and dates the entry from the voucher', () => {
     const parsed = makeParsedFile({
-      vouchers: [
-        makeVoucher('B', 1),
-        makeVoucher('B', 2),
-        makeVoucher('B', 3),
-        makeVoucher('C', 1),
-        makeVoucher('C', 2),
-      ],
+      vouchers: [makeVoucher('A', 1)],
     })
 
-    await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'B',
-    )
+    const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
 
-    const bNumbers = journalEntryInserts
-      .filter((r) => r.voucher_series === 'B')
-      .map((r) => r.voucher_number)
-    const cNumbers = journalEntryInserts
-      .filter((r) => r.voucher_series === 'C')
-      .map((r) => r.voucher_number)
-
-    // Each series starts at 1 and increments independently — not globally continuous
-    expect(bNumbers).toEqual([1, 2, 3])
-    expect(cNumbers).toEqual([1, 2])
+    expect(result.staged[0].entry_date).toBe('2024-01-15')
+    expect(result.staged[0].description).toBe('Voucher A1')
+    expect(result.staged[0].lines).toEqual([
+      {
+        account_number: '1510',
+        debit_amount: 1000,
+        credit_amount: 0,
+        line_description: null,
+        cost_center: null,
+        project: null,
+        dimensions: null,
+      },
+      {
+        account_number: '3001',
+        debit_amount: 0,
+        credit_amount: 1000,
+        line_description: null,
+        cost_center: null,
+        project: null,
+        dimensions: null,
+      },
+    ])
   })
 
-  it('preserves original source series/number on each imported entry, even across skipped vouchers', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
+  it('preserves original source series/number on staged payloads, even across skipped vouchers', () => {
     // A2 is an empty voucher (no lines) — will be skipped. A1 and A3 survive.
-    // Nordklart assigns target numbers 1 and 2 (contiguous), but source_voucher_number
+    // The finalize RPC assigns contiguous target numbers, but source_voucher_number
     // must preserve the SIE originals (1 and 3) so traceability is not lost.
     const parsed = makeParsedFile({
       vouchers: [
@@ -1037,43 +948,233 @@ describe('importVouchers — per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'A',
-    )
+    const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
 
-    expect(result.created).toBe(2)
+    expect(result.blockingErrors).toEqual([])
+    expect(result.staged).toHaveLength(2)
     expect(result.skippedEmpty).toBe(1)
-    expect(journalEntryInserts.map((r) => r.voucher_number)).toEqual([1, 2])
-    expect(journalEntryInserts.map((r) => r.source_voucher_series)).toEqual(['A', 'A'])
-    expect(journalEntryInserts.map((r) => r.source_voucher_number)).toEqual([1, 3])
+    expect(result.skippedDetails).toEqual([
+      expect.objectContaining({ voucherId: 'A2', reason: 'zero_lines' }),
+    ])
+    expect(result.staged.map((s) => s.source_voucher_series)).toEqual(['A', 'A'])
+    expect(result.staged.map((s) => s.source_voucher_number)).toEqual([1, 3])
   })
 
-  it('stores NULL source series/number when the source voucher has no series (SIE4I subsystem import)', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
+  it('stores NULL source series when the source voucher has no series (SIE4I subsystem import)', () => {
     const parsed = makeParsedFile({
       vouchers: [
         { ...makeVoucher('', 1) },
       ],
     })
 
-    await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'V',
-    )
+    const result = prepareStagedVouchers(parsed, baseMap, 'V', strictPolicy)
 
-    expect(journalEntryInserts[0].source_voucher_series).toBeNull()
-    expect(journalEntryInserts[0].source_voucher_number).toBe(1)
+    expect(result.staged[0].source_voucher_series).toBeNull()
+    expect(result.staged[0].source_voucher_number).toBe(1)
+  })
+
+  it('tracks net movements per target account for the vouchers that will be posted', () => {
+    // Feeds the migration-adjustment reconciliation (I16) for skipped vouchers.
+    const parsed = makeParsedFile({
+      vouchers: [makeVoucher('A', 1), makeVoucher('A', 2)],
+    })
+
+    const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
+
+    expect(result.movementsByAccount.get('1510')).toBe(2000)
+    expect(result.movementsByAccount.get('3001')).toBe(-2000)
+  })
+
+  describe('strict tolerance policy (audit I15)', () => {
+    it('blocks the import when a voucher has unmapped accounts', () => {
+      // Silently skipping financial vouchers would corrupt the migrated year —
+      // unmapped accounts are always blocking, never a warning.
+      const parsed = makeParsedFile({
+        vouchers: [
+          makeVoucher('A', 1, [
+            { account: '1510', amount: 1000 },
+            { account: '9999', amount: -1000 }, // not in accountMap
+          ]),
+        ],
+      })
+
+      const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
+
+      expect(result.staged).toEqual([])
+      expect(result.skippedUnmapped).toBe(1)
+      expect(result.blockingErrors.join(' ')).toMatch(/konton utan mappning: 9999/)
+    })
+
+    it('skips empty vouchers without blocking (no financial content)', () => {
+      const parsed = makeParsedFile({
+        vouchers: [{ ...makeVoucher('A', 1), lines: [] }, makeVoucher('A', 2)],
+      })
+
+      const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
+
+      expect(result.blockingErrors).toEqual([])
+      expect(result.skippedEmpty).toBe(1)
+      expect(result.staged).toHaveLength(1)
+    })
+
+    it('blocks single-line vouchers without approveSkippedVouchers', () => {
+      const parsed = makeParsedFile({
+        vouchers: [makeVoucher('A', 1, [{ account: '1510', amount: 500 }])],
+      })
+
+      const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
+
+      expect(result.staged).toEqual([])
+      expect(result.skippedSingleLine).toBe(1)
+      expect(result.blockingErrors.join(' ')).toMatch(/endast en bokföringsrad/)
+    })
+
+    it('skips single-line vouchers with a warning when approveSkippedVouchers is set', () => {
+      const parsed = makeParsedFile({
+        vouchers: [makeVoucher('A', 1, [{ account: '1510', amount: 500 }])],
+      })
+
+      const result = prepareStagedVouchers(parsed, baseMap, 'A', {
+        approveOreRounding: false,
+        approveSkippedVouchers: true,
+      })
+
+      expect(result.blockingErrors).toEqual([])
+      expect(result.staged).toEqual([])
+      expect(result.skippedSingleLine).toBe(1)
+      expect(result.warnings.join(' ')).toMatch(/hoppades över efter uttryckligt godkännande/)
+    })
+
+    it('auto-adjusts a 0.01 SEK diff with an öresutjämning line on 3741 (no approval needed)', () => {
+      // 1 öre är den dokumenterade automatiska toleransen — ingen varning,
+      // ingen attest, men differensen bokförs alltid explicit på 3741.
+      const parsed = makeParsedFile({
+        vouchers: [
+          makeVoucher('A', 1, [
+            { account: '1510', amount: 100.01 },
+            { account: '3001', amount: -100.0 },
+          ]),
+        ],
+      })
+
+      const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
+
+      expect(result.blockingErrors).toEqual([])
+      expect(result.warnings).toEqual([])
+      expect(result.staged).toHaveLength(1)
+      // Debet 100.01 > kredit 100.00 → 3741 balanserar på kreditsidan.
+      const adjustment = result.staged[0].lines.find((l) => l.account_number === '3741')
+      expect(adjustment).toEqual({
+        account_number: '3741',
+        debit_amount: 0,
+        credit_amount: 0.01,
+        line_description: 'Öresutjämning',
+        cost_center: null,
+        project: null,
+        dimensions: null,
+      })
+    })
+
+    it('blocks a 0.02 SEK diff without approveOreRounding', () => {
+      const parsed = makeParsedFile({
+        vouchers: [
+          makeVoucher('A', 1, [
+            { account: '1510', amount: 100.02 },
+            { account: '3001', amount: -100.0 },
+          ]),
+        ],
+      })
+
+      const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
+
+      expect(result.staged).toEqual([])
+      expect(result.skippedUnbalanced).toBe(1)
+      expect(result.blockingErrors.join(' ')).toMatch(/godkänn öresutjämning uttryckligen/i)
+    })
+
+    it('adjusts a 0.02 SEK diff to 3741 with a warning when approveOreRounding is set', () => {
+      const parsed = makeParsedFile({
+        vouchers: [
+          makeVoucher('A', 1, [
+            { account: '1510', amount: 100.02 },
+            { account: '3001', amount: -100.0 },
+          ]),
+        ],
+      })
+
+      const result = prepareStagedVouchers(parsed, baseMap, 'A', {
+        approveOreRounding: true,
+        approveSkippedVouchers: false,
+      })
+
+      expect(result.blockingErrors).toEqual([])
+      expect(result.staged).toHaveLength(1)
+      const adjustment = result.staged[0].lines.find((l) => l.account_number === '3741')
+      expect(adjustment?.credit_amount).toBe(0.02)
+      expect(result.warnings.join(' ')).toMatch(
+        /öresutjämning 0\.02 kr bokförd på konto 3741 efter uttryckligt godkännande/,
+      )
+    })
+
+    it('treats exactly 1.00 SEK as öresutjämning territory — requires approveOreRounding', () => {
+      // 1.00 SEK is the documented approval cap: still approvable as
+      // öresutjämning, never auto-adjusted.
+      const linesWithOneKronaDiff = [
+        { account: '1510', amount: 101.0 },
+        { account: '3001', amount: -100.0 },
+      ]
+
+      const blocked = prepareStagedVouchers(
+        makeParsedFile({ vouchers: [makeVoucher('A', 1, linesWithOneKronaDiff)] }),
+        baseMap,
+        'A',
+        strictPolicy,
+      )
+      expect(blocked.staged).toEqual([])
+      expect(blocked.skippedUnbalanced).toBe(1)
+      expect(blocked.blockingErrors.join(' ')).toMatch(/godkänn öresutjämning uttryckligen/i)
+
+      const approved = prepareStagedVouchers(
+        makeParsedFile({ vouchers: [makeVoucher('A', 1, linesWithOneKronaDiff)] }),
+        baseMap,
+        'A',
+        { approveOreRounding: true, approveSkippedVouchers: false },
+      )
+      expect(approved.blockingErrors).toEqual([])
+      const adjustment = approved.staged[0].lines.find((l) => l.account_number === '3741')
+      expect(adjustment?.credit_amount).toBe(1)
+    })
+
+    it('blocks a 1.50 SEK diff even with approveOreRounding — needs approveSkippedVouchers', () => {
+      // > 1 SEK is never öresavrundning — the voucher is incomplete in the
+      // source system. approveOreRounding must NOT rescue it.
+      const linesWithBigDiff = [
+        { account: '1510', amount: 101.5 },
+        { account: '3001', amount: -100.0 },
+      ]
+
+      const blocked = prepareStagedVouchers(
+        makeParsedFile({ vouchers: [makeVoucher('A', 1, linesWithBigDiff)] }),
+        baseMap,
+        'A',
+        { approveOreRounding: true, approveSkippedVouchers: false },
+      )
+      expect(blocked.staged).toEqual([])
+      expect(blocked.skippedUnbalanced).toBe(1)
+      expect(blocked.blockingErrors.join(' ')).toMatch(/obalanserad/)
+
+      // approveSkippedVouchers skips it with a warning — never posts it.
+      const skipped = prepareStagedVouchers(
+        makeParsedFile({ vouchers: [makeVoucher('A', 1, linesWithBigDiff)] }),
+        baseMap,
+        'A',
+        { approveOreRounding: false, approveSkippedVouchers: true },
+      )
+      expect(skipped.blockingErrors).toEqual([])
+      expect(skipped.staged).toEqual([])
+      expect(skipped.skippedUnbalanced).toBe(1)
+      expect(skipped.warnings.join(' ')).toMatch(/obalanserad med 1\.5 kr och hoppades över/)
+    })
   })
 
   describe('opening-balance voucher tagging vs derived IB (issue #675)', () => {
@@ -1082,12 +1183,11 @@ describe('importVouchers — per-voucher series preservation', () => {
       ['2010', '2010'],
     ])
 
-    it('tags a qualifying OB voucher opening_balance even when #UB -1 records exist', async () => {
+    it('tags a qualifying OB voucher opening_balance even when #UB -1 records exist', () => {
       // Precedence 2 beats 3: the OB-voucher candidate makes
       // getEffectiveOpeningBalances yield no balances, so hasCurrentYearIb is
       // false and the voucher keeps serving as the IB. Without that yield, a
       // derived IB entry AND this voucher would both book the same amounts.
-      const { supabase, journalEntryInserts } = buildCapturingSupabase()
       const parsed = makeParsedFile({
         openingBalances: [],
         closingBalances: [
@@ -1108,22 +1208,13 @@ describe('importVouchers — per-voucher series preservation', () => {
         ],
       })
 
-      const result = await importVouchers(
-        supabase,
-        'company-1',
-        'user-1',
-        'period-1',
-        parsed,
-        obMap,
-        'A',
-      )
+      const result = prepareStagedVouchers(parsed, obMap, 'A', strictPolicy)
 
-      expect(result.created).toBe(1)
-      expect(journalEntryInserts[0].source_type).toBe('opening_balance')
+      expect(result.staged).toHaveLength(1)
+      expect(result.staged[0].source_type).toBe('opening_balance')
     })
 
-    it('keeps an FY-start voucher without IB wording as import when IB is derived from #UB -1', async () => {
-      const { supabase, journalEntryInserts } = buildCapturingSupabase()
+    it('keeps an FY-start voucher without IB wording as import when IB is derived from #UB -1', () => {
       const parsed = makeParsedFile({
         openingBalances: [],
         closingBalances: [
@@ -1144,17 +1235,9 @@ describe('importVouchers — per-voucher series preservation', () => {
         ],
       })
 
-      await importVouchers(
-        supabase,
-        'company-1',
-        'user-1',
-        'period-1',
-        parsed,
-        obMap,
-        'A',
-      )
+      const result = prepareStagedVouchers(parsed, obMap, 'A', strictPolicy)
 
-      expect(journalEntryInserts[0].source_type).toBe('import')
+      expect(result.staged[0].source_type).toBe('import')
     })
   })
 })
@@ -1236,9 +1319,178 @@ describe('IB derivation from #UB -1 (issue #675)', () => {
 
       const result = validateIBBalance(parsed, accountMap)
 
-      // 37400.78 − 30000.00 → diff booked to 2099 by createOpeningBalanceEntry
+      // 37400.78 − 30000.00 → diff booked to 2099 by buildOpeningBalancePayload
       expect(result.roundingAdjustment).toBe(7400.78)
       expect(result.fileImbalance).toBe(7400.78)
     })
+  })
+})
+
+describe('buildOpeningBalancePayload', () => {
+  // Replaces createOpeningBalanceEntry: the payload is now built as pure data
+  // and posted inside finalize_sie_import's atomic transaction.
+  it('builds debit/credit lines from #IB 0 dated at fiscal year start', () => {
+    const parsed = makeParsedFile()
+    const accountMap = new Map([
+      ['1510', '1510'],
+      ['1930', '1930'],
+      ['2440', '2440'],
+    ])
+
+    const payload = buildOpeningBalancePayload(parsed, accountMap, 0)
+
+    expect(payload).not.toBeNull()
+    expect(payload!.entry_date).toBe('2024-01-01')
+    expect(payload!.description).toBe('Ingående balanser från SIE-import')
+    expect(payload!.lines).toEqual([
+      { account_number: '1510', debit_amount: 50000, credit_amount: 0, line_description: 'IB 1510' },
+      { account_number: '1930', debit_amount: 100000, credit_amount: 0, line_description: 'IB 1930' },
+      { account_number: '2440', debit_amount: 0, credit_amount: 150000, line_description: 'IB 2440' },
+    ])
+  })
+
+  it('books a validated imbalance explicitly to 2099, never silently', () => {
+    // 100 SEK unallocated årets resultat — validateIBBalance computed the
+    // adjustment; the payload must document it on a dedicated 2099 line.
+    const parsed = makeParsedFile({
+      openingBalances: [
+        { yearIndex: 0, account: '1510', amount: 50100 },
+        { yearIndex: 0, account: '2440', amount: -50000 },
+      ],
+    })
+    const accountMap = new Map([
+      ['1510', '1510'],
+      ['2440', '2440'],
+    ])
+
+    const payload = buildOpeningBalancePayload(parsed, accountMap, 100)
+
+    expect(payload!.lines).toContainEqual({
+      account_number: '2099',
+      debit_amount: 0,
+      credit_amount: 100,
+      line_description: 'Avrundningsdifferens vid SIE-import, 100 SEK',
+    })
+    // The entry balances after the adjustment
+    const totalDebit = payload!.lines.reduce((s, l) => s + l.debit_amount, 0)
+    const totalCredit = payload!.lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(totalDebit).toBe(totalCredit)
+  })
+
+  it('documents the #UB -1 derivation in the voucher description (issue #675)', () => {
+    const parsed = makeParsedFile({
+      openingBalances: [],
+      closingBalances: [
+        { yearIndex: -1, account: '1930', amount: 37400.78 },
+        { yearIndex: -1, account: '2440', amount: -37400.78 },
+      ],
+    })
+    const accountMap = new Map([
+      ['1930', '1930'],
+      ['2440', '2440'],
+    ])
+
+    const payload = buildOpeningBalancePayload(parsed, accountMap, 0)
+
+    expect(payload!.description).toBe(
+      'Ingående balanser från SIE-import (härledda från föregående års utgående balans)'
+    )
+    expect(payload!.lines).toEqual([
+      { account_number: '1930', debit_amount: 37400.78, credit_amount: 0, line_description: 'IB 1930' },
+      { account_number: '2440', debit_amount: 0, credit_amount: 37400.78, line_description: 'IB 2440' },
+    ])
+  })
+
+  it('returns null when the file carries no effective opening balances', () => {
+    const parsed = makeParsedFile({ openingBalances: [], closingBalances: [] })
+
+    expect(buildOpeningBalancePayload(parsed, new Map([['1930', '1930']]), 0)).toBeNull()
+  })
+
+  it('returns null when no IB account is mapped (all lines excluded)', () => {
+    const parsed = makeParsedFile()
+
+    expect(buildOpeningBalancePayload(parsed, new Map(), 0)).toBeNull()
+  })
+})
+
+describe('buildNextPeriodObLines', () => {
+  // Replaces resyncNextPeriodOpeningBalance: the N→N+1 IB resync now happens
+  // inside the finalize_sie_import RPC (I12), fed by these pure lines built
+  // from the imported year's #UB (yearIndex 0).
+  it('builds next-period IB lines from the current-year #UB', () => {
+    const parsed = makeParsedFile({
+      closingBalances: [
+        { yearIndex: -1, account: '1930', amount: 99999 }, // prior year — ignored
+        { yearIndex: 0, account: '1930', amount: 160406.0 },
+        { yearIndex: 0, account: '2440', amount: -160406.0 },
+      ],
+    })
+    const accountMap = new Map([
+      ['1930', '1930'],
+      ['2440', '2440'],
+    ])
+
+    const lines = buildNextPeriodObLines(parsed, accountMap)
+
+    expect(lines).toEqual([
+      {
+        account_number: '1930',
+        debit_amount: 160406.0,
+        credit_amount: 0,
+        line_description: 'IB 1930 (från föregående års UB)',
+      },
+      {
+        account_number: '2440',
+        debit_amount: 0,
+        credit_amount: 160406.0,
+        line_description: 'IB 2440 (från föregående års UB)',
+      },
+    ])
+  })
+
+  it('returns null when the file has no current-year #UB', () => {
+    const parsed = makeParsedFile({
+      closingBalances: [{ yearIndex: -1, account: '1930', amount: 37400.78 }],
+    })
+
+    expect(buildNextPeriodObLines(parsed, new Map([['1930', '1930']]))).toBeNull()
+  })
+
+  it('books an unbalanced UB set explicitly to 2099', () => {
+    const parsed = makeParsedFile({
+      closingBalances: [
+        { yearIndex: 0, account: '1930', amount: 100 },
+        { yearIndex: 0, account: '2440', amount: -50 },
+      ],
+    })
+    const accountMap = new Map([
+      ['1930', '1930'],
+      ['2440', '2440'],
+    ])
+
+    const lines = buildNextPeriodObLines(parsed, accountMap)
+
+    expect(lines).toContainEqual({
+      account_number: '2099',
+      debit_amount: 0,
+      credit_amount: 50,
+      line_description: 'Avrundningsdifferens vid IB-synk från SIE-import',
+    })
+  })
+
+  it('falls back to the source account number when a #UB account is unmapped', () => {
+    // Continuity beats mapping strictness here: the RPC validates the final
+    // entry, and dropping the line would silently unbalance next year's IB.
+    const parsed = makeParsedFile({
+      closingBalances: [
+        { yearIndex: 0, account: '1930', amount: 100 },
+        { yearIndex: 0, account: '2440', amount: -100 },
+      ],
+    })
+
+    const lines = buildNextPeriodObLines(parsed, new Map([['1930', '1932']]))
+
+    expect(lines!.map((l) => l.account_number)).toEqual(['1932', '2440'])
   })
 })

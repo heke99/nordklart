@@ -1,17 +1,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { getHistoricalOpenInvoices } from '@/lib/invoices/historical-open-items'
+import { roundOre } from '@/lib/money'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
   /**
-   * Sum of posted balances on accounts 1510 (Kundfordringar) and 1513
-   * (Kundfordringar – delad faktura). 1513 covers the Skatteverket portion
-   * of ROT/RUT fakturamodellen invoices and is zero today (no fakturamodellen
-   * postings yet) — included for forward compatibility.
+   * Closing balance on accounts 1510 (Kundfordringar) and 1513
+   * (Kundfordringar – delad faktura) AS OF the reconciliation date —
+   * opening balance plus movements, not just the period movement (A06).
    */
   account_1510_balance: number
   difference: number
   is_reconciled: boolean
+  /** The date both sides were measured at. */
+  as_of_date: string
   /**
    * Number of foreign-currency invoices that lacked an exchange_rate, so their
    * outstanding amount could not be converted to SEK. When > 0 the difference
@@ -19,90 +22,108 @@ export interface ARReconciliationResult {
    * than a true reconciliation break.
    */
   unconverted_fx_count: number
+  /** Unrealized FX revaluation adjustment included in the subledger total so
+   *  it reconciles against the revalued GL balance (A08). */
+  fx_revaluation_adjustment: number
 }
 
 /**
- * Compare sum of open customer invoices against account 1510 balance.
- * Account 1510 is debit-normal (asset): balance = debits - credits.
+ * Compare the customer ledger against the 1510/1513 GL balance — BOTH
+ * measured at the same date (revision item A06):
  *
- * Conversion uses each invoice's stored exchange_rate (the invoice-date rate),
- * which matches what was originally posted to 1510. This means the report will
- * diverge from the GL once partial payments settle at a different rate (the
- * delta is correctly booked as valutakursvinst/-förlust to 3960/7960 per
- * ML 8 kap 21–23 §). A subledger-derived total would reconcile through that
- * difference; deferred to a follow-up.
+ *   - Subledger: invoices open AT the reconciliation date with their
+ *     historically open amounts (payments/credits after the date excluded),
+ *     converted at the invoice-date rate — exactly what was posted to 1510.
+ *   - GL: the CLOSING balance (opening + movements) of 1510/1513 as of the
+ *     same date, via the paginated trial balance (A07).
+ *   - Unrealized FX revaluations posted to 1510 are added to the subledger
+ *     side from the persisted revaluation snapshot, so a revalued GL balance
+ *     reconciles exactly (A08).
+ *
+ * Fails closed (A10): database errors throw — never an empty zero report.
  */
 export async function generateARReconciliation(
   supabase: SupabaseClient,
   companyId: string,
-  periodId: string
+  periodId: string,
+  asOfDate?: string
 ): Promise<ARReconciliationResult> {
-
-  // total/paid_amount are stored in invoice currency; account 1510 is in SEK
-  // (booked at invoice-date rate), so convert each row before summing.
-  const { data: invoices } = await supabase
-    .from('invoices')
-    .select('total, paid_amount, remaining_amount, currency, exchange_rate')
+  const { data: period, error: periodError } = await supabase
+    .from('fiscal_periods')
+    .select('period_start, period_end')
+    .eq('id', periodId)
     .eq('company_id', companyId)
-    .in('status', ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready'])
+    .single()
+  if (periodError || !period) {
+    throw new Error(`Räkenskapsperioden kunde inte läsas: ${periodError?.message ?? 'saknas'}`)
+  }
+
+  const today = new Date().toISOString().split('T')[0]
+  const effectiveAsOf =
+    asOfDate ?? (period.period_end < today ? (period.period_end as string) : today)
+
+  // Subledger: historically open invoices at the reconciliation date.
+  const openItems = await getHistoricalOpenInvoices(supabase, companyId, effectiveAsOf)
 
   let unconvertedFxCount = 0
-  const arLedgerTotal = (invoices || [])
-    .reduce((sum, inv) => {
-      const isFx = inv.currency && inv.currency !== 'SEK'
-      const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
-      // Skip unconvertible FX rows from the sum — adding raw foreign amounts
-      // to a SEK total is arithmetically unsound. Counted instead.
-      if (isFx && !hasRate) {
-        unconvertedFxCount += 1
-        return sum
-      }
-      const outstanding = Number(inv.remaining_amount ?? ((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)))
-      const sek = resolveSekAmount(outstanding, null, inv.currency, inv.exchange_rate)
-      return Math.round((sum + sek) * 100) / 100
-    }, 0)
+  let arLedgerTotal = 0
+  for (const item of openItems) {
+    const isFx = item.currency !== 'SEK'
+    if (isFx && (item.exchange_rate == null || item.exchange_rate <= 0)) {
+      unconvertedFxCount += 1
+      continue
+    }
+    const sek = isFx
+      ? roundOre(item.open_amount * (item.exchange_rate as number))
+      : item.open_amount
+    arLedgerTotal = roundOre(arLedgerTotal + sek)
+  }
 
-  // Get AR receivable balance from posted journal entry lines in this period.
-  // We sum 1510 (Kundfordringar) AND 1513 (Kundfordringar – delad faktura) so
-  // the comparison stays correct under ROT/RUT fakturamodellen, where the
-  // customer portion sits on 1510 and the Skatteverket claim on 1513 — both
-  // are open AR receivable from the company's perspective. 1513 is zero today
-  // (no fakturamodellen postings yet) so this is a forward-looking defense.
-  const { data: journalLines } = await supabase
-    .from('journal_entry_lines')
-    .select(`
-      debit_amount,
-      credit_amount,
-      journal_entry:journal_entries!inner(
-        status,
-        company_id,
-        fiscal_period_id
-      )
-    `)
-    .in('account_number', ['1510', '1513'])
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.fiscal_period_id', periodId)
-    .eq('journal_entries.status', 'posted')
+  // Unrealized FX adjustments posted to 1510 (A08): the GL balance includes
+  // them, so the subledger side must too — from the persisted snapshot.
+  let fxAdjustment = 0
+  const { data: revalItems, error: revalError } = await supabase
+    .from('currency_revaluation_items')
+    .select('unrealized_diff_sek, invoice_id, run:currency_revaluation_runs!inner(status, balance_date, company_id)')
+    .eq('company_id', companyId)
+    .eq('run.company_id', companyId)
+    .eq('run.status', 'posted')
+    .lte('run.balance_date', effectiveAsOf)
+    .not('invoice_id', 'is', null)
+  if (revalError) {
+    throw new Error(`Valutaomvärderingsunderlaget kunde inte läsas: ${revalError.message}`)
+  }
+  for (const item of revalItems ?? []) {
+    fxAdjustment = roundOre(fxAdjustment + (Number(item.unrealized_diff_sek) || 0))
+  }
+  arLedgerTotal = roundOre(arLedgerTotal + fxAdjustment)
 
-  // Both 1510 and 1513 are debit-normal assets: balance = debits - credits
+  // GL: CLOSING balance of 1510 + 1513 as of the same date (opening +
+  // movements), via the paginated trial balance (A06/A07).
+  const { rows } = await generateTrialBalance(supabase, companyId, periodId, {
+    toDate: effectiveAsOf,
+  })
   let account1510Balance = 0
-  if (journalLines) {
-    for (const line of journalLines) {
-      account1510Balance = Math.round((account1510Balance + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)) * 100) / 100
+  for (const row of rows) {
+    if (row.account_number === '1510' || row.account_number === '1513') {
+      account1510Balance =
+        roundOre(account1510Balance + row.closing_debit - row.closing_credit)
     }
   }
 
-  const difference = Math.round((arLedgerTotal - account1510Balance) * 100) / 100
+  const difference = roundOre(arLedgerTotal - account1510Balance)
 
   return {
-    ar_ledger_total: Math.round(arLedgerTotal * 100) / 100,
-    account_1510_balance: Math.round(account1510Balance * 100) / 100,
+    ar_ledger_total: roundOre(arLedgerTotal),
+    account_1510_balance: roundOre(account1510Balance),
     difference,
     // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
     // any row was excluded for a missing exchange rate, the calculation is
     // incomplete by construction and we cannot honestly stamp the period
     // Avstämd — the user must fix the underlying data first.
     is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
+    as_of_date: effectiveAsOf,
     unconverted_fx_count: unconvertedFxCount,
+    fx_revaluation_adjustment: fxAdjustment,
   }
 }

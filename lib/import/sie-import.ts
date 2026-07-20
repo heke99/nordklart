@@ -7,7 +7,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type {
   ParsedSIEFile,
   AccountMapping,
@@ -20,11 +21,15 @@ import type { CreateJournalEntryLineInput } from '@/types'
 import { mappingsToMap, getMappingStats } from './account-mapper'
 import { syncMappedAccounts } from './account-sync'
 import {
+  prepareStagedVouchers,
+  stageVouchers,
+  buildNextPeriodObLines,
+} from './sie-staging'
+import { verifySieKsumma } from './sie-ksumma'
+import {
   calculateFileHash,
   getEffectiveOpeningBalances,
   isBalanceSheetAccount,
-  OPENING_BALANCE_DESCRIPTION_RE,
-  SHARE_CAPITAL_DESCRIPTION_RE,
 } from './sie-parser'
 
 // Re-export from the parser (moved there to avoid an import cycle —
@@ -256,7 +261,9 @@ export async function undoSIEImport(
     return { success: false, deletedEntries: 0, error: 'Import hittades inte' }
   }
 
-  if (importRecord.status !== 'completed') {
+  // 'partial' = posted but not archived (I18) — undoable so the user can
+  // retry the whole import cleanly.
+  if (importRecord.status !== 'completed' && importRecord.status !== 'partial') {
     return { success: false, deletedEntries: 0, error: `Kan bara ångra slutförda importer (status: ${importRecord.status})` }
   }
 
@@ -314,12 +321,16 @@ async function cleanupStaleImportRecords(
 ): Promise<void> {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
 
+  // 'pending'/'validating'/'staged' rows are pre-posting states — deleting a
+  // stale one loses no journal data (staging rows cascade). 'importing' is
+  // NOT cleaned up: finalize_sie_import is atomic, so an 'importing' row
+  // either commits to a final state or the API marks it failed.
   await supabase
     .from('sie_imports')
     .delete()
     .eq('company_id', companyId)
     .eq('file_hash', fileHash)
-    .eq('status', 'pending')
+    .in('status', ['pending', 'validating', 'staged'])
     .lt('created_at', fiveMinutesAgo)
 }
 
@@ -546,19 +557,16 @@ export function validateIBBalance(
 }
 
 /**
- * Create opening balance journal entry from IB amounts.
+ * Build the opening-balance payload from IB amounts (pure — posting happens
+ * inside finalize_sie_import's atomic transaction).
  * The caller must validate the IB balance first via validateIBBalance().
  * If roundingAdjustment is non-zero, it is booked explicitly to 2099 with clear text.
  */
-async function createOpeningBalanceEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  fiscalPeriodId: string,
+export function buildOpeningBalancePayload(
   parsed: ParsedSIEFile,
   accountMap: Map<string, string>,
   roundingAdjustment: number
-): Promise<string | null> {
+): { entry_date: string; description: string; lines: CreateJournalEntryLineInput[] } | null {
   // Effective set: explicit #IB 0, or IB derived from #UB -1 (issue #675).
   const { balances: currentYearBalances, derivedFromPriorYearUB } =
     getEffectiveOpeningBalances(parsed)
@@ -567,7 +575,6 @@ async function createOpeningBalanceEntry(
     return null
   }
 
-  // Build journal entry lines
   const lines: CreateJournalEntryLineInput[] = []
 
   for (const balance of currentYearBalances) {
@@ -595,7 +602,7 @@ async function createOpeningBalanceEntry(
     return null
   }
 
-  // Add explicit rounding adjustment if needed (pre-validated by caller, <= 1 SEK)
+  // Add explicit rounding adjustment if needed (pre-validated by caller)
   if (Math.abs(roundingAdjustment) > 0.01) {
     if (roundingAdjustment > 0) {
       lines.push({
@@ -616,20 +623,15 @@ async function createOpeningBalanceEntry(
 
   const entryDate = parsed.stats.fiscalYearStart ?? formatDate(new Date())
 
-  const entry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: fiscalPeriodId,
+  return {
     entry_date: entryDate,
     // When derived, say so on the voucher itself — permanent documentation
     // of where the amounts came from (BFNAR 2013:2 behandlingshistorik).
     description: derivedFromPriorYearUB
       ? 'Ingående balanser från SIE-import (härledda från föregående års utgående balans)'
       : 'Ingående balanser från SIE-import',
-    source_type: 'opening_balance',
-    voucher_series: 'A',
     lines,
-  })
-
-  return entry.id
+  }
 }
 
 /**
@@ -692,759 +694,7 @@ export async function linkOpeningBalanceEntryToPeriod(
   }
 }
 
-/**
- * Pragmatic IB resync.
- *
- * Backfill scenario: user already imported 2026 (or set its IB manually),
- * then later imports 2025. The previously-set 2026 IB no longer matches
- * the 2025 UB we just computed — resync it by stornoing the old IB and
- * creating a fresh one from the just-imported #UB.
- *
- * Returns:
- *   - { resynced: true, ...details } when storno + new IB succeeded
- *   - { resynced: false, reason } when there's no next period, no existing
- *     IB to replace, or the next period is locked/closed
- *
- * Caller is responsible for surfacing the result in ImportResult.
- */
-export async function resyncNextPeriodOpeningBalance(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  justImportedPeriodEnd: string,
-  parsed: ParsedSIEFile,
-  accountMap: Map<string, string>
-): Promise<
-  | {
-      resynced: true
-      nextPeriodId: string
-      nextPeriodName: string
-      stornoEntryId: string
-      newOpeningBalanceEntryId: string
-    }
-  | { resynced: false; reason: string; nextPeriodName?: string }
-> {
-  const { data: nextPeriod } = await supabase
-    .from('fiscal_periods')
-    .select('id, name, period_start, period_end, is_closed, locked_at, opening_balance_entry_id, opening_balances_set')
-    .eq('company_id', companyId)
-    .gt('period_start', justImportedPeriodEnd)
-    .order('period_start', { ascending: true })
-    .limit(1)
-    .maybeSingle()
 
-  if (!nextPeriod) {
-    return { resynced: false, reason: 'no_next_period' }
-  }
-
-  if (!nextPeriod.opening_balance_entry_id) {
-    // No existing IB on the next period — caller has nothing to resync; the
-    // user's first IB for the next period will be derived from the import
-    // we just completed via getOpeningBalances() fallback.
-    return { resynced: false, reason: 'next_period_has_no_ib', nextPeriodName: nextPeriod.name }
-  }
-
-  if (nextPeriod.is_closed || nextPeriod.locked_at) {
-    return {
-      resynced: false,
-      reason: 'next_period_locked',
-      nextPeriodName: nextPeriod.name,
-    }
-  }
-
-  // Build the new IB lines from the just-imported year's #UB (yearIndex=0
-  // closing balances). Each balance carries the source account number; map
-  // through accountMap so chart renames in the target company are honored.
-  const currentYearUB = parsed.closingBalances.filter((b) => b.yearIndex === 0)
-  if (currentYearUB.length === 0) {
-    return { resynced: false, reason: 'no_closing_balances', nextPeriodName: nextPeriod.name }
-  }
-
-  const newLines: CreateJournalEntryLineInput[] = []
-  for (const balance of currentYearUB) {
-    const targetAccount = accountMap.get(balance.account) ?? balance.account
-    if (balance.amount > 0) {
-      newLines.push({
-        account_number: targetAccount,
-        debit_amount: balance.amount,
-        credit_amount: 0,
-        line_description: `IB ${balance.account} (resynk efter import)`,
-      })
-    } else if (balance.amount < 0) {
-      newLines.push({
-        account_number: targetAccount,
-        debit_amount: 0,
-        credit_amount: Math.abs(balance.amount),
-        line_description: `IB ${balance.account} (resynk efter import)`,
-      })
-    }
-  }
-
-  if (newLines.length === 0) {
-    return { resynced: false, reason: 'empty_new_ib', nextPeriodName: nextPeriod.name }
-  }
-
-  // Balance check: if the new IB doesn't balance (excluded accounts, etc.),
-  // book the difference to 2099 the same way createOpeningBalanceEntry does.
-  const totalDebit = newLines.reduce((s, l) => s + l.debit_amount, 0)
-  const totalCredit = newLines.reduce((s, l) => s + l.credit_amount, 0)
-  const diff = Math.round((totalDebit - totalCredit) * 100) / 100
-  if (Math.abs(diff) > 0.01) {
-    if (diff > 0) {
-      newLines.push({
-        account_number: '2099',
-        debit_amount: 0,
-        credit_amount: diff,
-        line_description: 'Avrundningsdifferens vid IB-resynk',
-      })
-    } else {
-      newLines.push({
-        account_number: '2099',
-        debit_amount: Math.abs(diff),
-        credit_amount: 0,
-        line_description: 'Avrundningsdifferens vid IB-resynk',
-      })
-    }
-  }
-
-  // Ordering note: create the new IB FIRST, then storno the old one. If we
-  // stornoed first and the createJournalEntry call failed, the next period
-  // would be left with a reversed IB and nothing to replace it — and
-  // executeSIEImport swallows our error as a non-fatal warning. By creating
-  // first we guarantee the worst case is "new IB exists but not yet linked",
-  // which getOpeningBalances() can still reason about.
-
-  // Build the new IB entry on the next period.
-  const newEntry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: nextPeriod.id,
-    entry_date: nextPeriod.period_start as string,
-    description: 'Ingående balanser (resynk efter prior-year SIE-import)',
-    source_type: 'opening_balance',
-    voucher_series: 'A',
-    lines: newLines,
-  })
-
-  // Atomically swap the period FK pointer (two-step around the
-  // immutability trigger).
-  const { error: relinkError } = await supabase.rpc('replace_period_opening_balance_link', {
-    p_company_id: companyId,
-    p_period_id: nextPeriod.id,
-    p_new_entry_id: newEntry.id,
-  })
-
-  if (relinkError) {
-    throw new Error(`Failed to relink opening balance on next period: ${relinkError.message}`)
-  }
-
-  // Now that the period points at the new IB, storno the old one. If this
-  // throws, the period is already on the correct entry — the orphaned old
-  // entry shows up as a stray verifikat but the FK stays consistent.
-  const storno = await reverseEntry(
-    supabase,
-    companyId,
-    userId,
-    nextPeriod.opening_balance_entry_id,
-    nextPeriod.period_start as string,
-  )
-
-  return {
-    resynced: true,
-    nextPeriodId: nextPeriod.id,
-    nextPeriodName: nextPeriod.name,
-    stornoEntryId: storno.id,
-    newOpeningBalanceEntryId: newEntry.id,
-  }
-}
-
-/**
- * Create journal entries from vouchers using batch insert for performance.
- *
- * Preserves per-voucher series from the source SIE file so customers migrating
- * from systems like Fortnox (which uses B=kundfakturor, C=inbetalningar, etc.)
- * retain traceability back to their original bookkeeping. Source voucher
- * numbers are renumbered per target series via next_voucher_number to avoid
- * collisions with existing entries; the source (series, number) is preserved
- * in MigrationDocumentation.voucherNumberMapping for audit trail (BFNAR 2013:2).
- *
- * `defaultSeries` is used as a fallback only for vouchers that arrive with an
- * empty series (e.g., SIE4I import files, per spec §5.15).
- */
-export async function importVouchers(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  fiscalPeriodId: string,
-  parsed: ParsedSIEFile,
-  accountMap: Map<string, string>,
-  defaultSeries: string
-): Promise<{
-  created: number
-  ids: string[]
-  errors: string[]
-  skippedEmpty: number
-  skippedSingleLine: number
-  skippedUnbalanced: number
-  skippedUnmapped: number
-  movementsByAccount: Map<string, number>
-  skippedDetails: {
-    voucherId: string
-    date: string
-    description: string
-    reason: 'unmapped' | 'empty' | 'unbalanced' | 'zero_lines' | 'single_line'
-    unmappedAccounts?: string[]
-    balanceDiff?: number
-    totalDebit?: number
-    totalCredit?: number
-    sourceLines?: { account: string; amount: number }[]
-    mappedLineCount?: number
-    originalLineCount?: number
-  }[]
-  voucherNumberMapping: Array<{ sourceId: string; series: string; targetNumber: number }>
-  seriesUsed: string[]
-  retriedBatches: number
-  failedBatches: number
-}> {
-  const results = {
-    created: 0,
-    ids: [] as string[],
-    errors: [] as string[],
-    skippedEmpty: 0,
-    skippedSingleLine: 0,
-    skippedUnbalanced: 0,
-    skippedUnmapped: 0,
-    movementsByAccount: new Map<string, number>(),
-    skippedDetails: [] as {
-      voucherId: string
-      date: string
-      description: string
-      reason: 'unmapped' | 'empty' | 'unbalanced' | 'zero_lines' | 'single_line'
-      unmappedAccounts?: string[]
-      balanceDiff?: number
-      totalDebit?: number
-      totalCredit?: number
-      sourceLines?: { account: string; amount: number }[]
-      mappedLineCount?: number
-      originalLineCount?: number
-    }[],
-    voucherNumberMapping: [] as Array<{ sourceId: string; series: string; targetNumber: number }>,
-    seriesUsed: [] as string[],
-    retriedBatches: 0,
-    failedBatches: 0,
-  }
-
-  // Pre-filter and prepare all valid vouchers
-  interface PreparedVoucher {
-    sourceId: string
-    series: string
-    date: string
-    description: string
-    // Original series/number as written in the source SIE file. NULL for SIE4I
-    // subsystem imports where series/verno are optional. Stored per-entry for
-    // traceability alongside the aggregate sie_imports.migration_documentation.
-    sourceSeries: string | null
-    sourceNumber: number | null
-    // 'import' for ordinary migrated vouchers; 'opening_balance' for a #VER that
-    // is really the year's ingående balans (see isLikelyOpeningBalance below).
-    sourceType: 'import' | 'opening_balance'
-    lines: {
-      account_number: string
-      debit_amount: number
-      credit_amount: number
-      line_description: string | null
-      // SIE dimension 1 (kostnadsställe) / 6 (projekt) object codes.
-      cost_center: string | null
-      project: string | null
-      // Full dimension→code map from the #TRANS object list, preserved for
-      // round-trip fidelity incl. non-standard dimensions.
-      dimensions: Record<string, string> | null
-    }[]
-  }
-
-  const preparedVouchers: PreparedVoucher[] = []
-
-  // A SIE file represents the opening balance either as #IB records (handled
-  // separately by createOpeningBalanceEntry → source_type='opening_balance'),
-  // as IB derived from #UB -1 when #IB 0 is missing (issue #675, also via
-  // createOpeningBalanceEntry) or, in some source systems, as an ordinary #VER
-  // dated on the fiscal-year start. When there is NO current-year IB from
-  // either of the first two paths, detect a clearly-labelled IB voucher and
-  // tag it opening_balance so bank reconciliation excludes it from the period
-  // movement (otherwise it lands as 'import' and surfaces as a phantom
-  // difference equal to the IB). Deliberately conservative — requires the IB
-  // wording AND a balance-sheet-only voucher on FY start, and never a
-  // share-capital deposit. A missed IB still falls back to the manual "Märk som
-  // ingående balans" action in Bankavstämning, so we never risk hiding a real
-  // bank movement by over-classifying.
-  //
-  // Using the effective set keeps this gate consistent with the helper's
-  // precedence: when an OB-voucher candidate exists the helper yields no
-  // balances (the voucher serves as IB and gets tagged here); when IB was
-  // derived from #UB -1 the gate is closed so the same amounts can never be
-  // booked twice.
-  const hasCurrentYearIb = getEffectiveOpeningBalances(parsed).balances.length > 0
-  const fyStart = parsed.stats.fiscalYearStart
-
-  for (const voucher of parsed.vouchers) {
-    const lines: PreparedVoucher['lines'] = []
-    let hasUnmappedAccount = false
-    const unmappedAccountSet = new Set<string>()
-
-    for (const line of voucher.lines) {
-      const targetAccount = accountMap.get(line.account)
-
-      if (!targetAccount) {
-        hasUnmappedAccount = true
-        unmappedAccountSet.add(line.account)
-        continue
-      }
-
-      // SIE dimensions: 1 = kostnadsställe → cost_center, 6 = projekt →
-      // project. All pairs (incl. non-standard dimensions) are preserved in
-      // the dimensions map so nothing from the source file is discarded.
-      let costCenter: string | null = null
-      let project: string | null = null
-      let dimensionsMap: Record<string, string> | null = null
-      if (line.objectList && line.objectList.length > 0) {
-        dimensionsMap = {}
-        for (const ref of line.objectList) {
-          dimensionsMap[ref.dimension] = ref.code
-          if (ref.dimension === '1') costCenter = ref.code
-          if (ref.dimension === '6') project = ref.code
-        }
-      }
-
-      // In SIE, amount is positive for debit, negative for credit
-      if (line.amount > 0) {
-        lines.push({
-          account_number: targetAccount,
-          debit_amount: Math.round(line.amount * 100) / 100,
-          credit_amount: 0,
-          line_description: line.description || null,
-          cost_center: costCenter,
-          project,
-          dimensions: dimensionsMap,
-        })
-      } else if (line.amount < 0) {
-        lines.push({
-          account_number: targetAccount,
-          debit_amount: 0,
-          credit_amount: Math.round(Math.abs(line.amount) * 100) / 100,
-          line_description: line.description || null,
-          cost_center: costCenter,
-          project,
-          dimensions: dimensionsMap,
-        })
-      }
-      // Note: lines with amount === 0 are silently dropped
-    }
-
-    const voucherId = `${voucher.series}${voucher.number}`
-    const voucherDate = formatDate(voucher.date)
-
-    // Skip vouchers with unmapped accounts
-    if (hasUnmappedAccount) {
-      results.skippedDetails.push({
-        voucherId,
-        date: voucherDate,
-        description: voucher.description,
-        reason: 'unmapped',
-        unmappedAccounts: [...unmappedAccountSet],
-        mappedLineCount: lines.length,
-        originalLineCount: voucher.lines.length,
-        sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
-      })
-      results.skippedUnmapped++
-      continue
-    }
-
-    // Fix 3: Separate empty (0 lines) from single-line vouchers
-    if (lines.length === 0) {
-      results.skippedDetails.push({
-        voucherId,
-        date: voucherDate,
-        description: voucher.description,
-        reason: 'zero_lines',
-        mappedLineCount: 0,
-        originalLineCount: voucher.lines.length,
-        sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
-      })
-      results.skippedEmpty++
-      continue
-    }
-
-    if (lines.length === 1) {
-      results.skippedDetails.push({
-        voucherId,
-        date: voucherDate,
-        description: voucher.description,
-        reason: 'single_line',
-        mappedLineCount: 1,
-        originalLineCount: voucher.lines.length,
-        sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
-      })
-      results.skippedSingleLine++
-      continue
-    }
-
-    // Validate balance — Fix 2: Tiered rounding with öresutjämning (3741)
-    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    const balanceDiff = Math.round(Math.abs(totalDebit - totalCredit) * 100) / 100
-    if (balanceDiff > 1.00) {
-      // More than 1 SEK off — incomplete voucher in source system, skip
-      results.skippedDetails.push({
-        voucherId,
-        date: voucherDate,
-        description: voucher.description,
-        reason: 'unbalanced',
-        balanceDiff,
-        totalDebit: Math.round(totalDebit * 100) / 100,
-        totalCredit: Math.round(totalCredit * 100) / 100,
-        mappedLineCount: lines.length,
-        originalLineCount: voucher.lines.length,
-        sourceLines: voucher.lines.map(l => ({ account: l.account, amount: l.amount })),
-      })
-      results.skippedUnbalanced++
-      continue
-    } else if (balanceDiff > 0.005) {
-      // Rounding difference <= 1 SEK — add explicit öresutjämning line (never modify existing lines)
-      const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
-      if (roundedDiff > 0) {
-        lines.push({
-          account_number: '3741',
-          debit_amount: 0,
-          credit_amount: Math.abs(roundedDiff),
-          line_description: 'Öresutjämning',
-          cost_center: null,
-          project: null,
-          dimensions: null,
-        })
-      } else {
-        lines.push({
-          account_number: '3741',
-          debit_amount: Math.abs(roundedDiff),
-          credit_amount: 0,
-          line_description: 'Öresutjämning',
-          cost_center: null,
-          project: null,
-          dimensions: null,
-        })
-      }
-    }
-
-    // Resolve per-voucher series from the parsed SIE record. Fall back to the
-    // caller-supplied default only when the source voucher has no series
-    // (e.g., SIE4I subsystem import files where series/verno are optional).
-    const resolvedSeries = voucher.series && voucher.series.trim()
-      ? voucher.series.trim()
-      : defaultSeries
-
-    const rawSourceSeries = voucher.series && voucher.series.trim() ? voucher.series.trim() : null
-    const rawSourceNumber = Number.isFinite(voucher.number) ? voucher.number : null
-
-    const voucherDateStr = formatDate(voucher.date)
-    const isLikelyOpeningBalance =
-      !hasCurrentYearIb &&
-      !!fyStart && fyStart.slice(0, 10) === voucherDateStr &&
-      lines.length > 0 &&
-      lines.every((l) => isBalanceSheetAccount(l.account_number)) &&
-      OPENING_BALANCE_DESCRIPTION_RE.test(voucher.description || '') &&
-      !SHARE_CAPITAL_DESCRIPTION_RE.test(voucher.description || '')
-
-    preparedVouchers.push({
-      sourceId: voucherId,
-      series: resolvedSeries,
-      date: voucherDateStr,
-      description: voucher.description || `Import: ${voucher.series}${voucher.number}`,
-      sourceSeries: rawSourceSeries,
-      sourceNumber: rawSourceNumber,
-      sourceType: isLikelyOpeningBalance ? 'opening_balance' : 'import',
-      lines,
-    })
-  }
-
-  // NOTE: Per-account net movements are tracked inside the batch loop below,
-  // so that only SUCCESSFULLY inserted vouchers are counted. This ensures
-  // the migration adjustment entry correctly compensates for failed batches.
-
-  if (preparedVouchers.length === 0) {
-    return results
-  }
-
-  // Get all unique account numbers used
-  const allAccountNumbers = new Set<string>()
-  for (const v of preparedVouchers) {
-    for (const l of v.lines) {
-      allAccountNumbers.add(l.account_number)
-    }
-  }
-
-  // Resolve all account IDs in one query
-  const { data: accounts } = await supabase
-    .from('chart_of_accounts')
-    .select('id, account_number')
-    .eq('company_id', companyId)
-    .in('account_number', [...allAccountNumbers])
-
-  const accountIdMap = new Map<string, string>()
-  for (const acc of accounts || []) {
-    accountIdMap.set(acc.account_number, acc.id)
-  }
-
-  // Group prepared vouchers by series so each series' voucher numbers are
-  // reserved and assigned independently. Preserves SIE parse order within a
-  // series (Map maintains insertion order) so the first source voucher in
-  // series B becomes the first target voucher in series B.
-  const seriesGroups = new Map<string, PreparedVoucher[]>()
-  for (const v of preparedVouchers) {
-    const list = seriesGroups.get(v.series)
-    if (list) {
-      list.push(v)
-    } else {
-      seriesGroups.set(v.series, [v])
-    }
-  }
-
-  results.seriesUsed = [...seriesGroups.keys()]
-
-  // Batch insert journal entries (in chunks of 100) with retry logic.
-  // Retries handle transient errors (Supabase rate limits, Cloudflare 500s).
-  const BATCH_SIZE = 100
-  const MAX_RETRIES = 3
-  const INTER_BATCH_DELAY_MS = 50  // Prevent rate limiting under sustained load
-  let retriedBatches = 0
-  let failedBatches = 0
-
-  // Process each series as an independent mini-import. Voucher numbers must
-  // be monotonically increasing within a series; grouping first guarantees
-  // that without needing to interleave series-specific counters in one loop.
-  let seriesIndex = 0
-  for (const [series, groupVouchers] of seriesGroups) {
-    // Get starting voucher number for this series
-    const { data: startNumber } = await supabase.rpc('next_voucher_number', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriodId,
-      p_series: series,
-    })
-
-    const currentVoucherNumber = (startNumber as number) || 1
-
-    // Reserve the full voucher number range upfront to prevent concurrent
-    // operations from claiming numbers in our range during batch insertion.
-    const reservedHighest = currentVoucherNumber + groupVouchers.length - 1
-    await supabase.rpc('reserve_voucher_range', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriodId,
-      p_series: series,
-      p_highest_used: reservedHighest,
-    })
-
-    let highestInsertedVoucher = currentVoucherNumber - 1  // nothing inserted yet
-
-  for (let batchStart = 0; batchStart < groupVouchers.length; batchStart += BATCH_SIZE) {
-    const batch = groupVouchers.slice(batchStart, batchStart + BATCH_SIZE)
-    const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1
-    let batchWasRetried = false
-
-    // Prepare journal entry headers
-    const entryInserts = batch.map((v, i) => ({
-      user_id: userId,
-      company_id: companyId,
-      fiscal_period_id: fiscalPeriodId,
-      voucher_number: currentVoucherNumber + batchStart + i,
-      voucher_series: series,
-      entry_date: v.date,
-      description: v.description,
-      source_type: v.sourceType,
-      source_voucher_series: v.sourceSeries,
-      source_voucher_number: v.sourceNumber,
-      status: 'posted',
-      committed_at: new Date().toISOString(),
-    }))
-
-    // Insert headers with retry
-    let entries: { id: string }[] | null = null
-    let lastEntryError: string | null = null
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      if (attempt > 0) {
-        batchWasRetried = true
-        const backoffMs = Math.pow(2, attempt - 1) * 1000 // 1s, 2s, 4s
-        console.log(`[sie-import] Retrying batch ${batchNumber} (attempt ${attempt + 1}/${MAX_RETRIES + 1}) after ${backoffMs}ms`)
-        await new Promise(resolve => setTimeout(resolve, backoffMs))
-      }
-
-      const { data, error: entryError } = await supabase
-        .from('journal_entries')
-        .insert(entryInserts)
-        .select('id')
-
-      if (!entryError && data) {
-        entries = data
-        lastEntryError = null
-        break
-      }
-
-      lastEntryError = entryError?.message || 'Failed to insert entries'
-    }
-
-    if (!entries) {
-      failedBatches++
-      results.errors.push(
-        `Batch ${batchNumber} misslyckades efter ${MAX_RETRIES + 1} försök: ${lastEntryError}`
-      )
-      continue
-    }
-
-    // Prepare all lines for this batch
-    const allLines: {
-      journal_entry_id: string
-      account_number: string
-      account_id: string | null
-      debit_amount: number
-      credit_amount: number
-      currency: string
-      line_description: string | null
-      sort_order: number
-      cost_center: string | null
-      project: string | null
-      dimensions: Record<string, string> | null
-    }[] = []
-
-    for (let i = 0; i < batch.length; i++) {
-      const entryId = entries[i]?.id
-      if (!entryId) continue
-
-      const voucher = batch[i]
-      const assignedNumber = currentVoucherNumber + batchStart + i
-      voucher.lines.forEach((line, lineIndex) => {
-        allLines.push({
-          journal_entry_id: entryId,
-          account_number: line.account_number,
-          account_id: accountIdMap.get(line.account_number) || null,
-          debit_amount: line.debit_amount,
-          credit_amount: line.credit_amount,
-          currency: 'SEK',
-          line_description: line.line_description,
-          sort_order: lineIndex,
-          cost_center: line.cost_center,
-          project: line.project,
-          dimensions: line.dimensions,
-        })
-      })
-
-      results.voucherNumberMapping.push({
-        sourceId: voucher.sourceId,
-        series: voucher.series,
-        targetNumber: assignedNumber,
-      })
-
-      results.ids.push(entryId)
-      results.created++
-    }
-
-    // Insert all lines with retry
-    if (allLines.length > 0) {
-      let linesInserted = false
-      let lastLinesError: string | null = null
-
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (attempt > 0) {
-          batchWasRetried = true
-          const backoffMs = Math.pow(2, attempt - 1) * 1000
-          console.log(`[sie-import] Retrying batch ${batchNumber} lines (attempt ${attempt + 1}/${MAX_RETRIES + 1}) after ${backoffMs}ms`)
-          await new Promise(resolve => setTimeout(resolve, backoffMs))
-        }
-
-        const { error: linesError } = await supabase
-          .from('journal_entry_lines')
-          .insert(allLines)
-
-        if (!linesError) {
-          linesInserted = true
-          break
-        }
-
-        lastLinesError = linesError.message
-      }
-
-      if (linesInserted) {
-        // Track highest voucher number only after both headers AND lines succeed,
-        // to avoid counting orphaned entries with no lines as "used".
-        const batchHighest = currentVoucherNumber + batchStart + batch.length - 1
-        highestInsertedVoucher = Math.max(highestInsertedVoucher, batchHighest)
-
-        // Track movements ONLY for successfully inserted vouchers.
-        // This ensures the migration adjustment correctly compensates for
-        // any batches that failed completely.
-        for (let i = 0; i < batch.length; i++) {
-          const voucher = batch[i]
-          for (const line of voucher.lines) {
-            const net = line.debit_amount - line.credit_amount
-            results.movementsByAccount.set(
-              line.account_number,
-              (results.movementsByAccount.get(line.account_number) || 0) + net
-            )
-          }
-        }
-      } else {
-        failedBatches++
-        results.errors.push(
-          `Batch ${batchNumber} rader misslyckades efter ${MAX_RETRIES + 1} försök: ${lastLinesError}`
-        )
-      }
-    } else {
-      // No lines to insert — still count movements for vouchers with entries
-      for (let i = 0; i < batch.length; i++) {
-        const voucher = batch[i]
-        for (const line of voucher.lines) {
-          const net = line.debit_amount - line.credit_amount
-          results.movementsByAccount.set(
-            line.account_number,
-            (results.movementsByAccount.get(line.account_number) || 0) + net
-          )
-        }
-      }
-    }
-
-    // Count distinct batches that needed retries (not individual attempts)
-    if (batchWasRetried) {
-      retriedBatches++
-    }
-
-    // Small delay between batches to prevent Supabase/Cloudflare rate limiting
-    const isLastBatchInSeries = batchStart + BATCH_SIZE >= groupVouchers.length
-    const isLastSeries = seriesIndex === seriesGroups.size - 1
-    if (!isLastBatchInSeries || !isLastSeries) {
-      await new Promise(resolve => setTimeout(resolve, INTER_BATCH_DELAY_MS))
-    }
-  }
-
-    // Adjust voucher sequence after insertion for this series.
-    // Range was pre-reserved to `reservedHighest`. If some batches failed,
-    // release the unused portion to avoid burned numbers and gap-explanation friction.
-    if (highestInsertedVoucher < reservedHighest) {
-      const releaseTarget = highestInsertedVoucher >= currentVoucherNumber
-        ? highestInsertedVoucher       // partial success: set to actual highest
-        : currentVoucherNumber - 1     // total failure: roll back fully
-      await supabase.rpc('release_voucher_range', {
-        p_company_id: companyId,
-        p_fiscal_period_id: fiscalPeriodId,
-        p_series: series,
-        p_actual_last: releaseTarget,
-        p_reserved_highest: reservedHighest,
-      })
-    }
-
-    seriesIndex++
-  }
-
-  // Propagate batch retry stats
-  results.retriedBatches = retriedBatches
-  results.failedBatches = failedBatches
-
-  return results
-}
 
 /**
  * Compute per-series voucher number ranges from the voucher number mapping.
@@ -1704,7 +954,8 @@ async function createPendingImportRecord(
   userId: string,
   parsed: ParsedSIEFile,
   fileContent: string,
-  filename: string
+  filename: string,
+  replacesImportId?: string | null
 ): Promise<string> {
   const fileHash = await calculateFileHash(fileContent)
 
@@ -1727,6 +978,10 @@ async function createPendingImportRecord(
       transactions_count: 0,
       status: 'pending',
       imported_at: null,
+      // Replace-in-progress rows are exempt from the active-hash unique index
+      // (a replace of the identical file legitimately shares the hash with
+      // the row it supersedes — I06).
+      replaces_import_id: replacesImportId ?? null,
     })
     .select('id')
     .single()
@@ -1754,7 +1009,14 @@ async function createPendingImportRecord(
 }
 
 /**
- * Phase 2: Finalize the import record with results and archive the SIE file.
+ * Phase 2: Finalize the import record — archive first, then flip the status
+ * through the controlled complete_sie_import RPC (I17, I18, I24).
+ *
+ * Archive policy (I18): an import may only become 'completed' when the
+ * original file has been archived (BFL 7 kap 1-2§ — the file IS the
+ * räkenskapsinformation). If archiving fails after the vouchers were posted,
+ * the import finalizes as 'partial' with archive_error set; 'partial'
+ * imports block year-end readiness until resolved.
  */
 export async function finalizeImportRecord(
   supabase: SupabaseClient,
@@ -1768,9 +1030,7 @@ export async function finalizeImportRecord(
   // any journal entries (no OB entry, no vouchers), refuse to mark it as
   // 'completed'. A 'completed' row with transactions_count=0 would claim
   // the (company_id, file_hash) slot in the partial unique index and the
-  // overlapping-period check would block any retry. Flipping to 'failed'
-  // (which the partial index already excludes) keeps the slot free so the
-  // caller can re-import the same file once the mapping is fixed.
+  // overlapping-period check would block any retry.
   const noEntriesCreated =
     result.success &&
     result.journalEntriesCreated === 0 &&
@@ -1786,37 +1046,75 @@ export async function finalizeImportRecord(
     }
   }
 
-  const status = result.success ? 'completed' : 'failed'
-
-  await supabase
+  // Metadata update (not status — the RPC owns the state transition).
+  const { error: metaError } = await supabase
     .from('sie_imports')
     .update({
-      status,
-      imported_at: result.success ? new Date().toISOString() : null,
       transactions_count: result.journalEntriesCreated,
-      error_message: result.errors.length > 0 ? result.errors.join('; ') : null,
       fiscal_period_id: result.fiscalPeriodId,
       opening_balance_entry_id: result.openingBalanceEntryId,
       migration_documentation: documentation ?? null,
     })
     .eq('id', importId)
+    .eq('company_id', companyId)
+  if (metaError) {
+    // Controlled status finalization (I17): a metadata write failure must
+    // not let the import masquerade as completed.
+    result.success = false
+    result.errors.push(`Importstatus kunde inte sparas: ${metaError.message}`)
+  }
 
-  // Archive the SIE file to Supabase Storage (BFL 7 kap 1-2§ retention)
+  // Archive BEFORE completion (I18).
+  let archived = false
+  let archiveError: string | null = null
+  let storagePath: string | null = null
   if (result.success) {
-    const storagePath = `${companyId}/${importId}.se`
+    storagePath = `${companyId}/${importId}.se`
     const fileBlob = new Blob([fileContent], { type: 'text/plain' })
     const { error: uploadError } = await supabase.storage
       .from('sie-files')
       .upload(storagePath, fileBlob, { upsert: false })
 
     if (uploadError) {
-      console.error(`[sie-import] Failed to archive SIE file: ${uploadError.message}`)
+      // 'Duplicate' means the file is already archived (idempotent retry).
+      if (/already exists|duplicate/i.test(uploadError.message)) {
+        archived = true
+      } else {
+        archiveError = uploadError.message
+        storagePath = null
+        result.warnings.push(
+          `Originalfilen kunde inte arkiveras (${uploadError.message}). ` +
+          `Importen markeras som "partial" tills arkiveringen lyckas — bokförda verifikationer påverkas inte.`
+        )
+      }
     } else {
-      await supabase
-        .from('sie_imports')
-        .update({ file_storage_path: storagePath })
-        .eq('id', importId)
+      archived = true
     }
+  }
+
+  const finalStatus = !result.success ? 'failed' : archived ? 'completed' : 'partial'
+
+  const { error: completeError } = await supabase.rpc('complete_sie_import', {
+    p_company_id: companyId,
+    p_import_id: importId,
+    p_status: finalStatus,
+    p_error_message: result.errors.length > 0 ? result.errors.join('; ') : null,
+    // The persisted list IS the response list (I24).
+    p_warnings: result.warnings,
+    p_archived: archived,
+    p_archive_error: archiveError,
+    p_file_storage_path: storagePath,
+  })
+
+  if (completeError) {
+    // The API must not answer success when the status could not be saved (I17).
+    result.success = false
+    result.errors.push(`Importstatus kunde inte finaliseras: ${completeError.message}`)
+  } else if (finalStatus === 'partial') {
+    result.success = false
+    result.errors.push(
+      'Importen bokfördes men originalfilen kunde inte arkiveras — status "partial". Försök arkivera igen från importhistoriken.'
+    )
   }
 }
 
@@ -1963,6 +1261,26 @@ export async function syncDimensionRegisters(
   }
 }
 
+/**
+ * Execute a SIE import through the staged, atomic posting flow
+ * (revision items I01–I18, I24).
+ *
+ * Flow:
+ *   1. Server-side validation: mapping coverage, duplicate checks, #KSUMMA
+ *      verification (I19), voucher date-range guards.
+ *   2. prepareStagedVouchers() applies the STRICT difference policy (I15):
+ *      diffs ≤ 1 öre get an explicit öresutjämning line, anything larger
+ *      requires the caller's explicit approval or blocks the import.
+ *   3. Vouchers are staged into sie_import_staging (idempotent batches, I05)
+ *      and posted by the finalize_sie_import RPC in ONE transaction through
+ *      the same validation path as the engine (I01–I03), including precise
+ *      replace of a prior import (I06/I07) and the N→N+1 opening balance
+ *      resync with exact continuity (I12).
+ *   4. The original file is archived BEFORE the import may become
+ *      'completed' (I18); archive failure finalizes as 'partial'.
+ *   5. The persisted warning list and the API response share the same final
+ *      array (I24).
+ */
 export async function executeSIEImport(
   supabase: SupabaseClient,
   companyId: string,
@@ -1978,6 +1296,16 @@ export async function executeSIEImport(
     voucherSeries?: string
     onExistingPeriod?: 'block' | 'replace'
     updateAccountNames?: boolean
+    /** Explicitly approve öresutjämning (3741) for diffs in (0.01, 1.00] SEK (I15). */
+    approveOreRounding?: boolean
+    /** Explicitly approve skipping unpostable vouchers (I15). */
+    approveSkippedVouchers?: boolean
+    /** Explicitly approve the migration adjustment compensation entry (I16). */
+    approveMigrationAdjustment?: boolean
+    /** Explicitly proceed despite a #KSUMMA mismatch (I19). */
+    ignoreKsummaMismatch?: boolean
+    /** Raw file bytes (pre-decoding) for #KSUMMA verification. */
+    rawFileBytes?: Uint8Array
   }
 ): Promise<ImportResult> {
   const result: ImportResult = {
@@ -1994,6 +1322,10 @@ export async function executeSIEImport(
 
   const onExistingPeriod = options.onExistingPeriod ?? 'block'
   const updateAccountNames = options.updateAccountNames ?? true
+  const policy = {
+    approveOreRounding: options.approveOreRounding ?? false,
+    approveSkippedVouchers: options.approveSkippedVouchers ?? false,
+  }
 
   try {
     // Validate all accounts are mapped
@@ -2005,17 +1337,37 @@ export async function executeSIEImport(
       return result
     }
 
+    // #KSUMMA verification (I19): when the file declares a checksum it must
+    // verify, or the caller must explicitly acknowledge the mismatch.
+    let ksummaDeclared: string | null = null
+    let ksummaVerified: boolean | null = null
+    if (options.rawFileBytes) {
+      const ksumma = verifySieKsumma(options.rawFileBytes)
+      ksummaDeclared = ksumma.declared
+      ksummaVerified = ksumma.matches
+      if (ksumma.matches === false) {
+        if (options.ignoreKsummaMismatch) {
+          result.warnings.push(
+            `#KSUMMA stämmer inte (deklarerad ${ksumma.declared}, beräknad ${ksumma.computed}) — importen fortsätter efter uttryckligt godkännande.`
+          )
+        } else {
+          result.errors.push(
+            `#KSUMMA-kontrollsumman stämmer inte: filen deklarerar ${ksumma.declared} men innehållet ger ${ksumma.computed}. ` +
+              `Filen kan vara ändrad eller trunkerad. Exportera om filen från källsystemet, eller godkänn avvikelsen uttryckligen (ignore_ksumma_mismatch).`
+          )
+          return result
+        }
+      }
+    }
+
     // Defense in depth: refuse to enter executeSIEImport when the mapping
     // doesn't cover a single account present in the file. Without this guard
-    // a stale MCP client (or the HTTP execute route) could still drive
-    // importVouchers to silently skip every voucher and write a 0-entry
-    // 'completed' sie_imports row that holds the unique-index slot. Mirrors
-    // the stage-time check in nordklart_import_sie.
+    // a stale MCP client (or the HTTP execute route) could still drive the
+    // import to silently skip every voucher and write a 0-entry 'completed'
+    // sie_imports row that holds the unique-index slot.
     const sourceAccountsInFile = new Set<string>()
     for (const v of parsed.vouchers) for (const l of v.lines) sourceAccountsInFile.add(l.account)
     if (options.importOpeningBalances) {
-      // Effective set: also covers UB-1-only files (issue #675), whose
-      // derived IB accounts would otherwise bypass this guard entirely.
       for (const b of getEffectiveOpeningBalances(parsed).balances) {
         sourceAccountsInFile.add(b.account)
       }
@@ -2036,10 +1388,11 @@ export async function executeSIEImport(
       return result
     }
 
-    // Replace mode: if a prior completed import overlaps the new SIE's fiscal
-    // year, mark it 'replaced' (and cancel its imported entries) before we
-    // try to insert. Done before checkDuplicateImport / checkDuplicatePeriodImport
-    // since both of those would otherwise reject the replace flow.
+    // Replace mode (I06): identify the prior import but do NOT delete it here.
+    // The deletion happens INSIDE finalize_sie_import's transaction, after
+    // the new vouchers have been fully validated — a failure rolls everything
+    // back and the old import stays untouched.
+    let replacesImportId: string | null = null
     if (onExistingPeriod === 'replace') {
       const fyStart = parsed.stats.fiscalYearStart
       const fyEnd = parsed.stats.fiscalYearEnd
@@ -2048,44 +1401,14 @@ export async function executeSIEImport(
           supabase, companyId, fyStart, fyEnd
         )
         if (priorPeriodImport) {
-          const replaceResult = await replaceSIEImport(
-            supabase, companyId, priorPeriodImport.id
-          )
-          if (!replaceResult.success) {
-            result.errors.push(
-              replaceResult.error ?? 'Kunde inte ersätta tidigare SIE-import'
-            )
-            return result
-          }
-          result.replacedPriorImport = {
-            importId: priorPeriodImport.id,
-            deletedEntries: replaceResult.deletedEntries,
-          }
-
-          // The replace_sie_import RPC clears fiscal_periods
-          // opening_balance_entry_id and opening_balances_set inside its
-          // transaction when the prior import had an OB entry. This client-
-          // side UPDATE is now an idempotent safety net for pre-fix data
-          // (companies whose prior replace ran against the soft-cancel
-          // implementation and left the pointer dangling on the row).
-          if (priorPeriodImport.fiscal_period_id && priorPeriodImport.opening_balance_entry_id) {
-            await supabase
-              .from('fiscal_periods')
-              .update({
-                opening_balances_set: false,
-                opening_balance_entry_id: null,
-              })
-              .eq('id', priorPeriodImport.fiscal_period_id)
-              .eq('company_id', companyId)
-              .eq('opening_balance_entry_id', priorPeriodImport.opening_balance_entry_id)
-          }
+          replacesImportId = priorPeriodImport.id
         }
       }
     }
 
     // Block mode (default): the hash and period checks reject duplicates with
-    // graceful Swedish errors. Skipped in replace mode because we've already
-    // resolved any prior import above.
+    // graceful Swedish errors. Skipped in replace mode because finalize
+    // atomically supersedes any prior import.
     if (onExistingPeriod === 'block') {
       const duplicate = await checkDuplicateImport(supabase, companyId, options.fileContent)
       if (duplicate) {
@@ -2103,16 +1426,24 @@ export async function executeSIEImport(
       userId,
       parsed,
       options.fileContent,
-      options.filename
+      options.filename,
+      replacesImportId,
     )
+
+    // Persist the KSUMMA verification outcome on the import row.
+    if (ksummaDeclared !== null) {
+      await supabase
+        .from('sie_imports')
+        .update({ ksumma_declared: ksummaDeclared, ksumma_verified: ksummaVerified })
+        .eq('id', result.importId)
+        .eq('company_id', companyId)
+    }
 
     // Build account mapping lookup
     const accountMap = mappingsToMap(mappings)
 
     // Ensure all mapped target accounts exist in chart_of_accounts and,
-    // unless disabled, carry the SIE file's #KONTO names into the chart —
-    // customized names from the source system (e.g. Fortnox) would otherwise
-    // be lost to the BAS defaults.
+    // unless disabled, carry the SIE file's #KONTO names into the chart.
     const accountSync = await syncMappedAccounts(
       supabase,
       companyId,
@@ -2122,6 +1453,7 @@ export async function executeSIEImport(
     )
     if (accountSync.error) {
       result.errors.push(`Failed to create accounts: ${accountSync.error}`)
+      await finalizeImportRecord(supabase, result.importId, companyId, result, options.fileContent)
       return result
     }
     if (accountSync.renamed > 0) {
@@ -2143,12 +1475,11 @@ export async function executeSIEImport(
 
     if (!fiscalYearStart || !fiscalYearEnd) {
       result.errors.push('No fiscal year defined in the SIE file')
+      await finalizeImportRecord(supabase, result.importId, companyId, result, options.fileContent)
       return result
     }
 
     // Safety net: reject if a completed import already exists for this period.
-    // Skipped in replace mode — any overlapping prior import was already
-    // marked 'replaced' at the top of executeSIEImport.
     if (onExistingPeriod === 'block') {
       const periodDuplicate = await checkDuplicatePeriodImport(
         supabase, companyId, fiscalYearStart, fiscalYearEnd
@@ -2157,6 +1488,7 @@ export async function executeSIEImport(
         result.errors.push(
           `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} – ${periodDuplicate.fiscal_year_end}) finns redan`
         )
+        await finalizeImportRecord(supabase, result.importId, companyId, result, options.fileContent)
         return result
       }
     }
@@ -2169,7 +1501,6 @@ export async function executeSIEImport(
         fiscalYearEnd
       )
     } else {
-      // Find existing fiscal period
       const { data: existing } = await supabase
         .from('fiscal_periods')
         .select('id')
@@ -2180,19 +1511,27 @@ export async function executeSIEImport(
 
       if (!existing) {
         result.errors.push('No matching fiscal period found. Enable "Create fiscal period" option.')
+        await finalizeImportRecord(supabase, result.importId, companyId, result, options.fileContent)
         return result
       }
 
       result.fiscalPeriodId = existing.id
     }
 
+    // Stamp the resolved period on the import row so finalize_sie_import can
+    // read it (and so a failed import is still traceable to its period).
+    await supabase
+      .from('sie_imports')
+      .update({ fiscal_period_id: result.fiscalPeriodId })
+      .eq('id', result.importId)
+      .eq('company_id', companyId)
+
     // Track documentation data across import phases
     let ibRoundingAdjustment = 0
     let ibExplanation: 'unallocated_result' | 'excluded_accounts' | 'rounding' | null = null
     let migrationAdjustmentInfo = { created: false, deltaAccounts: 0, entryId: null as string | null }
-    let voucherNumberMapping: Array<{ sourceId: string; series: string; targetNumber: number }> = []
+    const voucherNumberMapping: Array<{ sourceId: string; series: string; targetNumber: number }> = []
     let voucherSeriesUsed: string[] = []
-    let voucherRetryStats = { retriedBatches: 0, failedBatches: 0 }
     let voucherStats = {
       total: parsed.vouchers.length,
       imported: 0,
@@ -2201,27 +1540,16 @@ export async function executeSIEImport(
       skippedSingleLine: 0,
       skippedEmpty: 0,
     }
-    // Fallback series for vouchers that arrive without one (SIE4I subsystem files).
-    // Source series from #VER are preserved per-voucher by importVouchers.
     const defaultSeries = options.voucherSeries || 'B'
 
-    // Validate and import opening balances.
+    // ── Opening balances (period N) ─────────────────────────────────────────
     //
-    // IB imbalance is NORMAL in Swedish SIE files for two common reasons:
-    // 1. Excluded system accounts (Fortnox 0099 etc.) carry IB balances
-    // 2. Previous year's result (årets resultat) hasn't been allocated to equity
-    //    yet — the profit/loss is implicit, not an explicit IB on 2099
-    //
-    // In both cases, the correct treatment is to book the diff to 2099 with
-    // explicit documentation. We never reject based on IB imbalance — the
-    // original goal was to stop SILENT equity alteration, not prevent it.
-    //
-    // Gate on the EFFECTIVE set: for files without #IB 0, the IB derived
-    // from #UB -1 (issue #675) must still open this block — gating on raw
-    // parsed.openingBalances would silently skip the derived IB entirely.
+    // IB imbalance is NORMAL in Swedish SIE files (excluded system accounts,
+    // unallocated prior-year result). The diff is booked to 2099 with
+    // explicit documentation — never silently.
+    let openingBalancePayload: { entry_date: string; description: string; lines: CreateJournalEntryLineInput[] } | null = null
     const effectiveIB = getEffectiveOpeningBalances(parsed)
     if (options.importOpeningBalances && effectiveIB.balances.length > 0 && result.fiscalPeriodId) {
-      // Check if opening balances already exist for this period
       const { data: period } = await supabase
         .from('fiscal_periods')
         .select('opening_balances_set, opening_balance_entry_id')
@@ -2231,15 +1559,6 @@ export async function executeSIEImport(
       if (period?.opening_balances_set || period?.opening_balance_entry_id) {
         result.warnings.push('Ingående balanser finns redan för denna period — hoppar över IB-import')
       } else {
-        // Continuation-import guard: if the company already has any posted
-        // non-IB journal entries from a prior import or manual bookkeeping,
-        // do NOT create a new IB entry. Each year's #IB equals the prior
-        // year's UB, which is already the sum of the prior year's posted
-        // transactions — so importing another IB entry double-counts one
-        // year of activity against every balance-sheet account. The
-        // first-ever import creates the legitimate pre-system IB; subsequent
-        // imports must rely on the prior entries to derive opening balances
-        // on the fly (via getOpeningBalances() fallback).
         const isContinuationImport = await companyHasPriorActivity(supabase, companyId)
 
         if (isContinuationImport) {
@@ -2249,82 +1568,57 @@ export async function executeSIEImport(
             'Stäm av mot SIE-filens #IB om du är osäker.'
           )
         } else {
-        const ibValidation = validateIBBalance(parsed, accountMap)
+          const ibValidation = validateIBBalance(parsed, accountMap)
 
-        if (ibValidation.lines.length > 0) {
-          if (effectiveIB.derivedFromPriorYearUB) {
-            result.warnings.push(
-              'SIE-filen saknar ingående balanser (#IB) för räkenskapsåret. ' +
-              'Ingående balanser härleddes från föregående års utgående balanser (#UB -1) enligt kontinuitetsprincipen.'
-            )
-          }
-
-          const absAdj = Math.abs(ibValidation.roundingAdjustment)
-
-          if (absAdj > 0.01) {
-            ibRoundingAdjustment = ibValidation.roundingAdjustment
-
-            // Produce a descriptive warning explaining the source of the imbalance
-            if (Math.abs(ibValidation.excludedAccountsTotal) > 0.01 && ibValidation.fileImbalance <= 1.00) {
-              // File-level IB is balanced — imbalance is entirely from excluded system accounts
-              ibExplanation = 'excluded_accounts'
+          if (ibValidation.lines.length > 0) {
+            if (effectiveIB.derivedFromPriorYearUB) {
               result.warnings.push(
-                `Exkluderade systemkonton har IB-saldon på totalt ${ibValidation.excludedAccountsTotal} SEK. ` +
-                `Differensen (${ibValidation.roundingAdjustment} SEK) bokförs på konto 2099.`
-              )
-            } else if (ibValidation.fileImbalance > 1.00) {
-              // File-level IB doesn't balance — likely unallocated årets resultat from previous year
-              ibExplanation = 'unallocated_result'
-              result.warnings.push(
-                `Ingående balanser obalanserade med ${ibValidation.roundingAdjustment} SEK ` +
-                `(troligen ej allokerat årets resultat från föregående räkenskapsår). ` +
-                `Differensen bokförs på konto 2099 (Årets resultat).`
-              )
-            } else {
-              // Small rounding
-              ibExplanation = 'rounding'
-              result.warnings.push(
-                `Avrundningsdifferens vid SIE-import: ${ibValidation.roundingAdjustment} SEK bokförd på konto 2099`
+                'SIE-filen saknar ingående balanser (#IB) för räkenskapsåret. ' +
+                'Ingående balanser härleddes från föregående års utgående balanser (#UB -1) enligt kontinuitetsprincipen.'
               )
             }
-          }
 
-          result.openingBalanceEntryId = await createOpeningBalanceEntry(
-            supabase,
-            companyId,
-            userId,
-            result.fiscalPeriodId,
-            parsed,
-            accountMap,
-            ibRoundingAdjustment
-          )
+            const absAdj = Math.abs(ibValidation.roundingAdjustment)
 
-          if (result.openingBalanceEntryId) {
-            result.journalEntriesCreated++
-            result.journalEntryIds.push(result.openingBalanceEntryId)
+            if (absAdj > 0.01) {
+              ibRoundingAdjustment = ibValidation.roundingAdjustment
 
-            await linkOpeningBalanceEntryToPeriod(
-              supabase,
-              companyId,
-              result.fiscalPeriodId,
-              result.openingBalanceEntryId
+              if (Math.abs(ibValidation.excludedAccountsTotal) > 0.01 && ibValidation.fileImbalance <= 1.00) {
+                ibExplanation = 'excluded_accounts'
+                result.warnings.push(
+                  `Exkluderade systemkonton har IB-saldon på totalt ${ibValidation.excludedAccountsTotal} SEK. ` +
+                  `Differensen (${ibValidation.roundingAdjustment} SEK) bokförs på konto 2099.`
+                )
+              } else if (ibValidation.fileImbalance > 1.00) {
+                ibExplanation = 'unallocated_result'
+                result.warnings.push(
+                  `Ingående balanser obalanserade med ${ibValidation.roundingAdjustment} SEK ` +
+                  `(troligen ej allokerat årets resultat från föregående räkenskapsår). ` +
+                  `Differensen bokförs på konto 2099 (Årets resultat).`
+                )
+              } else {
+                ibExplanation = 'rounding'
+                result.warnings.push(
+                  `Avrundningsdifferens vid SIE-import: ${ibValidation.roundingAdjustment} SEK bokförd på konto 2099`
+                )
+              }
+            }
+
+            openingBalancePayload = buildOpeningBalancePayload(
+              parsed,
+              accountMap,
+              ibRoundingAdjustment,
             )
           }
-        }
         }
       }
     }
 
-    // Import transactions (SIE4 only)
+    // ── Vouchers (SIE4 only) ────────────────────────────────────────────────
+    let prepared: ReturnType<typeof prepareStagedVouchers> | null = null
     if (options.importTransactions && parsed.vouchers.length > 0 && result.fiscalPeriodId) {
       // Reject vouchers whose date falls outside the resolved fiscal period.
-      // Without this guard, a SIE file whose #VER dates extend beyond #RAR (or
-      // a fiscal period whose shape doesn't match the file's #RAR) would
-      // produce journal entries stamped to a period that doesn't cover their
-      // own entry_date — breaking the SIE invariant and BFL 5 kap.
-      //
-      // Fail closed if the period fetch errors: a silent skip would leave the
-      // exact data-corruption path this guard exists to close.
+      // Fail closed if the period fetch errors.
       const { data: resolvedPeriod, error: resolvedPeriodError } = await supabase
         .from('fiscal_periods')
         .select('period_start, period_end')
@@ -2335,13 +1629,10 @@ export async function executeSIEImport(
         result.errors.push(
           `Kunde inte verifiera räkenskapsårets datumintervall innan import: ${resolvedPeriodError?.message ?? 'räkenskapsåret hittades inte'}. Försök igen.`
         )
+        await finalizeImportRecord(supabase, result.importId, companyId, result, options.fileContent)
         return result
       }
 
-      // Date-only string comparison — sidesteps any latent off-by-one if the
-      // SIE parser ever attaches a time component to v.date. SIE per spec is
-      // YYYYMMDD and our parser normalizes to midnight, but a string compare
-      // matches the underlying DATE columns exactly and is cheap.
       const periodStart = resolvedPeriod.period_start as string
       const periodEnd = resolvedPeriod.period_end as string
       const outOfRange = parsed.vouchers.filter((v) => {
@@ -2356,21 +1647,17 @@ export async function executeSIEImport(
             `${periodStart} – ${periodEnd}. Exempel: ${sample}${outOfRange.length > 3 ? '…' : ''}. ` +
             `Importera varje räkenskapsår som en egen SIE-fil — flera år i samma fil stöds inte.`
         )
+        await finalizeImportRecord(supabase, result.importId, companyId, result, options.fileContent)
         return result
       }
 
-      // Detect partial-year export: if voucher dates don't span the full fiscal year,
-      // the migration adjustment will produce incorrect large deltas for the missing period.
+      // Detect partial-year export.
       if (parsed.vouchers.length > 0 && fiscalYearStart && fiscalYearEnd) {
         const voucherDates = parsed.vouchers.map(v => v.date.getTime())
         const earliestVoucher = new Date(Math.min(...voucherDates))
         const latestVoucher = new Date(Math.max(...voucherDates))
-
-        // Parse fiscal year string dates for comparison (append T00:00:00 to avoid UTC shift)
         const fyStart = new Date(fiscalYearStart + 'T00:00:00')
         const fyEnd = new Date(fiscalYearEnd + 'T00:00:00')
-
-        // Allow 30 days margin from fiscal year start/end for partial detection
         const msPerDay = 86400000
         const startGap = earliestVoucher.getTime() - fyStart.getTime()
         const endGap = fyEnd.getTime() - latestVoucher.getTime()
@@ -2387,11 +1674,7 @@ export async function executeSIEImport(
       // Ensure öresutjämning account 3741 exists in the user's chart
       await ensureAccountExists(supabase, companyId, userId, '3741', 'Öresutjämning vid import')
 
-      // Bank-transaction overlap: imported bank rows in the same date range
-      // very likely correspond to vouchers in this file. The bank-side
-      // automation blocks category auto-booking on SIE overlap (see
-      // lib/automation/sie-overlap.ts); this warning is the SIE-side signal
-      // so the user reviews reconciliation instead of booking twice.
+      // Bank-transaction overlap warning.
       if (fiscalYearStart && fiscalYearEnd) {
         try {
           const { count: overlappingTx } = await supabase
@@ -2411,9 +1694,7 @@ export async function executeSIEImport(
         }
       }
 
-      // Register SIE dimension objects: dim 1 → cost_centers, dim 6 →
-      // projects, so imported line references resolve in the dimension
-      // registers. Idempotent upserts on (company_id, code).
+      // Register SIE dimension objects (idempotent upserts).
       try {
         await syncDimensionRegisters(supabase, companyId, userId, parsed)
       } catch (dimErr) {
@@ -2422,62 +1703,157 @@ export async function executeSIEImport(
         )
       }
 
-      const voucherResults = await importVouchers(
-        supabase,
-        companyId,
-        userId,
-        result.fiscalPeriodId,
-        parsed,
-        accountMap,
-        defaultSeries
-      )
+      // Prepare voucher payloads with the strict difference policy (I15/I16).
+      prepared = prepareStagedVouchers(parsed, accountMap, defaultSeries, policy)
 
-      result.journalEntriesCreated += voucherResults.created
-      result.journalEntryIds.push(...voucherResults.ids)
-      result.errors.push(...voucherResults.errors)
-      voucherNumberMapping = voucherResults.voucherNumberMapping
-      voucherSeriesUsed = voucherResults.seriesUsed
-      voucherRetryStats = {
-        retriedBatches: voucherResults.retriedBatches,
-        failedBatches: voucherResults.failedBatches,
+      if (prepared.blockingErrors.length > 0) {
+        result.errors.push(...prepared.blockingErrors)
+        await finalizeImportRecord(supabase, result.importId, companyId, result, options.fileContent)
+        return result
       }
 
-      // Update stats for documentation
+      result.warnings.push(...prepared.warnings)
+      voucherSeriesUsed = prepared.seriesUsed
+
       voucherStats = {
         total: parsed.vouchers.length,
-        imported: voucherResults.created,
-        skippedUnbalanced: voucherResults.skippedUnbalanced,
-        skippedUnmapped: voucherResults.skippedUnmapped,
-        skippedSingleLine: voucherResults.skippedSingleLine,
-        skippedEmpty: voucherResults.skippedEmpty,
+        imported: 0, // filled after finalize
+        skippedUnbalanced: prepared.skippedUnbalanced,
+        skippedUnmapped: prepared.skippedUnmapped,
+        skippedSingleLine: prepared.skippedSingleLine,
+        skippedEmpty: prepared.skippedEmpty,
       }
 
-      // Report skipped vouchers as warnings
-      const totalSkipped = voucherResults.skippedEmpty + voucherResults.skippedSingleLine + voucherResults.skippedUnbalanced + voucherResults.skippedUnmapped
+      const totalSkipped = prepared.skippedEmpty + prepared.skippedSingleLine +
+        prepared.skippedUnbalanced + prepared.skippedUnmapped
       if (totalSkipped > 0) {
         const parts: string[] = []
-        if (voucherResults.skippedEmpty > 0) parts.push(`${voucherResults.skippedEmpty} tomma`)
-        if (voucherResults.skippedUnbalanced > 0) parts.push(`${voucherResults.skippedUnbalanced} obalanserade`)
-        if (voucherResults.skippedUnmapped > 0) parts.push(`${voucherResults.skippedUnmapped} med ej mappade konton`)
+        if (prepared.skippedEmpty > 0) parts.push(`${prepared.skippedEmpty} tomma`)
+        if (prepared.skippedUnbalanced > 0) parts.push(`${prepared.skippedUnbalanced} obalanserade`)
+        if (prepared.skippedSingleLine > 0) parts.push(`${prepared.skippedSingleLine} enradiga`)
         result.warnings.push(
-          `${totalSkipped} verifikationer hoppades över (ofullständiga i källsystemet): ${parts.join(', ')}`
+          `${totalSkipped} verifikationer hoppades över (uttryckligt godkänt): ${parts.join(', ')}`
         )
       }
 
-      // Fix 3: Specific warning for single-line vouchers
-      if (voucherResults.skippedSingleLine > 0) {
-        const singleLineDetails = voucherResults.skippedDetails
-          .filter(d => d.reason === 'single_line')
-          .slice(0, 10)
-          .map(d => d.voucherId)
-        result.warnings.push(
-          `${voucherResults.skippedSingleLine} enradsverifikationer hoppades över (kan vara periodiseringar/manuella justeringar): ${singleLineDetails.join(', ')}${voucherResults.skippedSingleLine > 10 ? '...' : ''}`
-        )
-      }
+      // Stage the vouchers (idempotent batches — a retry after timeout
+      // re-stages only what's missing and finalize skips already-posted
+      // external references, I05).
+      await stageVouchers(supabase, companyId, result.importId, prepared.staged)
+    }
 
-      // Create migration adjustment entry to reconcile against UB/RES
-      const totalSkippedForAdjustment = voucherResults.skippedUnbalanced + voucherResults.skippedUnmapped + voucherResults.skippedSingleLine
-      if (totalSkippedForAdjustment > 0 && result.fiscalPeriodId) {
+    // ── Next-period IB resync payload (I12) ────────────────────────────────
+    // Rebuild year N+1's opening balance from the imported #UB when a next
+    // period exists (or should be created). The RPC enforces conflict rules
+    // (IB from another source blocks) and exact continuity.
+    const nextPeriodObLines = buildNextPeriodObLines(parsed, accountMap)
+
+    // ── Atomic finalize: replace + post + OB + IB resync in ONE transaction ─
+    const finalizeOptions: Record<string, unknown> = {
+      skip_duplicates: true,
+      expected_voucher_count: prepared ? prepared.staged.length : 0,
+    }
+    if (replacesImportId) finalizeOptions.replaces_import_id = replacesImportId
+    if (openingBalancePayload) finalizeOptions.opening_balance = openingBalancePayload
+    if (nextPeriodObLines) {
+      finalizeOptions.next_period_ob = { lines: nextPeriodObLines }
+      // Never auto-create N+1 here: the next period is created by year-end
+      // closing or by importing year N+1 itself.
+      finalizeOptions.create_next_period = false
+    }
+
+    const { data: finalizeData, error: finalizeError } = await supabase.rpc(
+      'finalize_sie_import',
+      {
+        p_company_id: companyId,
+        p_import_id: result.importId,
+        p_user_id: userId,
+        p_options: finalizeOptions,
+      },
+    )
+
+    if (finalizeError) {
+      result.errors.push(`Importen kunde inte slutföras: ${finalizeError.message}`)
+      await finalizeImportRecord(supabase, result.importId, companyId, result, options.fileContent)
+      return result
+    }
+
+    const finalize = finalizeData as {
+      posted: number
+      skipped_duplicates: number
+      deleted_from_replaced: number
+      opening_balance_entry_id: string | null
+      next_period_opening_balance_entry_id: string | null
+      next_period_id: string | null
+    }
+
+    if (replacesImportId) {
+      result.replacedPriorImport = {
+        importId: replacesImportId,
+        deletedEntries: finalize.deleted_from_replaced,
+      }
+    }
+    if (finalize.opening_balance_entry_id) {
+      result.openingBalanceEntryId = finalize.opening_balance_entry_id
+      result.journalEntriesCreated++
+      result.journalEntryIds.push(finalize.opening_balance_entry_id)
+    }
+    if (finalize.next_period_opening_balance_entry_id && finalize.next_period_id) {
+      result.nextPeriodIBResync = {
+        nextPeriodId: finalize.next_period_id,
+        nextPeriodName: '',
+        stornoEntryId: '',
+        newOpeningBalanceEntryId: finalize.next_period_opening_balance_entry_id,
+      }
+      result.journalEntriesCreated++
+      result.journalEntryIds.push(finalize.next_period_opening_balance_entry_id)
+      result.warnings.push(
+        'Ingående balanser för nästa räkenskapsår synkades mot den importerade utgående balansen.',
+      )
+    }
+
+    result.journalEntriesCreated += finalize.posted
+    voucherStats.imported = finalize.posted
+    if (finalize.skipped_duplicates > 0) {
+      result.warnings.push(
+        `${finalize.skipped_duplicates} verifikationer var redan bokförda för denna import och hoppades över (idempotent återkörning).`
+      )
+    }
+
+    // Fetch the posted entries for ids + voucher number mapping documentation.
+    const postedEntries = await fetchAllRows<{
+      id: string
+      voucher_series: string
+      voucher_number: number
+      external_reference: string | null
+      source_voucher_series: string | null
+      source_voucher_number: number | null
+      source_type: string
+    }>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id, voucher_series, voucher_number, external_reference, source_voucher_series, source_voucher_number, source_type')
+        .eq('company_id', companyId)
+        .eq('sie_import_id', result.importId!)
+        .order('voucher_number', { ascending: true })
+        .range(from, to),
+    )
+    for (const e of postedEntries) {
+      if (e.source_type === 'opening_balance' && e.external_reference === 'opening_balance') continue
+      result.journalEntryIds.push(e.id)
+      voucherNumberMapping.push({
+        sourceId: `${e.source_voucher_series ?? ''}${e.source_voucher_number ?? ''}`,
+        series: e.voucher_series,
+        targetNumber: e.voucher_number,
+      })
+    }
+
+    // ── Migration adjustment (I16): only with explicit attest ───────────────
+    const totalSkippedForAdjustment = prepared
+      ? prepared.skippedUnbalanced + prepared.skippedSingleLine
+      : 0
+    if (totalSkippedForAdjustment > 0 && result.fiscalPeriodId && prepared) {
+      if (options.approveMigrationAdjustment) {
         try {
           const adjustment = await createMigrationAdjustmentEntry(
             supabase,
@@ -2486,8 +1862,8 @@ export async function executeSIEImport(
             result.fiscalPeriodId,
             parsed,
             accountMap,
-            voucherResults.movementsByAccount,
-            voucherResults.skippedDetails
+            prepared.movementsByAccount,
+            prepared.skippedDetails
           )
 
           result.warnings.push(...adjustment.warnings)
@@ -2496,7 +1872,7 @@ export async function executeSIEImport(
             result.journalEntriesCreated++
             result.journalEntryIds.push(adjustment.entryId)
             result.warnings.push(
-              `Migreringsjustering skapad: ${adjustment.deltaAccounts} konton justerade för att matcha UB/RES från källsystemet`
+              `Migreringsjustering skapad efter uttryckligt godkännande: ${adjustment.deltaAccounts} konton justerade för att matcha UB/RES från källsystemet`
             )
             migrationAdjustmentInfo = {
               created: true,
@@ -2510,58 +1886,23 @@ export async function executeSIEImport(
             'Kunde inte skapa migreringsjustering — kontrollera saldon manuellt mot källsystemet'
           )
         }
+      } else {
+        // No fabricated compensation without attest (I16): surface the exact
+        // situation and the recommended action instead.
+        result.warnings.push(
+          `${totalSkippedForAdjustment} verifikationer hoppades över utan kompensationsverifikation. ` +
+          `Utgående balans kan avvika från källsystemet — granska differenserna i importdetaljerna och ` +
+          `godkänn en migreringsjustering uttryckligen (approve_migration_adjustment) om den behövs.`
+        )
       }
     }
 
-    // Save account mappings for future use (non-fatal — import data is already committed)
+    // Save account mappings for future use (non-fatal)
     try {
       await saveMappings(supabase, companyId, mappings)
     } catch (mappingError) {
       console.error('[sie-import] Failed to save mappings (non-fatal):', mappingError)
       result.warnings.push('Kunde inte spara kontomappningar — påverkar inte importerade data')
-    }
-
-    // Pragmatic IB resync: if a chronologically-later fiscal period already
-    // exists with its own opening_balance entry, the customer is doing a
-    // prior-year backfill. Sync the next period's IB to match the UB we
-    // just imported so reports stay consistent.
-    if (result.success && fiscalYearEnd && result.fiscalPeriodId && parsed.closingBalances.length > 0) {
-      try {
-        const resync = await resyncNextPeriodOpeningBalance(
-          supabase,
-          companyId,
-          userId,
-          fiscalYearEnd,
-          parsed,
-          accountMap,
-        )
-        if (resync.resynced) {
-          result.nextPeriodIBResync = {
-            nextPeriodId: resync.nextPeriodId,
-            nextPeriodName: resync.nextPeriodName,
-            stornoEntryId: resync.stornoEntryId,
-            newOpeningBalanceEntryId: resync.newOpeningBalanceEntryId,
-          }
-          result.journalEntriesCreated += 2 // storno + new IB
-          result.journalEntryIds.push(resync.stornoEntryId, resync.newOpeningBalanceEntryId)
-          result.warnings.push(
-            `Ingående balanser för ${resync.nextPeriodName} synkades om mot den just importerade utgående balansen.`,
-          )
-        } else if (resync.reason === 'next_period_locked' && resync.nextPeriodName) {
-          result.nextPeriodIBResyncSkipped = {
-            reason: 'locked',
-            nextPeriodName: resync.nextPeriodName,
-          }
-          result.warnings.push(
-            `Nästa räkenskapsår (${resync.nextPeriodName}) är låst — ingående balanser kunde inte synkas om automatiskt. Lås upp perioden och importera igen för att synka.`,
-          )
-        }
-      } catch (resyncError) {
-        console.error('[sie-import] IB resync failed (non-fatal):', resyncError)
-        result.warnings.push(
-          `Ingående balanser för nästa räkenskapsår kunde inte synkas om automatiskt: ${resyncError instanceof Error ? resyncError.message : 'okänt fel'}. Kontrollera och justera manuellt.`,
-        )
-      }
     }
 
     // Generate systemdokumentation (MigrationDocumentation)
@@ -2584,8 +1925,6 @@ export async function executeSIEImport(
         manual: mappingStats.manual,
         unmapped: mappingStats.unmapped,
       },
-      // Behandlingshistorik for #KONTO renames applied by this import
-      // (BFNAR 2013:2 — the warnings array only carries the count).
       accountRenames:
         accountSync.renamedAccounts.length > 0 ? accountSync.renamedAccounts : undefined,
       vouchers: voucherStats,
@@ -2619,14 +1958,23 @@ export async function executeSIEImport(
         created: true,
         accountsAdjusted: migrationAdjustmentInfo.deltaAccounts,
       } : undefined,
-      retriedBatches: voucherRetryStats.retriedBatches,
-      failedBatches: voucherRetryStats.failedBatches,
+      retriedBatches: 0,
+      failedBatches: 0,
     }
 
-    // Set success before finalizing
+    // Add warnings for any parser issues BEFORE finalizing so the persisted
+    // warning list and the API response are the same final list (I24).
+    for (const issue of parsed.issues) {
+      if (issue.severity === 'warning') {
+        result.warnings.push(`Line ${issue.line}: ${issue.message}`)
+      }
+    }
+
     result.success = result.errors.length === 0
 
-    // Finalize the import record with results and documentation
+    // Finalize the import record: archive the original file FIRST (I18),
+    // then flip the status through the controlled complete_sie_import RPC
+    // (I17) with the final warning list (I24).
     await finalizeImportRecord(
       supabase,
       result.importId,
@@ -2647,13 +1995,6 @@ export async function executeSIEImport(
         }
       } catch (templateError) {
         console.error('[sie-import] Failed to populate counterparty templates:', templateError)
-      }
-    }
-
-    // Add warnings for any issues
-    for (const issue of parsed.issues) {
-      if (issue.severity === 'warning') {
-        result.warnings.push(`Line ${issue.line}: ${issue.message}`)
       }
     }
 

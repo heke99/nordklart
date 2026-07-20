@@ -161,19 +161,24 @@ export default function AgentChat({
     // Seed-message path: render the user's pre-baked starter in the timeline
     // and send it as the first turn's user_message (skips intent.capture +
     // promptTemplate). Empty seed runs the normal capture-driven flow.
-    if (seedUserMessage && seedUserMessage.trim().length > 0) {
-      setMessages([{ role: 'user', text: seedUserMessage.trim() }])
-      void startTurn({
-        conversationId: initialConversationId ?? null,
-        userMessage: seedUserMessage.trim(),
-      })
-    } else {
-      void startTurn({
-        conversationId: initialConversationId ?? null,
-        userMessage: '',
-      })
-    }
+    // Deferred to the next macrotask so the synchronous setState does not
+    // run directly within the effect body.
+    const timer = setTimeout(() => {
+      if (seedUserMessage && seedUserMessage.trim().length > 0) {
+        setMessages([{ role: 'user', text: seedUserMessage.trim() }])
+        void startTurn({
+          conversationId: initialConversationId ?? null,
+          userMessage: seedUserMessage.trim(),
+        })
+      } else {
+        void startTurn({
+          conversationId: initialConversationId ?? null,
+          userMessage: '',
+        })
+      }
+    }, 0)
     return () => {
+      clearTimeout(timer)
       activeControllerRef.current?.abort()
       activeControllerRef.current = null
     }

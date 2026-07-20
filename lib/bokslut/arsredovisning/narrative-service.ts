@@ -113,5 +113,38 @@ export async function upsertNarrative(
   if (error || !data) {
     throw new Error(`Failed to save narrative: ${error?.message ?? 'unknown'}`)
   }
+
+  // R10: saving a narrative field IS the active confirmation of its text.
+  // Record who confirmed what, when, and for which fiscal year in the
+  // append-only confirmation log. Best-effort: the narrative save is the
+  // primary operation; the confirmation is the audit trail on top.
+  const confirmedFields: Array<{ field: string; text: string }> = []
+  if (input.description != null) confirmedFields.push({ field: 'description', text: input.description })
+  if (input.important_events != null)
+    confirmedFields.push({ field: 'important_events', text: input.important_events })
+  if (input.resultatdisposition != null)
+    confirmedFields.push({ field: 'resultatdisposition', text: input.resultatdisposition })
+  for (const { field, text } of confirmedFields) {
+    try {
+      // text_version increments per (field, period): count existing rows.
+      const { count } = await supabase
+        .from('arsredovisning_narrative_confirmations')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .eq('field', field)
+      await supabase.from('arsredovisning_narrative_confirmations').insert({
+        company_id: companyId,
+        fiscal_period_id: fiscalPeriodId,
+        field,
+        confirmed_text: text,
+        text_version: (count ?? 0) + 1,
+        confirmed_by: userId,
+      })
+    } catch {
+      // Non-blocking audit enrichment.
+    }
+  }
+
   return data as NarrativeRow
 }

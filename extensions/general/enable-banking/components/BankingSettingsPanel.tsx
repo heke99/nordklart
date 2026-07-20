@@ -55,19 +55,24 @@ export default function BankingSettingsPanel() {
     if (isLoading) return
     if (typeof window === 'undefined') return
 
-    const params = new URLSearchParams(window.location.search)
-    const targetId = params.get('select_accounts')
-    if (!targetId) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams(window.location.search)
+      const targetId = params.get('select_accounts')
+      if (!targetId) return
 
-    const match = bankConnections.find(c => c.id === targetId)
-    if (match) {
-      setPickerConnectionId(targetId)
-    }
+      const match = bankConnections.find(c => c.id === targetId)
+      if (match) {
+        setPickerConnectionId(targetId)
+      }
 
-    params.delete('select_accounts')
-    const newQuery = params.toString()
-    const newUrl = `${window.location.pathname}${newQuery ? `?${newQuery}` : ''}`
-    window.history.replaceState({}, '', newUrl)
+      params.delete('select_accounts')
+      const newQuery = params.toString()
+      const newUrl = `${window.location.pathname}${newQuery ? `?${newQuery}` : ''}`
+      window.history.replaceState({}, '', newUrl)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [isLoading, bankConnections])
 
   function releaseConnectingLock() {

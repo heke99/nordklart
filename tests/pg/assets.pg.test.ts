@@ -79,7 +79,12 @@ async function insertDepreciationSchedule(params: {
 }
 
 // Insert a real posted journal entry we can FK-link a depreciation_schedule
-// to (the FK has ON DELETE RESTRICT so we need a genuine row).
+// to (the FK has ON DELETE RESTRICT so we need a genuine row). Entry + lines
+// go in ONE statement so the deferred check_balance_on_posted_insert trigger
+// sees balanced lines at commit. source_type is 'manual' (not 'year_end')
+// because the journal_entries_one_year_end_per_period unique index allows
+// only ONE posted year_end entry per fiscal period, and both callers share
+// the same period.
 async function insertPostedEntry(params: {
   userId: string
   companyId: string
@@ -88,17 +93,19 @@ async function insertPostedEntry(params: {
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2025-12-31', 'Test', 'year_end', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, params.voucherNumber ?? 1],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
+    `WITH e AS (
+       INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2025-12-31', 'Test', 'manual', 'posted')
+       RETURNING id
+     )
+     INSERT INTO public.journal_entry_lines
        (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '7832', 12000, 0), ($1, '1229', 0, 12000)`,
-    [id],
+     SELECT id, '7832', 12000, 0 FROM e
+     UNION ALL
+     SELECT id, '1229', 0, 12000 FROM e`,
+    [id, params.userId, params.companyId, params.fiscalPeriodId, params.voucherNumber ?? 1],
   )
   return id
 }

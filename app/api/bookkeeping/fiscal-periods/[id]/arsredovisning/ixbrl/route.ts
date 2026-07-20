@@ -2,6 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildIxbrlInput } from '@/lib/bokslut/ixbrl/build-input'
 import { generateK2IxbrlDocument } from '@/lib/bokslut/ixbrl/document/k2-document'
+import { runPreflightChecks } from '@/lib/bokslut/ixbrl/validate/rules'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 
 /**
@@ -37,6 +38,22 @@ export const GET = withRouteContext(
       const input = await buildIxbrlInput(supabase, companyId, id, {
         proposedDividend: Number.isFinite(proposedDividend) ? proposedDividend : 0,
       })
+
+      // Mandatory preflight (R13): download AND preview are blocked on
+      // critical validation errors — the user gets the structured issue
+      // list, never just a warning count in a header.
+      const preflight = runPreflightChecks(input)
+      if (!preflight.ok) {
+        return errorResponseFromCode('VALIDATION_FAILED', log, {
+          requestId,
+          details: {
+            reason: 'iXBRL-dokumentet klarade inte den obligatoriska förhandskontrollen',
+            errors: preflight.errors,
+            warnings: preflight.warnings,
+          },
+        })
+      }
+
       const { xhtml, warnings } = generateK2IxbrlDocument(input)
 
       const safePeriodEnd = input.period.end.replace(/[^\w.-]/g, '_')
@@ -57,6 +74,17 @@ export const GET = withRouteContext(
       const message = err instanceof Error ? err.message : ''
       if (/not found/i.test(message)) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
+      }
+      // R12: K3 digital submission is explicitly unsupported — surface a
+      // structured capability error, never a false "supported" state.
+      if (/Digital inlämning stöds ännu inte för K3/i.test(message)) {
+        return errorResponseFromCode('VALIDATION_FAILED', log, {
+          requestId,
+          details: {
+            code: 'K3_DIGITAL_SUBMISSION_NOT_SUPPORTED',
+            reason: message,
+          },
+        })
       }
       return errorResponse(err, log, { requestId })
     }

@@ -124,8 +124,13 @@ export default function QuickReviewDialog({
   // Reset local mirror whenever the underlying transaction changes (the parent
   // reuses the dialog instance across rows).
   useEffect(() => {
-    setEnrichedTx(transaction)
-    setRateError(null)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setEnrichedTx(transaction)
+      setRateError(null)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [transaction])
 
   // Backfill the SEK conversion on demand. resolveSekAmount silently falls
@@ -141,34 +146,39 @@ export default function QuickReviewDialog({
     if (!needsRate) return
 
     let cancelled = false
-    setRateLoading(true)
-    setRateError(null)
-    ;(async () => {
-      try {
-        const res = await fetch(`/api/transactions/${transaction.id}/refresh-exchange-rate`, {
-          method: 'POST',
-        })
-        const json = await res.json()
-        if (cancelled) return
-        if (!res.ok) {
-          setRateError(json?.error?.message || t('exchange_rate_fetch_failed'))
-          return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setRateLoading(true)
+      setRateError(null)
+      ;(async () => {
+        try {
+          const res = await fetch(`/api/transactions/${transaction.id}/refresh-exchange-rate`, {
+            method: 'POST',
+          })
+          const json = await res.json()
+          if (cancelled) return
+          if (!res.ok) {
+            setRateError(json?.error?.message || t('exchange_rate_fetch_failed'))
+            return
+          }
+          if (json?.data) {
+            setEnrichedTx({ ...json.data, ...{
+              potential_invoice: transaction.potential_invoice,
+              potential_supplier_invoice: transaction.potential_supplier_invoice,
+            } })
+          }
+        } catch {
+          if (!cancelled) setRateError(t('exchange_rate_fetch_failed'))
+        } finally {
+          if (!cancelled) setRateLoading(false)
         }
-        if (json?.data) {
-          setEnrichedTx({ ...json.data, ...{
-            potential_invoice: transaction.potential_invoice,
-            potential_supplier_invoice: transaction.potential_supplier_invoice,
-          } })
-        }
-      } catch {
-        if (!cancelled) setRateError(t('exchange_rate_fetch_failed'))
-      } finally {
-        if (!cancelled) setRateLoading(false)
-      }
-    })()
+      })()
+    }, 0)
 
     return () => {
       cancelled = true
+      clearTimeout(timer)
     }
   }, [open, transaction, t])
 

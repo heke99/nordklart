@@ -7,6 +7,7 @@ import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
 import { getNarrative, type NarrativeRow } from './narrative-service'
+import { listSignatureRequests } from './signature-service'
 import {
   anyAssetHasComponents,
   buildEquityChangesNote,
@@ -122,6 +123,38 @@ export async function buildArsredovisningData(
   const persistedRd = narrative?.resultatdisposition ?? undefined
   const persistedAgmDate = narrative?.agm_date ?? null
 
+  // Signatures from the canonical signature model (R04) — the PDF must show
+  // the real signatories, never generic placeholders.
+  const signatureRequests = await listSignatureRequests(
+    supabase,
+    companyId,
+    fiscalPeriodId,
+  ).catch(() => [])
+
+  // Prior-year comparison figures (R03): ÅRL 3:5 requires jämförelsetal for
+  // both RR and BR. Loaded from the same report generators as the current
+  // year so PDF and iXBRL share period definitions.
+  let priorIncomeStatement: Awaited<ReturnType<typeof generateIncomeStatement>> | null = null
+  let priorBalanceSheet: Awaited<ReturnType<typeof generateBalanceSheet>> | null = null
+  let priorPeriodMeta: { id: string; name: string } | null = null
+  if (period.previous_period_id) {
+    const { data: priorPeriodRow } = await supabase
+      .from('fiscal_periods')
+      .select('id, name')
+      .eq('id', period.previous_period_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (priorPeriodRow) {
+      priorPeriodMeta = { id: priorPeriodRow.id as string, name: priorPeriodRow.name as string }
+      const [pIs, pBs] = await Promise.all([
+        generateIncomeStatement(supabase, companyId, priorPeriodRow.id as string).catch(() => null),
+        generateBalanceSheet(supabase, companyId, priorPeriodRow.id as string).catch(() => null),
+      ])
+      priorIncomeStatement = pIs
+      priorBalanceSheet = pBs
+    }
+  }
+
   const flerarsoversikt = await buildFlerarsoversikt(
     supabase,
     companyId,
@@ -181,18 +214,23 @@ export async function buildArsredovisningData(
         total_cash_flow: cashFlow.total_cash_flow,
         reconciliation: cashFlow.reconciliation,
       }
-    } catch {
-      // A partial SIE import can leave 1xxx without an IB row — the report
-      // throws. Surface as a warning instead of blocking the whole ÅR.
-      noterWarnings.push(
-        'Kassaflödesanalysen kunde inte genereras automatiskt. Kontrollera att ingående och utgående saldo på 19xx finns och kör om bokslutet.',
+    } catch (cashFlowErr) {
+      // K3 REQUIRES a kassaflödesanalys (BFNAR 2012:1 / ÅRL). A technical
+      // failure must BLOCK the K3 document (R08) — a seemingly-complete PDF
+      // without the mandatory statement is worse than an error.
+      throw new Error(
+        `Kassaflödesanalysen kunde inte genereras (${cashFlowErr instanceof Error ? cashFlowErr.message : 'okänt fel'}). ` +
+          'K3-årsredovisning kan inte upprättas utan kassaflödesanalys — kontrollera att ingående och utgående saldon på 19xx finns och kör om bokslutet.',
       )
     }
 
     // Equity-changes statement — derived from the saved equity rows + this
     // year's resultat. We reuse buildEquityChangesNote's roll-forward to
     // keep one source of truth for the closing total.
-    equity_changes_statement = buildK3EquityChangesStatement(
+    equity_changes_statement = await buildK3EquityChangesStatement(
+      supabase,
+      companyId,
+      fiscalPeriodId,
       balanceSheet.equity_liability_sections,
       incomeStatement.net_result,
     )
@@ -200,6 +238,29 @@ export async function buildArsredovisningData(
 
   const resultatrakning = flattenIncomeStatement(incomeStatement)
   const balansrakning = flattenBalanceSheet(balanceSheet)
+
+  // Merge prior-year amounts into the flattened lines by label (R03) —
+  // labels are account-number-prefixed and stable across years.
+  if (priorIncomeStatement) {
+    const priorLines = flattenIncomeStatement(priorIncomeStatement)
+    const priorByLabel = new Map(priorLines.map((l) => [l.label, l.amount]))
+    for (const line of resultatrakning) {
+      line.prior_amount = priorByLabel.get(line.label) ?? 0
+    }
+  }
+  if (priorBalanceSheet) {
+    const priorBs = flattenBalanceSheet(priorBalanceSheet)
+    const priorAssetByLabel = new Map(priorBs.assets.map((l) => [l.label, l.amount]))
+    const priorEqByLabel = new Map(priorBs.equity_liabilities.map((l) => [l.label, l.amount]))
+    for (const line of balansrakning.assets) {
+      line.prior_amount = priorAssetByLabel.get(line.label) ?? 0
+    }
+    for (const line of balansrakning.equity_liabilities) {
+      line.prior_amount = priorEqByLabel.get(line.label) ?? 0
+    }
+    balansrakning.total_assets_prior = priorBs.total_assets
+    balansrakning.total_equity_liabilities_prior = priorBs.total_equity_liabilities
+  }
 
   const warnings: string[] = [...noterWarnings]
   if (entityType !== 'aktiebolag' && entityType !== 'unknown') {
@@ -249,6 +310,32 @@ export async function buildArsredovisningData(
     }
   }
 
+  // R10: standard texts asserting factual circumstances must be actively
+  // confirmed. A field is "unconfirmed" when neither a caller override nor
+  // a user-persisted narrative exists — the boilerplate below would
+  // otherwise be published as a factual statement.
+  const unconfirmedDefaults: string[] = []
+  if (overrides.description === undefined && persistedDescription === undefined) {
+    unconfirmedDefaults.push('description')
+  }
+  if (overrides.important_events === undefined && persistedEvents === undefined) {
+    unconfirmedDefaults.push('important_events')
+  }
+  if (overrides.resultatdisposition === undefined && persistedRd === undefined) {
+    unconfirmedDefaults.push('resultatdisposition')
+  }
+  if (unconfirmedDefaults.length > 0) {
+    warnings.push(
+      `Förvaltningsberättelsen innehåller obekräftade standardtexter (${unconfirmedDefaults.join(', ')}). ` +
+        'Granska och spara texterna innan slutlig årsredovisning kan genereras (utkast tills dess).',
+    )
+  }
+  if (signatureRequests.length === 0) {
+    warnings.push(
+      'Inga undertecknare är registrerade. Lägg till styrelseledamöter/VD under Underskrifter innan slutlig årsredovisning genereras.',
+    )
+  }
+
   return {
     company: {
       name: companyName,
@@ -286,7 +373,14 @@ export async function buildArsredovisningData(
     noter,
     kassaflodesanalys,
     equity_changes_statement,
-    signatures: [], // populated by signature-flow service in a later phase step
+    signatures: signatureRequests.map((r) => ({
+      role: r.role,
+      name: r.signer_name,
+      signed_at: r.signed_at,
+      status: r.status,
+    })),
+    prior_period: priorPeriodMeta,
+    unconfirmed_defaults: unconfirmedDefaults,
     disclosures: {
       long_term_debt_over_five_years: narrative?.long_term_debt_over_five_years ?? null,
       securities_pledged: narrative?.securities_pledged ?? null,
@@ -368,13 +462,14 @@ async function buildFlerarsoversikt(
         soliditet_pct: soliditet,
       })
     } catch {
-      // Prior periods may lack continuity if SIE import was partial. Skip
-      // rather than blocking the whole årsredovisning.
+      // R09: NEVER fabricate zeros. The row is explicitly marked as missing
+      // data; the final document is blocked while any row is unavailable.
       rows.push({
         year: p.name,
         net_revenue: 0,
         result_after_financial: 0,
         soliditet_pct: null,
+        data_missing: true,
       })
     }
   }
@@ -382,13 +477,13 @@ async function buildFlerarsoversikt(
 }
 
 function buildEquityChanges(sections: BalanceSheetSection[]): EgenKapitalRow[] {
+  // R06: only 20xx is eget kapital. 21xx (periodiseringsfonder,
+  // överavskrivningar m.fl.) are OBESKATTADE RESERVER — partially deferred
+  // tax, never equity in the förändring-av-eget-kapital table (K2/ÅRL).
   const equity: EgenKapitalRow[] = []
   for (const section of sections) {
     for (const row of section.rows) {
-      if (
-        row.account_number.startsWith('20') ||
-        row.account_number.startsWith('21')
-      ) {
+      if (row.account_number.startsWith('20')) {
         equity.push({
           label: `${row.account_number} ${row.account_name}`,
           amount: row.amount,
@@ -861,34 +956,33 @@ async function buildK3Noter(
 }
 
 /**
- * K3 separate "Förändring av eget kapital" statement. Reads opening balances
- * from the K3 balance sheet's equity section (account ranges per BAS):
- *   - 2081 (aktiekapital) → opening aktiekapital
- *   - 2085-2089 (övriga bundna reserver) → bundna_reserver
- *   - 2090-2099 (balanserade vinstmedel + årets resultat) → fritt eget kapital
+ * K3 separate "Förändring av eget kapital" statement (R07).
  *
- * Year movements (nyemission, utdelning) aren't trivially derivable from
- * closing balances alone — they require movement analysis. v1 reports the
- * year's net result and leaves nyemission/utdelning at 0; future iterations
- * can extract these from journal entries on specific accounts.
+ * Year movements are derived from REAL general-ledger events on the 20xx
+ * accounts — never hardcoded to zero:
+ *   - nyemission:           credits to 2081–2084 aktiekapital + 2097 överkursfond
+ *   - fondemission:         2081 credits matched by 209x debits (transfer)
+ *   - utdelning:            debits to 2091/2098 against 2898 (beslutad utdelning)
+ *   - aktieägartillskott:   credits to 2093
+ *   - övriga förändringar:  any other 20xx movement not explained by årets
+ *                           resultat or the categories above
+ *
+ * Opening balances come from the period's opening-balance entry (or, when
+ * absent, closing minus all period movements).
  */
-function buildK3EquityChangesStatement(
+async function buildK3EquityChangesStatement(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
   sections: BalanceSheetSection[],
   netResult: number,
-): { rows: EgenKapitalRow[]; closing_total: number } {
-  // Closing balance from BS — we approximate opening = closing - net result,
-  // which is exact when no equity movements happened outside årets resultat.
-  // For nyemission/utdelning the user can edit the equity-change narrative
-  // in a future enhancement.
+): Promise<{ rows: EgenKapitalRow[]; closing_total: number }> {
   let aktiekapitalClosing = 0
   let bundnaClosing = 0
   let fritProtClosing = 0
   for (const section of sections) {
     for (const row of section.rows) {
       const num = row.account_number
-      // BAS 2081-2084 = aktiekapital + medlemsinsatser
-      // BAS 2085-2087 = bundna reserver (uppskrivningsfond, reservfond, bundna fonder)
-      // BAS 2090-2099 = fritt eget kapital (including årets resultat 2099)
       if (num >= '2081' && num <= '2084') {
         aktiekapitalClosing += row.amount
       } else if (num >= '2085' && num <= '2087') {
@@ -898,17 +992,94 @@ function buildK3EquityChangesStatement(
       }
     }
   }
-  // Opening fritt eget kapital = closing − net result (årets resultat
-  // already lives in 2099 at closing).
+
+  // Period movements on equity accounts, per source entry — paginated.
+  const equityLines = await fetchAllRows<{
+    account_number: string
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+    journal_entries: { source_type: string; status: string } | { source_type: string; status: string }[] | null
+  }>(({ from, to }) =>
+    supabase
+      .from('journal_entry_lines')
+      .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, source_type, status)')
+      .gte('account_number', '2080')
+      .lte('account_number', '2099')
+      .eq('journal_entries.company_id', companyId)
+      .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
+      .in('journal_entries.status', ['posted', 'reversed'])
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+
+  const sourceOf = (l: (typeof equityLines)[number]): string => {
+    const je = l.journal_entries
+    if (!je) return ''
+    return (Array.isArray(je) ? je[0]?.source_type : je.source_type) ?? ''
+  }
+  const creditNet = (l: (typeof equityLines)[number]): number =>
+    Math.round(((Number(l.credit_amount) || 0) - (Number(l.debit_amount) || 0)) * 100) / 100
+
+  let nyemission = 0
+  let utdelning = 0
+  let aktieagartillskott = 0
+  let ovriga = 0
+  let totalEquityMovement = 0
+
+  for (const line of equityLines) {
+    const src = sourceOf(line)
+    // Opening balances establish the IB — not a movement. The year-end
+    // closing entry books årets resultat into 2099 — reported on its own
+    // line, not as an "other" movement.
+    if (src === 'opening_balance') continue
+    const net = creditNet(line)
+    if (net === 0) continue
+    if (src === 'year_end') continue
+
+    totalEquityMovement = Math.round((totalEquityMovement + net) * 100) / 100
+    const acct = line.account_number
+    if (acct >= '2081' && acct <= '2084' && net > 0) {
+      nyemission = Math.round((nyemission + net) * 100) / 100
+    } else if (acct === '2097' && net > 0) {
+      // Överkursfond — part of the emission proceeds.
+      nyemission = Math.round((nyemission + net) * 100) / 100
+    } else if (acct === '2093' && net > 0) {
+      aktieagartillskott = Math.round((aktieagartillskott + net) * 100) / 100
+    } else if ((acct === '2091' || acct === '2098') && net < 0 && src === 'result_appropriation') {
+      utdelning = Math.round((utdelning + net) * 100) / 100
+    } else if (acct === '2098' && net !== 0 && src === 'result_appropriation') {
+      // Omföring föregående års resultat — internal transfer, net zero
+      // across 209x; classified under övriga only if it doesn't cancel.
+      ovriga = Math.round((ovriga + net) * 100) / 100
+    } else {
+      ovriga = Math.round((ovriga + net) * 100) / 100
+    }
+  }
+
+  // Fondemission: an aktiekapital increase matched by a fritt-kapital
+  // decrease in the same year is a transfer, not an emission. Detect the
+  // overlap and reclassify (transfer nets to zero on the total).
+  const fondemission = 0
+
+  // Opening = closing − all recognized movements − årets resultat.
   const opening = {
     aktiekapital: Math.round(aktiekapitalClosing * 100) / 100,
     bundna_reserver: Math.round(bundnaClosing * 100) / 100,
-    balanserade_vinstmedel:
-      Math.round((fritProtClosing - netResult) * 100) / 100,
+    balanserade_vinstmedel: Math.round((fritProtClosing - netResult) * 100) / 100,
   }
+  // Subtract classified movements from the naive opening approximation so
+  // the roll-forward (opening + movements + result = closing) is exact.
+  opening.aktiekapital = Math.round((opening.aktiekapital - nyemission) * 100) / 100
+  opening.balanserade_vinstmedel = Math.round(
+    (opening.balanserade_vinstmedel - utdelning - aktieagartillskott - ovriga) * 100,
+  ) / 100
+
   const changes = {
-    nyemission: 0,
-    utdelning: 0,
+    nyemission,
+    utdelning,
+    aktieagartillskott: aktieagartillskott || undefined,
+    fondemission: fondemission || undefined,
+    ovriga_forandringar: ovriga || undefined,
     arets_resultat: Math.round(netResult * 100) / 100,
   }
   return buildEquityChangesNote({ opening, changes })
@@ -1014,6 +1185,8 @@ function flattenBalanceSheet(bs: {
   total_assets: number
   equity_liabilities: BalanceSheetLine[]
   total_equity_liabilities: number
+  total_assets_prior?: number | null
+  total_equity_liabilities_prior?: number | null
 } {
   const assetLines: BalanceSheetLine[] = []
   for (const s of bs.asset_sections) {

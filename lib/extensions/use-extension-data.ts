@@ -35,7 +35,12 @@ export function useExtensionData(sector: string, slug: string) {
   }, [basePath])
 
   useEffect(() => {
-    refresh()
+    // Defer to the next macrotask so the synchronous setState inside
+    // refresh does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      refresh()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [refresh])
 
   const save = useCallback(async (key: string, value: Record<string, unknown>) => {

@@ -27,11 +27,6 @@ export function NotificationSettings({ onSettingsChange }: NotificationSettingsP
   const [isPushSupported, setIsPushSupported] = useState(false)
   const [isPushSubscribed, setIsPushSubscribed] = useState(false)
 
-  useEffect(() => {
-    fetchSettings()
-    checkPushSupport()
-  }, [])
-
   const checkPushSupport = async () => {
     if ('serviceWorker' in navigator && 'PushManager' in window) {
       setIsPushSupported(true)
@@ -85,6 +80,18 @@ export function NotificationSettings({ onSettingsChange }: NotificationSettingsP
 
     setIsLoading(false)
   }
+
+  useEffect(() => {
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchSettings/checkPushSupport does not run directly within the
+    // effect body.
+    const timer = setTimeout(() => {
+      fetchSettings()
+      checkPushSupport()
+    }, 0)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const updateSetting = async (key: keyof NotificationSettingsType, value: boolean | string) => {
     if (!settings) return

@@ -298,15 +298,25 @@ export function BankReconciliationView() {
   }, [accountNumber, accountCurrency, includeMatched])
 
   useEffect(() => {
-    fetchAll()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchAll does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchAll()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchAll])
 
   // Reset transient per-account UI state when the selected account changes. A
   // verifikation pick or a dry-run preview computed for the previous account is
   // meaningless against the new one — and applying it would cross-link.
   useEffect(() => {
-    setSelectedMatch({})
-    setDryRunResults(null)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      setSelectedMatch({})
+      setDryRunResults(null)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [accountNumber])
 
   const handleDryRun = async () => {

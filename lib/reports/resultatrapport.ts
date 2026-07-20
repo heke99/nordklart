@@ -48,9 +48,14 @@ export async function generateResultatrapport(
   const effectiveFromDate = options?.fromDate ?? period.period_start
   const effectiveToDate = options?.toDate ?? period.period_end
 
+  // R01: the year-end closing verifikat (which zeros classes 3–8 into
+  // 8999/2099) is excluded so the report after bokslut shows the SAME
+  // operating result as immediately before the closing entry — mirroring
+  // the formal income statement.
   const currentTb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     fromDate: options?.fromDate,
     toDate: options?.toDate,
+    excludeYearEndClosing: true,
   })
   const currentRows = filterPnl(currentTb.rows)
 
@@ -70,7 +75,9 @@ export async function generateResultatrapport(
       .single()
 
     if (prior) {
-      const priorTb = await generateTrialBalance(supabase, companyId, period.previous_period_id)
+      const priorTb = await generateTrialBalance(supabase, companyId, period.previous_period_id, {
+        excludeYearEndClosing: true,
+      })
       priorRows = filterPnl(priorTb.rows)
       priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
     }
@@ -107,9 +114,14 @@ function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
  * (class 4–7) have debit. We render every line as `credit - debit` so that
  * revenue is positive, expenses are negative, and a positive net result
  * means profit. This matches how Fortnox and Visma present a Resultatrapport.
+ *
+ * The PERIOD MOVEMENT is used (R02): when the user selects e.g. March, the
+ * report shows March's rörelser only — never the cumulative year-to-date
+ * closing balance. For a full fiscal year the movement equals the closing
+ * balance for P&L accounts (their opening is zero).
  */
 function signedAmount(row: TrialBalanceRow): number {
-  return row.closing_credit - row.closing_debit
+  return row.period_credit - row.period_debit
 }
 
 function sumNet(rows: TrialBalanceRow[]): number {

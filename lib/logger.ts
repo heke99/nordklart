@@ -113,7 +113,7 @@ function shouldLog(level: LogLevel): boolean {
   return true
 }
 
-interface LogRecord {
+export interface LogRecord {
   level: LogLevel
   module: string
   msg: string

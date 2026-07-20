@@ -64,19 +64,22 @@ async function seedPostedVoucher(params: {
 }): Promise<string> {
   const id = randomUUID()
   const amount = params.amount ?? 1000
+  // Entry + balanced lines in ONE statement — the deferred
+  // check_balance_on_posted_insert trigger requires balance at commit.
   await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Inbetalning', 'manual', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, Math.floor(Math.random() * 100000)],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
+    `WITH e AS (
+       INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Inbetalning', 'manual', 'posted')
+       RETURNING id
+     )
+     INSERT INTO public.journal_entry_lines
        (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '1930', $2, 0),
-            ($1, '1510', 0, $2)`,
-    [id, amount],
+     SELECT id, '1930', $6, 0 FROM e
+     UNION ALL
+     SELECT id, '1510', 0, $6 FROM e`,
+    [id, params.userId, params.companyId, params.fiscalPeriodId, Math.floor(Math.random() * 100000), amount],
   )
   return id
 }

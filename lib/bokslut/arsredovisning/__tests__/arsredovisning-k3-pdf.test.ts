@@ -118,6 +118,8 @@ function makeMinimalK3Data(): ArsredovisningData {
       closing_total: 600_000,
     },
     signatures: [],
+    prior_period: null,
+    unconfirmed_defaults: [],
     warnings: [],
     disclosures: {
       long_term_debt_over_five_years: null,
@@ -173,6 +175,39 @@ describe('ArsredovisningK3PDF', () => {
     ]
     const doc = ArsredovisningK3PDF({ data })
     const buffer = await renderToBuffer(doc)
+    expect(buffer.length).toBeGreaterThan(0)
+  })
+
+  it('renders as a FINAL document (isDraft=false) and as a draft with blockers', async () => {
+    const data = makeMinimalK3Data()
+
+    const finalBuffer = await renderToBuffer(ArsredovisningK3PDF({ data, isDraft: false }))
+    expect(finalBuffer.length).toBeGreaterThan(0)
+
+    const draftBuffer = await renderToBuffer(
+      ArsredovisningK3PDF({
+        data: { ...data, unconfirmed_defaults: ['description', 'important_events'] },
+        isDraft: true,
+        draftBlockers: ['AGM-datum saknas', 'Standardtexter är inte bekräftade'],
+      }),
+    )
+    expect(draftBuffer.length).toBeGreaterThan(0)
+  })
+
+  it('renders the jämförelse column when prior_period + prior amounts exist (R03)', async () => {
+    const data = makeMinimalK3Data()
+    data.prior_period = { id: 'fp0', name: '2024' }
+    data.resultatrakning = data.resultatrakning.map((line) => ({
+      ...line,
+      prior_amount: line.amount / 2,
+    }))
+    data.balansrakning.assets = data.balansrakning.assets.map((line) => ({
+      ...line,
+      prior_amount: line.amount / 2,
+    }))
+    data.balansrakning.total_assets_prior = 300_000
+    data.balansrakning.total_equity_liabilities_prior = 300_000
+    const buffer = await renderToBuffer(ArsredovisningK3PDF({ data }))
     expect(buffer.length).toBeGreaterThan(0)
   })
 })

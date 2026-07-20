@@ -1,66 +1,87 @@
+import { createHash } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchMultipleRates } from '@/lib/currency/riksbanken'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import {
-  BookkeepingDatabaseError,
-  CurrencyRevaluationAlreadyExistsError,
-} from '@/lib/bookkeeping/errors'
+  getHistoricalFxExposure,
+  type HistoricalOpenItem,
+} from '@/lib/invoices/historical-open-items'
 import type {
   Currency,
-  Invoice,
-  SupplierInvoice,
   RevaluationItem,
   CurrencyRevaluationPreview,
   CurrencyRevaluationResult,
   CreateJournalEntryLineInput,
+  JournalEntry,
 } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
- * Fetch open foreign-currency receivables (invoices).
- * Returns invoices with status 'sent' or 'overdue', non-SEK currency,
- * and a known exchange rate.
+ * Currency revaluation (revision items B05–B08, B14).
+ *
+ * The open exposure is reconstructed AS OF the balance date via the shared
+ * historical open-item module (B06): an invoice created after the balance
+ * date is excluded; one that was open on the balance date but settled later
+ * is revalued with the amount open on the balance date. Partial payments
+ * reduce the revalued amount symmetrically for receivables and payables (B07).
+ *
+ * Persistence is owned by the post_currency_revaluation RPC:
+ *   - deterministic snapshot key ⇒ idempotent re-runs (B05),
+ *   - changed underlag before close ⇒ controlled replace,
+ *   - closed/locked period ⇒ refused,
+ *   - the year-end RPC posts the deterministic reversal in the next
+ *     period exactly once (B08).
+ */
+
+
+/**
+ * Open foreign-currency receivables at `asOfDate` — canonical historical
+ * reconstruction shared with readiness/reports (B14).
  */
 export async function getOpenForeignCurrencyReceivables(
   supabase: SupabaseClient,
-  companyId: string
-): Promise<Invoice[]> {
-  const { data, error } = await supabase
-    .from('invoices')
-    .select('*')
-    .eq('company_id', companyId)
-    .in('status', ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready'])
-    .neq('currency', 'SEK')
-    .not('exchange_rate', 'is', null)
-
-  if (error) {
-    throw new BookkeepingDatabaseError('fetch_currency_receivables', error.message)
-  }
-
-  return (data || []) as Invoice[]
+  companyId: string,
+  asOfDate: string,
+): Promise<HistoricalOpenItem[]> {
+  const { receivables } = await getHistoricalFxExposure(supabase, companyId, asOfDate)
+  return receivables
 }
 
 /**
- * Fetch open foreign-currency payables (supplier invoices).
- * Returns supplier invoices with open statuses, non-SEK currency,
- * and a known exchange rate. Uses remaining_amount for partial payments.
+ * Open foreign-currency payables at `asOfDate` — canonical historical
+ * reconstruction shared with readiness/reports (B14).
  */
 export async function getOpenForeignCurrencyPayables(
   supabase: SupabaseClient,
-  companyId: string
-): Promise<SupplierInvoice[]> {
-  const { data, error } = await supabase
-    .from('supplier_invoices')
-    .select('*')
-    .eq('company_id', companyId)
-    .in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
-    .neq('currency', 'SEK')
-    .not('exchange_rate', 'is', null)
+  companyId: string,
+  asOfDate: string,
+): Promise<HistoricalOpenItem[]> {
+  const { payables } = await getHistoricalFxExposure(supabase, companyId, asOfDate)
+  return payables
+}
 
-  if (error) {
-    throw new BookkeepingDatabaseError('fetch_currency_payables', error.message)
-  }
-
-  return (data || []) as SupplierInvoice[]
+/**
+ * Deterministic idempotency key over the full revaluation underlag (B05).
+ * Same company, balance date, items and rates ⇒ same key.
+ */
+export function computeRevaluationSnapshotKey(
+  companyId: string,
+  closingDate: string,
+  items: RevaluationItem[],
+): string {
+  const canonical = items
+    .map((i) => ({
+      id: i.source_id,
+      t: i.type,
+      c: i.currency,
+      a: i.amount_in_currency,
+      or: i.original_rate,
+      cr: i.closing_rate,
+    }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return createHash('sha256')
+    .update(JSON.stringify({ companyId, closingDate, items: canonical }))
+    .digest('hex')
 }
 
 /**
@@ -80,15 +101,16 @@ export async function previewCurrencyRevaluation(
   companyId: string,
   closingDate: string
 ): Promise<CurrencyRevaluationPreview> {
-  const [receivables, payables] = await Promise.all([
-    getOpenForeignCurrencyReceivables(supabase, companyId),
-    getOpenForeignCurrencyPayables(supabase, companyId),
-  ])
+  const { receivables, payables } = await getHistoricalFxExposure(
+    supabase,
+    companyId,
+    closingDate,
+  )
 
   // Collect distinct currencies
   const currencies = new Set<Currency>()
   for (const inv of receivables) {
-    currencies.add(inv.currency)
+    currencies.add(inv.currency as Currency)
   }
   for (const si of payables) {
     currencies.add(si.currency as Currency)
@@ -118,25 +140,27 @@ export async function previewCurrencyRevaluation(
 
   const items: RevaluationItem[] = []
 
-  // Process receivables
-  for (const inv of receivables) {
-    const closingRate = rateMap.get(inv.currency)?.rate
-    if (!closingRate || !inv.exchange_rate) continue
+  const pushItem = (item: HistoricalOpenItem) => {
+    const closingRate = rateMap.get(item.currency as Currency)?.rate
+    if (!closingRate || !item.exchange_rate) return
 
-    const amountInCurrency = inv.total
-    const originalSek = Math.round(amountInCurrency * inv.exchange_rate * 100) / 100
-    const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100
-    const difference = Math.round((closingSek - originalSek) * 100) / 100
+    // Only the amount that was OPEN on the balance date is revalued (B06/B07).
+    const amountInCurrency = item.open_amount
+    if (amountInCurrency <= 0) return
 
-    if (Math.abs(difference) < 0.01) continue
+    const originalSek = roundOre(amountInCurrency * item.exchange_rate)
+    const closingSek = roundOre(amountInCurrency * closingRate)
+    const difference = roundOre(closingSek - originalSek)
+
+    if (Math.abs(difference) < 0.01) return
 
     items.push({
-      type: 'receivable',
-      source_id: inv.id,
-      reference: inv.invoice_number ?? '',
-      currency: inv.currency,
+      type: item.type === 'invoice' ? 'receivable' : 'payable',
+      source_id: item.id,
+      reference: item.reference,
+      currency: item.currency as Currency,
       amount_in_currency: amountInCurrency,
-      original_rate: inv.exchange_rate,
+      original_rate: item.exchange_rate,
       closing_rate: closingRate,
       original_sek: originalSek,
       closing_sek: closingSek,
@@ -144,33 +168,8 @@ export async function previewCurrencyRevaluation(
     })
   }
 
-  // Process payables (use remaining_amount for partial payments)
-  for (const si of payables) {
-    const closingRate = rateMap.get(si.currency as Currency)?.rate
-    if (!closingRate || !si.exchange_rate) continue
-
-    const amountInCurrency = si.remaining_amount
-    if (amountInCurrency <= 0) continue
-
-    const originalSek = Math.round(amountInCurrency * si.exchange_rate * 100) / 100
-    const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100
-    const difference = Math.round((closingSek - originalSek) * 100) / 100
-
-    if (Math.abs(difference) < 0.01) continue
-
-    items.push({
-      type: 'payable',
-      source_id: si.id,
-      reference: si.supplier_invoice_number,
-      currency: si.currency as Currency,
-      amount_in_currency: amountInCurrency,
-      original_rate: si.exchange_rate,
-      closing_rate: closingRate,
-      original_sek: originalSek,
-      closing_sek: closingSek,
-      difference_sek: difference,
-    })
-  }
+  for (const inv of receivables) pushItem(inv)
+  for (const si of payables) pushItem(si)
 
   // Build aggregated journal lines
   let debit1510 = 0 // Receivable gain (revalue up)
@@ -210,7 +209,7 @@ export async function previewCurrencyRevaluation(
   if (debit1510 > 0) {
     lines.push({
       account_number: '1510',
-      debit_amount: Math.round(debit1510 * 100) / 100,
+      debit_amount: roundOre(debit1510),
       credit_amount: 0,
       line_description: 'Omvärdering kundfordringar — orealiserad kursvinst',
     })
@@ -219,14 +218,14 @@ export async function previewCurrencyRevaluation(
     lines.push({
       account_number: '1510',
       debit_amount: 0,
-      credit_amount: Math.round(credit1510 * 100) / 100,
+      credit_amount: roundOre(credit1510),
       line_description: 'Omvärdering kundfordringar — orealiserad kursförlust',
     })
   }
   if (debit2440 > 0) {
     lines.push({
       account_number: '2440',
-      debit_amount: Math.round(debit2440 * 100) / 100,
+      debit_amount: roundOre(debit2440),
       credit_amount: 0,
       line_description: 'Omvärdering leverantörsskulder — orealiserad kursvinst',
     })
@@ -235,7 +234,7 @@ export async function previewCurrencyRevaluation(
     lines.push({
       account_number: '2440',
       debit_amount: 0,
-      credit_amount: Math.round(credit2440 * 100) / 100,
+      credit_amount: roundOre(credit2440),
       line_description: 'Omvärdering leverantörsskulder — orealiserad kursförlust',
     })
   }
@@ -243,22 +242,22 @@ export async function previewCurrencyRevaluation(
     lines.push({
       account_number: '3960',
       debit_amount: 0,
-      credit_amount: Math.round(credit3960 * 100) / 100,
+      credit_amount: roundOre(credit3960),
       line_description: 'Orealiserade valutakursvinster',
     })
   }
   if (debit7960 > 0) {
     lines.push({
       account_number: '7960',
-      debit_amount: Math.round(debit7960 * 100) / 100,
+      debit_amount: roundOre(debit7960),
       credit_amount: 0,
       line_description: 'Orealiserade valutakursförluster',
     })
   }
 
-  const totalGain = Math.round(credit3960 * 100) / 100
-  const totalLoss = Math.round(debit7960 * 100) / 100
-  const netEffect = Math.round((totalGain - totalLoss) * 100) / 100
+  const totalGain = roundOre(credit3960)
+  const totalLoss = roundOre(debit7960)
+  const netEffect = roundOre(totalGain - totalLoss)
 
   return {
     items,
@@ -271,11 +270,44 @@ export async function previewCurrencyRevaluation(
 }
 
 /**
- * Execute currency revaluation for a fiscal period.
- * Creates a journal entry with source_type 'currency_revaluation'.
+ * The RPC payload for post_currency_revaluation / execute_year_end_closing —
+ * lines + per-item snapshot + deterministic idempotency key.
+ */
+export function buildRevaluationRpcPayload(
+  companyId: string,
+  closingDate: string,
+  preview: CurrencyRevaluationPreview,
+): {
+  balance_date: string
+  snapshot_key: string
+  lines: CreateJournalEntryLineInput[]
+  items: Array<Record<string, unknown>>
+} {
+  return {
+    balance_date: closingDate,
+    snapshot_key: computeRevaluationSnapshotKey(companyId, closingDate, preview.items),
+    lines: preview.lines,
+    items: preview.items.map((i) => ({
+      invoice_id: i.type === 'receivable' ? i.source_id : null,
+      supplier_invoice_id: i.type === 'payable' ? i.source_id : null,
+      currency: i.currency,
+      open_amount_currency: i.amount_in_currency,
+      open_amount_sek_original: i.original_sek,
+      rate_original: i.original_rate,
+      rate_closing: i.closing_rate,
+      unrealized_diff_sek: i.difference_sek,
+    })),
+  }
+}
+
+/**
+ * Execute currency revaluation for a fiscal period through the idempotent
+ * post_currency_revaluation RPC (B05):
+ *   - identical underlag → the existing entry is reused (no error, no dupe),
+ *   - changed underlag before close → the RPC replaces the old entry,
+ *   - closed/locked period → the RPC refuses.
  *
- * Returns null if no foreign-currency items exist.
- * Throws if a revaluation entry already exists for this period (idempotency).
+ * Returns null if no foreign-currency exposure exists at the balance date.
  */
 export async function executeCurrencyRevaluation(
   supabase: SupabaseClient,
@@ -284,37 +316,45 @@ export async function executeCurrencyRevaluation(
   fiscalPeriodId: string,
   userId?: string
 ): Promise<CurrencyRevaluationResult | null> {
-  // Idempotency check: prevent double revaluation
-  const { count, error: checkError } = await supabase
-    .from('journal_entries')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-    .eq('source_type', 'currency_revaluation')
-    .eq('status', 'posted')
-
-  if (checkError) {
-    throw new BookkeepingDatabaseError('check_existing_revaluation', checkError.message)
-  }
-
-  if ((count ?? 0) > 0) {
-    throw new CurrencyRevaluationAlreadyExistsError()
-  }
-
   const preview = await previewCurrencyRevaluation(supabase, companyId, closingDate)
 
   if (preview.items.length === 0 || preview.lines.length === 0) {
     return null
   }
 
-  const entry = await createJournalEntry(supabase, companyId, userId ?? companyId, {
-    fiscal_period_id: fiscalPeriodId,
-    entry_date: closingDate,
-    description: `Omvärdering utländsk valuta ${closingDate}`,
-    source_type: 'currency_revaluation',
-    voucher_series: 'A',
-    lines: preview.lines,
+  const payload = buildRevaluationRpcPayload(companyId, closingDate, preview)
+
+  const { data, error } = await supabase.rpc('post_currency_revaluation', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+    p_user_id: userId ?? null,
+    p_balance_date: payload.balance_date,
+    p_snapshot_key: payload.snapshot_key,
+    p_lines: payload.lines,
+    p_items: payload.items,
   })
+
+  if (error) {
+    throw new BookkeepingDatabaseError('post_currency_revaluation', error.message)
+  }
+
+  const result = data as { run_id: string; entry_id: string | null; reused: boolean }
+
+  let entry: JournalEntry | null = null
+  if (result.entry_id) {
+    const { data: entryRow, error: entryError } = await supabase
+      .from('journal_entries')
+      .select('*')
+      .eq('id', result.entry_id)
+      .eq('company_id', companyId)
+      .single()
+    if (entryError) {
+      throw new BookkeepingDatabaseError('fetch_revaluation_entry', entryError.message)
+    }
+    entry = entryRow as JournalEntry
+  }
+
+  if (!entry) return null
 
   return { entry, preview }
 }

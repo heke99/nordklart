@@ -178,13 +178,18 @@ export default function AttachmentPreviewSheet({
   }, [])
 
   useEffect(() => {
-    if (open && entryId) {
-      fetchAttachments(entryId)
-    } else if (!open) {
-      setDocuments([])
-      setIntegrity({})
-      setBlockedDoc(null)
-    }
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchAttachments does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      if (open && entryId) {
+        fetchAttachments(entryId)
+      } else if (!open) {
+        setDocuments([])
+        setIntegrity({})
+        setBlockedDoc(null)
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, entryId, fetchAttachments])
 
   const handleOpenReplacePicker = (docId: string) => {

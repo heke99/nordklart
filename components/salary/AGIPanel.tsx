@@ -170,8 +170,13 @@ export function AGIPanel(props: AGIPanelProps) {
   }, [period])
 
   useEffect(() => {
-    fetchStatus()
-    fetchSubmission()
+    // Defer to the next macrotask so the synchronous setState inside
+    // fetchStatus/fetchSubmission does not run directly within the effect body.
+    const timer = setTimeout(() => {
+      fetchStatus()
+      fetchSubmission()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [fetchStatus, fetchSubmission])
 
   // Listen for OAuth completion from the BankID popup. When the popup posts

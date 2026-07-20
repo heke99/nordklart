@@ -58,7 +58,10 @@ export function DeadlineForm({
 
   // Reset form when dialog opens with new data
   useEffect(() => {
-    if (open) {
+    if (!open) return
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
       setConfirmDelete(false)
       if (initialData) {
         setFormData({
@@ -91,7 +94,8 @@ export function DeadlineForm({
           notes: '',
         })
       }
-    }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, initialData, initialDate])
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -81,8 +81,13 @@ export default function ChatSidebar({ initialConversations }: Props) {
   // conversation pane runs nearly edge-to-edge.
   const [collapsed, setCollapsed] = useState(true)
   useEffect(() => {
-    const stored = localStorage.getItem('Nordklart:chat-sidebar-collapsed')
-    if (stored === 'false') setCollapsed(false)
+    // Defer to the next macrotask so the synchronous setState does not run
+    // directly within the effect body.
+    const timer = setTimeout(() => {
+      const stored = localStorage.getItem('Nordklart:chat-sidebar-collapsed')
+      if (stored === 'false') setCollapsed(false)
+    }, 0)
+    return () => clearTimeout(timer)
   }, [])
   const toggleCollapsed = () => {
     setCollapsed(c => {
