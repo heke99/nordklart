@@ -3,6 +3,11 @@ import type { Currency, ExchangeRate } from '@/types'
 
 const log = createLogger('riksbanken')
 
+export interface ExchangeRateFetchOptions {
+  /** Never use approximate fallback rates for economic posting/year-end. */
+  allowFallback?: boolean
+}
+
 /** Riksbanken series IDs for each currency */
 const SERIES_IDS: Record<Currency, string> = {
   SEK: '',
@@ -19,7 +24,8 @@ const SERIES_IDS: Record<Currency, string> = {
  */
 export async function fetchExchangeRate(
   currency: Currency,
-  date?: Date
+  date?: Date,
+  options: ExchangeRateFetchOptions = {},
 ): Promise<ExchangeRate | null> {
   if (currency === 'SEK') {
     return {
@@ -95,8 +101,7 @@ export async function fetchExchangeRate(
     return null
   } catch (error) {
     log.error('Error fetching exchange rate:', error)
-    // Return fallback rates for development/testing
-    return getFallbackRate(currency)
+    return options.allowFallback === false ? null : getFallbackRate(currency)
   }
 }
 
@@ -167,7 +172,8 @@ export function formatCurrencyAmount(
  */
 export async function fetchMultipleRates(
   currencies: Currency[],
-  date?: Date
+  date?: Date,
+  options: ExchangeRateFetchOptions = {},
 ): Promise<Map<Currency, ExchangeRate>> {
   const results = new Map<Currency, ExchangeRate>()
 
@@ -182,7 +188,7 @@ export async function fetchMultipleRates(
   if (nonSek.length === 0) return results
 
   const settled = await Promise.allSettled(
-    nonSek.map(currency => fetchExchangeRate(currency, date))
+    nonSek.map(currency => fetchExchangeRate(currency, date, options))
   )
 
   for (let i = 0; i < nonSek.length; i++) {
@@ -191,9 +197,9 @@ export async function fetchMultipleRates(
 
     if (outcome.status === 'fulfilled' && outcome.value) {
       results.set(currency, outcome.value)
+    } else if (options.allowFallback === false) {
+      throw new Error(`Ingen verifierad Riksbankskurs kunde hämtas för ${currency} på eller före balansdagen.`)
     } else {
-      // fetchExchangeRate already returns fallback on error,
-      // but if it returned null or the promise rejected, use fallback
       results.set(currency, getFallbackRate(currency))
     }
   }

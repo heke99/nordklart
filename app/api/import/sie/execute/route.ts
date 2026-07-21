@@ -7,6 +7,7 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { AccountMapping, SIEAccountMappingRecord } from '@/lib/import/types'
+import { isSieFiscalPeriodAllowed, resolveSieFiscalYearAccess } from '@/lib/import/access'
 
 // SIE imports with many vouchers need extended execution time
 export const maxDuration = 300
@@ -30,6 +31,7 @@ const optionsSchema = z
       .optional(),
     updateAccountNames: z.boolean().default(true),
     onExistingPeriod: z.enum(['block', 'replace']).default('block'),
+    replaceImportId: z.string().uuid().nullable().optional(),
     /** Explicit approvals for the strict difference policy (I15/I16/I19). */
     approveOreRounding: z.boolean().default(false),
     approveSkippedVouchers: z.boolean().default(false),
@@ -111,6 +113,18 @@ export const POST = withRouteContext(
         })
       }
       const options = optionsParse.data
+      if (options.onExistingPeriod === 'replace' && !options.replaceImportId) {
+        return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+          requestId,
+          details: { reason: 'replaceImportId krävs när en tidigare import ska ersättas.' },
+        })
+      }
+      if (options.onExistingPeriod !== 'replace' && options.replaceImportId) {
+        return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+          requestId,
+          details: { reason: 'replaceImportId får endast användas i replace-läge.' },
+        })
+      }
 
       const { data: companySettings } = await supabase
         .from('company_settings')
@@ -127,6 +141,38 @@ export const POST = withRouteContext(
       // Full server-side re-parse AND re-validation of the original file
       // (I13): the execute endpoint never trusts client-parsed data.
       const parsed = parseSIEFile(content)
+      const fiscalAccess = await resolveSieFiscalYearAccess(
+        supabase,
+        ctx.sieImportAccess,
+        companyId,
+        parsed.stats.fiscalYearStart,
+        parsed.stats.fiscalYearEnd,
+      )
+      if (options.replaceImportId) {
+        const { data: prior, error: priorError } = await supabase
+          .from('sie_imports')
+          .select('id,status,fiscal_period_id,fiscal_year_start,fiscal_year_end')
+          .eq('id', options.replaceImportId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (priorError) throw new Error(priorError.message)
+        if (!prior || !['completed', 'partial'].includes(prior.status) || !isSieFiscalPeriodAllowed(ctx.sieImportAccess, prior.fiscal_period_id)) {
+          return errorResponseFromCode('SIE_IMPORT_NOT_FOUND', opLog, { requestId })
+        }
+        if (prior.fiscal_year_start !== parsed.stats.fiscalYearStart || prior.fiscal_year_end !== parsed.stats.fiscalYearEnd) {
+          return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+            requestId,
+            details: { reason: 'Den korrigerade filen måste avse exakt samma räkenskapsår som importen som ersätts.' },
+          })
+        }
+      }
+      if (!fiscalAccess.allowed) {
+        return errorResponseFromCode('PERMISSION_DENIED', opLog, {
+          requestId,
+          details: { reason: 'SIE-filen avser ett annat räkenskapsår än det köpta engångsbokslutet.' },
+        })
+      }
+
       const validation = validateSIEFile(parsed)
       if (!validation.valid) {
         return errorResponseFromCode('VALIDATION_FAILED', opLog, {
@@ -219,6 +265,7 @@ export const POST = withRouteContext(
           voucherSeries: options.voucherSeries || companyDefaultSeries,
           updateAccountNames: options.updateAccountNames,
           onExistingPeriod: options.onExistingPeriod,
+          replaceImportId: options.replaceImportId ?? null,
           approveOreRounding: options.approveOreRounding,
           approveSkippedVouchers: options.approveSkippedVouchers,
           approveMigrationAdjustment: options.approveMigrationAdjustment,
@@ -243,5 +290,5 @@ export const POST = withRouteContext(
       })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, accessPolicy: 'sie_import' },
 )

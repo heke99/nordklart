@@ -41,6 +41,104 @@ export interface HistoricalOpenItem {
 }
 
 
+
+const canonicalRpcUnavailable = new WeakSet<object>()
+
+interface HistoricalOpenItemRpcRow {
+  source_type: 'invoice' | 'supplier_invoice'
+  source_id: string
+  reference: string | null
+  currency: string | null
+  exchange_rate: number | string | null
+  invoice_date: string
+  due_date: string | null
+  customer_id: string | null
+  supplier_id: string | null
+  total: number | string
+  open_amount: number | string
+  current_status: string
+}
+
+/**
+ * Prefer the database-owned reconstruction so FX, ledgers, readiness and
+ * reconciliation cannot drift. The fallback only supports a rolling deploy
+ * where application code reaches an installation before the migration has
+ * been applied; every other database error fails closed.
+ */
+async function getHistoricalOpenItemsFromDatabase(
+  supabase: SupabaseClient,
+  companyId: string,
+  asOfDate: string,
+): Promise<HistoricalOpenItem[] | null> {
+  if (canonicalRpcUnavailable.has(supabase as object)) return null
+  // A real Supabase client always exposes rpc(). Focused legacy test adapters
+  // may omit it; treat that exactly like a rolling deploy before the canonical
+  // function exists and exercise the table fallback instead.
+  if (typeof (supabase as unknown as { rpc?: unknown }).rpc !== 'function') return null
+
+  // RPC result sets are subject to the same PostgREST row cap as table
+  // queries. Page explicitly so a company with >1 000 open invoices does not
+  // receive a silently truncated reconciliation or aging report.
+  const rows: HistoricalOpenItemRpcRow[] = []
+  let from = 0
+  const pageSize = 1000
+  while (true) {
+    const rpcQuery = supabase.rpc('historical_open_items_at', {
+      p_company_id: companyId,
+      p_as_of_date: asOfDate,
+    })
+    const supportsRange =
+      typeof (rpcQuery as unknown as { range?: unknown }).range === 'function'
+    const response = supportsRange
+      ? await (rpcQuery as unknown as {
+          range: (
+            from: number,
+            to: number,
+          ) => PromiseLike<{ data: unknown; error: { message: string; code?: string } | null }>
+        }).range(from, from + pageSize - 1)
+      : await rpcQuery
+    const { data, error } = response
+
+    if (error) {
+      const code = (error as { code?: string }).code
+      const missingFunction =
+        code === '42883' ||
+        code === 'PGRST202' ||
+        /historical_open_items_at.*(does not exist|could not find)/i.test(error.message)
+      if (missingFunction) {
+        canonicalRpcUnavailable.add(supabase as object)
+        return null
+      }
+      throw new Error(`historical_open_items_at failed: ${error.message}`)
+    }
+
+    if (!Array.isArray(data)) {
+      throw new Error('historical_open_items_at returned an invalid response')
+    }
+    rows.push(...(data as HistoricalOpenItemRpcRow[]))
+    // Production PostgREST builders expose .range(). Some focused unit mocks
+    // resolve the RPC directly; those mocks already provide their complete
+    // result set, so a second page would only repeat the same data.
+    if (!supportsRange || data.length < pageSize) break
+    from += pageSize
+  }
+
+  return rows.map((row) => ({
+    id: row.source_id,
+    type: row.source_type,
+    reference: row.reference ?? '',
+    currency: row.currency ?? 'SEK',
+    exchange_rate: row.exchange_rate == null ? null : Number(row.exchange_rate),
+    invoice_date: row.invoice_date,
+    due_date: row.due_date,
+    customer_id: row.customer_id,
+    supplier_id: row.supplier_id,
+    total: Number(row.total),
+    open_amount: Number(row.open_amount),
+    current_status: row.current_status,
+  }))
+}
+
 interface InvoiceRow {
   id: string
   invoice_number: string | null
@@ -87,6 +185,9 @@ export async function getHistoricalOpenInvoices(
   companyId: string,
   asOfDate: string,
 ): Promise<HistoricalOpenItem[]> {
+  const canonical = await getHistoricalOpenItemsFromDatabase(supabase, companyId, asOfDate)
+  if (canonical) return canonical.filter((item) => item.type === 'invoice')
+
   const invoices = await fetchAllRows<InvoiceRow>(({ from, to }) =>
     supabase
       .from('invoices')
@@ -168,6 +269,9 @@ export async function getHistoricalOpenSupplierInvoices(
   companyId: string,
   asOfDate: string,
 ): Promise<HistoricalOpenItem[]> {
+  const canonical = await getHistoricalOpenItemsFromDatabase(supabase, companyId, asOfDate)
+  if (canonical) return canonical.filter((item) => item.type === 'supplier_invoice')
+
   const invoices = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
     supabase
       .from('supplier_invoices')
@@ -248,10 +352,16 @@ export async function getHistoricalFxExposure(
   companyId: string,
   asOfDate: string,
 ): Promise<{ receivables: HistoricalOpenItem[]; payables: HistoricalOpenItem[] }> {
-  const [receivables, payables] = await Promise.all([
-    getHistoricalOpenInvoices(supabase, companyId, asOfDate),
-    getHistoricalOpenSupplierInvoices(supabase, companyId, asOfDate),
-  ])
+  const canonical = await getHistoricalOpenItemsFromDatabase(supabase, companyId, asOfDate)
+  const [receivables, payables] = canonical
+    ? [
+        canonical.filter((item) => item.type === 'invoice'),
+        canonical.filter((item) => item.type === 'supplier_invoice'),
+      ]
+    : await Promise.all([
+        getHistoricalOpenInvoices(supabase, companyId, asOfDate),
+        getHistoricalOpenSupplierInvoices(supabase, companyId, asOfDate),
+      ])
   const fx = (i: HistoricalOpenItem) =>
     i.currency !== 'SEK' && i.exchange_rate != null && i.open_amount > 0
   return {

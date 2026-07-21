@@ -2225,7 +2225,7 @@ export const TAX_DEADLINE_TYPE_LABELS: Record<TaxDeadlineType, string> = {
 // ============================================================
 
 // SIE import status
-export type SIEImportStatus = 'pending' | 'mapped' | 'completed' | 'failed'
+export type SIEImportStatus = 'pending' | 'mapped' | 'completed' | 'partial' | 'failed' | 'replaced' | 'undone'
 
 // SIE import record
 export interface SIEImport {
@@ -2246,6 +2246,11 @@ export interface SIEImport {
   error_message: string | null
   fiscal_period_id: string | null
   opening_balance_entry_id: string | null
+  replaces_import_id?: string | null
+  replaced_by_import_id?: string | null
+  file_storage_path?: string | null
+  ksumma_declared?: string | null
+  ksumma_verified?: boolean | null
   imported_at: string | null
   created_at: string
   updated_at: string

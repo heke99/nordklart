@@ -11,9 +11,9 @@ import { roundOre } from '@/lib/money'
  * bypassing every engine validation. The new flow:
  *
  *   1. prepareStagedVouchers() — pure validation + payload building with a
- *      STRICT difference policy (I15): öre differences ≤ 1 öre get an
- *      explicit öresutjämning line; anything larger requires the caller's
- *      explicit, reviewed approval or blocks the import. Nothing is silently
+ *      STRICT difference policy (I15): every non-zero difference requires the
+ *      caller's explicit, reviewed approval before a 3741 line is staged.
+ *      Nothing is silently
  *      auto-adjusted and no voucher is silently skipped.
  *   2. stageVouchers() — idempotent batch writes to sie_import_staging
  *      (retry-safe: primary key (import_id, row_index)).
@@ -25,13 +25,13 @@ import { roundOre } from '@/lib/money'
  */
 
 
-/** Auto-adjusted öresutjämning tolerance: 1 öre (documented, I15). */
-export const SIE_ORE_AUTO_TOLERANCE = 0.01
+/** No automatic öresutjämning is permitted. Kept as an exported invariant. */
+export const SIE_ORE_AUTO_TOLERANCE = 0
 /** Maximum difference that MAY be approved for öresutjämning: 1 SEK. */
 export const SIE_ORE_APPROVAL_CAP = 1.0
 
 export interface SieImportPolicy {
-  /** Explicitly approve öresutjämning (3741) for diffs in (0.01, 1.00] SEK. */
+  /** Explicitly approve öresutjämning (3741) for every non-zero diff up to 1.00 SEK. */
   approveOreRounding: boolean
   /** Explicitly approve skipping unpostable vouchers (unbalanced > 1 SEK,
    *  single-line). Without approval such vouchers BLOCK the import. */
@@ -265,9 +265,9 @@ export function prepareStagedVouchers(
     }
 
     if (balanceDiff > 0.005) {
-      // Öresutjämning territory. ≤ 1 öre is the documented automatic
-      // tolerance; (1 öre, 1 SEK] requires explicit approval (I15).
-      if (balanceDiff > SIE_ORE_AUTO_TOLERANCE && !policy.approveOreRounding) {
+      // Every non-zero difference requires explicit approval. Even 0.01 SEK
+      // is an economic correction and must never be silently posted to 3741.
+      if (!policy.approveOreRounding) {
         result.skippedUnbalanced++
         result.skippedDetails.push({
           voucherId,
@@ -282,7 +282,7 @@ export function prepareStagedVouchers(
           sourceLines: voucher.lines.map((l) => ({ account: l.account, amount: l.amount })),
         })
         result.blockingErrors.push(
-          `Verifikation ${voucherId} (${voucherDate}) har en öresdifferens på ${balanceDiff} kr (över den automatiska toleransen 0,01 kr). Godkänn öresutjämning uttryckligen (approve_ore_rounding) för att bokföra differensen på konto 3741.`,
+          `Verifikation ${voucherId} (${voucherDate}) har en differens på ${balanceDiff} kr. Godkänn uttryckligen den föreslagna korrigeringen på konto 3741 (approve_ore_rounding), eller rätta källfilen.`,
         )
         continue
       }
@@ -297,11 +297,9 @@ export function prepareStagedVouchers(
         project: null,
         dimensions: null,
       })
-      if (balanceDiff > SIE_ORE_AUTO_TOLERANCE) {
-        result.warnings.push(
-          `Verifikation ${voucherId}: öresutjämning ${balanceDiff} kr bokförd på konto 3741 efter uttryckligt godkännande.`,
-        )
-      }
+      result.warnings.push(
+        `Verifikation ${voucherId}: differens ${balanceDiff} kr bokförd på konto 3741 efter uttryckligt godkännande.`,
+      )
     }
 
     const resolvedSeries =

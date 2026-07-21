@@ -98,6 +98,22 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingen aktiv företagskontext. Välj ett företag och försök igen.',
     message_en: 'No active company context resolved for the request.',
   },
+  INVALID_COMPANY_ID: {
+    httpStatus: 400,
+    message_sv: 'Företags-id är ogiltigt eller bolaget finns inte.',
+    message_en: 'The company id is invalid or the company does not exist.',
+  },
+  PERMISSION_DENIED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att läsa eller ändra det här bolagets räkenskapsår.',
+    message_en: 'The actor is not allowed to access this company fiscal year.',
+  },
+  DATABASE_QUERY_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Data kunde inte hämtas från databasen. Försök igen.',
+    message_en: 'The database query failed.',
+    retryable: true,
+  },
   MAINTENANCE_READ_ONLY: {
     httpStatus: 503,
     message_sv:
@@ -881,6 +897,47 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_en:
       'Cannot create a new fiscal year while a prior period is still open; lock it first.',
   },
+  ACCOUNTING_PERIODS_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bolaget saknar räkenskapsperioder.',
+    message_en: 'No accounting periods exist for the company.',
+  },
+  FISCAL_YEAR_NOT_CREATED: {
+    httpStatus: 500,
+    message_sv: 'Räkenskapsåret kunde inte skapas.',
+    message_en: 'The fiscal year was not created.',
+  },
+  YEAR_END_ENTITLEMENT_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Bolaget saknar aktiv åtkomst till bokslut för detta räkenskapsår.',
+    message_en: 'An active year-end entitlement is required.',
+  },
+  ONE_OFF_YEAR_END_NOT_ACTIVE: {
+    httpStatus: 403,
+    message_sv: 'Engångsbokslutet är inte aktivt eller gäller ett annat räkenskapsår.',
+    message_en: 'The one-off year-end case is not active for this fiscal year.',
+  },
+  FISCAL_YEAR_OVERLAP: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret överlappar ett befintligt räkenskapsår.',
+    message_en: 'The fiscal year overlaps an existing fiscal year.',
+  },
+  FISCAL_YEAR_NOT_CONTIGUOUS: {
+    httpStatus: 400,
+    message_sv: 'Räkenskapsåret måste ansluta direkt till föregående eller nästa år.',
+    message_en: 'The fiscal year must be contiguous with adjacent fiscal years.',
+  },
+  INVALID_FISCAL_YEAR_RANGE: {
+    httpStatus: 400,
+    message_sv: 'Datumintervallet för räkenskapsåret är ogiltigt.',
+    message_en: 'The fiscal year date range is invalid.',
+  },
+  FISCAL_YEAR_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Räkenskapsåret kunde inte skapas. Försök igen.',
+    message_en: 'Fiscal year creation failed.',
+    retryable: true,
+  },
 }
 
 const ACCRUALS: Record<string, StructuredErrorEntry> = {
@@ -970,6 +1027,12 @@ const REPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Rapporten kunde inte genereras.',
     message_en: 'Failed to generate the report.',
+  },
+  REPORT_DATA_QUERY_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Rapportdata kunde inte hämtas. Försök igen.',
+    message_en: 'Report source data could not be loaded.',
+    retryable: true,
   },
 }
 
@@ -1130,6 +1193,21 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'SIE-importen kunde inte ersättas.',
     message_en: 'Failed to replace SIE import.',
+  },
+  SIE_IMPORT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'SIE-importen hittades inte eller ligger utanför det räkenskapsår du har åtkomst till.',
+    message_en: 'SIE import not found or outside the permitted fiscal period.',
+  },
+  SIE_DELETE_POSTED_FORBIDDEN: {
+    httpStatus: 409,
+    message_sv: 'En bokförd SIE-import får inte raderas. Använd ångra eller ersätt så att stornoverifikationer och revisionsspår bevaras.',
+    message_en: 'A posted SIE import cannot be deleted; use reversal-based undo or replace.',
+  },
+  SIE_REPLACE_FILE_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Ladda upp och validera den korrigerade SIE-filen innan den tidigare importen kan ersättas.',
+    message_en: 'Upload and validate the corrected SIE file before replacing the previous import.',
   },
   SIE_UNDO_FAILED: {
     httpStatus: 400,

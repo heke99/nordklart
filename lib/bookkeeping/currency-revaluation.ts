@@ -77,6 +77,8 @@ export function computeRevaluationSnapshotKey(
       a: i.amount_in_currency,
       or: i.original_rate,
       cr: i.closing_rate,
+      crd: i.closing_rate_date ?? closingDate,
+      rs: i.rate_source ?? 'riksbanken',
     }))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   return createHash('sha256')
@@ -130,7 +132,8 @@ export async function previewCurrencyRevaluation(
   // Fetch closing rates
   const rateMap = await fetchMultipleRates(
     Array.from(currencies),
-    new Date(closingDate)
+    new Date(closingDate),
+    { allowFallback: false },
   )
 
   const closingRates: Record<string, number> = {}
@@ -141,8 +144,9 @@ export async function previewCurrencyRevaluation(
   const items: RevaluationItem[] = []
 
   const pushItem = (item: HistoricalOpenItem) => {
-    const closingRate = rateMap.get(item.currency as Currency)?.rate
-    if (!closingRate || !item.exchange_rate) return
+    const closingRateObservation = rateMap.get(item.currency as Currency)
+    const closingRate = closingRateObservation?.rate
+    if (!closingRate || !closingRateObservation || !item.exchange_rate) return
 
     // Only the amount that was OPEN on the balance date is revalued (B06/B07).
     const amountInCurrency = item.open_amount
@@ -152,8 +156,10 @@ export async function previewCurrencyRevaluation(
     const closingSek = roundOre(amountInCurrency * closingRate)
     const difference = roundOre(closingSek - originalSek)
 
-    if (Math.abs(difference) < 0.01) return
-
+    // Keep every open FX item in the verified snapshot, including a zero/
+    // sub-öre difference. The database needs the complete item set to prove
+    // that no exposure was omitted; only journal-line creation applies the
+    // materiality threshold below.
     items.push({
       type: item.type === 'invoice' ? 'receivable' : 'payable',
       source_id: item.id,
@@ -162,6 +168,8 @@ export async function previewCurrencyRevaluation(
       amount_in_currency: amountInCurrency,
       original_rate: item.exchange_rate,
       closing_rate: closingRate,
+      closing_rate_date: closingRateObservation.date,
+      rate_source: 'riksbanken',
       original_sek: originalSek,
       closing_sek: closingSek,
       difference_sek: difference,
@@ -295,8 +303,61 @@ export function buildRevaluationRpcPayload(
       open_amount_sek_original: i.original_sek,
       rate_original: i.original_rate,
       rate_closing: i.closing_rate,
+      rate_closing_date: i.closing_rate_date ?? closingDate,
+      rate_source: i.rate_source ?? 'riksbanken',
       unrealized_diff_sek: i.difference_sek,
     })),
+  }
+}
+
+
+/**
+ * Freeze the official closing rates before an economic RPC uses them.
+ *
+ * The service fetches Riksbanken observations, but cannot make them economic
+ * truth by merely embedding them in the posting payload. This service-only RPC
+ * stores the exact observation once; post_currency_revaluation subsequently
+ * derives its rate from that locked database snapshot and only uses the
+ * payload values as a mismatch detector.
+ */
+export async function registerYearEndFxRateSnapshots(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  closingDate: string,
+  userId: string,
+  preview: CurrencyRevaluationPreview,
+): Promise<void> {
+  const ratesByCurrency = new Map<string, { currency: string; rate: number; observed_date: string }>()
+  for (const item of preview.items) {
+    const observedDate = item.closing_rate_date ?? closingDate
+    const existing = ratesByCurrency.get(item.currency)
+    if (existing && (existing.rate !== item.closing_rate || existing.observed_date !== observedDate)) {
+      throw new Error(`Conflicting closing-rate observations for ${item.currency}`)
+    }
+    ratesByCurrency.set(item.currency, {
+      currency: item.currency,
+      rate: item.closing_rate,
+      observed_date: observedDate,
+    })
+  }
+
+  if (ratesByCurrency.size === 0) return
+
+  const { error } = await supabase.rpc('register_year_end_fx_rate_snapshots', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+    p_actor_user_id: userId,
+    p_balance_date: closingDate,
+    p_rates: Array.from(ratesByCurrency.values()).map((rate) => ({
+      ...rate,
+      source: 'riksbanken',
+      source_reference: `SWEA:${rate.currency}:${rate.observed_date}`,
+    })),
+  })
+
+  if (error) {
+    throw new BookkeepingDatabaseError('register_year_end_fx_rate_snapshots', error.message)
   }
 }
 
@@ -314,20 +375,30 @@ export async function executeCurrencyRevaluation(
   companyId: string,
   closingDate: string,
   fiscalPeriodId: string,
-  userId?: string
+  userId: string
 ): Promise<CurrencyRevaluationResult | null> {
+  if (!userId) {
+    throw new Error('YEAR_END_ACTOR_REQUIRED: currency revaluation requires a verified actor')
+  }
+
   const preview = await previewCurrencyRevaluation(supabase, companyId, closingDate)
 
-  if (preview.items.length === 0 || preview.lines.length === 0) {
+  if (preview.items.length === 0) {
     return null
   }
+
+  await registerYearEndFxRateSnapshots(
+    supabase, companyId, fiscalPeriodId, closingDate, userId, preview,
+  )
+
+  if (preview.lines.length === 0) return null
 
   const payload = buildRevaluationRpcPayload(companyId, closingDate, preview)
 
   const { data, error } = await supabase.rpc('post_currency_revaluation', {
     p_company_id: companyId,
     p_fiscal_period_id: fiscalPeriodId,
-    p_user_id: userId ?? null,
+    p_user_id: userId,
     p_balance_date: payload.balance_date,
     p_snapshot_key: payload.snapshot_key,
     p_lines: payload.lines,

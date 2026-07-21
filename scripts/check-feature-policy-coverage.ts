@@ -32,6 +32,7 @@ import {
   isCoreOperation,
   isPeriodBoundYearEndOperation,
   isPlatformOperation,
+  isSieImportOperation,
 } from '../lib/platform/feature-policy-map'
 
 type Finding = { file: string; reason: string }
@@ -124,6 +125,7 @@ function hasServerSideFeatureCheck(source: string): boolean {
     || source.includes('featureAccessError(')
     || source.includes('requirePlatformRole(')
     || source.includes('requirePlatformAdmin(')
+    || source.includes('resolveFiscalPeriodAccess(')
 }
 
 const OPERATION_PATTERNS = [
@@ -181,6 +183,16 @@ for (const file of allRoutes) {
         findings.push({
           file: relFile,
           reason: `operation '${operation}' är period-bunden year-end men routen saknar requireYearEndAccess()`,
+        })
+      }
+      continue
+    }
+
+    if (isSieImportOperation(operation)) {
+      if (!source.includes("accessPolicy: 'sie_import'")) {
+        findings.push({
+          file: relFile,
+          reason: `operation '${operation}' måste använda accessPolicy: 'sie_import' för bokförings- eller periodbundet engångsbokslut`,
         })
       }
       continue

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+import { createServiceClient } from '@/lib/supabase/server'
 
 /**
  * GET: list year-end runs for a fiscal period (revision item B10).
@@ -15,20 +16,21 @@ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-en
 export const GET = withRouteContext(
   'period.year_end_runs',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-    const { user, supabase, companyId, log, requestId } = ctx
+    const { user, companyId, log, requestId } = ctx
     const { id } = await params
     const opLog = log.child({ periodId: id })
 
-    const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+    const serviceDb = createServiceClient()
+    const access = await requireYearEndAccess(serviceDb, companyId, user.id, id, {
       operation: 'period.year_end_runs',
       requestId,
     })
     if (!access.allowed) return yearEndAccessDeniedResponse()
 
-    const { data, error } = await supabase
+    const { data, error } = await serviceDb
       .from('year_end_runs')
       .select(
-        'id, status, idempotency_key, error_message, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, started_at, finished_at, created_at',
+        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, idempotency_key, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, started_at, finished_at, created_at',
       )
       .eq('company_id', companyId!)
       .eq('fiscal_period_id', id)
@@ -42,4 +44,5 @@ export const GET = withRouteContext(
 
     return NextResponse.json({ data: data ?? [] })
   },
+  { allowRequestedCompany: true },
 )

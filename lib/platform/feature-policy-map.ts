@@ -78,6 +78,17 @@ export function isPeriodBoundYearEndOperation(operation: string): boolean {
   )
 }
 
+
+/**
+ * SIE import is available either through bookkeeping.core or a period-bound
+ * one-off year-end purchase. Routes must therefore use the dedicated
+ * `accessPolicy: 'sie_import'` resolver instead of a company-wide feature.
+ */
+export function isSieImportOperation(operation: string): boolean {
+  const normalized = operation.toLowerCase()
+  return normalized.startsWith('sie_import.') || normalized.startsWith('imports.sie.')
+}
+
 export function isCoreOperation(operation: string): boolean {
   const normalized = operation.toLowerCase()
   return CORE_OPERATION_PREFIXES.some(({ prefix }) => normalized.startsWith(prefix))
@@ -100,7 +111,7 @@ export function featureForOperation(operation: string): FeatureCode | null {
     if (normalized.includes('onboarding') || normalized.includes('application')) return NORDKLART_FEATURES.bankgiroApplication
     return NORDKLART_FEATURES.bankgiroOperations
   }
-  if (isPeriodBoundYearEndOperation(normalized)) {
+  if (isPeriodBoundYearEndOperation(normalized) || isSieImportOperation(normalized)) {
     return null
   }
   if (isCoreOperation(normalized) || isPlatformOperation(normalized)) {

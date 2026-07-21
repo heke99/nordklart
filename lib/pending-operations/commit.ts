@@ -2619,7 +2619,7 @@ async function commitUndoSieImport(
     return { error: 'import_id is required', status: 400 }
   }
 
-  const result = await undoSIEImport(supabase, companyId, importId)
+  const result = await undoSIEImport(supabase, companyId, importId, userId)
   if (!result.success) {
     return { error: result.error ?? 'SIE undo failed', status: 400 }
   }
@@ -2627,7 +2627,7 @@ async function commitUndoSieImport(
   return {
     data: {
       import_id: importId,
-      deleted_entries: result.deletedEntries,
+      reversed_entries: result.reversedEntries,
     },
   }
 }

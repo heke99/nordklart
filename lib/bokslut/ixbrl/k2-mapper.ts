@@ -16,6 +16,8 @@
 
 import type { ConceptAmount, ConceptAmounts } from './types'
 
+export const K2_MAPPING_VERSION = 'k2-bas-2026-v1' as const
+
 export interface TrialBalanceRowLike {
   account_number: string
   account_name: string

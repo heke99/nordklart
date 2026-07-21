@@ -12,6 +12,7 @@ import {
   grantCompanyAccessFromCardAction,
   revokeCompanyAccessFromCardAction,
   setCompanySubscriptionFromCardAction,
+  createFiscalYearFromCompanyCardAction,
 } from './actions'
 
 export const dynamic = 'force-dynamic'
@@ -70,6 +71,7 @@ export default async function PlatformCompanyDetailPage({ params, searchParams }
               Felsökningsrapport
             </a>
           </Button>
+          <Button asChild variant="outline"><Link href={`/bookkeeping/year-end?company_id=${company.id}`}>Administrera bokslut</Link></Button>
           <Button asChild variant="secondary"><Link href="/platform/companies"><ArrowLeft className="mr-2 h-4 w-4" />Alla bolag</Link></Button>
         </div>
       }
@@ -182,6 +184,17 @@ export default async function PlatformCompanyDetailPage({ params, searchParams }
           </div>
         </section>
       </div>
+
+      <section className="rounded-3xl border bg-card p-6 shadow-sm">
+        <div className="flex items-start gap-3"><BookOpenCheck className="mt-1 h-5 w-5 text-primary" /><div><h2 className="text-xl font-semibold">Bokslut och räkenskapsår</h2><p className="mt-1 text-sm text-muted-foreground">Superadmin kan öppna bolagets bokslutsvy eller skapa det första räkenskapsåret utan medlemskap i bolaget.</p></div></div>
+        {canWrite ? <form action={createFiscalYearFromCompanyCardAction} className="mt-5 grid gap-3 rounded-2xl border p-4 md:grid-cols-4">
+          <input type="hidden" name="company_id" value={company.id} />
+          <input required name="name" placeholder="Exempel: 2026" className="h-10 rounded-lg border bg-background px-3 text-sm" />
+          <input required name="period_start" type="date" className="h-10 rounded-lg border bg-background px-3 text-sm" />
+          <input required name="period_end" type="date" className="h-10 rounded-lg border bg-background px-3 text-sm" />
+          <Button type="submit">Skapa räkenskapsår</Button>
+        </form> : null}
+      </section>
 
       <section className="rounded-3xl border bg-card p-6 shadow-sm">
         <div className="flex items-start gap-3"><BookOpenCheck className="mt-1 h-5 w-5 text-primary" /><div><h2 className="text-xl font-semibold">Bokföringskontroll</h2><p className="mt-1 text-sm text-muted-foreground">Kontrollerar att underlag, kvitto, utlägg, leverantörsfaktura, verifikation och bankhändelse hänger ihop.</p></div></div>

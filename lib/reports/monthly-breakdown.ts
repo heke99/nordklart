@@ -12,6 +12,15 @@ export interface MonthlyBreakdown {
   months: MonthlyBreakdownMonth[]
 }
 
+export class MonthlyBreakdownDataError extends Error {
+  readonly code = 'REPORT_DATA_QUERY_FAILED'
+
+  constructor(message: string, readonly causeDetail?: unknown) {
+    super(message)
+    this.name = 'MonthlyBreakdownDataError'
+  }
+}
+
 const MONTH_LABELS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun',
   'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec',
@@ -38,8 +47,14 @@ export async function generateMonthlyBreakdown(
     .eq('company_id', companyId)
     .single()
 
-  if (periodError || !period) {
-    return { months: [] }
+  if (periodError) {
+    throw new MonthlyBreakdownDataError(
+      'Räkenskapsperioden kunde inte hämtas för månadsrapporten.',
+      periodError,
+    )
+  }
+  if (!period) {
+    throw new MonthlyBreakdownDataError('Räkenskapsperioden saknas för månadsrapporten.')
   }
 
   // Get all posted journal entry lines for this period with their entry dates
@@ -62,11 +77,15 @@ export async function generateMonthlyBreakdown(
         `)
         .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
         .eq('journal_entries.company_id', companyId)
-        .eq('journal_entries.status', 'posted')
+        .in('journal_entries.status', ['posted', 'reversed'])
         .range(from, to)
     )
-  } catch {
-    return { months: [] }
+  } catch (error) {
+    if (error instanceof MonthlyBreakdownDataError) throw error
+    throw new MonthlyBreakdownDataError(
+      'Verifikationsraderna kunde inte hämtas för månadsrapporten.',
+      error,
+    )
   }
 
   // Build monthly aggregates using year-aware keys ("2024-03", "2024-04", etc.)

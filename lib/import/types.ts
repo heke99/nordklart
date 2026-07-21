@@ -333,8 +333,8 @@ export interface ImportResult {
 
   // If this import replaced a prior completed import for the same fiscal year
   // (Fortnox re-sync flow), the prior import's id and the count of journal
-  // entries that were deleted as a result.
-  replacedPriorImport?: { importId: string; deletedEntries: number } | null
+  // entries that were reversed as a result; originals remain immutable.
+  replacedPriorImport?: { importId: string; reversedEntries: number } | null
 
   // If a prior-year backfill triggered IB resync on the immediately-following
   // fiscal period (storno + recreate of its opening_balance entry), the

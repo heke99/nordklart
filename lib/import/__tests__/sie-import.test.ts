@@ -1045,9 +1045,7 @@ describe('prepareStagedVouchers — per-voucher series preservation', () => {
       expect(result.warnings.join(' ')).toMatch(/hoppades över efter uttryckligt godkännande/)
     })
 
-    it('auto-adjusts a 0.01 SEK diff with an öresutjämning line on 3741 (no approval needed)', () => {
-      // 1 öre är den dokumenterade automatiska toleransen — ingen varning,
-      // ingen attest, men differensen bokförs alltid explicit på 3741.
+    it('blocks a 0.01 SEK diff until öresutjämning is explicitly approved', () => {
       const parsed = makeParsedFile({
         vouchers: [
           makeVoucher('A', 1, [
@@ -1057,22 +1055,20 @@ describe('prepareStagedVouchers — per-voucher series preservation', () => {
         ],
       })
 
-      const result = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
+      const blocked = prepareStagedVouchers(parsed, baseMap, 'A', strictPolicy)
+      expect(blocked.staged).toEqual([])
+      expect(blocked.skippedUnbalanced).toBe(1)
+      expect(blocked.blockingErrors.join(' ')).toMatch(/0\.01 kr/i)
+      expect(blocked.blockingErrors.join(' ')).toMatch(/godkänn uttryckligen.*konto 3741/i)
 
-      expect(result.blockingErrors).toEqual([])
-      expect(result.warnings).toEqual([])
-      expect(result.staged).toHaveLength(1)
-      // Debet 100.01 > kredit 100.00 → 3741 balanserar på kreditsidan.
-      const adjustment = result.staged[0].lines.find((l) => l.account_number === '3741')
-      expect(adjustment).toEqual({
-        account_number: '3741',
-        debit_amount: 0,
-        credit_amount: 0.01,
-        line_description: 'Öresutjämning',
-        cost_center: null,
-        project: null,
-        dimensions: null,
+      const approved = prepareStagedVouchers(parsed, baseMap, 'A', {
+        approveOreRounding: true,
+        approveSkippedVouchers: false,
       })
+      expect(approved.blockingErrors).toEqual([])
+      const adjustment = approved.staged[0].lines.find((line) => line.account_number === '3741')
+      expect(adjustment).toMatchObject({ debit_amount: 0, credit_amount: 0.01 })
+      expect(approved.warnings.join(' ')).toMatch(/efter uttryckligt godkännande/i)
     })
 
     it('blocks a 0.02 SEK diff without approveOreRounding', () => {
@@ -1089,7 +1085,7 @@ describe('prepareStagedVouchers — per-voucher series preservation', () => {
 
       expect(result.staged).toEqual([])
       expect(result.skippedUnbalanced).toBe(1)
-      expect(result.blockingErrors.join(' ')).toMatch(/godkänn öresutjämning uttryckligen/i)
+      expect(result.blockingErrors.join(' ')).toMatch(/godkänn uttryckligen.*konto 3741/i)
     })
 
     it('adjusts a 0.02 SEK diff to 3741 with a warning when approveOreRounding is set', () => {
@@ -1112,7 +1108,7 @@ describe('prepareStagedVouchers — per-voucher series preservation', () => {
       const adjustment = result.staged[0].lines.find((l) => l.account_number === '3741')
       expect(adjustment?.credit_amount).toBe(0.02)
       expect(result.warnings.join(' ')).toMatch(
-        /öresutjämning 0\.02 kr bokförd på konto 3741 efter uttryckligt godkännande/,
+        /differens 0\.02 kr bokförd på konto 3741 efter uttryckligt godkännande/,
       )
     })
 
@@ -1132,7 +1128,7 @@ describe('prepareStagedVouchers — per-voucher series preservation', () => {
       )
       expect(blocked.staged).toEqual([])
       expect(blocked.skippedUnbalanced).toBe(1)
-      expect(blocked.blockingErrors.join(' ')).toMatch(/godkänn öresutjämning uttryckligen/i)
+      expect(blocked.blockingErrors.join(' ')).toMatch(/godkänn uttryckligen.*konto 3741/i)
 
       const approved = prepareStagedVouchers(
         makeParsedFile({ vouchers: [makeVoucher('A', 1, linesWithOneKronaDiff)] }),

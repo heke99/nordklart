@@ -431,17 +431,19 @@ function SIEImportWizard() {
   const currentStepIndex = sieSteps.indexOf(step)
   const progress = ((currentStepIndex + 1) / sieSteps.length) * 100
 
-  const handleFileSelect = useCallback(async (selectedFile: File) => {
+  const handleFileSelect = useCallback(async (selectedFile: File, replaceImportId?: string) => {
     setFile(selectedFile)
     setError(null)
     setErrorType(undefined)
     setValidationErrors([])
     setValidationWarnings([])
+    setDuplicateImportId(replaceImportId ?? null)
     setIsLoading(true)
 
     try {
       const formData = new FormData()
       formData.append('file', selectedFile)
+      if (replaceImportId) formData.append('replaceImportId', replaceImportId)
 
       const res = await fetch('/api/import/sie/parse', {
         method: 'POST',
@@ -543,7 +545,7 @@ function SIEImportWizard() {
 
       toast({
         title: 'Import ångrad',
-        description: `${data.deletedEntries} verifikation${data.deletedEntries === 1 ? '' : 'er'} raderades.`,
+        description: `${data.reversedEntries} verifikation${data.reversedEntries === 1 ? '' : 'er'} stornerades. Original och revisionsspår är bevarade.`,
       })
 
       // Reset wizard to upload step so the user can re-import a corrected file
@@ -569,32 +571,16 @@ function SIEImportWizard() {
 
   const handleReplace = useCallback(async (importId: string) => {
     if (!file) return
-
     setIsReplacing(true)
     try {
-      const res = await fetch(`/api/import/sie/${importId}/replace`, { method: 'POST' })
-      const data = await res.json()
-
-      if (!res.ok) {
-        toast({ title: 'Kunde inte ersätta import', description: getErrorMessage(data), variant: 'destructive' })
-        return
-      }
-
-      toast({
-        title: 'Import ersatt',
-        description: `${data.deletedEntries} verifikation${data.deletedEntries === 1 ? '' : 'er'} raderades. Importerar ny fil...`,
-      })
-
-      // Clear error state and re-trigger the file upload
       setError(null)
       setErrorType(undefined)
-      setDuplicateImportId(null)
-
-      // Small delay so the user sees the success toast before re-upload starts
-      await new Promise(resolve => setTimeout(resolve, 500))
-      handleFileSelect(file)
-    } catch {
-      toast({ title: 'Anslutningsfel', description: 'Kunde inte nå servern.', variant: 'destructive' })
+      setDuplicateImportId(importId)
+      await handleFileSelect(file, importId)
+      toast({
+        title: 'Korrigerad fil validerad',
+        description: 'Den tidigare importen ligger kvar tills den nya filen godkänns och bokförs atomiskt.',
+      })
     } finally {
       setIsReplacing(false)
     }
@@ -690,7 +676,11 @@ function SIEImportWizard() {
       const formData = new FormData()
       formData.append('file', file)
       formData.append('mappings', JSON.stringify(mappings))
-      formData.append('options', JSON.stringify(options))
+      formData.append('options', JSON.stringify({
+        ...options,
+        onExistingPeriod: duplicateImportId ? 'replace' : 'block',
+        replaceImportId: duplicateImportId,
+      }))
 
       const res = await fetch('/api/import/sie/execute', { method: 'POST', body: formData })
       const data = await res.json()
@@ -742,7 +732,7 @@ function SIEImportWizard() {
     } finally {
       setIsLoading(false)
     }
-  }, [file, mappings, toast])
+  }, [file, mappings, toast, duplicateImportId])
 
   const goToStep = (targetStep: ImportWizardStep) => { setStep(targetStep); setError(null); setValidationErrors([]); setValidationWarnings([]) }
   const goBack = () => { const i = sieSteps.indexOf(step); if (i > 0) setStep(sieSteps[i - 1]) }

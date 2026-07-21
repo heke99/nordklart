@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from "@/components/ui/skeleton"
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { KPIHeroCards } from '@/components/kpi/KPIHeroCards'
@@ -20,7 +21,7 @@ export default function KpiPage() {
   const [preferences, setPreferences] = useState<KPIPreferences>(getDefaultPreferences())
   const [isLoadingReport, setIsLoadingReport] = useState(false)
   const [isSavingPrefs, setIsSavingPrefs] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ message: string; code?: string; requestId?: string } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -41,11 +42,25 @@ export default function KpiPage() {
     setError(null)
     try {
       const res = await fetch(`/api/reports/kpi?period_id=${periodId}`)
-      if (!res.ok) throw new Error(t('fetch_failed'))
-      const { data } = await res.json()
-      setReport(data)
+      const payload = await res.json().catch(() => ({})) as {
+        data?: KPIReport
+        error?: string
+        code?: string
+        request_id?: string
+      }
+      if (!res.ok || !payload.data) {
+        setReport(null)
+        setError({
+          message: payload.error ?? t('fetch_failed'),
+          code: payload.code,
+          requestId: payload.request_id,
+        })
+        return
+      }
+      setReport(payload.data)
     } catch {
-      setError(t('fetch_failed'))
+      setReport(null)
+      setError({ message: t('fetch_failed') })
     } finally {
       setIsLoadingReport(false)
     }
@@ -108,8 +123,19 @@ export default function KpiPage() {
 
       {error && (
         <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            <p>{error}</p>
+          <CardContent className="space-y-3 py-8 text-center">
+            <p className="font-medium text-destructive">{error.message}</p>
+            {error.code && (
+              <p className="text-xs text-muted-foreground">Felkod: {error.code}</p>
+            )}
+            {error.requestId && (
+              <p className="text-xs text-muted-foreground">Referens: {error.requestId}</p>
+            )}
+            {selectedPeriod && (
+              <Button type="button" variant="outline" onClick={() => void fetchReport(selectedPeriod)}>
+                Försök igen
+              </Button>
+            )}
           </CardContent>
         </Card>
       )}

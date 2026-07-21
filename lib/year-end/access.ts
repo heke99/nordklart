@@ -1,9 +1,6 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { checkFeatureAccess, featureAccessError } from '@/lib/platform/entitlements'
-import { createLogger } from '@/lib/logger'
-
-const log = createLogger('year-end/access')
 
 export type YearEndAccessSource =
   | 'feature_entitlement'
@@ -15,12 +12,13 @@ export interface YearEndAccessDecision {
   allowed: boolean
   source?: YearEndAccessSource
   sourceId?: string | null
-  reason?: 'missing_entitlement' | 'expired' | 'unauthorized'
+  reason?: 'missing_entitlement' | 'expired' | 'unauthorized' | 'database_error'
 }
 
 type OneTimePurchaseRow = {
   id: string
   permanent_access?: boolean | null
+  access_starts_at?: string | null
   access_expires_at?: string | null
 }
 
@@ -31,6 +29,8 @@ type RequireYearEndAccessOptions = {
   auditPlatformBypass?: boolean
   operation?: string
   requestId?: string
+  /** Require an effective write-capable company role for economic mutations. */
+  requireWrite?: boolean
 }
 
 async function isPlatformAdmin(supabase: SupabaseClient, userId?: string | null): Promise<boolean> {
@@ -113,6 +113,25 @@ export async function resolveYearEndAccess(
   userId?: string | null,
   options: RequireYearEndAccessOptions = {},
 ): Promise<YearEndAccessDecision> {
+  let effectiveRole: string | null = null
+  let canWrite = false
+  let canManagePlatform = false
+  if (userId) {
+    const { data: accessData, error: accessError } = await supabase.rpc(
+      'resolve_company_access_for_user',
+      { p_user_id: userId, p_company_id: companyId },
+    )
+    if (accessError) return { allowed: false, reason: 'database_error' }
+    const access = Array.isArray(accessData) ? accessData[0] : null
+    if (!access?.can_read) return { allowed: false, reason: 'unauthorized' }
+    effectiveRole = access.effective_role ?? null
+    canWrite = Boolean(access.can_write)
+    canManagePlatform = Boolean(access.can_manage_platform) && effectiveRole === 'platform_admin'
+    if (options.requireWrite && !canWrite && !canManagePlatform && !['company_owner','company_admin','accountant','client_user'].includes(effectiveRole ?? '')) {
+      return { allowed: false, reason: 'unauthorized' }
+    }
+  }
+
   const projectEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.projects')
   if (projectEntitlement.allowed) {
     return { allowed: true, source: 'feature_entitlement', sourceId: projectEntitlement.sourceId ?? null }
@@ -128,7 +147,7 @@ export async function resolveYearEndAccess(
   if (fiscalPeriodId) {
     const { data } = await supabase
       .from('one_time_purchases')
-      .select('id, status, access_expires_at, permanent_access')
+      .select('id, status, access_starts_at, access_expires_at, permanent_access')
       .eq('company_id', companyId)
       .eq('purchase_type', 'year_end')
       .eq('fiscal_period_id', fiscalPeriodId)
@@ -139,9 +158,10 @@ export async function resolveYearEndAccess(
 
     const row = data as OneTimePurchaseRow | null
     if (row) {
-      const hasAccess = Boolean(row.permanent_access)
+      const hasStarted = !row.access_starts_at || new Date(row.access_starts_at).getTime() <= Date.now()
+      const hasAccess = hasStarted && (Boolean(row.permanent_access)
         || !row.access_expires_at
-        || new Date(row.access_expires_at).getTime() >= Date.now()
+        || new Date(row.access_expires_at).getTime() >= Date.now())
       if (hasAccess) {
         return { allowed: true, source: 'one_time_purchase', sourceId: row.id }
       }
@@ -149,7 +169,7 @@ export async function resolveYearEndAccess(
     }
   }
 
-  if (await isPlatformAdmin(supabase, userId)) {
+  if (canManagePlatform || await isPlatformAdmin(supabase, userId)) {
     return { allowed: true, source: 'platform_admin_bypass' }
   }
 
@@ -174,27 +194,16 @@ export async function requireYearEndAccess(
     && decision.source === 'platform_admin_bypass'
     && options.auditPlatformBypass !== false
   ) {
-    try {
-      await auditPlatformBypass(
-        supabase,
-        userId,
-        companyId,
-        fiscalPeriodId,
-        options.operation,
-        options.requestId,
-      )
-    } catch (err) {
-      // Never block a legitimate platform admin because an optional audit sink
-      // is unavailable — but surface the gap loudly: bypass-without-audit is a
-      // compliance signal operations must see.
-      log.error('platform admin year-end bypass could NOT be audit-logged', err as Error, {
-        userId,
-        companyId,
-        fiscalPeriodId,
-        operation: options.operation ?? null,
-        requestId: options.requestId ?? null,
-      })
-    }
+    // Audit is an invariant, not best effort. A platform bypass without a
+    // durable audit row must fail closed before any data is returned or changed.
+    await auditPlatformBypass(
+      supabase,
+      userId,
+      companyId,
+      fiscalPeriodId,
+      options.operation,
+      options.requestId,
+    )
   }
   return decision
 }

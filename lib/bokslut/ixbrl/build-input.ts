@@ -9,11 +9,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { buildArsredovisningData } from '@/lib/bokslut/arsredovisning/build-data'
 import { listSignatureRequests } from '@/lib/bokslut/arsredovisning/signature-service'
 import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
-import { mapTrialBalancesToK2, type TrialBalancePair } from './k2-mapper'
+import { assertK2FormalReportModel } from '@/lib/bokslut/formal-report/k2-model'
 import { resolveEntryPoint } from './taxonomy/entry-points'
 import type {
   EgetKapitalForandring,
@@ -57,19 +56,16 @@ export async function buildIxbrlInput(
   // lib/reports' generateIncomeStatement uses) drives the RR. A single TB can
   // never serve both: with bokslut booked every RR concept would map to 0,
   // without it the BR would not tie.
-  const [pdfData, periodRow, currentTbFull, currentTbPreClosing, signatureRequests] =
-    await Promise.all([
-      buildArsredovisningData(supabase, companyId, fiscalPeriodId),
-      supabase
-        .from('fiscal_periods')
-        .select('id, period_start, period_end, previous_period_id')
-        .eq('id', fiscalPeriodId)
-        .eq('company_id', companyId)
-        .single(),
-      generateTrialBalance(supabase, companyId, fiscalPeriodId),
-      generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeYearEndClosing: true }),
-      listSignatureRequests(supabase, companyId, fiscalPeriodId),
-    ])
+  const [pdfData, periodRow, signatureRequests] = await Promise.all([
+    buildArsredovisningData(supabase, companyId, fiscalPeriodId),
+    supabase
+      .from('fiscal_periods')
+      .select('id, period_start, period_end, previous_period_id')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .single(),
+    listSignatureRequests(supabase, companyId, fiscalPeriodId),
+  ])
 
   if (periodRow.error || !periodRow.data) throw new Error('Fiscal period not found')
   const period = periodRow.data
@@ -81,65 +77,31 @@ export async function buildIxbrlInput(
   }
   const entryPoint = resolveEntryPoint('k2')
 
-  // Previous period: trial balances for jämförelsesiffror (same full/
-  // pre-closing split as the current year).
+  // Previous-period metadata is only used for contexts. All current and
+  // comparison values are already locked into the same canonical formal
+  // model that projected the PDF rows.
   let previousPeriod: { start: string; end: string } | null = null
-  let previousTb: TrialBalancePair | null = null
   if (period.previous_period_id) {
-    const { data: prev } = await supabase
+    const { data: prev, error: previousPeriodError } = await supabase
       .from('fiscal_periods')
       .select('id, period_start, period_end')
       .eq('id', period.previous_period_id)
       .eq('company_id', companyId)
       .maybeSingle()
-    if (prev) {
-      previousPeriod = { start: prev.period_start, end: prev.period_end }
-      try {
-        const [prevFull, prevPreClosing] = await Promise.all([
-          generateTrialBalance(supabase, companyId, prev.id),
-          generateTrialBalance(supabase, companyId, prev.id, { excludeYearEndClosing: true }),
-        ])
-        previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
-      } catch {
-        warnings.push(
-          'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår — balans- och resultaträkning visas utan jämförelseår (kontrollera-kod 3006/3007 kan utlösas).',
-        )
-        previousPeriod = null
-      }
+    if (previousPeriodError) {
+      throw new Error(`Jämförelseperioden kunde inte hämtas: ${previousPeriodError.message}`)
     }
+    if (prev) previousPeriod = { start: prev.period_start, end: prev.period_end }
   }
 
-  const mapping = mapTrialBalancesToK2(
-    { full: currentTbFull.rows, preClosing: currentTbPreClosing.rows },
-    previousTb,
-  )
+  const mapping = pdfData.formal_report
+  if (!mapping) {
+    throw new Error(
+      'K2-underlaget saknar den kanoniska formella rapportmodellen. Generering blockeras för att PDF och iXBRL inte ska kunna drifta.',
+    )
+  }
+  assertK2FormalReportModel(mapping)
   warnings.push(...mapping.warnings)
-
-  // Shared totals control (R05): the PDF (buildArsredovisningData) and the
-  // iXBRL taxonomy mapping must agree on the headline figures — årets
-  // resultat and balansomslutning. A divergence means the two documents
-  // would present different numbers for the same year; that BLOCKS
-  // generation instead of shipping inconsistent filings. Tolerance 1 kr:
-  // iXBRL rounds to whole SEK, the PDF keeps öre.
-  const pdfNetResult =
-    pdfData.resultatrakning.find((l) => l.label === 'Årets resultat')?.amount ?? null
-  if (
-    pdfNetResult !== null &&
-    Math.abs(Math.round(pdfNetResult) - mapping.totals.aretsResultat.current) > 1
-  ) {
-    throw new Error(
-      `PDF och iXBRL är inte samstämmiga: årets resultat är ${Math.round(pdfNetResult)} kr i PDF-underlaget ` +
-        `men ${mapping.totals.aretsResultat.current} kr i iXBRL-mappningen. Kontrollera kontoklassificeringen innan dokumentet genereras.`,
-    )
-  }
-  if (
-    Math.abs(Math.round(pdfData.balansrakning.total_assets) - mapping.totals.tillgangar.current) > 1
-  ) {
-    throw new Error(
-      `PDF och iXBRL är inte samstämmiga: balansomslutningen är ${Math.round(pdfData.balansrakning.total_assets)} kr i PDF-underlaget ` +
-        `men ${mapping.totals.tillgangar.current} kr i iXBRL-mappningen. Kontrollera kontoklassificeringen innan dokumentet genereras.`,
-    )
-  }
 
   // ---- flerårsöversikt (reuse PDF rows; whole SEK) -------------------------
   // PDF rows are oldest-first; iXBRL columns newest-first. Each row needs the
@@ -366,6 +328,8 @@ export async function buildIxbrlInput(
     period: { start: period.period_start, end: period.period_end },
     previousPeriod,
     isFirstFiscalYear: previousPeriod === null,
+    formalReportModelVersion: mapping.modelVersion,
+    formalReportMappingVersion: mapping.mappingVersion,
     rr: mapping.rr,
     br: mapping.br,
     totals: mapping.totals,

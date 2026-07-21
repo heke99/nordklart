@@ -90,6 +90,11 @@ export interface IxbrlArsredovisningInput {
    *  may then legitimately be absent (3006/3007 exemption). */
   isFirstFiscalYear: boolean
 
+  /** Version of the canonical PDF/iXBRL row model used for this document. */
+  formalReportModelVersion?: string
+  /** BAS-to-taxonomy mapping version used by the canonical model. */
+  formalReportMappingVersion?: string
+
   /** RR concept-keyed amounts (kostnadsslagsindelad, risbs posts). */
   rr: ConceptAmounts
   /** BR concept-keyed amounts (risbs posts). */

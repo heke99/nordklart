@@ -15,9 +15,9 @@ import {
 //     (sie_import_id + external_reference) and sequential voucher numbers.
 //   - Idempotent retry: already-posted external references are skipped.
 //   - An unbalanced staged voucher aborts the WHOLE finalize (nothing posts).
-//   - Atomic replace: the old import's entries are deleted and the new ones
-//     posted in one transaction; a failing replace leaves the old intact.
-//   - undo_sie_import deletes ONLY the chosen import's entries.
+//   - Atomic replace: the old import is reversed without hard deletion and the
+//     corrected import is posted in the same transaction.
+//   - Undo creates exact storno entries for only the selected import.
 //   - The deferred balance guard makes a direct posted INSERT without
 //     balanced lines impossible (I03).
 //   - complete_sie_import refuses 'completed' without archive (I18).
@@ -224,16 +224,9 @@ describe('finalize_sie_import (atomic staged posting)', () => {
     )
   })
 
-  it('atomic replace deletes exactly the old import and posts the new one (I06/I07)', async () => {
+  it('atomic replace reverses exactly the old import and posts the corrected file (I06/I07)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seed()
-
-    // Old import with 2 posted entries + one MANUAL entry that must survive.
-    const oldImport = await insertImportRow({
-      companyId,
-      userId,
-      fiscalPeriodId,
-      status: 'staged',
-    })
+    const oldImport = await insertImportRow({ companyId, userId, fiscalPeriodId, status: 'staged' })
     await stage(oldImport, companyId, [
       voucher('A', 1, '2025-02-01', [
         { account: '1930', debit: 100, credit: 0 },
@@ -246,183 +239,142 @@ describe('finalize_sie_import (atomic staged posting)', () => {
     ])
     await finalize(companyId, oldImport, userId)
     await getPool().query(
-      `SELECT public.complete_sie_import($1::uuid, $2::uuid, 'completed', NULL, '[]'::jsonb, true, NULL, 'x/y.se')`,
+      `SELECT public.complete_sie_import($1::uuid,$2::uuid,'completed',NULL,'[]'::jsonb,true,NULL,'old.se')`,
       [companyId, oldImport],
     )
 
-    // Manual entry in the same period (must survive replace).
     const manualId = randomUUID()
-    const client = await getPool().connect()
-    try {
-      await client.query('BEGIN')
-      await client.query(
-        `INSERT INTO public.journal_entries
-           (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-            entry_date, description, source_type, status, committed_at)
-         VALUES ($1, $2, $3, $4, 500, 'A', '2025-05-01', 'Manual', 'manual', 'posted', now())`,
-        [manualId, userId, companyId, fiscalPeriodId],
-      )
-      await client.query(
-        `INSERT INTO public.journal_entry_lines
-           (journal_entry_id, account_number, debit_amount, credit_amount)
-         VALUES ($1, '1930', 10, 0), ($1, '3001', 0, 10)`,
-        [manualId],
-      )
-      await client.query('COMMIT')
-    } finally {
-      client.release()
-    }
+    await getPool().query(
+      `WITH entry AS (
+         INSERT INTO public.journal_entries
+           (id,user_id,company_id,fiscal_period_id,voucher_number,voucher_series,
+            entry_date,description,source_type,status,committed_at)
+         VALUES ($1,$2,$3,$4,500,'M','2025-05-01','Manual','manual','posted',now())
+         RETURNING id
+       )
+       INSERT INTO public.journal_entry_lines
+         (journal_entry_id,account_number,debit_amount,credit_amount)
+       SELECT id,'1930',10,0 FROM entry
+       UNION ALL SELECT id,'3001',0,10 FROM entry`,
+      [manualId, userId, companyId, fiscalPeriodId],
+    )
 
-    // New import replacing the old.
-    const newImport = await insertImportRow({
-      companyId,
-      userId,
-      fiscalPeriodId,
-      status: 'staged',
-      replaces: oldImport,
+    const replacement = await insertImportRow({
+      companyId, userId, fiscalPeriodId, status: 'staged', replaces: oldImport,
     })
-    await stage(newImport, companyId, [
+    await stage(replacement, companyId, [
       voucher('A', 1, '2025-02-01', [
         { account: '1930', debit: 200, credit: 0 },
         { account: '3001', debit: 0, credit: 200 },
       ]),
     ])
-    const result = await finalize(companyId, newImport, userId, {
-      replaces_import_id: oldImport,
-    })
-    expect(result.deleted_from_replaced).toBe(2)
+    const result = await finalize(companyId, replacement, userId, { replaces_import_id: oldImport })
+    expect(result.deleted_from_replaced).toBe(2) // compatibility field; now means reversed
     expect(result.posted).toBe(1)
 
-    const pool = getPool()
-    const { rows: oldRows } = await pool.query(
-      `SELECT count(*)::int AS n FROM public.journal_entries WHERE sie_import_id = $1`,
+    const { rows: oldRows } = await getPool().query(
+      `SELECT source_type,status,reverses_id,reversed_by_id
+       FROM public.journal_entries WHERE sie_import_id=$1 ORDER BY source_type,status`,
       [oldImport],
     )
-    expect(oldRows[0].n).toBe(0)
-    const { rows: manualRows } = await pool.query(
-      `SELECT status FROM public.journal_entries WHERE id = $1`,
-      [manualId],
+    expect(oldRows.filter((row) => row.source_type !== 'storno')).toHaveLength(2)
+    expect(oldRows.filter((row) => row.source_type !== 'storno').every((row) => row.status === 'reversed')).toBe(true)
+    expect(oldRows.filter((row) => row.source_type === 'storno' && row.status === 'posted')).toHaveLength(2)
+
+    const { rows: links } = await getPool().query(
+      `SELECT original_entry_id,reversal_entry_id FROM public.sie_import_entry_reversals
+       WHERE company_id=$1 AND sie_import_id=$2`,
+      [companyId, oldImport],
+    )
+    expect(links).toHaveLength(2)
+
+    const { rows: manualRows } = await getPool().query(
+      `SELECT status FROM public.journal_entries WHERE id=$1`, [manualId],
     )
     expect(manualRows[0].status).toBe('posted')
-    const { rows: importStatus } = await pool.query(
-      `SELECT status FROM public.sie_imports WHERE id = $1`,
-      [oldImport],
-    )
-    expect(importStatus[0].status).toBe('replaced')
   })
 
-  it('a FAILING replace leaves the old import completely intact (I06)', async () => {
+  it('a failing replacement leaves the old bookkeeping economically valid (I06)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seed()
-
-    const oldImport = await insertImportRow({
-      companyId,
-      userId,
-      fiscalPeriodId,
-      status: 'staged',
-    })
-    await stage(oldImport, companyId, [
-      voucher('A', 1, '2025-02-01', [
-        { account: '1930', debit: 100, credit: 0 },
-        { account: '3001', debit: 0, credit: 100 },
-      ]),
-    ])
+    const oldImport = await insertImportRow({ companyId, userId, fiscalPeriodId, status: 'staged' })
+    await stage(oldImport, companyId, [voucher('A', 1, '2025-02-01', [
+      { account: '1930', debit: 100, credit: 0 },
+      { account: '3001', debit: 0, credit: 100 },
+    ])])
     await finalize(companyId, oldImport, userId)
     await getPool().query(
-      `SELECT public.complete_sie_import($1::uuid, $2::uuid, 'completed', NULL, '[]'::jsonb, true, NULL, 'x/z.se')`,
+      `SELECT public.complete_sie_import($1::uuid,$2::uuid,'completed',NULL,'[]'::jsonb,true,NULL,'old.se')`,
       [companyId, oldImport],
     )
 
-    const newImport = await insertImportRow({
-      companyId,
-      userId,
-      fiscalPeriodId,
-      status: 'staged',
-      replaces: oldImport,
+    const replacement = await insertImportRow({
+      companyId, userId, fiscalPeriodId, status: 'staged', replaces: oldImport,
     })
-    // Unbalanced replacement voucher → whole transaction rolls back.
-    await stage(newImport, companyId, [
-      voucher('A', 1, '2025-02-01', [
-        { account: '1930', debit: 100, credit: 0 },
-        { account: '3001', debit: 0, credit: 90 },
-      ]),
-    ])
-    await expect(
-      finalize(companyId, newImport, userId, { replaces_import_id: oldImport }),
-    ).rejects.toThrow(/SIE_UNBALANCED/)
+    await stage(replacement, companyId, [voucher('A', 1, '2025-02-01', [
+      { account: '1930', debit: 100, credit: 0 },
+      { account: '3001', debit: 0, credit: 90 },
+    ])])
+    await expect(finalize(companyId, replacement, userId, { replaces_import_id: oldImport }))
+      .rejects.toThrow(/SIE_UNBALANCED/)
 
-    const pool = getPool()
-    const { rows: oldEntries } = await pool.query(
-      `SELECT count(*)::int AS n FROM public.journal_entries
-       WHERE sie_import_id = $1 AND status = 'posted'`,
+    const { rows } = await getPool().query(
+      `SELECT source_type,status FROM public.journal_entries WHERE sie_import_id=$1`,
       [oldImport],
     )
-    expect(oldEntries[0].n).toBe(1)
-    const { rows: statusRows } = await pool.query(
-      `SELECT status FROM public.sie_imports WHERE id = $1`,
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ status: 'posted' })
+    const { rows: reversals } = await getPool().query(
+      `SELECT id FROM public.sie_import_entry_reversals WHERE sie_import_id=$1`,
       [oldImport],
     )
-    expect(statusRows[0].status).toBe('completed')
+    expect(reversals).toHaveLength(0)
   })
 
-  it('undo_sie_import deletes ONLY the chosen import (I09)', async () => {
+  it('undo creates storno for only the selected import and never hard-deletes posted rows (I09)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seed()
-
     const importA = await insertImportRow({ companyId, userId, fiscalPeriodId, status: 'staged' })
-    await stage(importA, companyId, [
-      voucher('A', 1, '2025-02-01', [
-        { account: '1930', debit: 100, credit: 0 },
-        { account: '3001', debit: 0, credit: 100 },
-      ]),
-    ])
+    await stage(importA, companyId, [voucher('A', 1, '2025-02-01', [
+      { account: '1930', debit: 100, credit: 0 },
+      { account: '3001', debit: 0, credit: 100 },
+    ])])
     await finalize(companyId, importA, userId)
     await getPool().query(
-      `SELECT public.complete_sie_import($1::uuid, $2::uuid, 'completed', NULL, '[]'::jsonb, true, NULL, 'a.se')`,
+      `SELECT public.complete_sie_import($1::uuid,$2::uuid,'completed',NULL,'[]'::jsonb,true,NULL,'a.se')`,
       [companyId, importA],
     )
 
-    // Second import in a DIFFERENT period (no period overlap constraints).
     const period2 = await insertFiscalPeriod({
-      userId,
-      companyId,
-      periodStart: '2024-01-01',
-      periodEnd: '2024-12-31',
-      name: '2024',
+      userId, companyId, periodStart: '2024-01-01', periodEnd: '2024-12-31', name: '2024',
     })
-    const importB = await insertImportRow({
-      companyId,
-      userId,
-      fiscalPeriodId: period2,
-      status: 'staged',
-    })
-    await stage(importB, companyId, [
-      voucher('B', 1, '2024-02-01', [
-        { account: '1930', debit: 70, credit: 0 },
-        { account: '3001', debit: 0, credit: 70 },
-      ]),
-    ])
+    const importB = await insertImportRow({ companyId, userId, fiscalPeriodId: period2, status: 'staged' })
+    await stage(importB, companyId, [voucher('B', 1, '2024-02-01', [
+      { account: '1930', debit: 70, credit: 0 },
+      { account: '3001', debit: 0, credit: 70 },
+    ])])
     await finalize(companyId, importB, userId)
     await getPool().query(
-      `SELECT public.complete_sie_import($1::uuid, $2::uuid, 'completed', NULL, '[]'::jsonb, true, NULL, 'b.se')`,
+      `SELECT public.complete_sie_import($1::uuid,$2::uuid,'completed',NULL,'[]'::jsonb,true,NULL,'b.se')`,
       [companyId, importB],
     )
 
-    const { rows } = await getPool().query(
-      `SELECT public.undo_sie_import($1::uuid, $2::uuid) AS deleted`,
-      [companyId, importA],
+    const { rows: undo } = await getPool().query(
+      `SELECT public.undo_sie_import_internal($1::uuid,$2::uuid,$3::uuid) AS reversed`,
+      [companyId, importA, userId],
     )
-    expect(rows[0].deleted).toBe(1)
+    expect(undo[0].reversed).toBe(1)
 
-    const pool = getPool()
-    const { rows: aRows } = await pool.query(
-      `SELECT count(*)::int AS n FROM public.journal_entries WHERE sie_import_id = $1`,
-      [importA],
+    const { rows: aRows } = await getPool().query(
+      `SELECT source_type,status FROM public.journal_entries WHERE sie_import_id=$1`, [importA],
     )
-    expect(aRows[0].n).toBe(0)
-    const { rows: bRows } = await pool.query(
-      `SELECT count(*)::int AS n FROM public.journal_entries WHERE sie_import_id = $1`,
-      [importB],
+    expect(aRows).toHaveLength(2)
+    expect(aRows.some((row) => row.source_type !== 'storno' && row.status === 'reversed')).toBe(true)
+    expect(aRows.some((row) => row.source_type === 'storno' && row.status === 'posted')).toBe(true)
+
+    const { rows: bRows } = await getPool().query(
+      `SELECT source_type,status FROM public.journal_entries WHERE sie_import_id=$1`, [importB],
     )
-    expect(bRows[0].n).toBe(1)
+    expect(bRows).toHaveLength(1)
+    expect(bRows[0].status).toBe('posted')
   })
 })
 

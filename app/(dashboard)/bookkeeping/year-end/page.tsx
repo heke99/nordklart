@@ -6,7 +6,6 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { EmptyState } from '@/components/ui/empty-state'
 import {
   Select,
   SelectContent,
@@ -15,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ArrowLeft, Lock } from 'lucide-react'
+import { ArrowLeft, RefreshCw } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
@@ -52,6 +51,15 @@ export default function YearEndPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
+  const companyId = searchParams.get('company_id')
+  const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
+  const [periodRefresh, setPeriodRefresh] = useState(0)
+  const [canCreateFiscalYear, setCanCreateFiscalYear] = useState(false)
+  const defaultYear = new Date().getFullYear()
+  const [newPeriodName, setNewPeriodName] = useState(String(defaultYear))
+  const [newPeriodStart, setNewPeriodStart] = useState(`${defaultYear}-01-01`)
+  const [newPeriodEnd, setNewPeriodEnd] = useState(`${defaultYear}-12-31`)
+  const [creatingPeriod, setCreatingPeriod] = useState(false)
 
   // ---- Period selection ----
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
@@ -77,15 +85,17 @@ export default function YearEndPage() {
     let cancelled = false
     const load = async () => {
       try {
-        const res = await fetch('/api/bookkeeping/fiscal-periods')
+        const res = await fetch(`/api/bookkeeping/fiscal-periods${companySuffix}`)
+        const body = await res.json()
         if (!res.ok) {
-          if (!cancelled) setPeriodsError('Kunde inte hämta perioder')
+          if (!cancelled) setPeriodsError(body?.error?.message ?? 'Kunde inte hämta perioder')
           return
         }
-        const { data } = (await res.json()) as { data: FiscalPeriod[] }
+        const data = (body.periods ?? body.data ?? []) as FiscalPeriod[]
+        if (!cancelled) setCanCreateFiscalYear(Boolean(body.canCreateFiscalYear))
         const today = new Date().toISOString().split('T')[0]
-        const eligible = (data ?? []).filter(
-          (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
+        const eligible = data.filter(
+          (p) => !p.is_closed && p.period_end <= today,
         )
         // Oldest first — accountants close in order.
         eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
@@ -94,15 +104,15 @@ export default function YearEndPage() {
         if (!selectedPeriodId && eligible.length > 0) {
           setSelectedPeriodId(eligible[0].id)
         }
-      } catch {
-        if (!cancelled) setPeriodsError('Kunde inte hämta perioder')
+      } catch (error) {
+        if (!cancelled) setPeriodsError(getErrorMessage(error))
       }
     }
     void load()
     return () => {
       cancelled = true
     }
-  }, [selectedPeriodId])
+  }, [companySuffix, periodRefresh, selectedPeriodId])
 
   // ---- Sync selected period to URL so users can bookmark / share ----
   useEffect(() => {
@@ -117,19 +127,24 @@ export default function YearEndPage() {
   // see what happened and retry through the wizard (the close is atomic and
   // idempotent, so a retry is always safe). ----
   const [failedRuns, setFailedRuns] = useState<
-    { id: string; status: string; error_message: string | null; started_at: string }[]
+    { id: string; status: string; error_code?: string | null; current_step?: string | null; user_message?: string | null; retry_count?: number; retryable?: boolean; error_message: string | null; started_at: string }[]
   >([])
   useEffect(() => {
     if (!selectedPeriodId) return
     let cancelled = false
     const timer = setTimeout(() => {
-      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end/runs`)
+      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end/runs${companySuffix}`)
         .then(async (res) => {
           if (cancelled || !res.ok) return
           const body = await res.json()
           const runs = (body.data ?? []) as {
             id: string
             status: string
+            error_code?: string | null
+            current_step?: string | null
+            user_message?: string | null
+            retry_count?: number
+            retryable?: boolean
             error_message: string | null
             started_at: string
           }[]
@@ -143,7 +158,7 @@ export default function YearEndPage() {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, companySuffix])
 
   // ---- Fetch readiness report whenever selected period changes ----
   useEffect(() => {
@@ -155,7 +170,7 @@ export default function YearEndPage() {
       setReportLoading(true)
       setReportError(null)
       setReport(null)
-      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/bokslut-readiness`)
+      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/bokslut-readiness${companySuffix}`)
         .then(async (res) => {
           const body = await res.json()
           if (cancelled) return
@@ -176,7 +191,7 @@ export default function YearEndPage() {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, companySuffix])
 
   // ---- Step navigation ----
   const goToPreview = useCallback(async () => {
@@ -185,7 +200,7 @@ export default function YearEndPage() {
     setPreviewError(null)
     setStep('preview')
     try {
-      const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end`)
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end${companySuffix}`)
       const body = await res.json()
       if (!res.ok) {
         setPreviewError(body?.error?.message ?? 'Kunde inte hämta förhandsgranskning')
@@ -197,7 +212,7 @@ export default function YearEndPage() {
     } finally {
       setPreviewLoading(false)
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, companySuffix])
 
   const reportPeriodName = report?.period.name
   const executeYearEnd = useCallback(async () => {
@@ -227,7 +242,35 @@ export default function YearEndPage() {
     } finally {
       setExecuting(false)
     }
-  }, [selectedPeriodId, reportPeriodName, toast])
+  }, [selectedPeriodId, reportPeriodName, toast, companySuffix])
+
+  const createFiscalYear = useCallback(async () => {
+    setCreatingPeriod(true)
+    setPeriodsError(null)
+    try {
+      const res = await fetch(`/api/bookkeeping/fiscal-periods${companySuffix}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: newPeriodName,
+          period_start: newPeriodStart,
+          period_end: newPeriodEnd,
+        }),
+      })
+      const body = await res.json()
+      if (!res.ok) {
+        setPeriodsError(body?.error?.message ?? 'Räkenskapsåret kunde inte skapas')
+        return
+      }
+      setSelectedPeriodId(body.data.id)
+      setPeriodRefresh((value) => value + 1)
+      toast({ title: 'Räkenskapsår skapat', description: `${newPeriodStart} – ${newPeriodEnd}` })
+    } catch (error) {
+      setPeriodsError(getErrorMessage(error))
+    } finally {
+      setCreatingPeriod(false)
+    }
+  }, [companySuffix, newPeriodName, newPeriodStart, newPeriodEnd, toast])
 
   const currentStepIndex = STEP_ORDER.indexOf(step)
   const progressValue = ((currentStepIndex + 1) / STEP_ORDER.length) * 100
@@ -267,17 +310,26 @@ export default function YearEndPage() {
       )}
 
       {periodsError && (
-        <Card>
-          <CardContent className="p-6 text-destructive">{periodsError}</CardContent>
+        <Card className="border-destructive/40">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-6">
+            <div><p className="font-medium text-destructive">{periodsError}</p><p className="mt-1 text-xs text-muted-foreground">Försök igen. Felet visas aldrig som ett tomt eller nollställt resultat.</p></div>
+            <Button variant="outline" onClick={() => setPeriodRefresh((value) => value + 1)}><RefreshCw className="mr-2 h-4 w-4" />Försök igen</Button>
+          </CardContent>
         </Card>
       )}
 
       {periods !== null && periods.length === 0 && (
-        <EmptyState
-          icon={Lock}
-          title="Inga perioder att stänga"
-          description="Det finns ingen öppen räkenskapsperiod vars slutdatum redan har passerat. Bokslut görs efter att periodens slutdatum är passerat."
-        />
+        <Card>
+          <CardContent className="space-y-4 p-6">
+            <div><h2 className="text-lg font-semibold">Företaget saknar ett bokslutsbart räkenskapsår</h2><p className="mt-1 text-sm text-muted-foreground">Ett tomt resultat är inte ett databasfel. Skapa kalenderår eller ange ett brutet räkenskapsår nedan.</p></div>
+            {canCreateFiscalYear ? <div className="grid gap-3 md:grid-cols-4">
+              <input value={newPeriodName} onChange={(event) => setNewPeriodName(event.target.value)} aria-label="Namn på räkenskapsår" className="h-10 rounded-md border bg-background px-3 text-sm" />
+              <input type="date" value={newPeriodStart} onChange={(event) => setNewPeriodStart(event.target.value)} aria-label="Räkenskapsårets start" className="h-10 rounded-md border bg-background px-3 text-sm" />
+              <input type="date" value={newPeriodEnd} onChange={(event) => setNewPeriodEnd(event.target.value)} aria-label="Räkenskapsårets slut" className="h-10 rounded-md border bg-background px-3 text-sm" />
+              <Button onClick={createFiscalYear} disabled={creatingPeriod}>{creatingPeriod ? 'Skapar…' : 'Skapa räkenskapsår'}</Button>
+            </div> : <p className="text-sm text-muted-foreground">Du saknar rätt att skapa år eller så är engångsköpet inte aktivt.</p>}
+          </CardContent>
+        </Card>
       )}
 
       {showWizard && periods && periods.length > 1 && step !== 'result' && (
@@ -347,7 +399,7 @@ export default function YearEndPage() {
               {failedRuns.slice(0, 3).map((run) => (
                 <li key={run.id}>
                   {new Date(run.started_at).toLocaleString('sv-SE')}:{' '}
-                  {run.error_message ?? 'Okänt fel'}
+                  {run.user_message ?? run.error_message ?? 'Okänt fel'} {run.error_code ? `(${run.error_code})` : ''}
                 </li>
               ))}
             </ul>

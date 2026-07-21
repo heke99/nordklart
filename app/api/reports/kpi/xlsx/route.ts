@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
-import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
+import { generateMonthlyBreakdown, MonthlyBreakdownDataError } from '@/lib/reports/monthly-breakdown'
 import {
   calculateCashPosition,
   calculateGrossMargin,
@@ -108,6 +108,13 @@ export async function GET(request: Request) {
         .lte('invoice_date', period.period_end)
         .neq('status', 'credited'),
     ])
+
+    if (paidInvoicesResult.error) {
+      throw new Error(`Paid invoice query failed: ${paidInvoicesResult.error.message}`)
+    }
+    if (topSuppliersResult.error) {
+      throw new Error(`Supplier KPI query failed: ${topSuppliersResult.error.message}`)
+    }
 
     const cashPosition = calculateCashPosition(trialBalanceResult.rows)
     const vatLiability = calculateVatLiability(trialBalanceResult.rows)
@@ -244,9 +251,18 @@ export async function GET(request: Request) {
       },
     })
   } catch (err) {
+    const requestId = crypto.randomUUID()
+    const code = err instanceof MonthlyBreakdownDataError
+      ? err.code
+      : 'REPORT_GENERATION_FAILED'
+    console.error('[reports/kpi/xlsx] generation failed', { requestId, code, err })
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera nyckeltalsrapport' },
-      { status: 500 }
+      {
+        error: 'Nyckeltalsrapporten kunde inte genereras. Försök igen.',
+        code,
+        request_id: requestId,
+      },
+      { status: 500 },
     )
   }
 }

@@ -1,31 +1,41 @@
-import { NextResponse } from 'next/server'
-import { replaceSIEImport } from '@/lib/import/sie-import'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { isSieFiscalPeriodAllowed } from '@/lib/import/access'
 
 /**
- * POST /api/import/sie/[id]/replace
- *
- * Replace a completed SIE import by hard-deleting its entries, allowing the
- * user to re-import corrected data for the same fiscal period.
+ * Direct replace without a corrected file is disabled. The caller must upload
+ * the new SIE file to /execute with onExistingPeriod=replace and the exact
+ * replaceImportId; the database then reverses old and posts new atomically.
  */
 export const POST = withRouteContext(
   'sie_import.replace',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
-    const opLog = log.child({ sieImportId: id })
+    const { supabase, companyId, sieImportAccess, log, requestId } = ctx
+    const { data, error } = await supabase
+      .from('sie_imports')
+      .select('id,fiscal_period_id,status')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .maybeSingle()
 
-    const result = await replaceSIEImport(supabase, companyId!, id)
-
-    if (!result.success) {
-      return errorResponseFromCode('SIE_REPLACE_FAILED', opLog, {
+    if (error) {
+      return errorResponseFromCode('DATABASE_QUERY_FAILED', log, {
         requestId,
-        details: { reason: result.error },
+        reason: error.message,
       })
     }
+    if (!data || !isSieFiscalPeriodAllowed(sieImportAccess, data.fiscal_period_id)) {
+      return errorResponseFromCode('SIE_IMPORT_NOT_FOUND', log, { requestId })
+    }
 
-    return NextResponse.json({ success: true, deletedEntries: result.deletedEntries })
+    return errorResponseFromCode('SIE_REPLACE_FILE_REQUIRED', log, {
+      requestId,
+      details: {
+        replaceImportId: id,
+        message: 'Ladda upp den korrigerade SIE-filen och ange detta import-ID i execute-steget.',
+      },
+    })
   },
-  { requireWrite: true },
+  { requireWrite: true, accessPolicy: 'sie_import' },
 )

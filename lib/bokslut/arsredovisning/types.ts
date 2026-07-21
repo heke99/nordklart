@@ -1,3 +1,5 @@
+import type { K2FormalReportModel } from '@/lib/bokslut/formal-report/k2-model'
+
 /**
  * Structured data for a K2 årsredovisning. Generated server-side from
  * income statement + balance sheet + asset register + salary data; passed
@@ -71,6 +73,8 @@ export interface ArsredovisningData {
    *  page and a richer note set) and lets the UI label the document
    *  correctly. K2 is the default for AB without an explicit election. */
   accounting_framework: 'k2' | 'k3'
+  /** Canonical row model shared by K2 PDF, preview, preflight and iXBRL. */
+  formal_report?: K2FormalReportModel
   forvaltningsberattelse: {
     /** Beskrivning av verksamheten (företaget kan editera). */
     description: string

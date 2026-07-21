@@ -140,3 +140,31 @@ export async function revokeCompanyAccessFromCardAction(formData: FormData) {
     fail(companyId, error instanceof Error && error.message !== 'required' ? error.message : 'Ett obligatoriskt fält saknas.')
   }
 }
+
+export async function createFiscalYearFromCompanyCardAction(formData: FormData) {
+  const companyId = text(formData, 'company_id', true)!
+  try {
+    const { user } = await requirePlatformAdmin()
+    await assertCompany(companyId)
+    const name = text(formData, 'name', true)!
+    const periodStart = text(formData, 'period_start', true)!
+    const periodEnd = text(formData, 'period_end', true)!
+    const { createServiceClient } = await import('@/lib/supabase/server')
+    const serviceDb = createServiceClient()
+    const requestId = `platform_${crypto.randomUUID()}`
+    const { data, error } = await serviceDb.rpc('create_fiscal_year_atomic_internal', {
+      p_company_id: companyId,
+      p_actor_user_id: user.id,
+      p_name: name,
+      p_period_start: periodStart,
+      p_period_end: periodEnd,
+      p_request_id: requestId,
+    })
+    if (error) fail(companyId, error.message || 'Räkenskapsåret kunde inte skapas.')
+    const period = Array.isArray(data) ? data[0] : data
+    revalidatePath(`/platform/companies/${companyId}`)
+    done(companyId, `Räkenskapsåret ${period?.name ?? name} har skapats atomiskt.`)
+  } catch (error) {
+    fail(companyId, error instanceof Error && error.message !== 'required' ? error.message : 'Kontrollera namn och datum.')
+  }
+}

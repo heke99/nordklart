@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
+import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 
 /**
  * Pagination proofs with ≥ 2 500 rows (revision items I21, A01/A03/A07, R17).
@@ -192,11 +193,29 @@ describe('historical AR ledger with 2 500 invoices (A07/A09)', () => {
       name: `Kund ${i}`,
     }))
 
-    const supabase = pagingSupabase({
-      invoices,
-      invoice_payments: [],
-      customers,
-    })
+    const canonicalOpenItems = invoices.map((invoice) => ({
+      source_type: 'invoice',
+      source_id: invoice.id,
+      reference: invoice.invoice_number,
+      currency: invoice.currency,
+      exchange_rate: invoice.exchange_rate,
+      invoice_date: invoice.invoice_date,
+      due_date: invoice.due_date,
+      customer_id: invoice.customer_id,
+      supplier_id: null,
+      total: invoice.total,
+      open_amount: invoice.total,
+      current_status: invoice.status,
+    }))
+
+    const supabase = pagingSupabase(
+      {
+        invoices,
+        invoice_payments: [],
+        customers,
+      },
+      { historical_open_items_at: canonicalOpenItems },
+    )
 
     const report = await generateARLedger(supabase, 'c1', '2025-06-30')
     expect(report.unpaid_count).toBe(2500)
@@ -204,3 +223,36 @@ describe('historical AR ledger with 2 500 invoices (A07/A09)', () => {
     expect(report.entries).toHaveLength(50)
   })
 })
+
+describe('monthly breakdown with 2 500 journal lines', () => {
+  it('aggregates all pages and keeps the selected month movement separate', async () => {
+    const lines = Array.from({ length: 2500 }, (_, i) => ({
+      account_number: i % 2 === 0 ? '3001' : '5010',
+      debit_amount: i % 2 === 0 ? 0 : 10,
+      credit_amount: i % 2 === 0 ? 20 : 0,
+      journal_entry: {
+        entry_date: '2025-03-15',
+        status: 'posted',
+        company_id: 'c1',
+        fiscal_period_id: 'p1',
+      },
+    }))
+
+    const supabase = pagingSupabase({
+      fiscal_periods: [{ period_start: '2025-01-01', period_end: '2025-12-31' }],
+      journal_entry_lines: lines,
+    })
+
+    const report = await generateMonthlyBreakdown(supabase, 'c1', 'p1')
+    const march = report.months.find((month) => month.label === 'Mar')
+
+    expect(march).toEqual({
+      label: 'Mar',
+      income: 25000,
+      expenses: 12500,
+      net: 12500,
+    })
+    expect(report.months.filter((month) => month.net !== 0)).toHaveLength(1)
+  })
+})
+

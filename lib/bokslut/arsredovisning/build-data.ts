@@ -17,6 +17,12 @@ import {
 } from './k3-noter-builder'
 import { buildAnlaggningstillgangarNote } from './anlaggningstillgangar-note'
 import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
+import {
+  buildK2FormalReportModel,
+  formalBalanceSheetLines,
+  formalIncomeStatementLines,
+  type K2FormalReportModel,
+} from '@/lib/bokslut/formal-report/k2-model'
 import type {
   ArsredovisningData,
   EgenKapitalRow,
@@ -236,30 +242,65 @@ export async function buildArsredovisningData(
     )
   }
 
-  const resultatrakning = flattenIncomeStatement(incomeStatement)
-  const balansrakning = flattenBalanceSheet(balanceSheet)
+  let formal_report: K2FormalReportModel | undefined
+  let resultatrakning: IncomeStatementLine[]
+  let balansrakning: ArsredovisningData['balansrakning']
 
-  // Merge prior-year amounts into the flattened lines by label (R03) —
-  // labels are account-number-prefixed and stable across years.
-  if (priorIncomeStatement) {
-    const priorLines = flattenIncomeStatement(priorIncomeStatement)
-    const priorByLabel = new Map(priorLines.map((l) => [l.label, l.amount]))
-    for (const line of resultatrakning) {
-      line.prior_amount = priorByLabel.get(line.label) ?? 0
+  if (accountingFramework === 'k2') {
+    const [currentFull, currentPreClosing] = await Promise.all([
+      generateTrialBalance(supabase, companyId, fiscalPeriodId),
+      generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+        excludeYearEndClosing: true,
+      }),
+    ])
+
+    let previousPair: Parameters<typeof buildK2FormalReportModel>[1] = null
+    if (priorPeriodMeta) {
+      const [previousFull, previousPreClosing] = await Promise.all([
+        generateTrialBalance(supabase, companyId, priorPeriodMeta.id),
+        generateTrialBalance(supabase, companyId, priorPeriodMeta.id, {
+          excludeYearEndClosing: true,
+        }),
+      ])
+      previousPair = {
+        full: previousFull.rows,
+        preClosing: previousPreClosing.rows,
+      }
     }
-  }
-  if (priorBalanceSheet) {
-    const priorBs = flattenBalanceSheet(priorBalanceSheet)
-    const priorAssetByLabel = new Map(priorBs.assets.map((l) => [l.label, l.amount]))
-    const priorEqByLabel = new Map(priorBs.equity_liabilities.map((l) => [l.label, l.amount]))
-    for (const line of balansrakning.assets) {
-      line.prior_amount = priorAssetByLabel.get(line.label) ?? 0
+
+    formal_report = buildK2FormalReportModel(
+      { full: currentFull.rows, preClosing: currentPreClosing.rows },
+      previousPair,
+    )
+    resultatrakning = formalIncomeStatementLines(formal_report)
+    balansrakning = formalBalanceSheetLines(formal_report)
+  } else {
+    resultatrakning = flattenIncomeStatement(incomeStatement)
+    balansrakning = flattenBalanceSheet(balanceSheet)
+
+    // K3 uses its separate report structure. Keep prior-year values attached
+    // to the same flattened labels; K2 comparison values come from the
+    // canonical formal model above.
+    if (priorIncomeStatement) {
+      const priorLines = flattenIncomeStatement(priorIncomeStatement)
+      const priorByLabel = new Map(priorLines.map((line) => [line.label, line.amount]))
+      for (const line of resultatrakning) {
+        line.prior_amount = priorByLabel.get(line.label) ?? 0
+      }
     }
-    for (const line of balansrakning.equity_liabilities) {
-      line.prior_amount = priorEqByLabel.get(line.label) ?? 0
+    if (priorBalanceSheet) {
+      const priorBs = flattenBalanceSheet(priorBalanceSheet)
+      const priorAssetByLabel = new Map(priorBs.assets.map((line) => [line.label, line.amount]))
+      const priorEqByLabel = new Map(priorBs.equity_liabilities.map((line) => [line.label, line.amount]))
+      for (const line of balansrakning.assets) {
+        line.prior_amount = priorAssetByLabel.get(line.label) ?? 0
+      }
+      for (const line of balansrakning.equity_liabilities) {
+        line.prior_amount = priorEqByLabel.get(line.label) ?? 0
+      }
+      balansrakning.total_assets_prior = priorBs.total_assets
+      balansrakning.total_equity_liabilities_prior = priorBs.total_equity_liabilities
     }
-    balansrakning.total_assets_prior = priorBs.total_assets
-    balansrakning.total_equity_liabilities_prior = priorBs.total_equity_liabilities
   }
 
   const warnings: string[] = [...noterWarnings]
@@ -349,6 +390,7 @@ export async function buildArsredovisningData(
       period_end: period.period_end,
     },
     accounting_framework: accountingFramework,
+    formal_report,
     forvaltningsberattelse: {
       description:
         overrides.description ??

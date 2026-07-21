@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
-import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
+import { generateMonthlyBreakdown, MonthlyBreakdownDataError } from '@/lib/reports/monthly-breakdown'
 import {
   calculateCashPosition,
   calculateGrossMargin,
@@ -16,7 +16,7 @@ import { mergeWithDefaults } from '@/lib/reports/kpi-definitions'
 import { requireCompanyId } from '@/lib/company/context'
 import type { KPIReport, KPIPreferences } from '@/types'
 
-export async function GET(request: Request) {
+async function getKpiReport(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -81,6 +81,13 @@ export async function GET(request: Request) {
       .lte('invoice_date', period.period_end)
       .neq('status', 'credited'),
   ])
+
+  if (paidInvoicesResult.error) {
+    throw new Error(`Paid invoice query failed: ${paidInvoicesResult.error.message}`)
+  }
+  if (topSuppliersResult.error) {
+    throw new Error(`Supplier KPI query failed: ${topSuppliersResult.error.message}`)
+  }
 
   // Cash position — use account overrides if set
   const cashOverrides = preferences.accountOverrides['cashPosition']
@@ -153,11 +160,6 @@ export async function GET(request: Request) {
     total: number | null
     supplier: { id: string; name: string } | { id: string; name: string }[] | null
   }
-  if (topSuppliersResult.error) {
-    // Surface the failure rather than silently rendering an empty chart that
-    // matches the legitimate "no supplier invoices" empty state.
-    console.error('[kpi] topSuppliersResult error:', topSuppliersResult.error)
-  }
   const supplierTotals = new Map<string, { name: string; total: number }>()
   for (const row of (topSuppliersResult.data ?? []) as SupplierInvoiceRow[]) {
     if (!row.supplier_id) continue
@@ -202,4 +204,25 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ data: report })
+}
+
+
+export async function GET(request: Request) {
+  const requestId = crypto.randomUUID()
+  try {
+    return await getKpiReport(request)
+  } catch (error) {
+    const code = error instanceof MonthlyBreakdownDataError
+      ? error.code
+      : 'REPORT_GENERATION_FAILED'
+    console.error('[reports/kpi] generation failed', { requestId, code, error })
+    return NextResponse.json(
+      {
+        error: 'Rapportdata kunde inte laddas. Försök igen.',
+        code,
+        request_id: requestId,
+      },
+      { status: 500 },
+    )
+  }
 }

@@ -1200,9 +1200,9 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
                 {' · '}{d.skippedVouchers.total} hoppade över
               </span>
             )}
-            {result.replacedPriorImport && result.replacedPriorImport.deletedEntries > 0 && (
+            {result.replacedPriorImport && result.replacedPriorImport.reversedEntries > 0 && (
               <span>
-                {' · '}ersatte {result.replacedPriorImport.deletedEntries.toLocaleString('sv-SE')} tidigare importerade verifikationer
+                {' · '}ersatte {result.replacedPriorImport.reversedEntries.toLocaleString('sv-SE')} tidigare importerade verifikationer genom storno
               </span>
             )}
           </p>

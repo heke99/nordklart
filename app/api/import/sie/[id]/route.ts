@@ -1,111 +1,89 @@
-import { createClient } from '@/lib/supabase/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { isSieFiscalPeriodAllowed } from '@/lib/import/access'
 
-/**
- * GET /api/import/sie/[id]
- * Get details of a specific SIE import
- */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
+async function loadImport(
+  supabase: SupabaseClient,
+  companyId: string,
+  importId: string,
 ) {
-  const supabase = await createClient()
-  const { id } = await params
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGate) return featureGate
-
-  const { data, error } = await supabase
+  return supabase
     .from('sie_imports')
     .select('*')
-    .eq('id', id)
+    .eq('id', importId)
     .eq('company_id', companyId)
-    .single()
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  if (!data) {
-    return NextResponse.json({ error: 'Import not found' }, { status: 404 })
-  }
-
-  return NextResponse.json({ data })
+    .maybeSingle()
 }
+
+/** GET /api/import/sie/[id] */
+export const GET = withRouteContext(
+  'sie_import.get',
+  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { supabase, companyId, sieImportAccess, log, requestId } = ctx
+    const { data, error } = await loadImport(supabase, companyId, id)
+
+    if (error) {
+      return errorResponseFromCode('DATABASE_QUERY_FAILED', log, {
+        requestId,
+        reason: error.message,
+        details: { operation: 'get_sie_import', import_id: id },
+      })
+    }
+    if (!data || !isSieFiscalPeriodAllowed(sieImportAccess, data.fiscal_period_id)) {
+      return errorResponseFromCode('SIE_IMPORT_NOT_FOUND', log, { requestId })
+    }
+    return NextResponse.json({ data })
+  },
+  { accessPolicy: 'sie_import' },
+)
 
 /**
  * DELETE /api/import/sie/[id]
- * Delete an import record.
- *
- * Only failed or pending imports can be deleted. Completed imports have created
- * journal entries that are part of räkenskapsinformation — deleting the metadata
- * without reversing entries would leave orphaned bookkeeping data, and deleting
- * both is prohibited under BFL 7 kap (7-year retention).
+ * Only non-posted import metadata may be removed. Completed/partial/replaced
+ * imports must stay in the audit trail and use reversal-based undo/replace.
  */
-export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-  const { id } = await params
+export const DELETE = withRouteContext(
+  'sie_import.delete',
+  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { supabase, companyId, sieImportAccess, log, requestId } = ctx
+    const { data: importRecord, error: readError } = await loadImport(supabase, companyId, id)
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    if (readError) {
+      return errorResponseFromCode('DATABASE_QUERY_FAILED', log, {
+        requestId,
+        reason: readError.message,
+        details: { operation: 'read_sie_import_before_delete', import_id: id },
+      })
+    }
+    if (!importRecord || !isSieFiscalPeriodAllowed(sieImportAccess, importRecord.fiscal_period_id)) {
+      return errorResponseFromCode('SIE_IMPORT_NOT_FOUND', log, { requestId })
+    }
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    if (['completed', 'partial', 'replaced', 'undone'].includes(importRecord.status)) {
+      return errorResponseFromCode('SIE_DELETE_POSTED_FORBIDDEN', log, {
+        requestId,
+        details: { status: importRecord.status },
+      })
+    }
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    const { error } = await supabase
+      .from('sie_imports')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', companyId)
 
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGate) return featureGate
-
-  // Check current status before deleting
-  const { data: importRecord } = await supabase
-    .from('sie_imports')
-    .select('status')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
-
-  if (!importRecord) {
-    return NextResponse.json({ error: 'Import not found' }, { status: 404 })
-  }
-
-  if (importRecord.status === 'completed') {
-    return NextResponse.json({
-      error: 'Slutförd import kan inte raderas. Importerade verifikationer ingår i räkenskapsinformationen (BFL 7 kap).',
-    }, { status: 403 })
-  }
-
-  const { error } = await supabase
-    .from('sie_imports')
-    .delete()
-    .eq('id', id)
-    .eq('company_id', companyId)
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ success: true })
-}
+    if (error) {
+      return errorResponseFromCode('DATABASE_QUERY_FAILED', log, {
+        requestId,
+        reason: error.message,
+        details: { operation: 'delete_sie_import', import_id: id },
+      })
+    }
+    return NextResponse.json({ success: true })
+  },
+  { requireWrite: true, accessPolicy: 'sie_import' },
+)

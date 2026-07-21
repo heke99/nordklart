@@ -26,6 +26,12 @@
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { createServiceClient } from '@/lib/supabase/server'
+import {
+  auditPlatformSieImportOperation,
+  resolveSieImportAccess,
+  type SieImportAccessDecision,
+} from '@/lib/import/access'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger, type Logger } from '@/lib/logger'
@@ -43,6 +49,8 @@ export interface RouteContext {
   user: User
   /** Authenticated Supabase client (request-scoped, RLS active). */
   supabase: SupabaseClient
+  /** Present for SIE routes after canonical bookkeeping/year-end access resolution. */
+  sieImportAccess?: SieImportAccessDecision
   /**
    * Resolved active company id. The wrapper short-circuits with
    * COMPANY_CONTEXT_MISSING before invoking the handler when no company is
@@ -62,6 +70,11 @@ export interface RouteContext {
 }
 
 interface RouteContextOptions {
+  /** Use the combined bookkeeping/year-end/one-off policy and a narrowly scoped service client. */
+  accessPolicy?: 'default' | 'sie_import'
+  /** Accept ?company_id= only after canonical server-side actor/company verification. */
+  allowRequestedCompany?: boolean
+
   /**
    * Defaults to false. When true, the wrapper rejects callers whose role in
    * the active company is `viewer` (or who have no membership). Mirrors the
@@ -94,7 +107,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
   handler: RouteHandler<P>,
   options: RouteContextOptions = {},
 ): (request: Request, params: P) => Promise<Response> {
-  const { requireWrite = false } = options
+  const { requireWrite = false, accessPolicy = 'default', allowRequestedCompany = false } = options
 
   return async function wrapped(request: Request, params: P): Promise<Response> {
     const requestId = generateRequestId()
@@ -123,24 +136,96 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       errLog = userLog
 
       let companyId: string | null = null
-      try {
-        companyId = await getActiveCompanyId(supabase, user.id)
-      } catch (err) {
-        userLog.error('failed to resolve active company', err as Error)
+      let requestedCompanyCanWrite: boolean | null = null
+      const requestedCompanyId = allowRequestedCompany
+        ? new URL(request.url).searchParams.get('company_id')
+        : null
+
+      if (requestedCompanyId) {
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestedCompanyId)) {
+          return errorResponseFromCode('INVALID_COMPANY_ID', userLog, { requestId })
+        }
+        const accessDb = createServiceClient()
+        const { data: accessData, error: accessError } = await accessDb.rpc(
+          'resolve_company_access_for_user',
+          { p_user_id: user.id, p_company_id: requestedCompanyId },
+        )
+        if (accessError) {
+          return errorResponseFromCode('DATABASE_QUERY_FAILED', userLog, {
+            requestId,
+            reason: accessError.message,
+            details: { operation: 'resolve_requested_company_access' },
+          })
+        }
+        const access = Array.isArray(accessData) ? accessData[0] : null
+        if (!access?.can_read) return errorResponseFromCode('PERMISSION_DENIED', userLog, { requestId })
+        companyId = requestedCompanyId
+        requestedCompanyCanWrite = Boolean(access.can_write || access.can_manage_platform)
+      } else {
+        try {
+          companyId = await getActiveCompanyId(supabase, user.id)
+        } catch (err) {
+          userLog.error('failed to resolve active company', err as Error)
+        }
       }
 
       if (!companyId) {
         return errorResponseFromCode('COMPANY_CONTEXT_MISSING', userLog, { requestId })
       }
 
-      const requiredFeature = featureForOperation(operation)
-      if (requiredFeature) {
-        const featureAccess = await checkFeatureAccess(supabase, companyId, requiredFeature)
-        if (!featureAccess.allowed) {
-          userLog.warn('feature access denied', { feature: requiredFeature, reason: featureAccess.reason })
-          const response = featureAccessError(requiredFeature)
-          response.headers.set('X-Request-Id', requestId)
-          return response
+      let routeSupabase: SupabaseClient = supabase
+      let sieImportAccess: SieImportAccessDecision | undefined
+
+      if (accessPolicy === 'sie_import') {
+        const serviceDb = createServiceClient()
+        sieImportAccess = await resolveSieImportAccess(serviceDb, user.id, companyId)
+        if (!sieImportAccess.allowed) {
+          const code = sieImportAccess.reason === 'permission_denied'
+            ? 'PERMISSION_DENIED'
+            : sieImportAccess.reason === 'one_off_expired'
+              ? 'ONE_OFF_YEAR_END_NOT_ACTIVE'
+              : sieImportAccess.reason === 'company_not_found'
+                ? 'INVALID_COMPANY_ID'
+                : sieImportAccess.reason === 'database_error'
+                  ? 'DATABASE_QUERY_FAILED'
+                  : 'YEAR_END_ENTITLEMENT_REQUIRED'
+          return errorResponseFromCode(code, userLog, {
+            requestId,
+            details: { operation: 'resolve_sie_import_access' },
+            reason: sieImportAccess.databaseError,
+          })
+        }
+        if (requireWrite && !sieImportAccess.canWrite) {
+          return errorResponseFromCode('PERMISSION_DENIED', userLog, { requestId })
+        }
+        routeSupabase = serviceDb
+
+        if (sieImportAccess.mode === 'platform') {
+          try {
+            await auditPlatformSieImportOperation(serviceDb, {
+              actorUserId: user.id,
+              companyId,
+              operation,
+              requestId,
+            })
+          } catch (auditError) {
+            return errorResponseFromCode('DATABASE_QUERY_FAILED', userLog, {
+              requestId,
+              details: { operation: 'audit_platform_sie_import_operation' },
+              reason: auditError instanceof Error ? auditError.message : String(auditError),
+            })
+          }
+        }
+      } else {
+        const requiredFeature = featureForOperation(operation)
+        if (requiredFeature) {
+          const featureAccess = await checkFeatureAccess(supabase, companyId, requiredFeature)
+          if (!featureAccess.allowed) {
+            userLog.warn('feature access denied', { feature: requiredFeature, reason: featureAccess.reason })
+            const response = featureAccessError(requiredFeature)
+            response.headers.set('X-Request-Id', requestId)
+            return response
+          }
         }
       }
 
@@ -156,16 +241,21 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
           })
         }
 
-        // Delegate to the existing helper so tests that already mock it
-        // continue to work. The helper returns its own 403 NextResponse;
-        // we wrap it in our request-id header for traceability.
-        const writeCheck = await requireWritePermission(supabase, user.id)
-        if (!writeCheck.ok) {
-          userLog.warn('write permission denied')
-          if (!writeCheck.response.headers.get('X-Request-Id')) {
-            writeCheck.response.headers.set('X-Request-Id', requestId)
+        if (accessPolicy !== 'sie_import') {
+          if (requestedCompanyCanWrite === false) {
+            return errorResponseFromCode('PERMISSION_DENIED', userLog, { requestId })
           }
-          return writeCheck.response
+          if (requestedCompanyCanWrite === null) {
+            // Delegate to the existing helper for the ordinary active-company path.
+            const writeCheck = await requireWritePermission(supabase, user.id)
+            if (!writeCheck.ok) {
+              userLog.warn('write permission denied')
+              if (!writeCheck.response.headers.get('X-Request-Id')) {
+                writeCheck.response.headers.set('X-Request-Id', requestId)
+              }
+              return writeCheck.response
+            }
+          }
         }
       }
 
@@ -173,8 +263,9 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         requestId,
         log: userLog.child({ companyId }),
         user,
-        supabase,
+        supabase: routeSupabase,
         companyId,
+        ...(sieImportAccess ? { sieImportAccess } : {}),
       }
       errLog = ctx.log
 

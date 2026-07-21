@@ -9,6 +9,7 @@ import {
   previewCurrencyRevaluation,
   buildRevaluationRpcPayload,
   computeRevaluationSnapshotKey,
+  registerYearEndFxRateSnapshots,
 } from '@/lib/bookkeeping/currency-revaluation'
 import { getCompanyEntityType } from '@/lib/company/entity-type'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
@@ -445,7 +446,7 @@ export async function executeYearEndClosing(
   companyId: string,
   userId: string,
   fiscalPeriodId: string,
-  options?: { idempotencyKey?: string }
+  options?: { idempotencyKey?: string; correlationId?: string }
 ): Promise<YearEndResult> {
   const idempotencyKey = options?.idempotencyKey ?? `close:${fiscalPeriodId}`
 
@@ -472,6 +473,17 @@ export async function executeYearEndClosing(
     companyId,
     period.period_end
   )
+  if (revalPreview.items.length > 0) {
+    await registerYearEndFxRateSnapshots(
+      supabase,
+      companyId,
+      fiscalPeriodId,
+      period.period_end,
+      userId,
+      revalPreview,
+    )
+  }
+
   const revaluationPayload =
     revalPreview.items.length > 0
       ? buildRevaluationRpcPayload(companyId, period.period_end, revalPreview)
@@ -491,22 +503,40 @@ export async function executeYearEndClosing(
   })
 
   if (rpcError) {
-    // Record the failed attempt for visibility/recovery (B10). Best-effort:
-    // the failure itself is the primary signal.
-    try {
-      await supabase.from('year_end_runs').insert({
-        company_id: companyId,
-        fiscal_period_id: fiscalPeriodId,
-        status: 'failed',
-        idempotency_key: idempotencyKey,
-        error_message: rpcError.message.slice(0, 2000),
-        created_by: userId,
-        finished_at: new Date().toISOString(),
-      })
-    } catch {
-      // swallow — the thrown error below carries the diagnostic
+    const technicalMessage = rpcError.message || 'Unknown database error'
+    const extractedCode = technicalMessage.match(/\b(YE_[A-Z0-9_]+|FX_[A-Z0-9_]+)\b/)?.[1]
+      ?? 'YEAR_END_FAILED'
+    const recoveryRequired = /timeout|connection|network|statement timeout|canceling statement/i.test(
+      technicalMessage,
+    )
+    const userMessage = recoveryRequired
+      ? 'Bokslutskörningen avbröts utan säker slutstatus och behöver kontrolleras innan återkörning.'
+      : 'Bokslutet kunde inte genomföras. Ingen ofullständig stängning har godkänts.'
+
+    // Failure persistence is part of the contract, not best-effort. The
+    // database operation above is atomic and has rolled back; this separate
+    // service-only RPC creates the durable run/audit record.
+    const { error: recordError } = await supabase.rpc('record_year_end_failure', {
+      p_company_id: companyId,
+      p_fiscal_period_id: fiscalPeriodId,
+      p_actor_user_id: userId,
+      p_idempotency_key: idempotencyKey,
+      p_current_step: 'closing',
+      p_error_code: extractedCode,
+      p_technical_error: technicalMessage,
+      p_user_message: userMessage,
+      p_correlation_id: options?.correlationId ?? null,
+      p_recovery_required: recoveryRequired,
+    })
+
+    if (recordError) {
+      throw new Error(
+        `Year-end closing failed and the mandatory failure record could not be persisted: `
+        + `${technicalMessage}; failure-record error: ${recordError.message}`,
+      )
     }
-    throw new Error(`Year-end closing failed: ${rpcError.message}`)
+
+    throw new Error(`Year-end closing failed [${extractedCode}]: ${technicalMessage}`)
   }
 
   const result = rpcResult as {

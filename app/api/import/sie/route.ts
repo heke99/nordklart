@@ -1,56 +1,43 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
-/**
- * GET /api/import/sie
- * List all SIE imports for the user
- */
-export async function GET(request: Request) {
-  const supabase = await createClient()
+/** GET /api/import/sie — list SIE imports visible to the active access scope. */
+export const GET = withRouteContext(
+  'sie_import.list',
+  async (request, ctx) => {
+    const { supabase, companyId, sieImportAccess, log, requestId } = ctx
+    const { searchParams } = new URL(request.url)
+    const limit = Math.min(Math.max(Number.parseInt(searchParams.get('limit') || '20', 10) || 20, 1), 100)
+    const offset = Math.max(Number.parseInt(searchParams.get('offset') || '0', 10) || 0, 0)
+    const status = searchParams.get('status')
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    if (sieImportAccess?.allowedPeriodIds && sieImportAccess.allowedPeriodIds.length === 0) {
+      return NextResponse.json({ data: [], count: 0, limit, offset })
+    }
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    let query = supabase
+      .from('sie_imports')
+      .select('*', { count: 'exact' })
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    if (status) query = query.eq('status', status)
+    if (sieImportAccess?.allowedPeriodIds !== null && sieImportAccess?.allowedPeriodIds) {
+      query = query.in('fiscal_period_id', sieImportAccess.allowedPeriodIds)
+    }
 
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGate) return featureGate
+    const { data, error, count } = await query
+    if (error) {
+      return errorResponseFromCode('DATABASE_QUERY_FAILED', log, {
+        requestId,
+        reason: error.message,
+        details: { operation: 'list_sie_imports' },
+      })
+    }
 
-  // Parse query params
-  const { searchParams } = new URL(request.url)
-  const limit = parseInt(searchParams.get('limit') || '20', 10)
-  const offset = parseInt(searchParams.get('offset') || '0', 10)
-  const status = searchParams.get('status')
-
-  let query = supabase
-    .from('sie_imports')
-    .select('*', { count: 'exact' })
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1)
-
-  if (status) {
-    query = query.eq('status', status)
-  }
-
-  const { data, error, count } = await query
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({
-    data,
-    count,
-    limit,
-    offset,
-  })
-}
+    return NextResponse.json({ data: data ?? [], count: count ?? 0, limit, offset })
+  },
+  { accessPolicy: 'sie_import' },
+)

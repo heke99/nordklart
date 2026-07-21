@@ -7,7 +7,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { commitEntry, createDraftEntry } from '@/lib/bookkeeping/engine'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type {
   ParsedSIEFile,
@@ -171,75 +171,30 @@ export async function checkDuplicatePeriodImport(
 }
 
 /**
- * Replace a completed SIE import so the user can re-import corrected data
- * for the same fiscal period.
+ * Direct replacement without a corrected file is intentionally disabled.
+ * Replacement must be initiated by uploading the new file and passing the
+ * exact prior import id to executeSIEImport. finalize_sie_import then reverses
+ * the old entries and posts the new import in one transaction.
  *
- * The RPC hard-deletes every source_type='import' entry the original import
- * created (plus stragglers from any prior soft-replace), detaches user-
- * attached documents from those entries (PDFs stay in storage as unlinked
- * documents), clears the fiscal-period opening-balance pointer if it came
- * from this import, and resets voucher_sequences so the next re-import
- * restarts the series at 1 (or at MAX of remaining non-import entries).
- *
- * Audit trail lives in the sie_imports row (status='replaced',
- * replaced_at, filename, file_hash, transactions_count, fiscal_year_*)
- * plus per-row audit_log entries written by the write_audit_log trigger
- * on each journal_entries DELETE (old_state JSONB snapshot).
- *
- * The whole cleanup is atomic via the replace_sie_import DB RPC.
+ * @deprecated Use executeSIEImport(..., { onExistingPeriod: 'replace',
+ * replaceImportId }) with the corrected original file.
  */
 export async function replaceSIEImport(
-  supabase: SupabaseClient,
-  companyId: string,
-  importId: string
-): Promise<{ success: boolean; deletedEntries: number; error?: string }> {
-  // 1. Fetch and validate the import record
-  const { data: importRecord } = await supabase
-    .from('sie_imports')
-    .select('status, fiscal_period_id')
-    .eq('id', importId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (!importRecord) {
-    return { success: false, deletedEntries: 0, error: 'Import hittades inte' }
+  _supabase: SupabaseClient,
+  _companyId: string,
+  _importId: string,
+): Promise<{ success: false; reversedEntries: 0; error: string }> {
+  return {
+    success: false,
+    reversedEntries: 0,
+    error: 'Ladda upp den korrigerade SIE-filen. Den gamla importen reverseras atomiskt först när den nya filen är validerad och redo att bokföras.',
   }
-
-  if (importRecord.status !== 'completed') {
-    return { success: false, deletedEntries: 0, error: `Kan bara ersätta slutförda importer (status: ${importRecord.status})` }
-  }
-
-  // 2. Check that the fiscal period is not closed or locked
-  if (importRecord.fiscal_period_id) {
-    const { data: period } = await supabase
-      .from('fiscal_periods')
-      .select('is_closed, locked_at')
-      .eq('id', importRecord.fiscal_period_id)
-      .eq('company_id', companyId)
-      .single()
-
-    if (period?.is_closed || period?.locked_at) {
-      return { success: false, deletedEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Öppna perioden först.' }
-    }
-  }
-
-  // 3. Atomically delete entries and mark import as replaced via DB RPC
-  const { data: deletedCount, error: rpcError } = await supabase.rpc('replace_sie_import', {
-    p_company_id: companyId,
-    p_import_id: importId,
-  })
-
-  if (rpcError) {
-    return { success: false, deletedEntries: 0, error: `Kunde inte ersätta import: ${rpcError.message}` }
-  }
-
-  return { success: true, deletedEntries: deletedCount as number }
 }
 
 /**
- * Undo a completed SIE import by hard-deleting its entries (transaction
- * vouchers + opening_balance) and resetting voucher_sequences, without
- * requiring a replacement file. Marks sie_imports.status='undone'.
+ * Undo a completed SIE import by posting exact reversal entries for every
+ * transaction voucher and opening-balance entry. Originals and attachments
+ * remain immutable and traceable. Marks sie_imports.status='undone'.
  *
  * Pre-flight checks mirror replaceSIEImport so the user gets a Swedish
  * error message before the RPC raises. The RPC itself is idempotent on
@@ -248,8 +203,9 @@ export async function replaceSIEImport(
 export async function undoSIEImport(
   supabase: SupabaseClient,
   companyId: string,
-  importId: string
-): Promise<{ success: boolean; deletedEntries: number; error?: string }> {
+  importId: string,
+  actorUserId: string,
+): Promise<{ success: boolean; reversedEntries: number; error?: string }> {
   const { data: importRecord } = await supabase
     .from('sie_imports')
     .select('status, fiscal_period_id')
@@ -258,13 +214,13 @@ export async function undoSIEImport(
     .single()
 
   if (!importRecord) {
-    return { success: false, deletedEntries: 0, error: 'Import hittades inte' }
+    return { success: false, reversedEntries: 0, error: 'Import hittades inte' }
   }
 
   // 'partial' = posted but not archived (I18) — undoable so the user can
   // retry the whole import cleanly.
   if (importRecord.status !== 'completed' && importRecord.status !== 'partial') {
-    return { success: false, deletedEntries: 0, error: `Kan bara ångra slutförda importer (status: ${importRecord.status})` }
+    return { success: false, reversedEntries: 0, error: `Kan bara ångra slutförda importer (status: ${importRecord.status})` }
   }
 
   if (importRecord.fiscal_period_id) {
@@ -276,20 +232,21 @@ export async function undoSIEImport(
       .single()
 
     if (period?.is_closed || period?.locked_at) {
-      return { success: false, deletedEntries: 0, error: 'Kan inte ångra import i ett låst eller stängt räkenskapsår. Öppna perioden först.' }
+      return { success: false, reversedEntries: 0, error: 'Kan inte ångra import i ett låst eller stängt räkenskapsår. Öppna perioden först.' }
     }
   }
 
-  const { data: deletedCount, error: rpcError } = await supabase.rpc('undo_sie_import', {
+  const { data: reversedCount, error: rpcError } = await supabase.rpc('undo_sie_import_internal', {
     p_company_id: companyId,
     p_import_id: importId,
+    p_actor_user_id: actorUserId,
   })
 
   if (rpcError) {
-    return { success: false, deletedEntries: 0, error: `Kunde inte ångra import: ${rpcError.message}` }
+    return { success: false, reversedEntries: 0, error: `Kunde inte ångra import: ${rpcError.message}` }
   }
 
-  return { success: true, deletedEntries: deletedCount as number }
+  return { success: true, reversedEntries: reversedCount as number }
 }
 
 /**
@@ -739,6 +696,8 @@ async function createMigrationAdjustmentEntry(
   companyId: string,
   userId: string,
   fiscalPeriodId: string,
+  sieImportId: string,
+  approveOreRounding: boolean,
   parsed: ParsedSIEFile,
   accountMap: Map<string, string>,
   importedMovements: Map<string, number>,
@@ -842,6 +801,12 @@ async function createMigrationAdjustmentEntry(
 
   if (balanceDiff > 0.005) {
     const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
+    if (!approveOreRounding) {
+      throw new Error(
+        `Migreringsjusteringen har en differens på ${Math.abs(roundedDiff).toFixed(2)} kr. ` +
+          'Konto 3741 får endast läggas till efter uttryckligt godkännande av öresutjämningen.',
+      )
+    }
     if (roundedDiff > 0) {
       lines.push({
         account_number: '3741',
@@ -870,16 +835,57 @@ async function createMigrationAdjustmentEntry(
   const firstDate = skippedDates[0] || '?'
   const lastDate = skippedDates[skippedDates.length - 1] || '?'
 
-  const entry = await createJournalEntry(supabase, companyId, userId, {
+  const draft = await createDraftEntry(supabase, companyId, userId, {
     fiscal_period_id: fiscalPeriodId,
     entry_date: entryDate,
     description: `Omföringsverifikation: justering för ${skippedDetails.length} exkluderade verifikationer (${firstId}–${lastId}, ${firstDate}–${lastDate}) vid SIE-import`,
     source_type: 'import',
+    source_id: sieImportId,
     voucher_series: 'M',
     lines,
   })
 
-  return { entryId: entry.id, deltaAccounts: deltaAccountCount, warnings }
+  // The adjustment is created by the import and must therefore carry the
+  // exact same provenance before it is posted. Undo/replace intentionally
+  // fail closed instead of guessing by period or source_type.
+  const { error: provenanceError } = await supabase
+    .from('journal_entries')
+    .update({
+      sie_import_id: sieImportId,
+      external_reference: 'migration_adjustment',
+    })
+    .eq('id', draft.id)
+    .eq('company_id', companyId)
+    .eq('status', 'draft')
+
+  if (provenanceError) {
+    await supabase
+      .from('journal_entries')
+      .update({ status: 'cancelled' })
+      .eq('id', draft.id)
+      .eq('company_id', companyId)
+      .eq('status', 'draft')
+    throw new Error(`Migreringsjusteringens importproveniens kunde inte sparas: ${provenanceError.message}`)
+  }
+
+  try {
+    const entry = await commitEntry(
+      supabase,
+      companyId,
+      userId,
+      draft.id,
+      'sie_migration_adjustment',
+    )
+    return { entryId: entry.id, deltaAccounts: deltaAccountCount, warnings }
+  } catch (error) {
+    await supabase
+      .from('journal_entries')
+      .update({ status: 'cancelled' })
+      .eq('id', draft.id)
+      .eq('company_id', companyId)
+      .eq('status', 'draft')
+    throw error
+  }
 }
 
 /**
@@ -1185,14 +1191,14 @@ export async function loadMappings(supabase: SupabaseClient, companyId: string):
  * the new SIE's fiscal year is handled:
  *   - 'block' (default): refuse with a Swedish error. Used by the manual
  *     upload route in app/api/import/sie. Preserves prior behavior.
- *   - 'replace': automatically call replaceSIEImport on the prior row
- *     (marks it 'replaced', cancels its imported journal entries) and
- *     proceed. Used by the Fortnox re-sync flow so the user can pull
- *     updated data from Fortnox without manual cleanup.
+ *   - 'replace': bind the new staged import to one explicitly selected
+ *     completed import. The database validates the relationship, reverses
+ *     every precisely tagged posted entry and only then posts the corrected
+ *     import in the same finalization transaction.
  *
- * Replace only cancels journal entries with source_type='import' — entries
- * the user created natively in Nordklart (categorized transactions, invoices,
- * etc.) are left alone. See the replace_sie_import RPC.
+ * Replacement never guesses by period or source_type and never hard-deletes
+ * posted entries. Native Nordklart entries are outside the import provenance
+ * and remain untouched.
  *
  * `updateAccountNames` (default true) carries the SIE file's #KONTO names
  * into the chart for identity-mapped accounts: new accounts are created with
@@ -1295,8 +1301,10 @@ export async function executeSIEImport(
     importTransactions: boolean
     voucherSeries?: string
     onExistingPeriod?: 'block' | 'replace'
+    /** Exact completed import selected for atomic replacement. Never trusted without server validation. */
+    replaceImportId?: string | null
     updateAccountNames?: boolean
-    /** Explicitly approve öresutjämning (3741) for diffs in (0.01, 1.00] SEK (I15). */
+    /** Explicitly approve öresutjämning (3741) for every non-zero diff up to 1.00 SEK (I15). */
     approveOreRounding?: boolean
     /** Explicitly approve skipping unpostable vouchers (I15). */
     approveSkippedVouchers?: boolean
@@ -1392,17 +1400,15 @@ export async function executeSIEImport(
     // The deletion happens INSIDE finalize_sie_import's transaction, after
     // the new vouchers have been fully validated — a failure rolls everything
     // back and the old import stays untouched.
-    let replacesImportId: string | null = null
-    if (onExistingPeriod === 'replace') {
+    let replacesImportId: string | null = options.replaceImportId ?? null
+    if (onExistingPeriod === 'replace' && !replacesImportId) {
       const fyStart = parsed.stats.fiscalYearStart
       const fyEnd = parsed.stats.fiscalYearEnd
       if (fyStart && fyEnd) {
         const priorPeriodImport = await checkDuplicatePeriodImport(
           supabase, companyId, fyStart, fyEnd
         )
-        if (priorPeriodImport) {
-          replacesImportId = priorPeriodImport.id
-        }
+        if (priorPeriodImport) replacesImportId = priorPeriodImport.id
       }
     }
 
@@ -1790,7 +1796,7 @@ export async function executeSIEImport(
     if (replacesImportId) {
       result.replacedPriorImport = {
         importId: replacesImportId,
-        deletedEntries: finalize.deleted_from_replaced,
+        reversedEntries: finalize.deleted_from_replaced,
       }
     }
     if (finalize.opening_balance_entry_id) {
@@ -1860,6 +1866,8 @@ export async function executeSIEImport(
             companyId,
             userId,
             result.fiscalPeriodId,
+            result.importId!,
+            options.approveOreRounding ?? false,
             parsed,
             accountMap,
             prepared.movementsByAccount,
@@ -1882,8 +1890,11 @@ export async function executeSIEImport(
           }
         } catch (adjustmentError) {
           console.error('[sie-import] Failed to create migration adjustment entry:', adjustmentError)
+          const message = adjustmentError instanceof Error
+            ? adjustmentError.message
+            : 'Okänt fel vid migreringsjustering'
           result.warnings.push(
-            'Kunde inte skapa migreringsjustering — kontrollera saldon manuellt mot källsystemet'
+            `Migreringsjustering skapades inte: ${message} Kontrollera saldon manuellt mot källsystemet.`
           )
         }
       } else {

@@ -5,16 +5,24 @@ import {
 } from '@/lib/bookkeeping/currency-revaluation'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+import { createServiceClient } from '@/lib/supabase/server'
 
 /** GET: preview currency revaluation for a fiscal period. */
 export const GET = withRouteContext(
   'period.fx_revaluation_preview',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
+    const serviceDb = createServiceClient()
+    const access = await requireYearEndAccess(serviceDb, companyId, user.id, id, {
+      operation: 'period.fx_revaluation_preview',
+      requestId,
+    })
+    if (!access.allowed) return yearEndAccessDeniedResponse()
 
-    const { data: period, error: periodError } = await supabase
+    const { data: period, error: periodError } = await serviceDb
       .from('fiscal_periods')
       .select('*')
       .eq('id', id)
@@ -26,7 +34,7 @@ export const GET = withRouteContext(
     }
 
     try {
-      const preview = await previewCurrencyRevaluation(supabase, companyId!, period.period_end)
+      const preview = await previewCurrencyRevaluation(serviceDb, companyId, period.period_end)
       return NextResponse.json({ data: preview })
     } catch (err) {
       opLog.error('fx revaluation preview failed', err as Error)
@@ -34,6 +42,7 @@ export const GET = withRouteContext(
       return errorResponse(err, opLog, { requestId })
     }
   },
+  { allowRequestedCompany: true },
 )
 
 /** POST: execute currency revaluation, creating the period-end FX entry. */
@@ -41,10 +50,17 @@ export const POST = withRouteContext(
   'period.fx_revaluation',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { user, supabase, companyId, log, requestId } = ctx
+    const { user, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
+    const serviceDb = createServiceClient()
+    const access = await requireYearEndAccess(serviceDb, companyId, user.id, id, {
+      operation: 'period.fx_revaluation',
+      requestId,
+      requireWrite: true,
+    })
+    if (!access.allowed) return yearEndAccessDeniedResponse()
 
-    const { data: period, error: periodError } = await supabase
+    const { data: period, error: periodError } = await serviceDb
       .from('fiscal_periods')
       .select('*')
       .eq('id', id)
@@ -61,7 +77,7 @@ export const POST = withRouteContext(
 
     try {
       const result = await executeCurrencyRevaluation(
-        supabase, companyId!, period.period_end, id, user.id,
+        serviceDb, companyId, period.period_end, id, user.id,
       )
 
       if (!result) {
@@ -82,5 +98,5 @@ export const POST = withRouteContext(
       return fallback
     }
   },
-  { requireWrite: true },
+  { allowRequestedCompany: true },
 )

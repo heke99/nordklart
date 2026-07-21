@@ -1,196 +1,84 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { saveMappings } from '@/lib/import/sie-import'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import type { AccountMapping } from '@/lib/import/types'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
-/**
- * GET /api/import/sie/mappings
- * Get all saved account mappings for the user
- */
-export async function GET() {
-  const supabase = await createClient()
+export const GET = withRouteContext(
+  'sie_import.mappings.list',
+  async (_request, ctx) => {
+    const { supabase, companyId, log, requestId } = ctx
+    const { data, error } = await supabase
+      .from('sie_account_mappings')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('source_account')
+    if (error) return errorResponseFromCode('DATABASE_QUERY_FAILED', log, { requestId, reason: error.message })
+    return NextResponse.json({ data: data ?? [] })
+  },
+  { accessPolicy: 'sie_import' },
+)
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+export const POST = withRouteContext(
+  'sie_import.mappings.save',
+  async (request, ctx) => {
+    const { supabase, companyId, log, requestId } = ctx
+    const body = await request.json()
+    const mappings: AccountMapping[] = body.mappings
+    if (!Array.isArray(mappings)) {
+      return errorResponseFromCode('VALIDATION_FAILED', log, { requestId, details: { reason: 'Ogiltiga kontomappningar.' } })
+    }
+    try {
+      await saveMappings(supabase, companyId, mappings)
+      return NextResponse.json({ success: true })
+    } catch (error) {
+      return errorResponseFromCode('DATABASE_QUERY_FAILED', log, {
+        requestId,
+        reason: error instanceof Error ? error.message : String(error),
+      })
+    }
+  },
+  { requireWrite: true, accessPolicy: 'sie_import' },
+)
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+export const PUT = withRouteContext(
+  'sie_import.mappings.update',
+  async (request, ctx) => {
+    const { user, supabase, companyId, log, requestId } = ctx
+    const body = await request.json()
+    const sourceAccount = typeof body.sourceAccount === 'string' ? body.sourceAccount.trim() : ''
+    const targetAccount = typeof body.targetAccount === 'string' ? body.targetAccount.trim() : ''
+    if (!sourceAccount || !/^\d{4}$/.test(targetAccount)) {
+      return errorResponseFromCode('VALIDATION_FAILED', log, { requestId, details: { reason: 'Källkonto och fyrsiffrigt målkonto krävs.' } })
+    }
+    const { data, error } = await supabase
+      .from('sie_account_mappings')
+      .upsert({
+        user_id: user.id,
+        company_id: companyId,
+        source_account: sourceAccount,
+        target_account: targetAccount,
+        confidence: 1,
+        match_type: 'manual',
+      }, { onConflict: 'company_id,source_account' })
+      .select()
+      .single()
+    if (error) return errorResponseFromCode('DATABASE_QUERY_FAILED', log, { requestId, reason: error.message })
+    return NextResponse.json({ data })
+  },
+  { requireWrite: true, accessPolicy: 'sie_import' },
+)
 
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGate) return featureGate
-
-  const { data, error } = await supabase
-    .from('sie_account_mappings')
-    .select('*')
-    .eq('company_id', companyId)
-    .order('source_account')
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ data })
-}
-
-/**
- * POST /api/import/sie/mappings
- * Save account mappings (bulk upsert)
- */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGate) return featureGate
-
-  const body = await request.json()
-  const mappings: AccountMapping[] = body.mappings
-
-  if (!mappings || !Array.isArray(mappings)) {
-    return NextResponse.json({ error: 'Invalid mappings data' }, { status: 400 })
-  }
-
-  try {
-    // COMPANY-scoped, not user-scoped: two companies under the same user can
-    // hold different mappings for the same source account. Passing user.id
-    // here used to store the rows under the wrong tenant key, making them
-    // invisible to GET/parse/execute (which read by company_id).
-    await saveMappings(supabase, companyId, mappings)
+export const DELETE = withRouteContext(
+  'sie_import.mappings.delete',
+  async (request, ctx) => {
+    const { supabase, companyId, log, requestId } = ctx
+    const sourceAccount = new URL(request.url).searchParams.get('sourceAccount')
+    let query = supabase.from('sie_account_mappings').delete().eq('company_id', companyId)
+    if (sourceAccount) query = query.eq('source_account', sourceAccount)
+    const { error } = await query
+    if (error) return errorResponseFromCode('DATABASE_QUERY_FAILED', log, { requestId, reason: error.message })
     return NextResponse.json({ success: true })
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to save mappings' },
-      { status: 500 }
-    )
-  }
-}
-
-/**
- * PUT /api/import/sie/mappings
- * Update a single mapping
- */
-export async function PUT(request: Request) {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGate) return featureGate
-
-  const body = await request.json()
-  const { sourceAccount, targetAccount } = body
-
-  if (!sourceAccount || !targetAccount) {
-    return NextResponse.json(
-      { error: 'sourceAccount and targetAccount are required' },
-      { status: 400 }
-    )
-  }
-
-  const { data, error } = await supabase
-    .from('sie_account_mappings')
-    .upsert({
-      user_id: user.id,
-      company_id: companyId,
-      source_account: sourceAccount,
-      target_account: targetAccount,
-      confidence: 1.0,
-      match_type: 'manual',
-    }, {
-      // Uniqueness is company-scoped since 20260330130000 — the old
-      // user_id,source_account conflict target no longer matches a
-      // constraint and made every PUT fail at runtime.
-      onConflict: 'company_id,source_account',
-    })
-    .select()
-    .single()
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ data })
-}
-
-/**
- * DELETE /api/import/sie/mappings
- * Delete a specific mapping or all mappings
- */
-export async function DELETE(request: Request) {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGate) return featureGate
-
-  const { searchParams } = new URL(request.url)
-  const sourceAccount = searchParams.get('sourceAccount')
-
-  if (sourceAccount) {
-    // Delete specific mapping
-    const { error } = await supabase
-      .from('sie_account_mappings')
-      .delete()
-      .eq('company_id', companyId)
-      .eq('source_account', sourceAccount)
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-  } else {
-    // Delete all mappings
-    const { error } = await supabase
-      .from('sie_account_mappings')
-      .delete()
-      .eq('company_id', companyId)
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-  }
-
-  return NextResponse.json({ success: true })
-}
+  },
+  { requireWrite: true, accessPolicy: 'sie_import' },
+)

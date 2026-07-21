@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildBokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+import { createServiceClient } from '@/lib/supabase/server'
 
 /**
  * GET: aggregated bokslut readiness report — combines validateYearEndReadiness
@@ -14,17 +15,18 @@ export const GET = withRouteContext(
   'period.bokslut_readiness',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { user, supabase, companyId, log, requestId } = ctx
+    const { user, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
 
     try {
-      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+      const serviceDb = createServiceClient()
+      const access = await requireYearEndAccess(serviceDb, companyId, user.id, id, {
         operation: 'period.bokslut_readiness',
         requestId,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse()
 
-      const report = await buildBokslutReadinessReport(supabase, companyId, user.id, id)
+      const report = await buildBokslutReadinessReport(serviceDb, companyId, user.id, id)
       return NextResponse.json({ data: report })
     } catch (err) {
       opLog.error('bokslut readiness aggregation failed', err as Error)
@@ -38,4 +40,5 @@ export const GET = withRouteContext(
       })
     }
   },
+  { allowRequestedCompany: true },
 )

@@ -10,11 +10,12 @@ beforeEach(() => {
 })
 
 describe('generateMonthlyBreakdown', () => {
-  it('returns empty months when no fiscal period found', async () => {
-    mockResult({ data: null, error: { message: 'not found' } })
+  it('fails closed when the fiscal-period query fails', async () => {
+    mockResult({ data: null, error: { message: 'database unavailable' } })
 
-    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
-    expect(result.months).toEqual([])
+    await expect(
+      generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1'),
+    ).rejects.toMatchObject({ code: 'REPORT_DATA_QUERY_FAILED' })
   })
 
   it('returns empty months when no journal entries exist', async () => {
@@ -54,7 +55,7 @@ describe('generateMonthlyBreakdown', () => {
         select: () => ({
           eq: () => ({
             eq: () => ({
-              eq: () => ({
+              in: () => ({
                 range: () =>
                   Promise.resolve({
                     data: [],
@@ -98,7 +99,7 @@ describe('generateMonthlyBreakdown', () => {
         select: () => ({
           eq: () => ({
             eq: () => ({
-              eq: () => ({
+              in: () => ({
                 range: () =>
                   Promise.resolve({
                     data: [
@@ -179,7 +180,7 @@ describe('generateMonthlyBreakdown', () => {
         select: () => ({
           eq: () => ({
             eq: () => ({
-              eq: () => ({
+              in: () => ({
                 range: () =>
                   Promise.resolve({
                     data: [

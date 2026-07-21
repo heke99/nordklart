@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import {
   parseSIEFile,
   validateSIEFile,
@@ -12,6 +13,7 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { isSieFiscalPeriodAllowed, resolveSieFiscalYearAccess } from '@/lib/import/access'
 
 /**
  * POST /api/import/sie/parse
@@ -24,6 +26,14 @@ export const POST = withRouteContext(
 
     const formData = await request.formData()
     const file = formData.get('file') as File | null
+    const replaceImportRaw = formData.get('replaceImportId')
+    const replaceImportId = typeof replaceImportRaw === 'string' && replaceImportRaw
+      ? z.string().uuid().safeParse(replaceImportRaw)
+      : null
+
+    if (replaceImportId && !replaceImportId.success) {
+      return errorResponseFromCode('VALIDATION_FAILED', log, { requestId, details: { reason: 'Ogiltigt ersättnings-ID.' } })
+    }
 
     if (!file) {
       return errorResponseFromCode('SIE_PARSE_NO_FILE', log, { requestId })
@@ -56,14 +66,26 @@ export const POST = withRouteContext(
       const encoding = detectEncoding(arrayBuffer)
       const content = decodeBuffer(arrayBuffer, encoding)
 
-      const duplicate = await checkDuplicateImport(supabase, companyId!, content)
-      if (duplicate) {
+      let replacementRecord: { id: string; fiscal_period_id: string | null; status: string } | null = null
+      if (replaceImportId?.success) {
+        const { data, error } = await supabase
+          .from('sie_imports')
+          .select('id,fiscal_period_id,status')
+          .eq('id', replaceImportId.data)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (error) throw new Error(error.message)
+        if (!data || !isSieFiscalPeriodAllowed(ctx.sieImportAccess, data.fiscal_period_id) || !['completed', 'partial'].includes(data.status)) {
+          return errorResponseFromCode('SIE_IMPORT_NOT_FOUND', opLog, { requestId })
+        }
+        replacementRecord = data
+      }
+
+      const duplicate = await checkDuplicateImport(supabase, companyId, content)
+      if (duplicate && duplicate.id !== replacementRecord?.id) {
         return errorResponseFromCode('SIE_DUPLICATE_FILE', opLog, {
           requestId,
-          details: {
-            importId: duplicate.id,
-            importedAt: duplicate.imported_at,
-          },
+          details: { importId: duplicate.id, importedAt: duplicate.imported_at },
         })
       }
 
@@ -76,7 +98,7 @@ export const POST = withRouteContext(
           parsed.stats.fiscalYearStart,
           parsed.stats.fiscalYearEnd,
         )
-        if (periodDuplicate) {
+        if (periodDuplicate && periodDuplicate.id !== replacementRecord?.id) {
           return errorResponseFromCode('SIE_DUPLICATE_PERIOD', opLog, {
             requestId,
             details: {
@@ -87,6 +109,20 @@ export const POST = withRouteContext(
             },
           })
         }
+      }
+
+      const fiscalAccess = await resolveSieFiscalYearAccess(
+        supabase,
+        ctx.sieImportAccess,
+        companyId,
+        parsed.stats.fiscalYearStart,
+        parsed.stats.fiscalYearEnd,
+      )
+      if (!fiscalAccess.allowed) {
+        return errorResponseFromCode('PERMISSION_DENIED', opLog, {
+          requestId,
+          details: { reason: 'SIE-filen avser ett annat räkenskapsår än det köpta engångsbokslutet.' },
+        })
       }
 
       const validation = validateSIEFile(parsed)
@@ -168,4 +204,5 @@ export const POST = withRouteContext(
       })
     }
   },
+  { accessPolicy: 'sie_import' },
 )

@@ -121,12 +121,25 @@ function createRevaluationMockSupabase(config: {
     journal_entries: (config.journalEntries ?? []) as unknown as Row[],
   }
 
-  const rpc = vi.fn().mockResolvedValue(
-    config.rpcResult ?? {
-      data: { run_id: 'run-1', entry_id: 'entry-1', reused: false },
-      error: null,
+  const rpc = vi.fn().mockImplementation((name: string) => {
+    if (name === 'historical_open_items_at') {
+      // These unit cases intentionally exercise the table fallback. Production
+      // uses the canonical RPC after the migration is present.
+      return Promise.resolve({
+        data: null,
+        error: { code: '42883', message: 'function historical_open_items_at does not exist' },
+      })
     }
-  )
+    if (name === 'register_year_end_fx_rate_snapshots') {
+      return Promise.resolve({ data: null, error: null })
+    }
+    return Promise.resolve(
+      config.rpcResult ?? {
+        data: { run_id: 'run-1', entry_id: 'entry-1', reused: false },
+        error: null,
+      },
+    )
+  })
 
   const supabase = {
     from: vi
@@ -484,6 +497,28 @@ describe('currency-revaluation', () => {
     })
   })
 
+  describe('official rate policy', () => {
+    it('requests Riksbanken observations with fallback disabled', async () => {
+      const eurInvoice = makeInvoice({
+        id: 'inv-rate-policy',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11,
+        total: 100,
+      })
+      mockRates({ EUR: 11.5 })
+      const { supabase } = createRevaluationMockSupabase({ invoices: [eurInvoice] })
+
+      await previewCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE)
+
+      expect(mockedFetchRates).toHaveBeenCalledWith(
+        ['EUR'],
+        new Date(BALANCE_DATE),
+        { allowFallback: false },
+      )
+    })
+  })
+
   describe('previewCurrencyRevaluation', () => {
     it('returns empty preview when no foreign currency items', async () => {
       const { supabase } = createRevaluationMockSupabase({})
@@ -774,7 +809,7 @@ describe('currency-revaluation', () => {
       expect(preview.items[0].difference_sek).toBe(500)
     })
 
-    it('skips items with zero difference', async () => {
+    it('retains zero-difference exposure in the verified snapshot without journal lines', async () => {
       const eurInvoice = makeInvoice({
         id: 'inv-same',
         status: 'sent',
@@ -790,7 +825,8 @@ describe('currency-revaluation', () => {
       const { supabase } = createRevaluationMockSupabase({ invoices: [eurInvoice] })
       const preview = await previewCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE)
 
-      expect(preview.items).toHaveLength(0)
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].difference_sek).toBe(0)
       expect(preview.lines).toHaveLength(0)
     })
 
@@ -911,6 +947,8 @@ describe('currency-revaluation', () => {
           open_amount_sek_original: 11000,
           rate_original: 11,
           rate_closing: 11.5,
+          rate_closing_date: BALANCE_DATE,
+          rate_source: 'riksbanken',
           unrealized_diff_sek: 500,
         },
         {
@@ -921,6 +959,8 @@ describe('currency-revaluation', () => {
           open_amount_sek_original: 22000,
           rate_original: 11,
           rate_closing: 11.5,
+          rate_closing_date: BALANCE_DATE,
+          rate_source: 'riksbanken',
           unrealized_diff_sek: 1000,
         },
       ])
@@ -935,11 +975,13 @@ describe('currency-revaluation', () => {
         supabase,
         'company-1',
         BALANCE_DATE,
-        'period-1'
+        'period-1',
+        'user-1'
       )
 
       expect(result).toBeNull()
-      expect(rpc).not.toHaveBeenCalled()
+      expect(rpc.mock.calls.map(([name]) => name)).not.toContain('post_currency_revaluation')
+      expect(rpc.mock.calls.map(([name]) => name)).not.toContain('register_year_end_fx_rate_snapshots')
     })
 
     it('posts through the post_currency_revaluation RPC with the deterministic payload', async () => {
@@ -970,9 +1012,10 @@ describe('currency-revaluation', () => {
       )
 
       expect(result).not.toBeNull()
-      expect(rpc).toHaveBeenCalledOnce()
+      const postCall = rpc.mock.calls.find(([name]) => name === 'post_currency_revaluation')
+      expect(postCall).toBeTruthy()
 
-      const [rpcName, rpcArgs] = rpc.mock.calls[0] as [string, Record<string, unknown>]
+      const [rpcName, rpcArgs] = postCall as [string, Record<string, unknown>]
       expect(rpcName).toBe('post_currency_revaluation')
       expect(rpcArgs.p_company_id).toBe('company-1')
       expect(rpcArgs.p_fiscal_period_id).toBe('period-1')
@@ -995,27 +1038,20 @@ describe('currency-revaluation', () => {
       ])
     })
 
-    it('passes null as p_user_id when no user is given', async () => {
-      const eurInvoice = makeInvoice({
-        status: 'sent',
-        currency: 'EUR',
-        exchange_rate: 11.0,
-        total: 1000,
-      })
+    it('rejects execution when no verified actor is supplied', async () => {
+      const { supabase, rpc } = createRevaluationMockSupabase({})
 
-      mockRates({ EUR: 11.5 })
+      await expect(
+        executeCurrencyRevaluation(
+          supabase,
+          'company-1',
+          BALANCE_DATE,
+          'period-1',
+          undefined as unknown as string,
+        ),
+      ).rejects.toThrow(/YEAR_END_ACTOR_REQUIRED/)
 
-      const { supabase, rpc } = createRevaluationMockSupabase({
-        invoices: [eurInvoice],
-        journalEntries: [
-          makeJournalEntry({ id: 'entry-1', source_type: 'currency_revaluation' }),
-        ],
-      })
-
-      await executeCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE, 'period-1')
-
-      const [, rpcArgs] = rpc.mock.calls[0] as [string, Record<string, unknown>]
-      expect(rpcArgs.p_user_id).toBeNull()
+      expect(rpc).not.toHaveBeenCalled()
     })
 
     it('returns the posted entry and the preview', async () => {
@@ -1040,7 +1076,8 @@ describe('currency-revaluation', () => {
         supabase,
         'company-1',
         BALANCE_DATE,
-        'period-1'
+        'period-1',
+        'user-1'
       )
 
       expect(result).not.toBeNull()
@@ -1076,7 +1113,8 @@ describe('currency-revaluation', () => {
         supabase,
         'company-1',
         BALANCE_DATE,
-        'period-1'
+        'period-1',
+        'user-1'
       )
 
       expect(result).not.toBeNull()
@@ -1105,7 +1143,8 @@ describe('currency-revaluation', () => {
         supabase,
         'company-1',
         BALANCE_DATE,
-        'period-1'
+        'period-1',
+        'user-1'
       )
 
       expect(result).toBeNull()
@@ -1127,10 +1166,10 @@ describe('currency-revaluation', () => {
       })
 
       await expect(
-        executeCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE, 'period-1')
+        executeCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE, 'period-1', 'user-1')
       ).rejects.toThrow(BookkeepingDatabaseError)
       await expect(
-        executeCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE, 'period-1')
+        executeCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE, 'period-1', 'user-1')
       ).rejects.toThrow('post_currency_revaluation')
     })
 
@@ -1150,7 +1189,7 @@ describe('currency-revaluation', () => {
       })
 
       await expect(
-        executeCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE, 'period-1')
+        executeCurrencyRevaluation(supabase, 'company-1', BALANCE_DATE, 'period-1', 'user-1')
       ).rejects.toThrow('fetch_revaluation_entry')
     })
   })

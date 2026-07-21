@@ -7,25 +7,27 @@ import {
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+import { createServiceClient } from '@/lib/supabase/server'
 
 /** GET: validate readiness + preview the year-end entries. */
 export const GET = withRouteContext(
   'period.year_end_preview',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { user, supabase, companyId, log, requestId } = ctx
+    const { user, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
 
     try {
-      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+      const serviceDb = createServiceClient()
+      const access = await requireYearEndAccess(serviceDb, companyId, user.id, id, {
         operation: 'period.year_end_preview',
         requestId,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse()
 
       const [validation, preview] = await Promise.all([
-        validateYearEndReadiness(supabase, companyId!, user.id, id),
-        previewYearEndClosing(supabase, companyId!, user.id, id),
+        validateYearEndReadiness(serviceDb, companyId, user.id, id),
+        previewYearEndClosing(serviceDb, companyId, user.id, id),
       ])
       return NextResponse.json({ data: { validation, preview } })
     } catch (err) {
@@ -37,6 +39,7 @@ export const GET = withRouteContext(
       return errorResponseFromCode('YEAR_END_PREVIEW_FAILED', opLog, { requestId })
     }
   },
+  { allowRequestedCompany: true },
 )
 
 /** POST: actually run year-end closing (atomic, idempotent — B01/B09). */
@@ -44,13 +47,15 @@ export const POST = withRouteContext(
   'period.year_end',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { user, supabase, companyId, log, requestId } = ctx
+    const { user, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
 
     try {
-      const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
+      const serviceDb = createServiceClient()
+      const access = await requireYearEndAccess(serviceDb, companyId, user.id, id, {
         operation: 'period.year_end',
         requestId,
+        requireWrite: true,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse()
 
@@ -60,7 +65,7 @@ export const POST = withRouteContext(
       const idempotencyKey =
         request.headers.get('idempotency-key')?.slice(0, 128) ?? undefined
 
-      const result = await executeYearEndClosing(supabase, companyId!, user.id, id, {
+      const result = await executeYearEndClosing(serviceDb, companyId, user.id, id, {
         idempotencyKey,
       })
       return NextResponse.json({ data: result })
@@ -91,5 +96,5 @@ export const POST = withRouteContext(
       return fallback
     }
   },
-  { requireWrite: true },
+  { allowRequestedCompany: true },
 )
