@@ -3058,6 +3058,10 @@ export interface RevaluationItem {
   amount_in_currency: number
   original_rate: number
   closing_rate: number
+  /** Observation date used for the locked closing-rate snapshot. */
+  closing_rate_date?: string
+  /** Authoritative rate source, normally Riksbanken. */
+  rate_source?: string
   original_sek: number
   closing_sek: number
   difference_sek: number

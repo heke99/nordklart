@@ -4,6 +4,19 @@ import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
+  createServiceClient: () => mockSupabase,
+}))
+
+vi.mock('@/lib/import/access', () => ({
+  resolveSieImportAccess: vi.fn().mockResolvedValue({
+    allowed: true,
+    canWrite: true,
+    companyExists: true,
+    mode: 'bookkeeping',
+    effectiveRole: 'company_admin',
+    allowedPeriodIds: null,
+  }),
+  auditPlatformSieImportOperation: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/lib/company/context', () => ({

@@ -238,6 +238,7 @@ export type BookkeepingOperation =
   | 'post_corrected_entry'
   | 'fetch_currency_receivables'
   | 'fetch_currency_payables'
+  | 'register_year_end_fx_rate_snapshots'
   | 'check_existing_revaluation'
   | 'post_currency_revaluation'
   | 'fetch_revaluation_entry'

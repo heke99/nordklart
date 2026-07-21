@@ -12,6 +12,7 @@ import {
   isCoreOperation,
   isPlatformOperation,
   isPeriodBoundYearEndOperation,
+  isSieImportOperation,
   isApiV1CoreOperation,
 } from '@/lib/platform/feature-policy-map'
 import { NORDKLART_FEATURES } from '@/lib/platform/feature-codes'
@@ -53,12 +54,18 @@ describe('featureForOperation', () => {
     expect(featureForOperation('journal_entry.batch_no_document_required')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('accruals.post_due')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('voucher_sequence.next')).toBe(NORDKLART_FEATURES.bookkeepingCore)
-    expect(featureForOperation('sie_import.execute')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('register_import.customers.parse')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('opening_balance.execute')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('document.upload')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('period.lock')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('period.depreciation_commit')).toBe(NORDKLART_FEATURES.bookkeepingCore)
+  })
+
+  it('keeps SIE operations null because the dedicated resolver supports bookkeeping and one-off year-end access', () => {
+    for (const op of ['sie_import.execute', 'sie_import.mappings.update', 'imports.sie.create']) {
+      expect(featureForOperation(op)).toBeNull()
+      expect(isSieImportOperation(op)).toBe(true)
+    }
   })
 
   it('keeps period-bound year-end operations null (gated via requireYearEndAccess)', () => {
