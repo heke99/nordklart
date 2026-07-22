@@ -80,13 +80,38 @@ describe('complimentary access grants', () => {
     expect(bankgiro.reason).toBe('missing_entitlement')
   })
 
+
+
+  it('does not grant unknown feature codes outside the catalogue', async () => {
+    const access = await featureAccess(companyId, `unknown.${randomUUID()}`)
+    expect(access.allowed).toBe(false)
+    expect(access.reason).toBe('missing_entitlement')
+  })
+
+  it('returns Full Access through the effective catalogue RPC without a plan', async () => {
+    const { rows } = await withRole({ role: 'service_role' }, (client) =>
+      client.query<{ enabled: boolean; source_type: string | null }>(
+        `SELECT enabled, source_type
+         FROM public.company_feature_access_catalog($1)
+         WHERE feature_code = 'bookkeeping.core'`,
+        [companyId],
+      ),
+    )
+
+    expect(rows[0]?.enabled).toBe(true)
+    expect(rows[0]?.source_type).toBe('commercial_grant')
+  })
+
   it('a Bankgiro grant stays blocked until provider provisioning is complete', async () => {
     await withRole({ sub: adminId, role: 'authenticated' }, (client) =>
       client.query(`SELECT public.platform_grant_complimentary_bankgiro($1)`, [companyId]),
     )
+    const application = await featureAccess(companyId, 'bankgiro.application')
+    expect(application.allowed).toBe(true)
+
     const bankgiro = await featureAccess(companyId, 'bankgiro.operations')
-    // The entitlement exists, but bankgiro.operations additionally requires an
-    // active provider setup — no silent go-live on a paper grant.
+    // The application surface is available, but bankgiro.operations additionally
+    // requires active provider setup — no silent go-live on a paper grant.
     expect(bankgiro.allowed).toBe(false)
     expect(bankgiro.reason).toBe('provisioning_pending')
   })
@@ -128,7 +153,8 @@ describe('complimentary access grants', () => {
       [grantId],
     )
 
-    expect((await featureAccess(staleCompany, 'salary.runs')).allowed).toBe(false)
+    // Full Access is authoritative even when the diagnostic snapshot is stale.
+    expect((await featureAccess(staleCompany, 'salary.runs')).allowed).toBe(true)
 
     const repair = await withRole({ sub: adminId, role: 'authenticated' }, async (client) => {
       const result = await client.query<{

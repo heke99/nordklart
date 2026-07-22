@@ -33,6 +33,7 @@ import { clearRecaptIdentity } from '@/lib/recapt'
 import WorkspaceSwitcher from '@/components/dashboard/WorkspaceSwitcher'
 import { useCompany } from '@/contexts/CompanyContext'
 import { buildNavGroups, type NavIconKey, type NavItemSpec } from '@/lib/navigation/nav-builder'
+import { purchaseHrefForFeature } from '@/lib/navigation/feature-access-routing'
 import type { EntityType } from '@/types'
 import { useMemo, useState } from 'react'
 
@@ -105,9 +106,9 @@ function NavLink({ item, pathname, disabled, onClick }: {
   if (item.locked) {
     return (
       <Link
-        href={`/settings/billing?feature=${encodeURIComponent(item.feature ?? '')}`}
+        href={purchaseHrefForFeature(item.feature ?? '', item.href)}
         onClick={onClick}
-        title="Ingår inte i din plan — uppgradera för att låsa upp"
+        title="Tjänsten är inte aktiv — välj rätt plan eller tillägg"
       >
         <span className="group flex items-center justify-between rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground/70 transition-all hover:bg-accent/60 hover:text-accent-foreground">
           <span className="flex min-w-0 items-center gap-3">
@@ -116,7 +117,7 @@ function NavLink({ item, pathname, disabled, onClick }: {
           </span>
           <span className="ml-3 flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             <Lock className="h-3 w-3" aria-hidden="true" />
-            Uppgradera
+            Aktivera
           </span>
         </span>
       </Link>

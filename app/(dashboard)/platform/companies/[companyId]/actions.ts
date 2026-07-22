@@ -34,6 +34,28 @@ function numberValue(formData: FormData, key: string, fallback: number) {
   return parsed
 }
 
+function revalidateCompanyCommercialAccess(companyId: string) {
+  revalidatePath('/platform/companies')
+  revalidatePath(`/platform/companies/${companyId}`)
+  revalidatePath('/settings/billing')
+  revalidatePath('/', 'layout')
+}
+
+async function verifyGrantedFeature(
+  supabase: Awaited<ReturnType<typeof requirePlatformAdmin>>['supabase'],
+  companyId: string,
+  featureCode: string,
+) {
+  const { data, error } = await supabase.rpc('company_feature_access', {
+    p_company_id: companyId,
+    p_feature_code: featureCode,
+  })
+  const row = Array.isArray(data) ? data[0] as { allowed?: boolean; reason?: string | null } | undefined : undefined
+  if (error || row?.allowed !== true) {
+    throw new Error(`Åtkomsten skapades men kunde inte verifieras (${row?.reason ?? error?.message ?? 'okänd orsak'}).`)
+  }
+}
+
 async function assertCompany(companyId: string) {
   const { supabase } = await requirePlatformAdmin()
   const { data, error } = await supabase.from('companies').select('id').eq('id', companyId).maybeSingle()
@@ -113,13 +135,20 @@ export async function grantCompanyAccessFromCardAction(formData: FormData) {
       p_expires_at: expiresAt,
       p_note: note,
     })
-    if (error) fail(companyId, error.message || 'Åtkomsten kunde inte beviljas.')
-    revalidatePath('/platform/companies')
-    revalidatePath(`/platform/companies/${companyId}`)
-    done(companyId, 'Åtkomsten har beviljats och audit-loggats.')
+    if (error) throw new Error(error.message || 'Åtkomsten kunde inte beviljas.')
+    if (new Date(startsAt).getTime() <= Date.now() + 1_000) {
+      await verifyGrantedFeature(
+        supabase,
+        companyId,
+        grantType === 'complimentary_bankgiro' ? 'bankgiro.application' : 'bookkeeping.core',
+      )
+    }
+    revalidateCompanyCommercialAccess(companyId)
   } catch (error) {
     fail(companyId, error instanceof Error && error.message !== 'required' ? error.message : 'Ett obligatoriskt fält saknas.')
   }
+
+  done(companyId, 'Åtkomsten har beviljats och verifierats.')
 }
 
 export async function revokeCompanyAccessFromCardAction(formData: FormData) {
@@ -132,13 +161,13 @@ export async function revokeCompanyAccessFromCardAction(formData: FormData) {
       p_grant_id: grantId,
       p_reason: reason,
     })
-    if (error) fail(companyId, error.message || 'Åtkomsten kunde inte återkallas.')
-    revalidatePath('/platform/companies')
-    revalidatePath(`/platform/companies/${companyId}`)
-    done(companyId, 'Åtkomsten har återkallats och audit-loggats.')
+    if (error) throw new Error(error.message || 'Åtkomsten kunde inte återkallas.')
+    revalidateCompanyCommercialAccess(companyId)
   } catch (error) {
     fail(companyId, error instanceof Error && error.message !== 'required' ? error.message : 'Ett obligatoriskt fält saknas.')
   }
+
+  done(companyId, 'Åtkomsten har återkallats och audit-loggats.')
 }
 
 export async function createFiscalYearFromCompanyCardAction(formData: FormData) {

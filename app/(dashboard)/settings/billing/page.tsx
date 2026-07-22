@@ -7,6 +7,7 @@ import { BillingActions } from '@/components/billing/BillingActions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
+import { checkFeatureAccess } from '@/lib/platform/entitlements'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,7 +45,7 @@ const statusLabel = (status?: string | null) => {
 }
 
 const grantLabel = (grantType: string) => {
-  if (grantType === 'complimentary_full_access') return 'Kostnadsfri åtkomst'
+  if (grantType === 'complimentary_full_access') return 'Full Access · kostnadsfri'
   if (grantType === 'complimentary_bankgiro') return 'Kostnadsfri Bankgiroåtkomst'
   return 'Särskild åtkomst'
 }
@@ -62,7 +63,7 @@ const billingEventLabel = (eventType: string) => {
   return labels[eventType] ?? 'Betalningshändelse'
 }
 
-export default async function BillingSettingsPage({ searchParams }: { searchParams: Promise<{ checkout?: string; checkout_id?: string }> }) {
+export default async function BillingSettingsPage({ searchParams }: { searchParams: Promise<{ checkout?: string; checkout_id?: string; feature?: string; return_to?: string }> }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
@@ -71,6 +72,9 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
   if (!companyId) redirect('/onboarding')
   const canManageBilling = await canManageCompanyBilling(supabase, user.id, companyId)
   const query = await searchParams
+  const requestedFeatureCode = typeof query.feature === 'string' && /^[a-z0-9_.-]{1,120}$/i.test(query.feature)
+    ? query.feature
+    : null
 
   // Cancel return from Stripe: mark the local checkout session failed so the
   // open-session guard doesn't block a retry until Stripe's 24h expiry.
@@ -146,7 +150,14 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
   const currentPlan = currentVersion ? planById.get(currentVersion.plan_id) : null
   const activeBase = Boolean(activeSubscription && ['trialing', 'active'].includes(activeSubscription.status))
   const activeItems = items.filter((item) => ['trialing', 'active', 'past_due'].includes(item.status))
-  const activeGrants = grants.filter((grant) => ['active', 'scheduled'].includes(grant.status))
+  const now = Date.now()
+  const activeGrants = grants.filter((grant) => (
+    ['active', 'scheduled'].includes(grant.status)
+    && new Date(grant.starts_at).getTime() <= now
+    && (!grant.expires_at || new Date(grant.expires_at).getTime() > now)
+  ))
+  const hasComplimentaryFullAccess = activeGrants.some((grant) => grant.grant_type === 'complimentary_full_access')
+  const hasBaseCommercialAccess = activeBase || hasComplimentaryFullAccess
   const upcomingVersion = currentVersion
     ? versions.find((version) => version.plan_id === currentVersion.plan_id && version.status === 'scheduled') ?? null
     : null
@@ -181,6 +192,7 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
         description: plan.description,
         productType: product.product_type,
         productCode: product.code,
+        planCode: plan.code,
         billingInterval: version.billing_interval,
         price: Number(version.price_excl_vat),
         currency: version.currency,
@@ -189,12 +201,58 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
     })
     .filter((plan): plan is NonNullable<typeof plan> => Boolean(plan))
 
+  // A locked feature deep-link recommends a product that actually contains
+  // that feature. Full Access is checked through the same authoritative RPC;
+  // an already-allowed feature never prompts the company to buy a plan.
+  let requestedFeatureName: string | null = null
+  let requestedPlanVersionId: string | null = null
+  if (requestedFeatureCode) {
+    const currentAccess = await checkFeatureAccess(supabase, companyId, requestedFeatureCode)
+    if (!currentAccess.allowed) {
+      const { data: feature } = await supabase
+        .from('platform_features')
+        .select('id,name')
+        .eq('code', requestedFeatureCode)
+        .maybeSingle()
+
+      if (feature) {
+        requestedFeatureName = String(feature.name)
+        const purchasableVersionIds = purchasablePlans.map((plan) => plan.id)
+        if (purchasableVersionIds.length > 0) {
+          const { data: featurePlans } = await supabase
+            .from('platform_plan_version_features')
+            .select('plan_version_id')
+            .eq('feature_id', feature.id)
+            .eq('enabled', true)
+            .in('plan_version_id', purchasableVersionIds)
+
+          const matchingIds = new Set((featurePlans ?? []).map((row) => String(row.plan_version_id)))
+          const matchingPlans = purchasablePlans
+            .filter((plan) => matchingIds.has(plan.id))
+            .sort((a, b) => a.price - b.price)
+
+          const preferredType = requestedFeatureCode.startsWith('bankgiro.')
+            ? 'addon'
+            : requestedFeatureCode.startsWith('year_end.')
+              ? 'one_time'
+              : activeBase
+                ? 'addon'
+                : 'subscription'
+
+          requestedPlanVersionId = matchingPlans.find((plan) => plan.productType === preferredType)?.id
+            ?? matchingPlans[0]?.id
+            ?? null
+        }
+      }
+    }
+  }
+
   // Signup plan intent: the plan chosen on /priser is stored on the signup
   // draft (signup_drafts.selected_plan_version_id) and honored here — the
   // one place where payment actually happens. Never auto-charges; it only
   // pre-selects the plan in the purchase UI.
-  let preselectedPlanVersionId: string | null = null
-  if (!activeBase && canManageBilling) {
+  let preselectedPlanVersionId: string | null = requestedPlanVersionId
+  if (!preselectedPlanVersionId && !hasBaseCommercialAccess && canManageBilling) {
     const { data: draft } = await createServiceClient()
       .from('signup_drafts')
       .select('selected_plan_version_id')
@@ -219,13 +277,13 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">Hantera Nordklart för ditt företag</h1>
         <p className="mt-3 max-w-3xl text-muted-foreground">Se aktiv plan, tillägg, bokslutsköp och Bankgiro-status på ett ställe. Tillgång hanteras säkert och uppdateras när betalning eller beslut är bekräftat.</p>
         <div className="mt-6 grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border bg-background/70 p-5"><p className="text-sm text-muted-foreground">Basplan</p><p className="mt-1 text-lg font-semibold">{currentPlan?.name ?? 'Ingen aktiv basplan'}</p><p className="mt-2 text-sm text-muted-foreground">{currentVersion ? `${money(currentVersion.price_excl_vat, currentVersion.currency)} · ${currentVersion.billing_interval === 'year' ? 'årsvis' : 'månadsvis'} · nästa period till ${date(activeSubscription?.current_period_end ?? null)}` : 'Välj en plan för löpande Nordklart-tjänster.'}</p>{activeSubscription?.status === 'past_due' && activeSubscription.grace_ends_at ? <p className="mt-2 text-xs font-medium text-warning-foreground">Betalning saknas. Tillgång gäller till {date(activeSubscription.grace_ends_at)}.</p> : null}{activeSubscription?.cancel_at_period_end ? <p className="mt-2 text-xs font-medium text-warning-foreground">Uppsägning är planerad. Tillgång upphör {date(activeSubscription.current_period_end)}.</p> : null}{upcomingVersion ? <p className="mt-2 text-xs text-muted-foreground">Kommande pris: {money(upcomingVersion.price_excl_vat, upcomingVersion.currency)} från {date(upcomingVersion.effective_from)}.</p> : null}</div>
+          <div className="rounded-2xl border bg-background/70 p-5"><p className="text-sm text-muted-foreground">Basplan</p><p className="mt-1 text-lg font-semibold">{currentPlan?.name ?? (hasComplimentaryFullAccess ? 'Full Access · kostnadsfri' : 'Ingen aktiv basplan')}</p><p className="mt-2 text-sm text-muted-foreground">{currentVersion ? `${money(currentVersion.price_excl_vat, currentVersion.currency)} · ${currentVersion.billing_interval === 'year' ? 'årsvis' : 'månadsvis'} · nästa period till ${date(activeSubscription?.current_period_end ?? null)}` : hasComplimentaryFullAccess ? 'Alla ordinarie Nordklart-funktioner är aktiva utan abonnemangsplan. Bankgiro kräver separat åtkomst.' : 'Välj en plan för löpande Nordklart-tjänster.'}</p>{activeSubscription?.status === 'past_due' && activeSubscription.grace_ends_at ? <p className="mt-2 text-xs font-medium text-warning-foreground">Betalning saknas. Tillgång gäller till {date(activeSubscription.grace_ends_at)}.</p> : null}{activeSubscription?.cancel_at_period_end ? <p className="mt-2 text-xs font-medium text-warning-foreground">Uppsägning är planerad. Tillgång upphör {date(activeSubscription.current_period_end)}.</p> : null}{upcomingVersion ? <p className="mt-2 text-xs text-muted-foreground">Kommande pris: {money(upcomingVersion.price_excl_vat, upcomingVersion.currency)} från {date(upcomingVersion.effective_from)}.</p> : null}</div>
           <div className="rounded-2xl border bg-background/70 p-5"><p className="text-sm text-muted-foreground">Aktiva tillägg</p><p className="mt-1 text-lg font-semibold">{activeItems.length}</p><p className="mt-2 text-sm text-muted-foreground">{activeItems.length ? activeItems.map((item) => planById.get(versionById.get(item.plan_version_id)?.plan_id ?? '')?.name ?? 'Tillägg').join(', ') : 'Exempelvis Bankgiro hanteras separat från bokföringsplanen.'}</p></div>
           <div className="rounded-2xl border bg-background/70 p-5"><p className="text-sm text-muted-foreground">Särskild åtkomst</p><p className="mt-1 text-lg font-semibold">{activeGrants.length ? 'Aktiv' : 'Ordinarie plan'}</p><p className="mt-2 text-sm text-muted-foreground">{activeGrants.length ? activeGrants.map((grant) => grantLabel(grant.grant_type)).join(', ') : 'Bankgiro hanteras som separat tillägg.'}</p></div>
         </div>
       </section>
 
-      {canManageBilling ? <BillingActions plans={purchasablePlans} fiscalPeriods={periods.map((period) => ({ id: period.id, name: period.name, periodStart: period.period_start, periodEnd: period.period_end }))} hasActiveBaseSubscription={activeBase} hasStripeCustomer={Boolean(profileRes.data?.stripe_customer_id)} activeSubscriptionId={activeSubscription?.id ?? null} activePlanVersionId={activeSubscription?.plan_version_id ?? null} preselectedPlanVersionId={preselectedPlanVersionId} changeRequests={changeRequests.map((request) => ({ id: request.id, requestType: request.request_type, status: request.status, requestedAt: request.requested_at, targetPlanVersionId: request.target_plan_version_id }))} companyName={companyName} yearEndPurchasedPeriodIds={purchases.filter((purchase) => purchase.purchase_type === 'year_end' && ['paid', 'active', 'fulfilled'].includes(purchase.status) && purchase.fiscal_period_id).map((purchase) => purchase.fiscal_period_id as string)} /> : <section className="rounded-2xl border bg-card p-5 text-sm text-muted-foreground">Endast företagets ägare eller administratör kan ändra abonnemang och betalning.</section>}
+      {canManageBilling ? <BillingActions plans={purchasablePlans} fiscalPeriods={periods.map((period) => ({ id: period.id, name: period.name, periodStart: period.period_start, periodEnd: period.period_end }))} hasActiveBaseSubscription={activeBase} hasBaseCommercialAccess={hasBaseCommercialAccess} hasComplimentaryFullAccess={hasComplimentaryFullAccess} hasStripeCustomer={Boolean(profileRes.data?.stripe_customer_id)} activeSubscriptionId={activeSubscription?.id ?? null} activePlanVersionId={activeSubscription?.plan_version_id ?? null} preselectedPlanVersionId={preselectedPlanVersionId} requestedFeatureName={requestedFeatureName} changeRequests={changeRequests.map((request) => ({ id: request.id, requestType: request.request_type, status: request.status, requestedAt: request.requested_at, targetPlanVersionId: request.target_plan_version_id }))} companyName={companyName} yearEndPurchasedPeriodIds={purchases.filter((purchase) => purchase.purchase_type === 'year_end' && ['paid', 'active', 'fulfilled'].includes(purchase.status) && purchase.fiscal_period_id).map((purchase) => purchase.fiscal_period_id as string)} /> : <section className="rounded-2xl border bg-card p-5 text-sm text-muted-foreground">Endast företagets ägare eller administratör kan ändra abonnemang och betalning.</section>}
 
       <section className="rounded-3xl border bg-card p-5 shadow-sm"><h2 className="text-xl font-semibold">Aktiva tjänster och åtkomst</h2><div className="mt-4 grid gap-3 lg:grid-cols-2"><div className="rounded-2xl border bg-background/60 p-4"><p className="font-medium">Tillägg</p><div className="mt-3 space-y-2">{activeItems.map((item) => { const version = versionById.get(item.plan_version_id); const plan = version ? planById.get(version.plan_id) : null; return <div key={item.id} className="flex items-center justify-between gap-3 text-sm"><span>{plan?.name ?? 'Tillägg'}</span><span className="text-muted-foreground">{item.status === 'past_due' && item.grace_ends_at ? `Tillgång till ${date(item.grace_ends_at)}` : `Period till ${date(item.current_period_end)}`}</span></div> })}{activeItems.length === 0 ? <p className="text-sm text-muted-foreground">Inga aktiva tillägg.</p> : null}</div></div><div className="rounded-2xl border bg-background/60 p-4"><p className="font-medium">Gratis- och partneråtkomst</p><div className="mt-3 space-y-2">{activeGrants.map((grant) => <div key={grant.id} className="flex items-center justify-between gap-3 text-sm"><span>{grantLabel(grant.grant_type)}</span><span className="text-muted-foreground">{grant.expires_at ? `Gäller till ${date(grant.expires_at)}` : 'Utan slutdatum'}</span></div>)}{activeGrants.length === 0 ? <p className="text-sm text-muted-foreground">Ingen separat kostnadsfri åtkomst.</p> : null}</div></div></div></section>
 

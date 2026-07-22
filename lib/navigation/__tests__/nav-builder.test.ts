@@ -11,7 +11,9 @@ const ALL_FEATURES = new Set([
   'reports.core',
   'skatteverket.submissions',
   'year_end.projects',
-  'bankgiro.operations',
+  'bankgiro.application',
+  'bookkeeping.automation',
+  'ai.assistant',
 ])
 
 function companyInput(overrides: Partial<NavBuilderInput> = {}): NavBuilderInput {
@@ -74,6 +76,15 @@ describe('buildNavGroups — feature locking', () => {
     expect(lockedHrefs).toContain('/year-end')
     // Locked items stay visible — they are never removed from the nav.
     expect(items.some((item) => item.href === '/invoices')).toBe(true)
+  })
+
+
+  it('unlocks Bankgiro application navigation before provider operations are ready', () => {
+    const items = flatItems(companyInput({
+      enabledFeatures: new Set(['bankgiro.application']),
+      hasYearEndAccess: false,
+    }))
+    expect(items.find((item) => item.href === '/payments/bankgiro')?.locked).toBe(false)
   })
 
   it('a fiscal-period one-time purchase unlocks year-end without the company-wide feature', () => {

@@ -1,6 +1,7 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { FeatureCode } from '@/lib/platform/feature-codes'
+import { purchaseHrefForFeature } from '@/lib/navigation/feature-access-routing'
 
 // Feature/plan codes live in feature-codes.ts (no server-only import) so the
 // CI coverage script can read them. Re-exported here so application code
@@ -36,6 +37,10 @@ export type CompanyFeatureAccess = {
   category: string
   risk_level: 'low' | 'normal' | 'high'
   enabled: boolean
+  reason: FeatureAccessReason | null
+  source_type: string | null
+  source_id: string | null
+  expires_at: string | null
   limit_value: number | null
   limit_unit: string | null
 }
@@ -93,7 +98,9 @@ export function featureAccessError(featureCode: string): Response {
   return Response.json(
     {
       error: 'FEATURE_NOT_ENABLED',
-      message: `Funktionen ${featureCode} är inte aktiverad för bolaget. Aktivera rätt plan, tillägg eller engångsköp i plattformen.`,
+      message: `Funktionen ${featureCode} är inte aktiverad för bolaget. Aktivera rätt plan, tillägg eller engångsköp.`,
+      feature: featureCode,
+      upgrade_url: purchaseHrefForFeature(featureCode),
     },
     { status: 403 },
   )
@@ -112,21 +119,47 @@ export async function listCompanyFeatureAccess(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<CompanyFeatureAccess[]> {
-  const { data, error } = await supabase
-    .from('company_feature_access_v')
-    .select('feature_code, feature_name, category, risk_level, enabled, limit_value, limit_unit')
-    .eq('company_id', companyId)
-    .order('category', { ascending: true })
-    .order('feature_code', { ascending: true })
+  const { data, error } = await supabase.rpc('company_feature_access_catalog', {
+    p_company_id: companyId,
+  })
 
-  if (error) return []
+  // Deploys can briefly serve the new application before PostgREST has
+  // reloaded the new RPC schema. Fall back to the existing view so the
+  // sidebar never renders every module as locked during that window.
+  if (error) {
+    const { data: fallbackRows, error: fallbackError } = await supabase
+      .from('company_feature_access_v')
+      .select('feature_code, feature_name, category, risk_level, enabled, limit_value, limit_unit')
+      .eq('company_id', companyId)
+      .order('category', { ascending: true })
+      .order('feature_code', { ascending: true })
 
-  return (data ?? []).map((row) => ({
+    if (fallbackError) return []
+    return ((fallbackRows ?? []) as Array<Record<string, unknown>>).map((row) => ({
+      feature_code: String(row.feature_code),
+      feature_name: String(row.feature_name),
+      category: String(row.category),
+      risk_level: row.risk_level as CompanyFeatureAccess['risk_level'],
+      enabled: row.enabled === true,
+      reason: null,
+      source_type: null,
+      source_id: null,
+      expires_at: null,
+      limit_value: toNumber(row.limit_value as number | string | null),
+      limit_unit: typeof row.limit_unit === 'string' ? row.limit_unit : null,
+    }))
+  }
+
+  return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
     feature_code: String(row.feature_code),
     feature_name: String(row.feature_name),
     category: String(row.category),
     risk_level: row.risk_level as CompanyFeatureAccess['risk_level'],
     enabled: row.enabled === true,
+    reason: typeof row.reason === 'string' ? row.reason as FeatureAccessReason : null,
+    source_type: typeof row.source_type === 'string' ? row.source_type : null,
+    source_id: typeof row.source_id === 'string' ? row.source_id : null,
+    expires_at: typeof row.expires_at === 'string' ? row.expires_at : null,
     limit_value: toNumber(row.limit_value as number | string | null),
     limit_unit: typeof row.limit_unit === 'string' ? row.limit_unit : null,
   }))

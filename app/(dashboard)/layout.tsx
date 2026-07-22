@@ -20,7 +20,8 @@ import { getBranding } from '@/lib/branding/service'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { countPendingOperations, countUnbookedTransactions } from '@/lib/worklist'
 import { PLATFORM_ROLES } from '@/lib/auth/platform'
-import { listCompanyFeatureAccess } from '@/lib/platform/entitlements'
+import { checkFeatureAccess, listCompanyFeatureAccess } from '@/lib/platform/entitlements'
+import { featureForDashboardPath, purchaseHrefForFeature } from '@/lib/navigation/feature-access-routing'
 import { resolveWorkspaceType } from '@/lib/workspace/resolve'
 import type { EntityType, CompanyRole, Team } from '@/types'
 
@@ -237,6 +238,8 @@ export default async function DashboardLayout({
     supabase.from('agency_members').select('agency_id, role').eq('user_id', user.id).in('role', ['agency_owner', 'agency_admin', 'accountant', 'payroll', 'reviewer']).limit(1).maybeSingle(),
   ])
 
+  const isSandbox = settings?.is_sandbox === true
+
   // Feature-aware navigation: enabled feature codes drive which sidebar items
   // render locked (with an upgrade CTA). Year-end additionally honours
   // fiscal-period-bound one-time purchases, which the feature view cannot see.
@@ -256,6 +259,28 @@ export default async function DashboardLayout({
     (yearEndPurchaseCount ?? 0) > 0 || enabledFeatures?.includes('year_end.projects'),
   )
 
+  // Direct URL access follows the same commercial matrix as the sidebar. A
+  // missing feature is routed to a purchase surface that knows which exact
+  // plan, add-on or one-time product contains the requested feature. Full
+  // Access is resolved by company_feature_access(), so it never needs a plan.
+  const requiredRouteFeature = featureForDashboardPath(pathname)
+  if (!isSandbox && requiredRouteFeature) {
+    const periodBoundYearEndRoute = requiredRouteFeature === 'year_end.projects'
+      || pathname === '/import'
+      || pathname.startsWith('/import/')
+    let hasRouteAccess = periodBoundYearEndRoute && hasYearEndAccess
+    if (!hasRouteAccess) {
+      const catalogFeature = featureAccessList.find((feature) => feature.feature_code === requiredRouteFeature)
+      hasRouteAccess = catalogFeature
+        ? catalogFeature.enabled
+        : (await checkFeatureAccess(supabase, companyId, requiredRouteFeature)).allowed
+    }
+
+    if (!hasRouteAccess) {
+      redirect(purchaseHrefForFeature(requiredRouteFeature, pathname))
+    }
+  }
+
   // If onboarding incomplete, still render the dashboard — the page component
   // will show the inline onboarding card instead of the normal dashboard content.
 
@@ -264,8 +289,6 @@ export default async function DashboardLayout({
   const companyWithName = { ...companyRow, name: displayName }
 
   const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
-
-  const isSandbox = settings?.is_sandbox === true
 
   // Backfill a verified agent_profile for sandbox sessions that pre-date the
   // seed change. Without this an old anonymous session shows the "Bygg din

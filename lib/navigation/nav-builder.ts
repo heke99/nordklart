@@ -177,7 +177,7 @@ export function buildNavGroups(input: NavBuilderInput): NavGroupSpec[] {
         },
         {
           href: '/payments/bankgiro', label: 'Bankgiro', icon: 'bankgiro', requiresCompany: true,
-          ...lockState(input, NORDKLART_FEATURES.bankgiroOperations),
+          ...lockState(input, NORDKLART_FEATURES.bankgiroApplication),
         },
         { href: '/extensions', label: 'Integrationer', icon: 'extensions', requiresCompany: true },
       ],
@@ -185,8 +185,14 @@ export function buildNavGroups(input: NavBuilderInput): NavGroupSpec[] {
     {
       label: 'Inställningar',
       items: [
-        { href: '/automation', label: 'Automatisering', icon: 'automation', requiresCompany: true },
-        { href: '/chat', label: 'Bokföringsassistent', icon: 'assistant', requiresCompany: true },
+        {
+          href: '/automation', label: 'Automatisering', icon: 'automation', requiresCompany: true,
+          ...lockState(input, NORDKLART_FEATURES.bookkeepingAutomation),
+        },
+        {
+          href: '/chat', label: 'Bokföringsassistent', icon: 'assistant', requiresCompany: true,
+          ...lockState(input, NORDKLART_FEATURES.aiAssistant),
+        },
         ...(canManageAgency ? [{ href: '/agency', label: 'Redovisningsbyrå', icon: 'agency' } satisfies NavItemSpec] : []),
         ...(canManagePlatform ? [{ href: '/platform', label: 'Plattform', icon: 'platform' } satisfies NavItemSpec] : []),
         { href: '/settings', label: 'Inställningar', icon: 'settings' },

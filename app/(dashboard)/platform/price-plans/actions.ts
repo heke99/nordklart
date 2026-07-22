@@ -60,6 +60,29 @@ function assertRpc(error: SupabaseError, fallback: string) {
   if (error) redirectWith('error', error.message || fallback)
 }
 
+function revalidateCommercialAccessSurfaces() {
+  revalidatePath(PRICING_PATH)
+  revalidatePath('/settings/billing')
+  // Complimentary grants change the shared dashboard layout and every locked
+  // navigation item. Invalidate the layout tree, not only the admin screen.
+  revalidatePath('/', 'layout')
+}
+
+async function assertGrantedFeatureAccess(
+  supabase: Awaited<ReturnType<typeof requirePlatformAdmin>>['supabase'],
+  companyId: string,
+  featureCode: string,
+) {
+  const { data, error } = await supabase.rpc('company_feature_access', {
+    p_company_id: companyId,
+    p_feature_code: featureCode,
+  })
+  const row = Array.isArray(data) ? data[0] as { allowed?: boolean; reason?: string | null } | undefined : undefined
+  if (error || row?.allowed !== true) {
+    redirectWith('error', `Åtkomsten skapades men kunde inte verifieras (${row?.reason ?? error?.message ?? 'okänd orsak'}).`)
+  }
+}
+
 async function saveCommercialProfile(supabase: Awaited<ReturnType<typeof requirePlatformAdmin>>['supabase'], planId: string, formData: FormData) {
   const audienceType = text(formData, 'audience_type') || 'company'
   const companyFormScope = text(formData, 'company_form_scope') || (audienceType === 'agency' ? 'agency' : 'company_all')
@@ -357,7 +380,14 @@ export async function grantCommercialAccessAction(formData: FormData) {
     p_note: note,
   })
   assertRpc(error, 'Åtkomsten kunde inte beviljas.')
-  revalidatePath(PRICING_PATH)
+  if (new Date(startsAt).getTime() <= Date.now() + 1_000) {
+    await assertGrantedFeatureAccess(
+      supabase,
+      companyId,
+      grantType === 'complimentary_bankgiro' ? 'bankgiro.application' : 'bookkeeping.core',
+    )
+  }
+  revalidateCommercialAccessSurfaces()
   redirectWith('notice', grantType === 'complimentary_bankgiro' ? 'Complimentary Bankgiro har beviljats.' : 'Complimentary Full Access har beviljats.')
 }
 
@@ -369,7 +399,7 @@ export async function revokeCommercialAccessAction(formData: FormData) {
     p_reason: text(formData, 'reason'),
   })
   assertRpc(error, 'Åtkomsten kunde inte återkallas.')
-  revalidatePath(PRICING_PATH)
+  revalidateCommercialAccessSurfaces()
   redirectWith('notice', 'Åtkomsten har återkallats och audit-loggats.')
 }
 
@@ -392,7 +422,7 @@ export async function repairComplimentaryAccessAction(formData: FormData) {
   const disabled = Number(result?.disabled_rows_before ?? 0)
   const repaired = Number(result?.rows_repaired ?? 0)
 
-  revalidatePath(PRICING_PATH)
+  revalidateCommercialAccessSurfaces()
   redirectWith(
     'notice',
     `Complimentary-grants synkroniserades: ${scanned} grants kontrollerade, ${missing} saknade och ${disabled} avstängda feature-rader hittades, ${repaired} rader reparerades.`,
