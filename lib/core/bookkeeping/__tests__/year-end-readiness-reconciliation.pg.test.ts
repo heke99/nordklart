@@ -90,6 +90,19 @@ describe('year-end database readiness reconciliation hardening', () => {
     // No shared state. Each test owns its company and fiscal year.
   })
 
+  it('executes historical open-item reconstruction without output-column ambiguity', async () => {
+    const seeded = await seedReadyCompany()
+
+    const { rows } = await getPool().query(
+      `SELECT source_type, source_id, open_amount
+         FROM public.historical_open_items_at($1::uuid, DATE '2025-12-31')`,
+      [seeded.companyId],
+    )
+
+    expect(rows).toEqual([])
+    await expect(blockerCodes(seeded.companyId, seeded.fiscalPeriodId)).resolves.toBeDefined()
+  })
+
   it('blocks an unmatched bank-side transaction even when the amount could net against another row', async () => {
     const seeded = await seedReadyCompany()
     await insertTransaction({
