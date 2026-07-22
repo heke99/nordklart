@@ -107,6 +107,86 @@ describe('complimentary access grants', () => {
     expect(access.allowed).toBe(false)
     expect(access.reason).toBe('expired')
   })
+
+  it('repairs a stale Full Access feature snapshot', async () => {
+    const owner = await insertAuthUser()
+    const staleCompany = await insertCompany({ createdBy: owner })
+    await insertCompanyMember({ companyId: staleCompany, userId: owner, role: 'owner' })
+
+    const { rows } = await withRole({ sub: adminId, role: 'authenticated' }, (client) =>
+      client.query<{ grant_id: string }>(
+        `SELECT public.platform_grant_complimentary_full_access($1) AS grant_id`,
+        [staleCompany],
+      ),
+    )
+    const grantId = rows[0].grant_id
+
+    await getPool().query(
+      `DELETE FROM public.commercial_access_grant_features
+       WHERE grant_id = $1
+         AND feature_id = (SELECT id FROM public.platform_features WHERE code = 'salary.runs')`,
+      [grantId],
+    )
+
+    expect((await featureAccess(staleCompany, 'salary.runs')).allowed).toBe(false)
+
+    const repair = await withRole({ sub: adminId, role: 'authenticated' }, async (client) => {
+      const result = await client.query<{
+        grants_scanned: number
+        missing_rows_before: number
+        disabled_rows_before: number
+        rows_repaired: number
+      }>(`SELECT * FROM public.platform_repair_complimentary_access_grants($1)`, [staleCompany])
+      return result.rows[0]
+    })
+
+    expect(repair.grants_scanned).toBe(1)
+    expect(repair.missing_rows_before).toBeGreaterThanOrEqual(1)
+    expect(repair.disabled_rows_before).toBe(0)
+    expect(repair.rows_repaired).toBeGreaterThanOrEqual(1)
+    expect((await featureAccess(staleCompany, 'salary.runs')).allowed).toBe(true)
+  })
+
+  it('propagates future catalog features to existing Full Access grants', async () => {
+    const owner = await insertAuthUser()
+    const futureCompany = await insertCompany({ createdBy: owner })
+    await insertCompanyMember({ companyId: futureCompany, userId: owner, role: 'owner' })
+    await withRole({ sub: adminId, role: 'authenticated' }, (client) =>
+      client.query(`SELECT public.platform_grant_complimentary_full_access($1)`, [futureCompany]),
+    )
+
+    const featureCode = `test.full_access.${randomUUID().replaceAll('-', '')}`
+    let featureId: string | null = null
+    try {
+      const { rows } = await getPool().query<{ id: string }>(
+        `INSERT INTO public.platform_features (code, name, category, description)
+         VALUES ($1, 'Full access propagation test', 'test', 'Temporary pg-real feature')
+         RETURNING id`,
+        [featureCode],
+      )
+      featureId = rows[0].id
+
+      const access = await featureAccess(futureCompany, featureCode)
+      expect(access.allowed).toBe(true)
+
+      const { rows: coverageRows } = await withRole({ sub: adminId, role: 'authenticated' }, (client) =>
+        client.query<{ missing_feature_count: number }>(
+          `SELECT missing_feature_count
+           FROM public.commercial_access_grant_coverage_v
+           WHERE company_id = $1 AND grant_type = 'complimentary_full_access'
+           ORDER BY starts_at DESC
+           LIMIT 1`,
+          [futureCompany],
+        ),
+      )
+      expect(coverageRows[0]?.missing_feature_count).toBe(0)
+    } finally {
+      if (featureId) {
+        await getPool().query(`DELETE FROM public.commercial_access_grant_features WHERE feature_id = $1`, [featureId])
+        await getPool().query(`DELETE FROM public.platform_features WHERE id = $1`, [featureId])
+      }
+    }
+  })
 })
 
 describe('add-on purchases grant only their features', () => {

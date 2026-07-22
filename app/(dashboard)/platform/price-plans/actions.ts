@@ -373,6 +373,32 @@ export async function revokeCommercialAccessAction(formData: FormData) {
   redirectWith('notice', 'Åtkomsten har återkallats och audit-loggats.')
 }
 
+export async function repairComplimentaryAccessAction(formData: FormData) {
+  const { supabase } = await requirePlatformAdmin()
+  const companyId = text(formData, 'company_id')
+  const { data, error } = await supabase.rpc('platform_repair_complimentary_access_grants', {
+    p_company_id: companyId,
+  })
+  assertRpc(error, 'Full Access-grants kunde inte synkroniseras.')
+
+  const result = (Array.isArray(data) ? data[0] : null) as {
+    grants_scanned?: number
+    missing_rows_before?: number
+    disabled_rows_before?: number
+    rows_repaired?: number
+  } | null
+  const scanned = Number(result?.grants_scanned ?? 0)
+  const missing = Number(result?.missing_rows_before ?? 0)
+  const disabled = Number(result?.disabled_rows_before ?? 0)
+  const repaired = Number(result?.rows_repaired ?? 0)
+
+  revalidatePath(PRICING_PATH)
+  redirectWith(
+    'notice',
+    `Complimentary-grants synkroniserades: ${scanned} grants kontrollerade, ${missing} saknade och ${disabled} avstängda feature-rader hittades, ${repaired} rader reparerades.`,
+  )
+}
+
 export async function setManualSubscriptionAction(formData: FormData) {
   const { supabase } = await requirePlatformAdmin()
   const companyId = text(formData, 'company_id', true)!

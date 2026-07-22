@@ -11,6 +11,7 @@ import {
   createPricePlanAction,
   grantCommercialAccessAction,
   publishPlanVersionAction,
+  repairComplimentaryAccessAction,
   replacePlanVersionFeaturesAction,
   retirePlanVersionAction,
   revokeCommercialAccessAction,
@@ -31,6 +32,7 @@ type FeatureRow = { id: string; code: string; name: string; category: string; ri
 type VersionFeatureRow = { plan_version_id: string; feature_id: string; enabled: boolean; limit_value: number | string | null; limit_unit: string | null }
 type CompanyRow = { id: string; name: string; org_number: string | null }
 type GrantRow = { id: string; company_id: string; grant_type: string; status: string; starts_at: string; expires_at: string | null; note: string | null; created_at: string }
+type GrantCoverageRow = { grant_id: string; expected_feature_count: number; enabled_feature_count: number; missing_feature_count: number; disabled_feature_count: number }
 type SubscriptionRow = { id: string; company_id: string; plan_version_id: string | null; status: string; current_period_end: string | null; external_provider: string | null; created_at: string }
 type CheckoutRow = { id: string; company_id: string; checkout_kind: string; status: string; amount_excl_vat: number | string; currency: string; stripe_checkout_session_id: string | null; created_at: string }
 type WebhookRow = { id: string; event_type: string; status: string; attempt_count: number; company_id: string | null; received_at: string; processing_error: string | null }
@@ -62,6 +64,7 @@ export default async function PlatformPricePlansPage({
     versionFeaturesRes,
     companiesRes,
     grantsRes,
+    grantCoverageRes,
     subscriptionsRes,
     checkoutsRes,
     webhookEventsRes,
@@ -76,6 +79,7 @@ export default async function PlatformPricePlansPage({
     supabase.from('platform_plan_version_features').select('plan_version_id,feature_id,enabled,limit_value,limit_unit'),
     supabase.from('companies').select('id,name,org_number').order('name', { ascending: true }).limit(500),
     supabase.from('commercial_access_grants').select('id,company_id,grant_type,status,starts_at,expires_at,note,created_at').order('created_at', { ascending: false }).limit(100),
+    supabase.from('commercial_access_grant_coverage_v').select('grant_id,expected_feature_count,enabled_feature_count,missing_feature_count,disabled_feature_count'),
     supabase.from('company_subscriptions').select('id,company_id,plan_version_id,status,current_period_end,external_provider,created_at').order('created_at', { ascending: false }).limit(100),
     supabase.from('billing_checkout_sessions').select('id,company_id,checkout_kind,status,amount_excl_vat,currency,stripe_checkout_session_id,created_at').order('created_at', { ascending: false }).limit(20),
     supabase.from('stripe_webhook_events').select('id,event_type,status,attempt_count,company_id,received_at,processing_error').order('received_at', { ascending: false }).limit(20),
@@ -91,6 +95,7 @@ export default async function PlatformPricePlansPage({
   const versionFeatures = (versionFeaturesRes.data ?? []) as VersionFeatureRow[]
   const companies = (companiesRes.data ?? []) as CompanyRow[]
   const grants = (grantsRes.data ?? []) as GrantRow[]
+  const grantCoverage = (grantCoverageRes.data ?? []) as GrantCoverageRow[]
   const subscriptions = (subscriptionsRes.data ?? []) as SubscriptionRow[]
   const checkouts = (checkoutsRes.data ?? []) as CheckoutRow[]
   const webhookEvents = (webhookEventsRes.data ?? []) as WebhookRow[]
@@ -98,6 +103,7 @@ export default async function PlatformPricePlansPage({
 
   const productById = new Map(products.map((product) => [product.id, product]))
   const companyById = new Map(companies.map((company) => [company.id, company]))
+  const coverageByGrantId = new Map(grantCoverage.map((coverage) => [coverage.grant_id, coverage]))
   const versionById = new Map(versions.map((version) => [version.id, version]))
   const versionsByPlan = new Map<string, VersionRow[]>()
   for (const version of versions) versionsByPlan.set(version.plan_id, [...(versionsByPlan.get(version.plan_id) ?? []), version])
@@ -237,7 +243,17 @@ export default async function PlatformPricePlansPage({
             {selectedCompanyId ? <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[820px] text-sm"><thead className="border-b text-left text-muted-foreground"><tr><th className="px-3 py-3">Funktion</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Orsak/källa</th><th className="px-3 py-3">Giltighet</th><th className="px-3 py-3">Gräns</th></tr></thead><tbody>{effectiveFeatures.map((feature) => <tr key={feature.feature_code} className="border-b last:border-0"><td className="px-3 py-3"><div className="font-medium">{feature.feature_name}</div><div className="font-mono text-xs text-muted-foreground">{feature.feature_code}</div></td><td className="px-3 py-3"><Badge variant={feature.allowed ? 'success' : 'secondary'}>{feature.allowed ? 'Aktiv' : 'Inte aktiv'}</Badge></td><td className="px-3 py-3">{feature.allowed ? feature.source_type ?? 'okänd källa' : feature.reason ?? 'saknar åtkomst'}</td><td className="px-3 py-3">{dateTime(feature.expires_at)}</td><td className="px-3 py-3">{feature.limit_value ?? '–'}{feature.limit_unit ? ` ${feature.limit_unit}` : ''}</td></tr>)}{effectiveFeatures.length === 0 ? <tr><td colSpan={5} className="px-3 py-5 text-muted-foreground">Inga funktioner kunde läsas för valt bolag.</td></tr> : null}</tbody></table></div> : <p className="mt-5 text-sm text-muted-foreground">Välj ett bolag för att kontrollera varför det har eller saknar åtkomst.</p>}
           </section>
 
-          <section className="rounded-3xl border bg-card p-5 shadow-sm"><h2 className="text-xl font-semibold">Aktiva och schemalagda access-grants</h2><div className="mt-4 space-y-3">{activeGrants.map((grant) => <div key={grant.id} className="flex flex-col gap-3 rounded-2xl border bg-background/60 p-4 md:flex-row md:items-center md:justify-between"><div><div className="flex items-center gap-2"><span className="font-medium">{grant.grant_type === 'complimentary_full_access' ? 'Complimentary Full Access' : 'Complimentary Bankgiro'}</span><Badge variant={grant.status === 'active' ? 'success' : 'warning'}>{grant.status}</Badge></div><p className="mt-1 text-sm text-muted-foreground">{companyById.get(grant.company_id)?.name ?? grant.company_id} · start {dateTime(grant.starts_at)} · slut {dateTime(grant.expires_at)}</p>{grant.note ? <p className="mt-1 text-xs text-muted-foreground">{grant.note}</p> : null}</div><form action={revokeCommercialAccessAction} className="flex gap-2"><input type="hidden" name="grant_id" value={grant.id} /><input name="reason" placeholder="Orsak" className="h-9 rounded-lg border bg-card px-3 text-sm" /><Button type="submit" size="sm" variant="outline">Återkalla</Button></form></div>)}{activeGrants.length === 0 ? <p className="text-sm text-muted-foreground">Inga aktiva complimentary-grants.</p> : null}</div></section>
+          <section className="rounded-3xl border bg-card p-5 shadow-sm">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div><h2 className="text-xl font-semibold">Aktiva och schemalagda access-grants</h2><p className="mt-1 text-sm text-muted-foreground">Full Access följer hela feature-katalogen utom Bankgiro. Synkningen reparerar äldre snapshots och är säker att köra flera gånger.</p></div>
+              <form action={repairComplimentaryAccessAction}><Button type="submit" size="sm" variant="secondary">Synka complimentary-grants</Button></form>
+            </div>
+            <div className="mt-4 space-y-3">{activeGrants.map((grant) => {
+              const coverage = coverageByGrantId.get(grant.id)
+              const complete = coverage ? coverage.missing_feature_count === 0 : false
+              return <div key={grant.id} className="flex flex-col gap-3 rounded-2xl border bg-background/60 p-4 md:flex-row md:items-center md:justify-between"><div><div className="flex flex-wrap items-center gap-2"><span className="font-medium">{grant.grant_type === 'complimentary_full_access' ? 'Complimentary Full Access' : 'Complimentary Bankgiro'}</span><Badge variant={grant.status === 'active' ? 'success' : 'warning'}>{grant.status}</Badge>{coverage ? <Badge variant={complete ? 'success' : 'warning'}>{complete ? `Komplett · ${coverage.enabled_feature_count}/${coverage.expected_feature_count}` : `Saknar ${coverage.missing_feature_count}`}</Badge> : <Badge variant="secondary">Täckning okänd</Badge>}</div><p className="mt-1 text-sm text-muted-foreground">{companyById.get(grant.company_id)?.name ?? grant.company_id} · start {dateTime(grant.starts_at)} · slut {dateTime(grant.expires_at)}</p>{grant.note ? <p className="mt-1 text-xs text-muted-foreground">{grant.note}</p> : null}</div><form action={revokeCommercialAccessAction} className="flex gap-2"><input type="hidden" name="grant_id" value={grant.id} /><input name="reason" placeholder="Orsak" className="h-9 rounded-lg border bg-card px-3 text-sm" /><Button type="submit" size="sm" variant="outline">Återkalla</Button></form></div>
+            })}{activeGrants.length === 0 ? <p className="text-sm text-muted-foreground">Inga aktiva complimentary-grants.</p> : null}</div>
+          </section>
 
           <section className="rounded-3xl border bg-card p-5 shadow-sm"><h2 className="text-xl font-semibold">Senaste abonnemang</h2><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[700px] text-sm"><thead className="border-b text-left text-muted-foreground"><tr><th className="px-3 py-3">Bolag</th><th className="px-3 py-3">Version</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Period slut</th><th className="px-3 py-3">Källa</th></tr></thead><tbody>{subscriptions.slice(0, 25).map((subscription) => { const version = subscription.plan_version_id ? versionById.get(subscription.plan_version_id) : null; const plan = version ? plans.find((entry) => entry.id === version.plan_id) : null; return <tr key={subscription.id} className="border-b last:border-0"><td className="px-3 py-3">{companyById.get(subscription.company_id)?.name ?? subscription.company_id}</td><td className="px-3 py-3">{plan?.name ?? 'Legacy'}{version ? ` · v${version.version_number}` : ''}</td><td className="px-3 py-3"><Badge variant={subscription.status === 'active' ? 'success' : 'secondary'}>{subscription.status}</Badge></td><td className="px-3 py-3">{dateTime(subscription.current_period_end)}</td><td className="px-3 py-3">{subscription.external_provider ?? '–'}</td></tr> })}</tbody></table></div></section>
         </TabsContent>
