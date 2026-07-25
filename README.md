@@ -1,16 +1,66 @@
-# Bokslutsfix: `open_amount` är tvetydig
+# Nordklart
 
-Den här patchen rättar PostgreSQL-felet:
+Nordklart är ett svenskt ekonomi-, bokförings- och bokslutssystem för företag,
+redovisningsbyråer och externa integrationspartners. Plattformen bygger på
+Next.js 16, React 19, TypeScript och Supabase/PostgreSQL.
 
-```text
-column reference "open_amount" is ambiguous
+Systemets centrala principer är:
+
+- dubbel bokföring med atomisk postning och databasvaliderad balans;
+- oföränderliga bokförda verifikationer med spårbara storno- och rättelsekedjor;
+- tenantisolering genom server-side företagskontext, RLS och explicita behörigheter;
+- en canonical feature-resolver för planer, tillägg, Full Access och engångsköp;
+- reproducerbara SIE-, bank- och dokumentimporter;
+- atomiskt bokslut med readiness, advisory lock, idempotens och audit;
+- rapporter och årsredovisningsunderlag härledda från samma huvudbok.
+
+## Kom igång
+
+Krav: Node.js 22 och npm.
+
+```bash
+npm ci
+npm run dev
 ```
 
-Felet finns i `public.historical_open_items_at(uuid, date)`. Funktionen är en
-PL/pgSQL `RETURNS TABLE`-funktion, vilket gör returkolumnerna till PL/pgSQL-
-variabler. Slutfrågan använde `open_amount`, `source_type` och `source_id` utan
-tabellalias. PostgreSQL stoppade därför bokslutsberedskapen med SQLSTATE 42702.
+Skapa lokala miljövariabler enligt projektets deploymentdokumentation. Lägg
+aldrig hemligheter i repositoryt.
 
-Migrationen kvalificerar alla kolumner utan att ändra beräkningen av kund- eller
-leverantörsreskontran. Ett PG-regressionstest säkerställer att både funktionen
-och `year_end_db_blockers()` kan köras.
+## Verifiering
+
+```bash
+NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck
+npm run lint
+npm run check:lint
+npm test
+npm run check:guards
+npm run check:feature-policy
+npm run build
+```
+
+Databas- och RLS-sviten kräver en riktig PostgreSQL-instans:
+
+```bash
+npm run test:pg:bootstrap
+npm run test:pg
+npm run db:migrate:status
+```
+
+## Arkitektur
+
+- `app/` – App Router, dashboard och API-routes.
+- `lib/bookkeeping/` – canonical bokföringsmotor.
+- `lib/core/bookkeeping/` – postning, storno, perioder och bokslut.
+- `lib/platform/` – feature-, plan- och entitlementresolution.
+- `lib/import/` – SIE-, bank- och registerimport.
+- `lib/reports/` och `lib/bokslut/` – rapporter, årsredovisning och iXBRL.
+- `supabase/migrations/` – append-only databasmigrationer.
+- `tests/pg/` – verkliga PostgreSQL-, RLS- och concurrencytester.
+- `.agent-memory/` – verifierad, Git-versionerad projektstatus.
+
+Detaljerade arbetsregler finns i `AGENTS.md`, `CLAUDE.md`,
+`.cursor/rules/` och `.claude/rules/`.
+
+## Licens
+
+Proprietary. Se `LICENSE` och `NOTICE`.

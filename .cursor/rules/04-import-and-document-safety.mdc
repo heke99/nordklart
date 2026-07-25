@@ -1,0 +1,12 @@
+---
+description: Preserve import provenance and original documents
+alwaysApply: true
+---
+
+# Import and document safety
+
+Keep original bytes, hash, parser/mapping version, preview and commit result.
+Validate server-side again before commit. Import commits must be tenant-safe,
+atomic and idempotent; failure must not leave hidden partial bookkeeping.
+Never overwrite original documents. Derived OCR, previews and normalized files
+are separate versions.

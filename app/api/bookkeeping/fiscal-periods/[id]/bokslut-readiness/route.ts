@@ -24,7 +24,7 @@ export const GET = withRouteContext(
         operation: 'period.bokslut_readiness',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const report = await buildBokslutReadinessReport(serviceDb, companyId, user.id, id)
       return NextResponse.json({ data: report })

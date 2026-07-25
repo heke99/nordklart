@@ -16,7 +16,7 @@ export const GET = withRouteContext(
         operation: 'period.arsredovisning_pdf',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       // Narrative edits come from arsredovisning_narratives now, loaded
       // inside buildArsredovisningData. The URL stays clean — no narrative

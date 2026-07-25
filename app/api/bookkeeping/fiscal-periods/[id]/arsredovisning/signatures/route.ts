@@ -28,7 +28,7 @@ export const GET = withRouteContext(
         operation: 'period.arsredovisning_signatures_list',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const data = await listSignatureRequests(supabase, companyId, id)
       return NextResponse.json({ data })
@@ -50,7 +50,7 @@ export const POST = withRouteContext(
         operation: 'period.arsredovisning_signatures_create',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       // Defense-in-depth: confirm the fiscal period belongs to the
       // authenticated company before writing. RLS would catch a cross-tenant

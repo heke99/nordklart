@@ -38,7 +38,7 @@ export const GET = withRouteContext(
         operation: 'report.ink2',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const declaration = await generateINK2Declaration(supabase, companyId!, periodId)
       const readiness = declaration.taxAnalysis

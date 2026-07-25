@@ -7,7 +7,7 @@ import { BillingActions } from '@/components/billing/BillingActions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
-import { checkFeatureAccess } from '@/lib/platform/entitlements'
+import { checkFeatureAccess, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 
 export const dynamic = 'force-dynamic'
 
@@ -109,10 +109,19 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
     versionsRes,
     changeRequestsRes,
     invoicesRes,
+    baseFeatureAccess,
   ] = await Promise.all([
     supabase.from('company_subscriptions').select('id,plan_version_id,status,current_period_end,grace_ends_at,external_provider,cancel_at_period_end').eq('company_id', companyId).order('created_at', { ascending: false }).limit(10),
     supabase.from('company_subscription_items').select('id,plan_version_id,status,current_period_end,grace_ends_at,quantity').eq('company_id', companyId).order('created_at', { ascending: false }).limit(20),
-    supabase.from('commercial_access_grants').select('id,grant_type,status,starts_at,expires_at').eq('company_id', companyId).order('created_at', { ascending: false }).limit(20),
+    supabase
+      .from('commercial_access_grants')
+      .select('id,grant_type,status,starts_at,expires_at')
+      .eq('company_id', companyId)
+      .in('status', ['active', 'scheduled'])
+      .lte('starts_at', 'now')
+      .or('expires_at.is.null,expires_at.gt.now')
+      .order('created_at', { ascending: false })
+      .limit(20),
     supabase.from('one_time_purchases').select('id,plan_version_id,purchase_type,status,price_excl_vat,currency,fiscal_period_id,created_at').eq('company_id', companyId).order('created_at', { ascending: false }).limit(20),
     supabase.from('fiscal_periods').select('id,name,period_start,period_end').eq('company_id', companyId).order('period_end', { ascending: false }).limit(20),
     supabase.from('billing_events').select('id,event_type,amount_excl_vat,currency,created_at').eq('company_id', companyId).order('created_at', { ascending: false }).limit(12),
@@ -126,6 +135,7 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
     supabase.from('platform_plan_versions').select('id,plan_id,price_excl_vat,currency,billing_interval,stripe_price_id,status,effective_from,grace_days').in('status', ['active', 'scheduled']).order('effective_from', { ascending: false }),
     supabase.from('company_subscription_change_requests').select('id,request_type,status,requested_at,target_plan_version_id').eq('company_id', companyId).order('requested_at', { ascending: false }).limit(20),
     supabase.from('stripe_invoice_records').select('id,status,currency,amount_excl_vat,tax_amount,amount_incl_vat,hosted_invoice_url,invoice_pdf_url,invoice_date').eq('company_id', companyId).order('invoice_date', { ascending: false }).limit(20),
+    checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore),
   ])
 
   const subscriptions = (subscriptionsRes.data ?? []) as SubscriptionRow[]
@@ -150,14 +160,13 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
   const currentPlan = currentVersion ? planById.get(currentVersion.plan_id) : null
   const activeBase = Boolean(activeSubscription && ['trialing', 'active'].includes(activeSubscription.status))
   const activeItems = items.filter((item) => ['trialing', 'active', 'past_due'].includes(item.status))
-  const now = Date.now()
-  const activeGrants = grants.filter((grant) => (
-    ['active', 'scheduled'].includes(grant.status)
-    && new Date(grant.starts_at).getTime() <= now
-    && (!grant.expires_at || new Date(grant.expires_at).getTime() > now)
-  ))
+  // Effective-window filtering is performed by PostgreSQL above. The base
+  // capability itself comes from the authoritative resolver so a manual
+  // entitlement, partner grant or repaired Full Access grant behaves exactly
+  // like the route and navigation gates.
+  const activeGrants = grants
   const hasComplimentaryFullAccess = activeGrants.some((grant) => grant.grant_type === 'complimentary_full_access')
-  const hasBaseCommercialAccess = activeBase || hasComplimentaryFullAccess
+  const hasBaseCommercialAccess = activeBase || hasComplimentaryFullAccess || baseFeatureAccess.allowed
   const upcomingVersion = currentVersion
     ? versions.find((version) => version.plan_id === currentVersion.plan_id && version.status === 'scheduled') ?? null
     : null
@@ -208,7 +217,7 @@ export default async function BillingSettingsPage({ searchParams }: { searchPara
   let requestedPlanVersionId: string | null = null
   if (requestedFeatureCode) {
     const currentAccess = await checkFeatureAccess(supabase, companyId, requestedFeatureCode)
-    if (!currentAccess.allowed) {
+    if (!currentAccess.allowed && currentAccess.reason !== 'database_error') {
       const { data: feature } = await supabase
         .from('platform_features')
         .select('id,name')

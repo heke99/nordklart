@@ -47,7 +47,7 @@ export const POST = withRouteContext(
 
     const salaryAccess = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
     if (!salaryAccess.allowed) {
-      return featureAccessError(NORDKLART_FEATURES.salaryRuns)
+      return featureAccessError(NORDKLART_FEATURES.salaryRuns, salaryAccess.reason)
     }
 
     const payrollLimit = await assertCurrentUsageWithinCommercialLimit(

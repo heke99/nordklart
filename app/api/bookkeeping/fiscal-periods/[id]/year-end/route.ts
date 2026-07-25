@@ -23,7 +23,7 @@ export const GET = withRouteContext(
         operation: 'period.year_end_preview',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const [validation, preview] = await Promise.all([
         validateYearEndReadiness(serviceDb, companyId, user.id, id),
@@ -57,7 +57,7 @@ export const POST = withRouteContext(
         requestId,
         requireWrite: true,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       // Client-supplied idempotency key (optional). The default is
       // deterministic per period so a retried POST replays the completed

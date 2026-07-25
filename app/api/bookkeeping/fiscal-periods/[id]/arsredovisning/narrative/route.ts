@@ -88,7 +88,7 @@ export const GET = withRouteContext(
         operation: 'period.arsredovisning_narrative_get',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       // Mirror the POST handler's period-ownership pre-check so a valid
       // JWT for company A can't probe / enumerate company B's period IDs
@@ -122,7 +122,7 @@ export const POST = withRouteContext(
         operation: 'period.arsredovisning_narrative_post',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       // Verify the fiscal period belongs to the authenticated company before
       // writing — defense-in-depth alongside RLS, gives a cleaner 404 than

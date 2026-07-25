@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getActiveCompanyId } from '@/lib/company/context'
-import { listCompanyFeatureAccess } from '@/lib/platform/entitlements'
+import { checkFeatureAccess, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { NordklartActionCard, NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -72,7 +72,7 @@ export default async function BankAutomationPage() {
   if (!companyId) redirect('/onboarding')
 
   const [
-    features,
+    featureAccess,
     { count: bankConnections },
     { count: bankAccounts },
     { count: transactionsToReview },
@@ -81,7 +81,7 @@ export default async function BankAutomationPage() {
     { data: reviewItems },
     { data: rules },
   ] = await Promise.all([
-    listCompanyFeatureAccess(supabase, companyId),
+    checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bankAutomation),
     supabase.from('bank_connections').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'active'),
     supabase.from('bank_accounts').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'active'),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('automation_status', 'needs_review'),
@@ -91,7 +91,8 @@ export default async function BankAutomationPage() {
     supabase.from('bookkeeping_automation_rules').select('id, name, rule_type, min_confidence, auto_book_allowed, requires_review, status').eq('company_id', companyId).order('created_at', { ascending: false }).limit(8),
   ])
 
-  const hasBankAutomation = features.some((feature) => feature.feature_code === 'bank.automation' && feature.enabled)
+  const hasBankAutomation = featureAccess.allowed
+  const featureResolutionFailed = featureAccess.reason === 'database_error'
   return (
     <NordklartPageShell
       eyebrow="Bankautomation"
@@ -100,7 +101,12 @@ export default async function BankAutomationPage() {
       actions={<Button asChild variant="secondary"><Link href="/transactions">Visa transaktioner</Link></Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Tjänst" value={hasBankAutomation ? 'Aktiv' : 'Ej aktiv'} description="Ingår i din aktiva plan." tone={hasBankAutomation ? 'success' : 'warning'} />
+        <NordklartStatCard
+          label="Tjänst"
+          value={featureResolutionFailed ? 'Kunde inte verifieras' : hasBankAutomation ? 'Aktiv' : 'Ej aktiv'}
+          description={featureResolutionFailed ? 'Ingen planändring krävs. Försök igen om en stund.' : 'Ingår i din aktiva plan.'}
+          tone={hasBankAutomation ? 'success' : 'warning'}
+        />
         <NordklartStatCard label="Bankkopplingar" value={bankConnections ?? 0} description="Aktiva bankkopplingar." />
         <NordklartStatCard label="Bankkonton" value={bankAccounts ?? 0} description="Normaliserade bankkonton." />
         <NordklartStatCard label="Granska" value={transactionsToReview ?? 0} description="Osäkra händelser eller hög risk." tone="warning" />

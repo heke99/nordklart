@@ -1,0 +1,11 @@
+---
+description: Load and maintain Nordklart project memory
+alwaysApply: true
+---
+
+# Project memory
+
+Read `.agent-memory/README.md`, `current-state.md`, `open-blockers.md` and
+`next-actions.md` before implementation. Verify memory against runtime code,
+latest migrations and tests. Update the operational memory files after every
+completed work area. Never store secrets or copy whole historical reports.

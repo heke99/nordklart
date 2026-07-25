@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getActiveCompanyId } from '@/lib/company/context'
-import { listCompanyFeatureAccess } from '@/lib/platform/entitlements'
+import { checkFeatureAccess, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { YEAR_END_PRODUCT_STEPS, exportPackageLabel, yearEndStatusLabel } from '@/lib/year-end/product'
 import { NordklartActionCard, NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Badge } from '@/components/ui/badge'
@@ -28,15 +28,28 @@ export default async function YearEndProductPage() {
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding?intent=year-end')
 
-  const [features, projectsRes, checksRes, purchasesRes, deliverablesRes] = await Promise.all([
-    listCompanyFeatureAccess(supabase, companyId),
+  const [featureAccess, projectsRes, checksRes, purchasesRes, deliverablesRes] = await Promise.all([
+    checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.yearEndProjects),
     supabase.from('year_end_projects').select('id,status,source,readiness_score,export_package_status,next_action,updated_at').eq('company_id', companyId).order('updated_at', { ascending: false }).limit(6),
     supabase.from('year_end_checks').select('*', { count: 'exact', head: true }).eq('company_id', companyId).in('status', ['warning', 'error']),
-    supabase.from('one_time_purchases').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('purchase_type', 'year_end').in('status', ['paid', 'active', 'fulfilled']),
+    supabase
+      .from('one_time_purchases')
+      .select('*', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('purchase_type', 'year_end')
+      .in('status', ['paid', 'active', 'fulfilled'])
+      .or('access_starts_at.is.null,access_starts_at.lte.now')
+      .or('permanent_access.eq.true,access_expires_at.is.null,access_expires_at.gt.now'),
     supabase.from('year_end_deliverables').select('*', { count: 'exact', head: true }).eq('company_id', companyId).in('status', ['generated', 'approved', 'sent', 'archived']),
   ])
 
-  const hasYearEnd = features.some((feature) => ['year_end.product', 'year_end.one_time_purchase'].includes(feature.feature_code) && feature.enabled)
+  // A period-bound one-time purchase is intentionally not a company-wide
+  // feature row. It still activates the product entry point for that buyer.
+  const hasYearEnd = featureAccess.allowed || (purchasesRes.count ?? 0) > 0
+  const featureResolutionFailed = (
+    featureAccess.reason === 'database_error'
+    || Boolean(purchasesRes.error)
+  ) && !hasYearEnd
   const projects = (projectsRes.data ?? []) as YearEndProject[]
 
   return (
@@ -47,7 +60,12 @@ export default async function YearEndProductPage() {
       actions={<Button asChild><Link href="/bookkeeping/year-end">Starta bokslut</Link></Button>}
     >
       <div className="grid gap-4 md:grid-cols-4">
-        <NordklartStatCard label="Tillgång" value={hasYearEnd ? 'Aktiv' : 'Ej aktiv'} description="Ingår i plan eller separat bokslutsköp." tone={hasYearEnd ? 'success' : 'warning'} />
+        <NordklartStatCard
+          label="Tillgång"
+          value={featureResolutionFailed ? 'Kunde inte verifieras' : hasYearEnd ? 'Aktiv' : 'Ej aktiv'}
+          description={featureResolutionFailed ? 'Ingen planändring krävs. Försök igen om en stund.' : 'Ingår i plan eller separat bokslutsköp.'}
+          tone={hasYearEnd ? 'success' : 'warning'}
+        />
         <NordklartStatCard label="Projekt" value={projects.length} description="Senaste bokslutsprojekt." />
         <NordklartStatCard label="Avvikelser" value={checksRes.count ?? 0} description="Kräver kontroll innan låsning." tone={(checksRes.count ?? 0) > 0 ? 'warning' : 'success'} />
         <NordklartStatCard label="Exportpaket" value={deliverablesRes.count ?? 0} description="Redo att lämnas vidare." tone="primary" />

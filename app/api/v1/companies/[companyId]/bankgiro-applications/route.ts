@@ -82,6 +82,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>('bankg
   )
 
   if (!featureAccess.allowed) {
+    if (featureAccess.reason === 'database_error') {
+      return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          feature: NORDKLART_FEATURES.bankgiroApplication,
+          reason: featureAccess.reason,
+        },
+      })
+    }
     return v1ErrorResponseFromCode('FORBIDDEN', ctx.log, {
       requestId: ctx.requestId,
       details: {

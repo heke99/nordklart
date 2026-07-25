@@ -27,7 +27,9 @@ export async function requestBankgiroApplicationAction(formData: FormData) {
 
   const featureAccess = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bankgiroApplication)
   if (!featureAccess.allowed) {
-    redirect('/payments/bankgiro?error=bankgiro_access_required')
+    redirect(featureAccess.reason === 'database_error'
+      ? '/payments/bankgiro?error=access_unavailable'
+      : '/payments/bankgiro?error=bankgiro_access_required')
   }
 
   const providerId = text(formData, 'provider_id') || null

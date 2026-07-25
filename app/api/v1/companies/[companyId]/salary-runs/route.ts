@@ -263,7 +263,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const salaryAccess = await checkFeatureAccess(ctx.supabase, ctx.companyId!, NORDKLART_FEATURES.salaryRuns)
     if (!salaryAccess.allowed) {
-      return featureAccessError(NORDKLART_FEATURES.salaryRuns)
+      return featureAccessError(NORDKLART_FEATURES.salaryRuns, salaryAccess.reason)
     }
 
     const payrollLimit = await assertCurrentUsageWithinCommercialLimit(

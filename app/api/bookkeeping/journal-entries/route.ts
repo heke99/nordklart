@@ -21,7 +21,7 @@ export async function GET(request: Request) {
 
   const companyId = await requireCompanyId(supabase, user.id)
   const access = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (!access.allowed) return featureAccessError(NORDKLART_FEATURES.bookkeepingCore)
+  if (!access.allowed) return featureAccessError(NORDKLART_FEATURES.bookkeepingCore, access.reason)
 
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
@@ -158,7 +158,7 @@ export async function POST(request: Request) {
 
   const companyId = await requireCompanyId(supabase, user.id)
   const access = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (!access.allowed) return featureAccessError(NORDKLART_FEATURES.bookkeepingCore)
+  if (!access.allowed) return featureAccessError(NORDKLART_FEATURES.bookkeepingCore, access.reason)
 
   const validation = await validateBody(request, CreateJournalEntrySchema)
   if (!validation.success) return validation.response

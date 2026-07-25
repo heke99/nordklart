@@ -1,0 +1,12 @@
+---
+description: Preserve immutable and atomically balanced accounting
+alwaysApply: true
+---
+
+# Accounting integrity
+
+Post through the canonical engine/RPC. Posted data is immutable. Use storno
+and linked replacement entries. Balance, period locks, numbering,
+idempotency, audit and outbox effects belong inside the atomic database
+boundary. Use `roundOre()` for money. Add pg-real coverage for triggers, RPCs,
+RLS, concurrency and rollback.

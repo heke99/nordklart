@@ -20,6 +20,7 @@ export type FeatureAccessReason =
   | 'disabled'
   | 'provisioning_pending'
   | 'unauthorized'
+  | 'database_error'
 
 export interface FeatureAccessResult {
   allowed: boolean
@@ -79,8 +80,11 @@ export async function checkFeatureAccess(
   })
 
   const row = (Array.isArray(data) ? data[0] : null) as FeatureAccessRpcRow | null
+  // A resolver failure is not evidence that the company lacks a product.
+  // Keep the failure distinct so callers fail closed without sending a Full
+  // Access customer to an upgrade flow.
   if (error || !row) {
-    return { allowed: false, reason: 'missing_entitlement' }
+    return { allowed: false, reason: 'database_error' }
   }
 
   return {
@@ -94,12 +98,45 @@ export async function checkFeatureAccess(
   }
 }
 
-export function featureAccessError(featureCode: string): Response {
+export function featureAccessError(
+  featureCode: string,
+  reason: FeatureAccessReason = 'missing_entitlement',
+): Response {
+  if (reason === 'database_error') {
+    return Response.json(
+      {
+        error: 'FEATURE_ACCESS_UNAVAILABLE',
+        message: 'Åtkomsten kunde inte verifieras just nu. Ingen planändring krävs. Försök igen om en stund.',
+        feature: featureCode,
+        reason,
+        retryable: true,
+      },
+      {
+        status: 503,
+        headers: { 'Retry-After': '5' },
+      },
+    )
+  }
+
+  if (reason === 'provisioning_pending') {
+    return Response.json(
+      {
+        error: 'FEATURE_PROVISIONING_PENDING',
+        message: `Funktionen ${featureCode} är beviljad men den externa aktiveringen är inte klar.`,
+        feature: featureCode,
+        reason,
+        retryable: true,
+      },
+      { status: 409 },
+    )
+  }
+
   return Response.json(
     {
       error: 'FEATURE_NOT_ENABLED',
       message: `Funktionen ${featureCode} är inte aktiverad för bolaget. Aktivera rätt plan, tillägg eller engångsköp.`,
       feature: featureCode,
+      reason,
       upgrade_url: purchaseHrefForFeature(featureCode),
     },
     { status: 403 },

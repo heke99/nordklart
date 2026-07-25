@@ -25,7 +25,7 @@ export const GET = withRouteContext(
       operation: 'period.year_end_runs',
       requestId,
     })
-    if (!access.allowed) return yearEndAccessDeniedResponse()
+    if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
     const { data, error } = await serviceDb
       .from('year_end_runs')

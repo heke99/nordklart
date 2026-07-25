@@ -404,6 +404,12 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         const featureAccess = await checkFeatureAccess(supabase, companyId, requiredFeature)
         if (!featureAccess.allowed) {
           userLog.warn('feature access denied', { companyId, feature: requiredFeature, reason: featureAccess.reason })
+          if (featureAccess.reason === 'database_error') {
+            return await v1ErrorResponseFromCode('INTERNAL_ERROR', userLog, {
+              requestId,
+              details: { feature: requiredFeature, reason: featureAccess.reason },
+            })
+          }
           return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
             requestId,
             details: { feature: requiredFeature, reason: featureAccess.reason ?? 'missing_entitlement' },

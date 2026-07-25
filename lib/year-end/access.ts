@@ -136,16 +136,18 @@ export async function resolveYearEndAccess(
   if (projectEntitlement.allowed) {
     return { allowed: true, source: 'feature_entitlement', sourceId: projectEntitlement.sourceId ?? null }
   }
+  let accessResolutionFailed = projectEntitlement.reason === 'database_error'
 
   if (options.allowIxbrlFeature) {
     const ixbrlEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.ixbrl')
     if (ixbrlEntitlement.allowed) {
       return { allowed: true, source: 'ixbrl_feature_entitlement', sourceId: ixbrlEntitlement.sourceId ?? null }
     }
+    accessResolutionFailed ||= ixbrlEntitlement.reason === 'database_error'
   }
 
   if (fiscalPeriodId) {
-    const { data } = await supabase
+    const { data, error: purchaseError } = await supabase
       .from('one_time_purchases')
       .select('id, status, access_starts_at, access_expires_at, permanent_access')
       .eq('company_id', companyId)
@@ -156,6 +158,7 @@ export async function resolveYearEndAccess(
       .limit(1)
       .maybeSingle()
 
+    if (purchaseError) accessResolutionFailed = true
     const row = data as OneTimePurchaseRow | null
     if (row) {
       const hasStarted = !row.access_starts_at || new Date(row.access_starts_at).getTime() <= Date.now()
@@ -171,6 +174,10 @@ export async function resolveYearEndAccess(
 
   if (canManagePlatform || await isPlatformAdmin(supabase, userId)) {
     return { allowed: true, source: 'platform_admin_bypass' }
+  }
+
+  if (accessResolutionFailed) {
+    return { allowed: false, reason: 'database_error' }
   }
 
   return { allowed: false, reason: 'missing_entitlement' }
@@ -208,6 +215,9 @@ export async function requireYearEndAccess(
   return decision
 }
 
-export function yearEndAccessDeniedResponse(featureCode = 'year_end.projects'): Response {
-  return featureAccessError(featureCode)
+export function yearEndAccessDeniedResponse(
+  featureCode = 'year_end.projects',
+  reason?: YearEndAccessDecision['reason'],
+): Response {
+  return featureAccessError(featureCode, reason)
 }

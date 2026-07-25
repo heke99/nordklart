@@ -25,7 +25,7 @@ export const GET = withRouteContext(
         operation: 'tax_declaration.ef_preview',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const declaration = await generateNEDeclaration(supabase, companyId, id)
       const readiness = declaration.taxAnalysis

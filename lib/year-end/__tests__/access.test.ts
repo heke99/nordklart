@@ -8,6 +8,7 @@ vi.mock('@/lib/platform/entitlements', async (importOriginal) => {
 
 let accessRow: Record<string, unknown> | null
 let purchaseRow: Record<string, unknown> | null
+let purchaseError: { message: string } | null
 let platformRoleRow: Record<string, unknown> | null
 let auditError: { message: string } | null
 const purchaseFilters: Array<[string, unknown]> = []
@@ -26,7 +27,7 @@ function chainFor(table: string) {
   chain.limit = () => chain
   chain.maybeSingle = async () => ({
     data: table === 'one_time_purchases' ? purchaseRow : table === 'platform_roles' ? platformRoleRow : null,
-    error: null,
+    error: table === 'one_time_purchases' ? purchaseError : null,
   })
   chain.insert = async (row: Record<string, unknown>) => {
     if (table === 'audit_log') auditRows.push(row)
@@ -59,6 +60,7 @@ describe('year-end period-scoped access', () => {
     vi.clearAllMocks()
     accessRow = companyAccess
     purchaseRow = null
+    purchaseError = null
     platformRoleRow = null
     auditError = null
     purchaseFilters.length = 0
@@ -80,6 +82,35 @@ describe('year-end period-scoped access', () => {
     expect(purchaseFilters).toEqual(expect.arrayContaining([
       ['company_id', 'company-1'], ['fiscal_period_id', 'period-1'], ['purchase_type', 'year_end'],
     ]))
+  })
+
+  it('allows a valid one-time purchase even if the company-wide feature resolver is unavailable', async () => {
+    checkFeatureAccessMock.mockResolvedValue({ allowed: false, reason: 'database_error' })
+    purchaseRow = { id: 'purchase-1', permanent_access: true, access_starts_at: null, access_expires_at: null }
+
+    await expect(resolveYearEndAccess(db as never, 'company-1', 'period-1', 'user-1')).resolves.toMatchObject({
+      allowed: true,
+      source: 'one_time_purchase',
+      sourceId: 'purchase-1',
+    })
+  })
+
+  it('reports a technical failure instead of sending the customer to purchase', async () => {
+    checkFeatureAccessMock.mockResolvedValue({ allowed: false, reason: 'database_error' })
+
+    await expect(resolveYearEndAccess(db as never, 'company-1', 'period-1', 'user-1')).resolves.toMatchObject({
+      allowed: false,
+      reason: 'database_error',
+    })
+  })
+
+  it('reports a one-time purchase query failure as a technical failure', async () => {
+    purchaseError = { message: 'database unavailable' }
+
+    await expect(resolveYearEndAccess(db as never, 'company-1', 'period-1', 'user-1')).resolves.toMatchObject({
+      allowed: false,
+      reason: 'database_error',
+    })
   })
 
   it('denies another tenant before entitlement checks', async () => {

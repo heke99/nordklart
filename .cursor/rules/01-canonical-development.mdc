@@ -1,0 +1,12 @@
+---
+description: Keep one canonical owner per Nordklart domain
+alwaysApply: true
+---
+
+# Canonical development
+
+Trace the full call chain before changing behavior. Reuse canonical owners:
+`lib/bookkeeping/engine.ts`, `lib/platform/entitlements.ts`,
+`lib/year-end/access.ts`, `lib/import`, `lib/reports` and their database RPCs.
+Migrate callers and remove competing business logic. Frontend must not
+recalculate ledger, entitlement, report or import decisions.

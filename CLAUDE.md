@@ -4,7 +4,7 @@
 
 Nordklart is a Swedish-focused accounting SaaS for sole traders (enskild firma) and limited companies (aktiebolag). It implements double-entry bookkeeping compliant with Swedish accounting law (Bokföringslagen), including VAT handling, tax reporting, and 7-year document retention. Multi-tenant: each user can own or be a member of multiple companies, optionally grouped into teams (for consultants).
 
-**Tech stack**: Next.js 16.1.5 (App Router), React 19.2.3, TypeScript 5 (strict), Zod 4, Supabase (PostgreSQL + RLS + email/password + TOTP MFA auth), Tailwind CSS 4 + shadcn/ui, Vercel hosting, Docker (hosted).
+**Tech stack**: Next.js 16.2.9 (App Router), React 19.2.3, TypeScript 5.9 (strict), Zod 4, Supabase (PostgreSQL + RLS + email/password + TOTP MFA auth), Tailwind CSS 4 + shadcn/ui, Vercel hosting, Docker (hosted).
 
 **Integrations**: Enable Banking (PSD2), TIC Identity, Anthropic SDK, AWS Bedrock, OpenAI, Resend, Sentry, Svix, web-push, Upstash Redis, Google Drive, JSZip, sharp, Framer Motion, Recharts, PDF.js, `@react-pdf/renderer`, xlsx, fuse.js, ics.
 
@@ -112,7 +112,7 @@ These rules exist for legal compliance, enforced by database triggers. **Never v
 6. **Period lock enforcement.** DB trigger blocks writes to closed/locked periods. Company-wide lock date enforced via `enforce_company_lock_date()` trigger.
 7. **7-year document retention.** DB triggers prevent deletion of documents linked to posted entries.
 8. **Storno, never edit.** Use `correctEntry()` from `lib/core/bookkeeping/storno-service.ts`.
-9. **Use `Math.round(x * 100) / 100`** for monetary calculations. Never `toFixed()`.
+9. **Use `roundOre()` from `lib/money.ts`** for monetary calculations. Never add raw `Math.round(x * 100) / 100` or use `toFixed()` as arithmetic.
 10. **Always use engine functions.** Never insert directly into journal tables.
 11. **Account numbers are strings.** `'1930'`, never `1930`.
 

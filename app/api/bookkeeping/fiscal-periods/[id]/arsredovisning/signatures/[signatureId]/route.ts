@@ -41,7 +41,7 @@ export const PATCH = withRouteContext(
         operation: 'period.arsredovisning_signature_patch',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const { data, error } = await supabase
         .from('arsredovisning_signature_requests')

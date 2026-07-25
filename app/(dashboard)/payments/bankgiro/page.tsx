@@ -56,6 +56,7 @@ const ERROR_COPY: Record<string, string> = {
   active_application_exists: 'Det finns redan en aktiv Bankgiroansökan för bolaget. Fortsätt med den befintliga ansökan i stället.',
   not_allowed: 'Du saknar behörighet att skapa Bankgiroansökan för det här bolaget.',
   application_failed: 'Ansökan kunde inte sparas just nu. Kontrollera uppgifterna och försök igen.',
+  access_unavailable: 'Åtkomsten kunde inte verifieras just nu. Ingen planändring krävs. Försök igen om en stund.',
 }
 
 function providerName(provider: BankgiroApplication['payment_providers']) {
@@ -93,6 +94,7 @@ export default async function BankgiroPage({ searchParams }: BankgiroPageProps) 
   const providers = (providersRes.data ?? []) as PaymentProvider[]
   const latest = applications[0]
   const hasActiveApplication = applications.some((application) => ACTIVE_APPLICATION_STATUSES.has(application.status))
+  const featureResolutionFailed = featureAccess.reason === 'database_error'
   const canStartApplication = featureAccess.allowed && !hasActiveApplication && providers.length > 0
 
   return (
@@ -105,7 +107,7 @@ export default async function BankgiroPage({ searchParams }: BankgiroPageProps) 
           <Button asChild disabled={!providers.length || hasActiveApplication}>
             <Link href="#bankgiro-application-form">Påbörja ansökan</Link>
           </Button>
-        ) : (
+        ) : featureResolutionFailed ? null : (
           <Button asChild>
             <Link href="/settings/billing">Aktivera Bankgiro</Link>
           </Button>
@@ -130,7 +132,7 @@ export default async function BankgiroPage({ searchParams }: BankgiroPageProps) 
         <NordklartStatCard label="Avstämning" value={reconciliationRes.count ?? 0} description="Behöver matchas eller granskas." tone={(reconciliationRes.count ?? 0) > 0 ? 'warning' : 'success'} />
       </div>
 
-      {!featureAccess.allowed ? (
+      {!featureAccess.allowed && !featureResolutionFailed ? (
         <section className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-amber-950 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
@@ -142,6 +144,15 @@ export default async function BankgiroPage({ searchParams }: BankgiroPageProps) 
             </div>
             <Button asChild variant="secondary"><Link href="/settings/billing">Hantera plan</Link></Button>
           </div>
+        </section>
+      ) : null}
+      {featureResolutionFailed ? (
+        <section className="rounded-3xl border border-destructive/30 bg-destructive/10 p-5 text-destructive shadow-sm">
+          <p className="text-sm font-semibold uppercase tracking-wide">Tekniskt fel</p>
+          <h2 className="mt-1 text-xl font-semibold">Åtkomsten kunde inte verifieras</h2>
+          <p className="mt-2 max-w-3xl text-sm">
+            Ingen planändring krävs. Ladda om sidan om en stund. Ansökan är tillfälligt blockerad för att undvika en felaktig åtkomstbedömning.
+          </p>
         </section>
       ) : null}
 

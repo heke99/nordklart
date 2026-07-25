@@ -45,7 +45,7 @@ export const GET = withRouteContext(
         operation: 'tax_declaration.project_get',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const declaration = declarationType === 'NE'
         ? await generateNEDeclaration(supabase, companyId, id)
@@ -81,7 +81,7 @@ export const POST = withRouteContext(
         operation: 'tax_declaration.project_update',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const payload = validation.data
       const projectId = await upsertTaxDeclarationProject(

@@ -26,7 +26,7 @@ export const GET = withRouteContext(
         operation: 'period.arsredovisning_ixbrl_validate',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.ixbrl')
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.ixbrl', access.reason)
 
       const url = new URL(request.url)
       const utdelningRaw = url.searchParams.get('utdelning')

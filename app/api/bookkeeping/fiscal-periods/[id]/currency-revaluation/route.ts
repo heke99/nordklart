@@ -20,7 +20,7 @@ export const GET = withRouteContext(
       operation: 'period.fx_revaluation_preview',
       requestId,
     })
-    if (!access.allowed) return yearEndAccessDeniedResponse()
+    if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
     const { data: period, error: periodError } = await serviceDb
       .from('fiscal_periods')
@@ -58,7 +58,7 @@ export const POST = withRouteContext(
       requestId,
       requireWrite: true,
     })
-    if (!access.allowed) return yearEndAccessDeniedResponse()
+    if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
     const { data: period, error: periodError } = await serviceDb
       .from('fiscal_periods')

@@ -1,0 +1,12 @@
+---
+description: Enforce tenant security and evidence-backed verification
+alwaysApply: true
+---
+
+# Security and verification
+
+Every protected operation needs authentication, company access, permission,
+entitlement where applicable, resource ownership and RLS. Service-role code
+must revalidate actor and company explicitly. Security-definer functions need
+fixed `search_path`, minimal grants and cross-tenant tests. Report commands as
+VERIFIED, PARTIAL, NOT RUN, UNVERIFIED or FAILED only.

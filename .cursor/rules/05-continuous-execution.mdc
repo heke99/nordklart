@@ -1,0 +1,32 @@
+---
+description: Continue implementation beyond analysis, planning, and memory setup
+alwaysApply: true
+---
+
+# Continuous execution
+
+The task is not complete when analysis, planning, documentation, project memory,
+or a blocker list has been produced.
+
+After establishing context and memory, immediately implement the highest-priority
+verified requirement.
+
+Do not stop after a phase summary, vertical slice, scaffold, or plan.
+
+For each completed work item:
+
+1. inspect the canonical implementation,
+2. implement the full safe change,
+3. add or update migrations,
+4. add regression tests,
+5. run relevant verification,
+6. update project memory,
+7. continue to the next highest-priority item.
+
+Do not ask for permission between work items.
+
+Only external credentials, unavailable third-party production environments, or
+a genuine destructive ambiguity may remain as documented external verification.
+
+A task is not complete because code was written. It is complete only when the
+implementation, database, authorization, tests, documentation, and memory agree.

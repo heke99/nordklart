@@ -62,7 +62,7 @@ describe('SIE account mappings route — company scoping', () => {
       method: 'POST',
       body: { mappings },
     })
-    const response = await POST(request)
+    const response = await POST(request, { params: Promise.resolve({}) })
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -81,7 +81,7 @@ describe('SIE account mappings route — company scoping', () => {
       method: 'PUT',
       body: { sourceAccount: '1910', targetAccount: '1930' },
     })
-    const response = await PUT(request)
+    const response = await PUT(request, { params: Promise.resolve({}) })
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)

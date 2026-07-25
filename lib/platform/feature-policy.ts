@@ -25,5 +25,5 @@ export async function requireCompanyFeatureResponse(
   featureCode: FeatureCode,
 ): Promise<Response | null> {
   const access = await checkFeatureAccess(supabase, companyId, featureCode)
-  return access.allowed ? null : featureAccessError(featureCode)
+  return access.allowed ? null : featureAccessError(featureCode, access.reason)
 }

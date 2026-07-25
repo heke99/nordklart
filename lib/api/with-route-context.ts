@@ -222,7 +222,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
           const featureAccess = await checkFeatureAccess(supabase, companyId, requiredFeature)
           if (!featureAccess.allowed) {
             userLog.warn('feature access denied', { feature: requiredFeature, reason: featureAccess.reason })
-            const response = featureAccessError(requiredFeature)
+            const response = featureAccessError(requiredFeature, featureAccess.reason)
             response.headers.set('X-Request-Id', requestId)
             return response
           }

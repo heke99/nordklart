@@ -14,7 +14,7 @@ export const GET = withRouteContext(
         operation: 'period.arsredovisning_data',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const data = await buildArsredovisningData(supabase, companyId, id)
       return NextResponse.json({ data })

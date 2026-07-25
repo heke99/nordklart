@@ -271,9 +271,15 @@ export default async function DashboardLayout({
     let hasRouteAccess = periodBoundYearEndRoute && hasYearEndAccess
     if (!hasRouteAccess) {
       const catalogFeature = featureAccessList.find((feature) => feature.feature_code === requiredRouteFeature)
-      hasRouteAccess = catalogFeature
-        ? catalogFeature.enabled
-        : (await checkFeatureAccess(supabase, companyId, requiredRouteFeature)).allowed
+      if (catalogFeature) {
+        hasRouteAccess = catalogFeature.enabled
+      } else {
+        const routeAccess = await checkFeatureAccess(supabase, companyId, requiredRouteFeature)
+        if (routeAccess.reason === 'database_error') {
+          throw new Error(`FEATURE_ACCESS_UNAVAILABLE:${requiredRouteFeature}`)
+        }
+        hasRouteAccess = routeAccess.allowed
+      }
     }
 
     if (!hasRouteAccess) {

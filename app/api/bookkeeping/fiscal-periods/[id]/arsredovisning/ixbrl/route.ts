@@ -28,7 +28,7 @@ export const GET = withRouteContext(
         operation: 'period.arsredovisning_ixbrl',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.ixbrl')
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.ixbrl', access.reason)
 
       const url = new URL(request.url)
       const download = url.searchParams.get('download') === '1'

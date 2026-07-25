@@ -69,7 +69,7 @@ export const GET = withRouteContext(
         operation: 'period.bokslutsdispositioner_preview',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const data = await buildDispositionsProposal(supabase, companyId, id)
       return NextResponse.json({ data })
@@ -151,7 +151,7 @@ export const POST = withRouteContext(
         operation: 'period.bokslutsdispositioner_post',
         requestId,
       })
-      if (!access.allowed) return yearEndAccessDeniedResponse()
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
