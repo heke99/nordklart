@@ -19,6 +19,8 @@ const STORAGE_KEY_PREFIX = 'Nordklart:fiscal-year:'
 const ALL_YEARS_VALUE = '__all__'
 
 interface Props {
+  /** Override the active CompanyContext company for agency/client-scoped flows. */
+  companyId?: string | null
   /**
    * Current selection. `null` means "all years" — no filter applied.
    */
@@ -62,6 +64,7 @@ interface Props {
  * threads it into whichever queries need scoping.
  */
 export function FiscalYearSelector({
+  companyId,
   value,
   onChange,
   includeAllOption = true,
@@ -75,9 +78,10 @@ export function FiscalYearSelector({
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [loaded, setLoaded] = useState(false)
   const effectiveLabel = label === null ? null : (label ?? t('label'))
+  const effectiveCompanyId = companyId ?? company?.id ?? null
 
   useEffect(() => {
-    if (!company?.id) {
+    if (!effectiveCompanyId) {
       // Fire onReady so consumers don't stall in a loading state while the
       // company context hydrates. The effect re-runs once company.id arrives.
       onReady?.()
@@ -85,7 +89,9 @@ export function FiscalYearSelector({
     }
     let cancelled = false
     ;(async () => {
-      const res = await fetch('/api/bookkeeping/fiscal-periods')
+      const res = await fetch(
+        `/api/bookkeeping/fiscal-periods?company_id=${encodeURIComponent(effectiveCompanyId)}`,
+      )
       if (!res.ok) {
         if (!cancelled) {
           setLoaded(true)
@@ -110,7 +116,7 @@ export function FiscalYearSelector({
       // localStorage access is guarded because this is a 'use client' component
       // but still runs during SSR on first render for some setups.
       if (value === null && typeof window !== 'undefined') {
-        const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id)
+        const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + effectiveCompanyId)
         if (stored === ALL_YEARS_VALUE) {
           if (includeAllOption) onChange(null, null)
           else if (fetched.length > 0) onChange(fetched[0].id, fetched[0])
@@ -129,13 +135,13 @@ export function FiscalYearSelector({
   // onReady is intentionally excluded from deps: it's a lifecycle callback that
   // should fire once per load, not re-trigger if the parent re-creates it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, hideFuturePeriods, includeAllOption])
+  }, [effectiveCompanyId, hideFuturePeriods, includeAllOption])
 
   const handleChange = (next: string) => {
     const nextPeriodId = next === ALL_YEARS_VALUE ? null : next
-    if (company?.id && typeof window !== 'undefined') {
+    if (effectiveCompanyId && typeof window !== 'undefined') {
       window.localStorage.setItem(
-        STORAGE_KEY_PREFIX + company.id,
+        STORAGE_KEY_PREFIX + effectiveCompanyId,
         nextPeriodId ?? ALL_YEARS_VALUE,
       )
     }

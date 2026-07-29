@@ -1,31 +1,17 @@
 # Verifieringsmatris
 
-| Kontroll | Kommando/metod | Krav |
+| Kontroll | Kommando/metod | Senaste utfall |
 |---|---|---|
-| Typkontroll | `NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck` | 0 fel |
-| Lint | `npm run lint` och `npm run check:lint` | 0 lintfel |
-| Enhet/integration | `npm test` | alla icke-skip tester gröna |
-| Guards | `npm run check:guards` | ingen försämrad baslinje |
-| Featurepolicy | `node --import tsx scripts/generate-feature-policy-matrix.ts --check` | synkad |
-| Skill bodies | `node --import tsx scripts/generate-skill-bodies.ts --check` | synkade |
-| FAQ | `node --import tsx scripts/generate-faq-content.ts --check` | synkad |
-| Produktionsbygge | generatorer + `next build` | lyckat bygge |
-| Migrationer/RLS | mål-DB + pg-real/tenanttester | måste köras externt |
+| Typkontroll | `NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck` | PASS, 0 fel |
+| Riktade tester | readiness, accrual-route och featurepolicy-unit | PASS, 34/34 |
+| Full unit-svit | `TZ=Europe/Stockholm npm test` | PASS, 6 098 pass / 2 skip |
+| Full ESLint | `TZ=Europe/Stockholm npm run lint` | PASS, 0 fel / 226 varningar |
+| Lintbaseline | `npm run check:lint` | PASS, 0 nya fel |
+| Guards | `npm run check:guards` | PASS, 167 / 653 |
+| Featurepolicy | `node --import tsx scripts/check-feature-policy-coverage.ts` | PASS, 461 routes / 292 operationer |
+| SQL-syntax | PostgreSQL `libpg_query`-parser | PASS, 43 satser |
+| Produktionsbygge | generatorer + `next build` | PASS, 354 sidor |
+| pg-real/RLS | separat PostgreSQL-testdatabas | NOT RUN, databas saknas |
+| Live migration | mål-DB | NOT RUN, anslutning saknas |
 
-Skippade tester och kontroller som saknar miljö ska redovisas, inte räknas som
-godkända.
-
-## Senaste utfall — 2026-07-25
-
-| Kontroll | Utfall |
-|---|---|
-| Typkontroll | PASS, 0 fel |
-| Full unit-svit | PASS, 6 096 pass / 2 skip |
-| Full ESLint | PASS, 0 fel / 228 varningar |
-| Lintbaseline | PASS, 0 nya fel |
-| Guards | PASS, 167 / 653 / 2 och baseline ratchetad |
-| Featurepolicy | PASS, 459 routes / 289 operationer |
-| Skill bodies | PASS, 108 atomer |
-| FAQ | PASS, oförändrad dataset |
-| Next-produktionsbygge | PASS efter huvudändring, 353 sidor; slutlig query-precisering typkontrollerad/lintad |
-| Live migration/RLS/pg-real | NOT RUN, ingen mål-DB eller lokal PostgreSQL |
+Skippade tester och kontroller utan miljö räknas inte som godkända.

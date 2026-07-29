@@ -15,6 +15,7 @@ import type { EfDeclarationItem } from '@/lib/bokslut/enskild-firma/types'
 
 interface EfDeclarationSectionProps {
   fiscalPeriodId: string
+  companyId?: string | null
   /** Bokfört resultat (income statement net_result) — shown as the surplus
    *  base in the wizard header. Server recomputes from the trial balance. */
   bookedSurplus: number
@@ -69,6 +70,7 @@ const DEFAULT_OVERRIDES: EfOverrideInputs = {
  */
 export function EfDeclarationSection({
   fiscalPeriodId,
+  companyId,
   bookedSurplus,
   fiscalYear,
 }: EfDeclarationSectionProps) {
@@ -110,6 +112,7 @@ export function EfDeclarationSection({
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams()
+    if (companyId) params.set('company_id', companyId)
     params.set('category', overrides.category)
     const kap = parseFloat(overrides.kapitalunderlag)
     if (Number.isFinite(kap)) params.set('kapitalunderlag', String(kap))
@@ -124,7 +127,7 @@ export function EfDeclarationSection({
     const ec = parseFloat(overrides.expansionsfondChange)
     if (Number.isFinite(ec) && ec !== 0) params.set('expansionsfondDesiredChange', String(ec))
     return params.toString()
-  }, [overrides])
+  }, [overrides, companyId])
 
   const loadPreview = useCallback(async () => {
     setLoading(true)
@@ -366,7 +369,9 @@ export function EfDeclarationSection({
         <CardContent>
           <Button asChild variant="outline">
             <Link
-              href={`/api/reports/ne-bilaga?fiscal_period_id=${fiscalPeriodId}`}
+              href={`/api/reports/ne-bilaga?period_id=${encodeURIComponent(fiscalPeriodId)}${
+                companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''
+              }`}
               prefetch={false}
             >
               <FileDown className="mr-2 h-4 w-4" />

@@ -1,8 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
-import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import { getCompanyEntityType } from '@/lib/company/entity-type'
+import {
+  loadYearEndCashReconciliationStatus,
+  type YearEndCashReconciliationStatus,
+} from '@/lib/bokslut/manual-cash-reconciliation'
 import type { YearEndValidation } from '@/types'
 
 export type ReminderSeverity = 'info' | 'warning'
@@ -26,6 +29,9 @@ export interface BokslutBlockerDetail {
   /** Whether the underlying check completed. False ⇒ the check itself failed
    *  and the close is blocked until it can run (fail closed, B04). */
   checkCompleted: boolean
+  /** Canonical resolution surface when the blocker has a safe guided flow. */
+  href?: string
+  actionLabel?: string
 }
 
 export interface BokslutReadinessReport {
@@ -50,6 +56,8 @@ export interface BokslutReadinessReport {
     unmatched_gl_line_count: number
     difference: number
   } | null
+  /** Per-account canonical status, including manual SIE-only reconciliations. */
+  cashReconciliations: YearEndCashReconciliationStatus[]
   /** Period metadata so the UI can show name/dates without an extra fetch. */
   period: {
     id: string
@@ -102,6 +110,9 @@ export async function buildBokslutReadinessReport(
   }
 
   const period = periodResult.data
+  const reconciliationHref = `/bookkeeping/year-end/reconciliation?period=${encodeURIComponent(
+    fiscalPeriodId,
+  )}&company_id=${encodeURIComponent(companyId)}`
 
   const blockerDetails: BokslutBlockerDetail[] = []
 
@@ -145,27 +156,47 @@ export async function buildBokslutReadinessReport(
         message: row.message,
         count: row.detail_count ?? 0,
         checkCompleted: true,
+        ...(row.code.startsWith('bank_') || row.code.startsWith('manual_cash_')
+          ? {
+              href: reconciliationHref,
+              actionLabel: 'Öppna avstämning',
+            }
+          : {}),
       })
     }
   }
 
-  // Bank reconciliation snapshot for the period (B12): the strict
-  // is_reconciled from the reconciliation module (zero difference AND zero
-  // unmatched rows on both sides). A failure to compute the snapshot is a
-  // blocker — fail closed.
+  // Canonical per-account reconciliation status. This RPC is also consumed by
+  // year_end_db_blockers(), which execute_year_end_closing() re-runs inside
+  // the locked transaction. It supports both strict bank matching and the
+  // append-only manual SIE/no-bank path without creating a second readiness
+  // engine in the browser.
   let reconciliation: BokslutReadinessReport['reconciliation'] = null
+  let cashReconciliations: YearEndCashReconciliationStatus[] = []
   try {
-    const status = await getReconciliationStatus(
+    cashReconciliations = await loadYearEndCashReconciliationStatus(
       supabase,
       companyId,
-      period.period_start,
-      period.period_end,
+      fiscalPeriodId,
     )
     reconciliation = {
-      is_reconciled: status.is_reconciled,
-      unmatched_transaction_count: status.unmatched_transaction_count,
-      unmatched_gl_line_count: status.unmatched_gl_line_count,
-      difference: status.difference,
+      is_reconciled:
+        cashReconciliations.length > 0
+        && cashReconciliations.every((status) => status.is_reconciled),
+      unmatched_transaction_count: cashReconciliations.reduce(
+        (sum, status) => sum + status.unmatched_transaction_count,
+        0,
+      ),
+      unmatched_gl_line_count: cashReconciliations.reduce(
+        (sum, status) => sum + status.unmatched_gl_line_count,
+        0,
+      ),
+      // Sum absolute differences so two account errors can never cancel in
+      // the UI summary. The database evaluates each account independently.
+      difference: cashReconciliations.reduce(
+        (sum, status) => sum + Math.abs(Number(status.difference ?? 0)),
+        0,
+      ),
     }
   } catch (err) {
     blockerDetails.push({
@@ -187,8 +218,13 @@ export async function buildBokslutReadinessReport(
           ? `${reconciliation.unmatched_transaction_count} banktransaktioner är inte matchade. Avstäm banken innan bokslut.`
           : reconciliation.unmatched_gl_line_count > 0
             ? `${reconciliation.unmatched_gl_line_count} huvudboksrader på bankkontot är inte matchade. Avstäm banken innan bokslut.`
-            : `Bankavstämningen visar en differens på ${reconciliation.difference.toFixed(2)} kr.`,
-      href: '/reconciliation/bank',
+            : cashReconciliations.some(
+                  (status) =>
+                    status.reconciliation_mode === 'manual' && !status.is_reconciled,
+                )
+              ? 'Ett eller flera likvidkonton saknar giltig manuell saldoverifiering per balansdagen.'
+              : `Bankavstämningen visar en differens på ${reconciliation.difference.toFixed(2)} kr.`,
+      href: reconciliationHref,
     })
   }
 
@@ -253,6 +289,7 @@ export async function buildBokslutReadinessReport(
     unexplainedGapCount: validation.unexplainedGaps.length,
     trialBalanceBalanced: validation.trialBalanceBalanced,
     reconciliation,
+    cashReconciliations,
     period,
     entityType,
     rawValidation: validation,

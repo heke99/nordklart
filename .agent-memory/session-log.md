@@ -1,18 +1,21 @@
 # Sessionslogg
 
-## 2026-07-25
+## 2026-07-29
 
-- Läste målbeskrivningen och kartlade hela mottagna projektarkivet.
-- Etablerade orörd baslinje för exakt filjämförelse.
-- Installerade låsta npm-beroenden och körde baslinjetester/guards.
-- Diagnostiserade falska betalväggar vid feature-resolverfel samt periodbundet
-  bokslutsköp som inte syntes på översiktssidan.
-- Implementerade systemisk felklassning och uppdaterade berörda UI/API-flöden.
-- Lade och körde regressionstester.
-- Korrigerade befintliga Next 16-testtyper och React-purity-lint.
-- Verifierade typkontroll och fullständigt produktionsbygge.
-- Dokumenterade kanonisk arkitektur, aktiva beslut och kvarvarande skuld.
-- Körde full unit-svit: 6 096 tester passerade och 2 var avsiktligt skippade.
-- Körde full ESLint med 0 fel och ratchetade antipattern-baslinjen från 171 till
-  faktisk nivå 167 rå-auth-routes.
-- Verifierade featurepolicy, skill bodies och FAQ-synk.
+- Packade upp projektarkivet i en orörd baslinje och en arbetskopia.
+- Läste projektregler, aktuell accessmodell och senaste blocker-/stängnings-RPC.
+- Implementerade manuell likvidkontoavstämning med revisionsbevarande data,
+  serverberäknat saldo, dokumentunderlag, idempotens och audit.
+- Kopplade readiness och atomisk stängning till samma kanoniska status.
+- Lade automatisk invalidation för postade verifikationer och ändrade,
+  borttagna eller tillagda verifikationsrader.
+- Byggde bolags- och periodbunden API/UI samt säker evidensnedladdning.
+- Propagerade `company_id` genom bokslut, periodisering, dispositioner,
+  avskrivningar, EF/NE och årsredovisning.
+- Korrigerade NE-routeparametern.
+- Installerade låsta npm-beroenden med separat skrivbar cache.
+- Körde typecheck, 34 riktade tester, hela unit-sviten, lint, lintbaseline,
+  guards och featurepolicy.
+- Parservaliderade migrationen med PostgreSQLs `libpg_query`.
+- Körde fullständigt Next 16-produktionsbygge med 354 genererade sidor.
+- Dokumenterade att pg-real/RLS och live migration kräver extern databas.

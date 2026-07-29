@@ -85,6 +85,43 @@ async function blockerCodes(companyId: string, fiscalPeriodId: string): Promise<
   return rows.map((row) => row.code)
 }
 
+async function insertEvidence(userId: string, companyId: string): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.document_attachments
+       (id, user_id, company_id, storage_path, file_name, file_size_bytes,
+        mime_type, sha256_hash, uploaded_by, upload_source)
+     VALUES ($1, $2, $3, $4, 'kontoutdrag.pdf', 1024,
+             'application/pdf', $5, $2, 'file_upload')`,
+    [id, userId, companyId, `documents/${userId}/${id}.pdf`, 'a'.repeat(64)],
+  )
+  return id
+}
+
+async function recordManualReconciliation(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+  cashAccountId: string
+  statementBalance: number
+  evidenceDocumentId: string
+}): Promise<void> {
+  await getPool().query(
+    `SELECT public.record_year_end_manual_cash_reconciliation(
+       $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric, $6::uuid, $7
+     )`,
+    [
+      params.companyId,
+      params.fiscalPeriodId,
+      params.userId,
+      params.cashAccountId,
+      params.statementBalance,
+      params.evidenceDocumentId,
+      `test-${randomUUID()}`,
+    ],
+  )
+}
+
 describe('year-end database readiness reconciliation hardening', () => {
   beforeEach(async () => {
     // No shared state. Each test owns its company and fiscal year.
@@ -143,6 +180,56 @@ describe('year-end database readiness reconciliation hardening', () => {
     })
 
     expect(await blockerCodes(seeded.companyId, seeded.fiscalPeriodId)).toContain('bank_reconciliation_difference')
+  })
+
+  it('accepts a server-verified zero-difference statement when no bank feed exists', async () => {
+    const seeded = await seedReadyCompany()
+    await postEntry({ ...seeded, account: '1930', amount: 500 })
+    const evidenceDocumentId = await insertEvidence(seeded.userId, seeded.companyId)
+
+    await recordManualReconciliation({
+      ...seeded,
+      statementBalance: 500,
+      evidenceDocumentId,
+    })
+
+    const codes = await blockerCodes(seeded.companyId, seeded.fiscalPeriodId)
+    expect(codes).not.toContain('manual_cash_reconciliation_missing')
+    expect(codes).not.toContain('bank_unmatched_gl_lines')
+    expect(codes).not.toContain('bank_reconciliation_difference')
+  })
+
+  it('refuses a manual statement balance that differs from the server ledger', async () => {
+    const seeded = await seedReadyCompany()
+    await postEntry({ ...seeded, account: '1930', amount: 500 })
+    const evidenceDocumentId = await insertEvidence(seeded.userId, seeded.companyId)
+
+    await expect(recordManualReconciliation({
+      ...seeded,
+      statementBalance: 499,
+      evidenceDocumentId,
+    })).rejects.toThrow(/YEAR_END_MANUAL_RECONCILIATION_DIFFERENCE/i)
+  })
+
+  it('invalidates a prior manual verification when a later posting changes the cash ledger', async () => {
+    const seeded = await seedReadyCompany()
+    await postEntry({ ...seeded, account: '1930', amount: 500 })
+    const evidenceDocumentId = await insertEvidence(seeded.userId, seeded.companyId)
+    await recordManualReconciliation({
+      ...seeded,
+      statementBalance: 500,
+      evidenceDocumentId,
+    })
+
+    await postEntry({
+      ...seeded,
+      account: '1930',
+      amount: 100,
+      entryDate: '2025-07-01',
+    })
+
+    expect(await blockerCodes(seeded.companyId, seeded.fiscalPeriodId))
+      .toContain('manual_cash_reconciliation_stale')
   })
 
   it('blocks when historical AR does not reconcile to account 1510', async () => {

@@ -49,4 +49,5 @@ export const GET = withRouteContext(
       return errorResponse(err, opLog, { requestId })
     }
   },
+  { allowRequestedCompany: true },
 )

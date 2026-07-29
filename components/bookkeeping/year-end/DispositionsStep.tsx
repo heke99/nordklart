@@ -21,6 +21,7 @@ import type {
 
 interface DispositionsStepProps {
   periodId: string
+  companyId?: string | null
   onBack: () => void
   onContinue: () => void
 }
@@ -39,7 +40,12 @@ interface UiState {
  * EF companies get an empty `proposals` array from the server, so this step
  * renders a short pass-through note and lets the user continue.
  */
-export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsStepProps) {
+export function DispositionsStep({
+  periodId,
+  companyId,
+  onBack,
+  onContinue,
+}: DispositionsStepProps) {
   const { toast } = useToast()
   const [proposal, setProposal] = useState<DispositionsProposal | null>(null)
   const [loading, setLoading] = useState(true)
@@ -53,8 +59,9 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
     setLoading(true)
     setFetchError(null)
     try {
+      const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
       const res = await fetch(
-        `/api/bookkeeping/fiscal-periods/${periodId}/bokslutsdispositioner`,
+        `/api/bookkeeping/fiscal-periods/${periodId}/bokslutsdispositioner${companySuffix}`,
       )
       const body = await res.json()
       if (!res.ok) {
@@ -78,7 +85,7 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
     } finally {
       setLoading(false)
     }
-  }, [periodId])
+  }, [periodId, companyId])
 
   useEffect(() => {
     // Defer to the next macrotask so the synchronous setState inside
@@ -101,7 +108,8 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
         onContinue()
         return
       }
-      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/bokslutsdispositioner`, {
+      const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/bokslutsdispositioner${companySuffix}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items }),
@@ -124,7 +132,7 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
     } finally {
       setPosting(false)
     }
-  }, [proposal, ui, periodId, onContinue, toast])
+  }, [proposal, ui, periodId, companyId, onContinue, toast])
 
   // ---- Render branches ----
   if (loading) {
@@ -157,9 +165,14 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
     const fiscalYear = parseInt(proposal.fiscalPeriod.period_end.slice(0, 4), 10)
     return (
       <div className="space-y-6">
-        <DepreciationPanel periodId={periodId} onPosted={() => void loadProposals()} />
+        <DepreciationPanel
+          periodId={periodId}
+          companyId={companyId}
+          onPosted={() => void loadProposals()}
+        />
         <EfDeclarationSection
           fiscalPeriodId={periodId}
+          companyId={companyId}
           bookedSurplus={proposal.netResultBefore}
           fiscalYear={fiscalYear}
         />
@@ -176,7 +189,11 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
   if (proposal.proposals.length === 0) {
     return (
       <div className="space-y-6">
-        <DepreciationPanel periodId={periodId} onPosted={() => void loadProposals()} />
+        <DepreciationPanel
+          periodId={periodId}
+          companyId={companyId}
+          onPosted={() => void loadProposals()}
+        />
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Inga dispositioner föreslagna</CardTitle>
@@ -198,7 +215,11 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
 
   return (
     <div className="space-y-6">
-      <DepreciationPanel periodId={periodId} onPosted={() => void loadProposals()} />
+      <DepreciationPanel
+        periodId={periodId}
+        companyId={companyId}
+        onPosted={() => void loadProposals()}
+      />
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Bokslutsdispositioner</CardTitle>

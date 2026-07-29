@@ -17,13 +17,27 @@ import {
 import { detectPeriodisering } from '@/lib/bokslut/accruals/auto-detect'
 import type { AccrualProposal } from '@/lib/bokslut/accruals/types'
 import type { JournalEntry } from '@/types'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+import { createServiceClient } from '@/lib/supabase/server'
 
 export const GET = withRouteContext(
   'period.accruals_preview',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     try {
+      const access = await requireYearEndAccess(
+        createServiceClient(),
+        companyId,
+        user.id,
+        id,
+        {
+          operation: 'period.accruals_preview',
+          requestId,
+        },
+      )
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
+
       // Run the two independent scans in parallel so the wizard's first
       // paint isn't gated on the slower auto-detect query.
       const [proposal, autoDetected] = await Promise.all([
@@ -44,6 +58,7 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  { allowRequestedCompany: true },
 )
 
 // Defense-in-depth on caller-supplied account numbers. The wizard sends
@@ -117,6 +132,19 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
 
     try {
+      const access = await requireYearEndAccess(
+        createServiceClient(),
+        companyId,
+        user.id,
+        id,
+        {
+          operation: 'period.accruals_post',
+          requestId,
+          requireWrite: true,
+        },
+      )
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
+
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
         .select('id, name, period_end, is_closed, locked_at, closing_entry_id')
@@ -238,7 +266,7 @@ export const POST = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { allowRequestedCompany: true },
 )
 
 type PostItem = z.infer<typeof PostItemSchema>

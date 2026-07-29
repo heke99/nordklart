@@ -67,6 +67,8 @@ export function isPeriodBoundYearEndOperation(operation: string): boolean {
     normalized.startsWith('period.year_end')
     || normalized.startsWith('period.bokslut')
     || normalized.startsWith('period.arsredovisning')
+    || normalized.startsWith('period.accruals_')
+    || normalized.startsWith('period.depreciation_')
     || normalized === 'report.ink2'
     || normalized === 'report.ne_bilaga'
     || normalized.startsWith('tax_declaration.')

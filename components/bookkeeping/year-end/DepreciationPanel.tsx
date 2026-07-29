@@ -36,12 +36,13 @@ interface Proposal {
 
 interface DepreciationPanelProps {
   periodId: string
+  companyId?: string | null
   /** Called after a successful post — parent refetches dispositions because
    *  posted avskrivningar change the result which affects bolagsskatt etc. */
   onPosted: () => void
 }
 
-export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps) {
+export function DepreciationPanel({ periodId, companyId, onPosted }: DepreciationPanelProps) {
   const { toast } = useToast()
   const [proposal, setProposal] = useState<Proposal | null>(null)
   const [loading, setLoading] = useState(true)
@@ -52,7 +53,8 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/depreciation`)
+      const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/depreciation${companySuffix}`)
       const body = await res.json()
       if (!res.ok) {
         setError(body?.error?.message ?? 'Kunde inte ladda avskrivningar')
@@ -64,7 +66,7 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
     } finally {
       setLoading(false)
     }
-  }, [periodId])
+  }, [periodId, companyId])
 
   useEffect(() => {
     // Defer to the next macrotask so the synchronous setState inside
@@ -78,7 +80,8 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
   const handlePost = useCallback(async () => {
     setPosting(true)
     try {
-      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/depreciation`, {
+      const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/depreciation${companySuffix}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -101,7 +104,7 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
     } finally {
       setPosting(false)
     }
-  }, [periodId, onPosted, load, toast])
+  }, [periodId, companyId, onPosted, load, toast])
 
   if (loading) {
     return (
@@ -137,7 +140,10 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
           Inga aktiva anläggningstillgångar att skriva av.{' '}
-          <Link href="/assets" className="text-primary hover:underline">
+          <Link
+            href={companyId ? `/assets?company_id=${encodeURIComponent(companyId)}` : '/assets'}
+            className="text-primary hover:underline"
+          >
             Lägg till tillgångar
           </Link>{' '}
           så räknar bokslutet ut avskrivningarna automatiskt.

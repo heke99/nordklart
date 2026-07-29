@@ -8,17 +8,12 @@ vi.mock('@/lib/core/bookkeeping/year-end-service', () => ({
   validateYearEndReadiness: vi.fn(),
 }))
 
-vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
-  getReconciliationStatus: vi.fn(),
-}))
-
 vi.mock('@/lib/bokslut/enskild-firma/ef-declaration-preview', () => ({
   computeEfDeclarationPreview: vi.fn(),
 }))
 
 import { buildBokslutReadinessReport } from '../readiness-aggregator'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
-import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 
 interface MockBuilder {
@@ -34,6 +29,8 @@ function makeSupabase(handlers: {
   company?: { data: unknown; error: unknown }
   /** year_end_db_blockers RPC result (B03/B04). */
   dbBlockers?: { data: unknown; error: unknown }
+  /** year_end_cash_reconciliation_status RPC result. */
+  cashStatus?: { data: unknown; error: unknown }
 }) {
   function makeBuilder(table: string): MockBuilder {
     const b: MockBuilder = {
@@ -51,7 +48,12 @@ function makeSupabase(handlers: {
     }
     return b
   }
-  const rpc = vi.fn(async () => handlers.dbBlockers ?? { data: [], error: null })
+  const rpc = vi.fn(async (fn: string) => {
+    if (fn === 'year_end_cash_reconciliation_status') {
+      return handlers.cashStatus ?? { data: CASH_RECON_CLEAN, error: null }
+    }
+    return handlers.dbBlockers ?? { data: [], error: null }
+  })
   return {
     supabase: {
       from: vi.fn((table: string) => makeBuilder(table)),
@@ -88,18 +90,28 @@ const PERIOD = {
 const AB_COMPANY = { data: { entity_type: 'aktiebolag' }, error: null }
 const EF_COMPANY = { data: { entity_type: 'enskild_firma' }, error: null }
 
-const RECON_CLEAN = {
-  bank_transaction_total: 100,
-  gl_1930_balance: 100,
-  gl_1930_period_movement: 100,
-  gl_1930_opening_balance: 0,
-  gl_1930_correction_adjustment: 0,
+const CASH_RECON_CLEAN = [{
+  cash_account_id: 'cash-1',
+  ledger_account: '1930',
+  account_name: 'Företagskonto',
+  currency: 'SEK',
+  reconciliation_mode: 'automated',
+  ledger_balance: 100,
+  statement_balance: null,
   difference: 0,
-  is_reconciled: true,
-  matched_count: 5,
   unmatched_transaction_count: 0,
   unmatched_gl_line_count: 0,
-}
+  matching_conflict_count: 0,
+  reconciliation_id: null,
+  evidence_document_id: null,
+  evidence_file_name: null,
+  evidence_sha256: null,
+  verified_at: null,
+  invalidated_at: null,
+  invalidation_reason: null,
+  snapshot_current: false,
+  is_reconciled: true,
+}]
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -111,7 +123,6 @@ beforeEach(() => {
 describe('buildBokslutReadinessReport', () => {
   it('returns a ready report with the accruals reminder for AB', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const { supabase, rpc } = makeSupabase({
       period: { data: PERIOD, error: null },
       company: AB_COMPANY,
@@ -142,7 +153,6 @@ describe('buildBokslutReadinessReport', () => {
 
   it('returns the EF-only reminder for enskild firma', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const { supabase } = makeSupabase({
       period: { data: PERIOD, error: null },
       company: EF_COMPANY,
@@ -156,7 +166,6 @@ describe('buildBokslutReadinessReport', () => {
 
   it('warns EF owners about missing kapitalunderlag when the surplus is large', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     vi.mocked(computeEfDeclarationPreview).mockResolvedValue({
       bookedSurplus: 120_000,
     } as Awaited<ReturnType<typeof computeEfDeclarationPreview>>)
@@ -182,7 +191,6 @@ describe('buildBokslutReadinessReport', () => {
         draftCount: 3,
       }),
     )
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const { supabase } = makeSupabase({
       period: { data: PERIOD, error: null },
       company: AB_COMPANY,
@@ -197,7 +205,6 @@ describe('buildBokslutReadinessReport', () => {
 
   it('turns year_end_db_blockers rows into structured blockerDetails with exact counts', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const { supabase } = makeSupabase({
       period: { data: PERIOD, error: null },
       company: AB_COMPANY,
@@ -242,7 +249,6 @@ describe('buildBokslutReadinessReport', () => {
 
   it('fails CLOSED when year_end_db_blockers errors (B04): readiness_check_failed blocker', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const { supabase } = makeSupabase({
       period: { data: PERIOD, error: null },
       company: AB_COMPANY,
@@ -261,10 +267,10 @@ describe('buildBokslutReadinessReport', () => {
 
   it('fails CLOSED when the reconciliation lookup throws: reconciliation_check_failed blocker', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockRejectedValue(new Error('boom'))
     const { supabase } = makeSupabase({
       period: { data: PERIOD, error: null },
       company: AB_COMPANY,
+      cashStatus: { data: null, error: { message: 'boom' } },
     })
 
     const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
@@ -281,15 +287,18 @@ describe('buildBokslutReadinessReport', () => {
 
   it('adds a reconciliation reminder when bank is unreconciled', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue({
-      ...RECON_CLEAN,
-      is_reconciled: false,
-      unmatched_transaction_count: 7,
-      difference: 1234.56,
-    })
     const { supabase } = makeSupabase({
       period: { data: PERIOD, error: null },
       company: AB_COMPANY,
+      cashStatus: {
+        data: [{
+          ...CASH_RECON_CLEAN[0],
+          is_reconciled: false,
+          unmatched_transaction_count: 7,
+          difference: 1234.56,
+        }],
+        error: null,
+      },
     })
 
     const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
@@ -304,7 +313,6 @@ describe('buildBokslutReadinessReport', () => {
 
   it('throws when the fiscal period is missing', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const { supabase } = makeSupabase({
       period: { data: null, error: { message: 'not found' } },
       company: AB_COMPANY,
@@ -317,7 +325,6 @@ describe('buildBokslutReadinessReport', () => {
 
   it('blocks with entity_type_missing when companies.entity_type is absent — no silent AB fallback (B13)', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const { supabase } = makeSupabase({
       period: { data: PERIOD, error: null },
       company: { data: { entity_type: null }, error: null },
@@ -332,5 +339,75 @@ describe('buildBokslutReadinessReport', () => {
     expect(report.blockers).toContain(blocker!.message)
     // No EF reminders sneak in from an assumed legal form.
     expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeUndefined()
+  })
+
+  it('treats a current manual SIE-only verification as reconciled', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    const { supabase } = makeSupabase({
+      period: { data: PERIOD, error: null },
+      company: AB_COMPANY,
+      cashStatus: {
+        data: [{
+          ...CASH_RECON_CLEAN[0],
+          reconciliation_mode: 'manual',
+          statement_balance: 25_000,
+          ledger_balance: 25_000,
+          reconciliation_id: 'recon-1',
+          evidence_document_id: 'doc-1',
+          evidence_file_name: 'kontoutdrag.pdf',
+          evidence_sha256: 'a'.repeat(64),
+          verified_at: '2026-01-15T10:00:00Z',
+          snapshot_current: true,
+          is_reconciled: true,
+        }],
+        error: null,
+      },
+    })
+
+    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
+
+    expect(report.ready).toBe(true)
+    expect(report.reconciliation?.is_reconciled).toBe(true)
+    expect(report.cashReconciliations[0]?.reconciliation_mode).toBe('manual')
+    expect(
+      report.reminders.find((item) => item.code === 'bank_reconciliation_incomplete'),
+    ).toBeUndefined()
+  })
+
+  it('links a missing manual reconciliation blocker to the real period/company route', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    const message =
+      'Konto 1930 saknar bankkoppling. Ladda upp kontoutdrag och verifiera saldot manuellt per balansdagen.'
+    const { supabase } = makeSupabase({
+      period: { data: PERIOD, error: null },
+      company: AB_COMPANY,
+      dbBlockers: {
+        data: [{
+          code: 'manual_cash_reconciliation_missing',
+          message,
+          detail_count: 1,
+        }],
+        error: null,
+      },
+      cashStatus: {
+        data: [{
+          ...CASH_RECON_CLEAN[0],
+          reconciliation_mode: 'manual',
+          is_reconciled: false,
+        }],
+        error: null,
+      },
+    })
+
+    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
+
+    expect(report.ready).toBe(false)
+    expect(report.blockerDetails[0]).toMatchObject({
+      code: 'manual_cash_reconciliation_missing',
+      href: '/bookkeeping/year-end/reconciliation?period=fp-1&company_id=co-1',
+      actionLabel: 'Öppna avstämning',
+    })
+    expect(report.reminders.find((item) => item.code === 'bank_reconciliation_incomplete')?.href)
+      .toBe('/bookkeeping/year-end/reconciliation?period=fp-1&company_id=co-1')
   })
 })

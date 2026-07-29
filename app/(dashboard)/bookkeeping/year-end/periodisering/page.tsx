@@ -92,6 +92,8 @@ export default function PeriodiseringWizardPage() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const companyId = searchParams.get('company_id')
+  const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
 
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
   const [periodsError, setPeriodsError] = useState<string | null>(null)
@@ -122,7 +124,7 @@ export default function PeriodiseringWizardPage() {
     let cancelled = false
     const load = async () => {
       try {
-        const res = await fetch('/api/bookkeeping/fiscal-periods')
+        const res = await fetch(`/api/bookkeeping/fiscal-periods${companySuffix}`)
         if (!res.ok) {
           if (!cancelled) setPeriodsError('Kunde inte hämta perioder')
           return
@@ -146,7 +148,7 @@ export default function PeriodiseringWizardPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, companySuffix])
 
   // ---- Fetch accruals snapshot once period chosen ----
   useEffect(() => {
@@ -158,7 +160,7 @@ export default function PeriodiseringWizardPage() {
       setLoading(true)
       setLoadError(null)
       setProposal(null)
-      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/accruals`)
+      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/accruals${companySuffix}`)
         .then(async (res) => {
           const body = await res.json()
           if (cancelled) return
@@ -186,7 +188,7 @@ export default function PeriodiseringWizardPage() {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, companySuffix])
 
   const vacationProposal = useMemo(
     () => proposal?.proposals.find((p) => p.kind === 'vacation_liability_change') ?? null,
@@ -327,7 +329,7 @@ export default function PeriodiseringWizardPage() {
         return
       }
 
-      const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/accruals`, {
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/accruals${companySuffix}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items }),
@@ -357,6 +359,7 @@ export default function PeriodiseringWizardPage() {
     autoState,
     manualEntries,
     proposal,
+    companySuffix,
     toast,
   ])
 
@@ -372,7 +375,7 @@ export default function PeriodiseringWizardPage() {
           {closingYear ? `Periodisering — Bokslut ${closingYear}` : 'Periodisering'}
         </h1>
         <Button variant="outline" asChild>
-          <Link href="/bookkeeping/year-end">
+          <Link href={`/bookkeeping/year-end${companySuffix}`}>
             <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
           </Link>
         </Button>

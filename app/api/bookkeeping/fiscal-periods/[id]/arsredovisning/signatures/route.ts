@@ -36,6 +36,7 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  { allowRequestedCompany: true },
 )
 
 export const POST = withRouteContext(
@@ -49,6 +50,7 @@ export const POST = withRouteContext(
       const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
         operation: 'period.arsredovisning_signatures_create',
         requestId,
+        requireWrite: true,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
@@ -71,5 +73,5 @@ export const POST = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { allowRequestedCompany: true },
 )

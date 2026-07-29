@@ -220,7 +220,7 @@ export default function YearEndPage() {
     setExecuting(true)
     setExecuteError(null)
     try {
-      const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end`, {
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end${companySuffix}`, {
         method: 'POST',
       })
       const body = await res.json()
@@ -292,7 +292,7 @@ export default function YearEndPage() {
             size="default"
           />
           <Button variant="outline" asChild>
-            <Link href="/bookkeeping">
+            <Link href={`/bookkeeping${companySuffix}`}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Bokföring
             </Link>
@@ -419,6 +419,7 @@ export default function YearEndPage() {
       {showWizard && step === 'accruals' && selectedPeriodId && (
         <AccrualsStep
           periodId={selectedPeriodId}
+          companyId={companyId}
           onBack={() => setStep('preflight')}
           onContinue={() => setStep('dispositions')}
         />
@@ -427,6 +428,7 @@ export default function YearEndPage() {
       {showWizard && step === 'dispositions' && selectedPeriodId && (
         <DispositionsStep
           periodId={selectedPeriodId}
+          companyId={companyId}
           onBack={() => setStep('accruals')}
           onContinue={goToPreview}
         />
@@ -452,7 +454,7 @@ export default function YearEndPage() {
         />
       )}
 
-      {step === 'result' && result && <ResultStep result={result} />}
+      {step === 'result' && result && <ResultStep result={result} companyId={companyId} />}
     </div>
   )
 }

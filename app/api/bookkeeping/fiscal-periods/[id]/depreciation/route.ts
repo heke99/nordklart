@@ -7,6 +7,8 @@ import {
   proposeAnnualPostings,
   commitAnnualPostings,
 } from '@/lib/bokslut/assets/depreciation-engine'
+import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+import { createServiceClient } from '@/lib/supabase/server'
 
 const CommitSchema = z.object({
   /** Optional whitelist — when supplied, only assets in this list are posted.
@@ -18,8 +20,20 @@ export const GET = withRouteContext(
   'period.depreciation_preview',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     try {
+      const access = await requireYearEndAccess(
+        createServiceClient(),
+        companyId,
+        user.id,
+        id,
+        {
+          operation: 'period.depreciation_preview',
+          requestId,
+        },
+      )
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
+
       const proposal = await proposeAnnualPostings(supabase, companyId, id)
       return NextResponse.json({ data: proposal })
     } catch (err) {
@@ -30,6 +44,7 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  { allowRequestedCompany: true },
 )
 
 export const POST = withRouteContext(
@@ -42,6 +57,19 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
 
     try {
+      const access = await requireYearEndAccess(
+        createServiceClient(),
+        companyId,
+        user.id,
+        id,
+        {
+          operation: 'period.depreciation_commit',
+          requestId,
+          requireWrite: true,
+        },
+      )
+      if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
+
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
         .select('is_closed, locked_at, closing_entry_id')
@@ -63,5 +91,5 @@ export const POST = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { allowRequestedCompany: true },
 )

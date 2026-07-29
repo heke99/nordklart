@@ -15,6 +15,7 @@ import type { AccrualsProposal } from '@/lib/bokslut/accruals/types'
 
 interface AccrualsStepProps {
   periodId: string
+  companyId?: string | null
   onBack: () => void
   onContinue: () => void
 }
@@ -38,7 +39,7 @@ function makeId() {
   return Math.random().toString(36).slice(2, 10)
 }
 
-export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps) {
+export function AccrualsStep({ periodId, companyId, onBack, onContinue }: AccrualsStepProps) {
   const { toast } = useToast()
   const [proposal, setProposal] = useState<AccrualsProposal | null>(null)
   const [loading, setLoading] = useState(true)
@@ -54,7 +55,8 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
     const timer = setTimeout(() => {
       setLoading(true)
       setError(null)
-      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/accruals`)
+      const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
+      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/accruals${companySuffix}`)
         .then(async (res) => {
           const body = await res.json()
           if (cancelled) return
@@ -75,7 +77,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
       cancelled = true
       clearTimeout(timer)
     }
-  }, [periodId])
+  }, [periodId, companyId])
 
   const addManual = useCallback((kind: ManualEntry['kind']) => {
     setManual((prev) => [
@@ -138,7 +140,8 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
         onContinue()
         return
       }
-      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/accruals`, {
+      const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/accruals${companySuffix}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items }),
@@ -161,7 +164,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
     } finally {
       setPosting(false)
     }
-  }, [proposal, auto, manual, periodId, onContinue, toast])
+  }, [proposal, auto, manual, periodId, companyId, onContinue, toast])
 
   if (loading) {
     return (

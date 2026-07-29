@@ -58,7 +58,6 @@ describe('featureForOperation', () => {
     expect(featureForOperation('opening_balance.execute')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('document.upload')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('period.lock')).toBe(NORDKLART_FEATURES.bookkeepingCore)
-    expect(featureForOperation('period.depreciation_commit')).toBe(NORDKLART_FEATURES.bookkeepingCore)
   })
 
   it('keeps SIE operations null because the dedicated resolver supports bookkeeping and one-off year-end access', () => {
@@ -69,7 +68,7 @@ describe('featureForOperation', () => {
   })
 
   it('keeps period-bound year-end operations null (gated via requireYearEndAccess)', () => {
-    for (const op of ['period.year_end', 'period.year_end_preview', 'period.bokslut_readiness', 'period.arsredovisning_pdf', 'report.ink2', 'report.ne_bilaga', 'tax_declaration.ef_preview']) {
+    for (const op of ['period.year_end', 'period.year_end_preview', 'period.bokslut_readiness', 'period.arsredovisning_pdf', 'period.accruals_preview', 'period.depreciation_commit', 'report.ink2', 'report.ne_bilaga', 'tax_declaration.ef_preview']) {
       expect(featureForOperation(op)).toBeNull()
       expect(isPeriodBoundYearEndOperation(op)).toBe(true)
     }

@@ -1,15 +1,25 @@
 # Slutfört arbete
 
+## 2026-07-29
+
+- Etablerade en orörd baslinje från det mottagna projektarkivet.
+- Ersatte den trasiga bokslutsavstämningslänken med en verklig route.
+- Införde manuell serververifierad avstämning för företag utan bankdata.
+- Gjorde verifiering, underlag och invalidation append-only.
+- Skyddade accepterade dokumentunderlag mot ändring och borttagning.
+- Lät huvudboksändringar ogiltigförklara tidigare verifieringar.
+- Återanvände samma kanoniska blockerfunktion i UI och atomisk stängning.
+- Propagerade vald bolagskontext genom hela boksluts- och årsredovisningsflödet.
+- Säkrade periodbunden skrivåtkomst för engångsköpt bokslut utan att den
+  generiska feature-/write-gaten stoppar flödet i förtid.
+- Korrigerade NE-parametern från `fiscal_period_id` till `period_id`.
+- Lade TypeScript-, unit-, featurepolicy- och pg-real-regressionstester.
+- Verifierade typecheck, unit, lint, guards, featurepolicy, SQL-syntax och
+  fullständigt Next-produktionsbygge.
+
 ## 2026-07-25
 
-- Verifierade baslinjens 415 migrationer och befintliga accessmigrationer.
-- Gjorde `database_error` till ett eget featureåtkomstresultat.
-- Införde retrybart 503-kontrakt utan uppgraderingslänk vid resolverfel.
+- Införde systemisk separation mellan featureavslag och databasfel.
 - Propagerade bokslutsåtkomstorsak genom period- och rapport-API:er.
-- Säkrade att giltigt periodbundet engångsköp inte faller bort vid featurefel.
-- Bytte centrala dashboardsidor från planinferens till kanonisk featurekontroll.
-- Korrigerade Bankgiro-UX för teknisk åtkomststörning.
-- Lade regressionstester för verkligt avslag, resolverfel och engångsköp.
-- Korrigerade Next 16 route-testkontrakt och billing-lintfel.
-- Skapade ett versionsstyrt, projektspecifikt agentminne och Cursor-regler.
-
+- Säkrade periodbundet engångsköp vid feature-resolveravbrott.
+- Lade regressionstester för åtkomst- och resolverfallen.

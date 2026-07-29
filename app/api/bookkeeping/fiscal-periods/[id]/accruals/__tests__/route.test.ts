@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createMockRequest, createMockRouteParams, parseJsonResponse } from '@/tests/helpers'
 
 const mockCreateClient = vi.fn()
+const mockCreateServiceClient = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => mockCreateClient(),
+  createServiceClient: () => mockCreateServiceClient(),
 }))
 
 vi.mock('@/lib/init', () => ({
@@ -17,6 +19,11 @@ vi.mock('@/lib/company/context', () => ({
 
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
+vi.mock('@/lib/year-end/access', () => ({
+  requireYearEndAccess: vi.fn().mockResolvedValue({ allowed: true }),
+  yearEndAccessDeniedResponse: vi.fn(),
 }))
 
 const mockBuildAccrualsProposal = vi.fn()
@@ -41,6 +48,7 @@ beforeEach(() => {
   mockCreateClient.mockResolvedValue({
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
   })
+  mockCreateServiceClient.mockReturnValue({})
 })
 
 describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {

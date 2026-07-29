@@ -40,6 +40,7 @@ export const PATCH = withRouteContext(
       const access = await requireYearEndAccess(supabase, companyId, user.id, fiscalPeriodId, {
         operation: 'period.arsredovisning_signature_patch',
         requestId,
+        requireWrite: true,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
@@ -70,5 +71,5 @@ export const PATCH = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { allowRequestedCompany: true },
 )

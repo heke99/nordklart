@@ -22,6 +22,8 @@ export default function ArsredovisningPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const periodId = searchParams.get('period')
+  const companyId = searchParams.get('company_id')
+  const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
   const { toast } = useToast()
 
   const [data, setData] = useState<ArsredovisningData | null>(null)
@@ -66,8 +68,8 @@ export default function ArsredovisningPage() {
     if (!periodId) return
     let cancelled = false
     Promise.all([
-      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning`).then((r) => r.json()),
-      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`).then((r) =>
+      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning${companySuffix}`).then((r) => r.json()),
+      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures${companySuffix}`).then((r) =>
         r.json(),
       ),
     ])
@@ -116,7 +118,7 @@ export default function ArsredovisningPage() {
     return () => {
       cancelled = true
     }
-  }, [periodId])
+  }, [periodId, companySuffix])
 
   const hasUnsavedNarrative =
     description !== savedDescription ||
@@ -152,7 +154,7 @@ export default function ArsredovisningPage() {
     setSavingNarrative(true)
     try {
       const res = await fetch(
-        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/narrative`,
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/narrative${companySuffix}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -201,6 +203,7 @@ export default function ArsredovisningPage() {
     }
   }, [
     periodId,
+    companySuffix,
     description,
     importantEvents,
     resultatdisposition,
@@ -219,7 +222,7 @@ export default function ArsredovisningPage() {
       if (!periodId) return
       try {
         const res = await fetch(
-          `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures/${signatureId}`,
+          `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures/${signatureId}${companySuffix}`,
           {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -247,14 +250,14 @@ export default function ArsredovisningPage() {
         })
       }
     },
-    [periodId, toast],
+    [periodId, companySuffix, toast],
   )
 
   const handleAddSigner = useCallback(async () => {
     if (!periodId || !signerName.trim()) return
     try {
       const res = await fetch(
-        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`,
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures${companySuffix}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -280,7 +283,7 @@ export default function ArsredovisningPage() {
         variant: 'destructive',
       })
     }
-  }, [periodId, signerName, signerRole, toast])
+  }, [periodId, companySuffix, signerName, signerRole, toast])
 
   if (!periodId) {
     return (
@@ -296,7 +299,7 @@ export default function ArsredovisningPage() {
               Välj det räkenskapsår du vill se årsredovisningen för. Du kan
               förhandsgranska och ladda ner PDF-utkastet utan att stänga året — det
               fullständiga bokslutet görs sedan via{' '}
-              <Link href="/bookkeeping/year-end" className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground">
+              <Link href={`/bookkeeping/year-end${companySuffix}`} className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground">
                 Bokslut
               </Link>
               .
@@ -304,9 +307,16 @@ export default function ArsredovisningPage() {
           </CardHeader>
           <CardContent>
             <FiscalYearSelector
+              companyId={companyId}
               value={null}
               onChange={(id) => {
-                if (id) router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
+                if (id) {
+                  router.replace(
+                    `/bookkeeping/year-end/arsredovisning?period=${encodeURIComponent(id)}${
+                      companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''
+                    }`,
+                  )
+                }
               }}
               includeAllOption={false}
               hideFuturePeriods
@@ -347,7 +357,7 @@ export default function ArsredovisningPage() {
 
   // PDF route reads persisted narrative from the new arsredovisning_narratives
   // table. The save button below writes overrides; the URL stays clean.
-  const pdfUrl = `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf`
+  const pdfUrl = `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf${companySuffix}`
 
   return (
     <div className="space-y-8">
@@ -360,7 +370,11 @@ export default function ArsredovisningPage() {
         }
         action={
           <Button variant="outline" asChild>
-            <Link href={`/bookkeeping/year-end?period=${periodId}`}>
+            <Link
+              href={`/bookkeeping/year-end?period=${encodeURIComponent(periodId)}${
+                companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''
+              }`}
+            >
               <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
             </Link>
           </Button>

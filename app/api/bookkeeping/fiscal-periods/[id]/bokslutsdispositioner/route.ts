@@ -82,6 +82,7 @@ export const GET = withRouteContext(
       return errorResponse(err, opLog, { requestId })
     }
   },
+  { allowRequestedCompany: true },
 )
 
 // ============================================================
@@ -150,6 +151,7 @@ export const POST = withRouteContext(
       const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
         operation: 'period.bokslutsdispositioner_post',
         requestId,
+        requireWrite: true,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
@@ -205,7 +207,7 @@ export const POST = withRouteContext(
       return errorResponse(err, opLog, { requestId })
     }
   },
-  { requireWrite: true },
+  { allowRequestedCompany: true },
 )
 
 type PostItem = z.infer<typeof ItemSchema>

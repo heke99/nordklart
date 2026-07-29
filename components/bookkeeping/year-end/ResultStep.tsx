@@ -21,11 +21,12 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 
 interface ResultStepProps {
   result: YearEndResult
+  companyId?: string | null
 }
 
 const ORE_TOLERANCE = 0.005
 
-export function ResultStep({ result }: ResultStepProps) {
+export function ResultStep({ result, companyId }: ResultStepProps) {
   const [acknowledged, setAcknowledged] = useState(false)
 
   const continuity = result.continuity
@@ -56,19 +57,19 @@ export function ResultStep({ result }: ResultStepProps) {
           <ResultRow
             label="Bokslutsverifikation"
             value={formatVoucher(result.closingEntry)}
-            href={`/bookkeeping/${result.closingEntry.id}`}
+            href={withCompany(`/bookkeeping/${result.closingEntry.id}`, companyId)}
           />
           {result.revaluationEntry && (
             <ResultRow
               label="Kursrevaluering"
               value={formatVoucher(result.revaluationEntry)}
-              href={`/bookkeeping/${result.revaluationEntry.id}`}
+              href={withCompany(`/bookkeeping/${result.revaluationEntry.id}`, companyId)}
             />
           )}
           <ResultRow
             label="Ingående balanser i ny period"
             value={formatVoucher(result.openingBalanceEntry)}
-            href={`/bookkeeping/${result.openingBalanceEntry.id}`}
+            href={withCompany(`/bookkeeping/${result.openingBalanceEntry.id}`, companyId)}
           />
           <ResultRow label="Ny räkenskapsperiod" value={result.nextPeriod.name} />
         </CardContent>
@@ -100,7 +101,7 @@ export function ResultStep({ result }: ResultStepProps) {
           <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
             <Button variant="outline" asChild disabled={!acknowledged}>
               <Link
-                href="/bookkeeping"
+                href={withCompany('/bookkeeping', companyId)}
                 aria-disabled={!acknowledged}
                 tabIndex={acknowledged ? undefined : -1}
                 className={!acknowledged ? 'pointer-events-none opacity-50' : ''}
@@ -110,7 +111,7 @@ export function ResultStep({ result }: ResultStepProps) {
             </Button>
             <Button variant="outline" asChild disabled={!acknowledged}>
               <Link
-                href="/reports"
+                href={withCompany('/reports', companyId)}
                 aria-disabled={!acknowledged}
                 tabIndex={acknowledged ? undefined : -1}
                 className={!acknowledged ? 'pointer-events-none opacity-50' : ''}
@@ -120,7 +121,10 @@ export function ResultStep({ result }: ResultStepProps) {
             </Button>
             <Button asChild disabled={!acknowledged}>
               <Link
-                href={`/bookkeeping/year-end/arsredovisning?period=${result.closingEntry.fiscal_period_id}`}
+                href={withCompany(
+                  `/bookkeeping/year-end/arsredovisning?period=${result.closingEntry.fiscal_period_id}`,
+                  companyId,
+                )}
                 aria-disabled={!acknowledged}
                 tabIndex={acknowledged ? undefined : -1}
                 className={!acknowledged ? 'pointer-events-none opacity-50' : ''}
@@ -133,6 +137,11 @@ export function ResultStep({ result }: ResultStepProps) {
       </Card>
     </div>
   )
+}
+
+function withCompany(href: string, companyId?: string | null): string {
+  if (!companyId) return href
+  return `${href}${href.includes('?') ? '&' : '?'}company_id=${encodeURIComponent(companyId)}`
 }
 
 function ResultRow({ label, value, href }: { label: string; value: string; href?: string }) {

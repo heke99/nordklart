@@ -1,13 +1,16 @@
 # Nästa exakta åtgärder
 
-1. Kör `supabase migration list`/projektets migrationsstatus mot målmiljön och
-   applicera saknade migrationer.
-2. Kör pg-real-, RLS- och tenantisoleringstester mot en separat testdatabas.
-3. Migrera de högst riskklassade finansiella routes som använder rå auth till
-   `requireAuth`/kanonisk wrapper; lägg negativa MFA/RBAC-tester.
-4. Kör guarden och sänk `raw-route-auth`-baslinjen endast med faktiskt borttagna
-   träffar.
-5. Klassificera avrundningsträffar med bokföring, moms, lön och betalning först;
-   ersätt ekonomiska fall med `roundOre()` och regressionstesta gränsvärden.
-6. Granska de två migration/RLS-träffarna mot live-schema och eliminera dem.
-
+1. Applicera
+   `supabase/migrations/20260728143000_year_end_manual_cash_reconciliation.sql`
+   mot en separat testdatabas.
+2. Kör `npm run test:pg` och verifiera skapande, differensavslag,
+   dokumentimmutabilitet, invalidation och tenantisolering.
+3. Kontrollera målmiljöns migrationsstatus och applicera migrationen innan den
+   nya applikationskoden driftsätts.
+4. Smoke-testa ett SIE-only-bolag: ladda upp kontoutdrag, verifiera 0,00 kr,
+   ändra huvudboken, kontrollera att avstämningen blir stale och verifiera på
+   nytt.
+5. Smoke-testa engångsbokslut för valt kundbolag genom hela guiden inklusive
+   årsredovisning och NE-underlag.
+6. Fortsätt minska den befintliga auth- och avrundningsskulden utan att höja
+   guardbaslinjerna.

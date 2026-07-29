@@ -989,6 +989,36 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
     message_sv: 'Nästa räkenskapsperiod har redan ingående balanser bokförda. Storno dem innan du kör om bokslutet.',
     message_en: 'Next fiscal period already has opening balances posted; reverse them before re-running year-end.',
   },
+  YEAR_END_MANUAL_RECONCILIATION_DIFFERENCE: {
+    httpStatus: 409,
+    message_sv:
+      'Saldot enligt underlaget stämmer inte mot huvudboken. Kontrollera beloppet och bokföringen innan du verifierar igen.',
+    message_en:
+      'The statement balance does not match the server-calculated general-ledger balance.',
+  },
+  YEAR_END_MANUAL_RECONCILIATION_BANK_FEED_PRESENT: {
+    httpStatus: 409,
+    message_sv:
+      'Kontot har bankdata och måste stämmas av genom bankmatchningen. Manuell verifiering kan inte användas för att kringgå omatchade rader.',
+    message_en:
+      'The account has bank-feed data and must use transaction-to-ledger reconciliation.',
+  },
+  YEAR_END_MANUAL_RECONCILIATION_EVIDENCE_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ladda upp kontoutdrag eller annat saldounderlag för balansdagen.',
+    message_en: 'A balance-date statement or equivalent supporting document is required.',
+  },
+  YEAR_END_MANUAL_RECONCILIATION_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Den manuella avstämningen kunde inte sparas. Försök igen.',
+    message_en: 'Failed to persist the manual year-end cash reconciliation.',
+    retryable: true,
+  },
+  YEAR_END_MANUAL_RECONCILIATION_EVIDENCE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Avstämningsunderlaget kunde inte hittas.',
+    message_en: 'The reconciliation evidence could not be found.',
+  },
 }
 
 const OPENING_BAL: Record<string, StructuredErrorEntry> = {

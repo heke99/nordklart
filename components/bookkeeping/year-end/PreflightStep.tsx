@@ -146,8 +146,12 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 function BlockerRow({ blocker, report }: { blocker: string; report: BokslutReadinessReport }) {
   let href: string | null = null
   let actionLabel: string | null = null
+  const structured = report.blockerDetails.find((detail) => detail.message === blocker)
 
-  if (/draft journal entries/i.test(blocker) && report.draftCount > 0) {
+  if (structured?.href && structured.actionLabel) {
+    href = structured.href
+    actionLabel = structured.actionLabel
+  } else if (/draft journal entries/i.test(blocker) && report.draftCount > 0) {
     href = '/bookkeeping?status=draft'
     actionLabel = 'Visa utkast'
   } else if (/voucher gap/i.test(blocker)) {

@@ -110,6 +110,7 @@ export const GET = withRouteContext(
       })
     }
   },
+  { allowRequestedCompany: true },
 )
 
 function encodeISO88591(str: string): Uint8Array {
