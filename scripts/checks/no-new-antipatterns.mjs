@@ -22,6 +22,10 @@
  *      RLS is readable/writable by any authenticated caller. Tracked as an
  *      entry-set (migration#table) so new offenders fail even when legacy
  *      ones remain.
+ *   4. duplicate-migration-version — more than one SQL migration with the
+ *      same leading timestamp. The two legacy duplicate sets are tracked by
+ *      exact filename signature; neither a new duplicate nor a third file in
+ *      a legacy set is allowed.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -140,10 +144,34 @@ function findMigrationsMissingRls() {
   return offenders.sort()
 }
 
+function findDuplicateMigrationVersions() {
+  const dir = path.join(ROOT, 'supabase', 'migrations')
+  let files
+  try {
+    files = fs.readdirSync(dir).filter((f) => /^\d+_.+\.sql$/.test(f))
+  } catch {
+    return []
+  }
+
+  const byVersion = new Map()
+  for (const file of files) {
+    const version = file.split('_', 1)[0]
+    const versionFiles = byVersion.get(version) ?? []
+    versionFiles.push(file)
+    byVersion.set(version, versionFiles)
+  }
+
+  return [...byVersion.entries()]
+    .filter(([, versionFiles]) => versionFiles.length > 1)
+    .map(([version, versionFiles]) => `${version}:${versionFiles.sort().join(',')}`)
+    .sort()
+}
+
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
   migrationsMissingRls: findMigrationsMissingRls(),
+  duplicateMigrationVersions: findDuplicateMigrationVersions(),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -155,6 +183,10 @@ if (isUpdate) {
     rawRouteAuth: { count: current.rawRouteAuth.length, files: current.rawRouteAuth },
     naiveOreRound: { count: current.naiveOreRound },
     migrationsMissingRls: { count: current.migrationsMissingRls.length, entries: current.migrationsMissingRls },
+    duplicateMigrationVersions: {
+      count: current.duplicateMigrationVersions.length,
+      entries: current.duplicateMigrationVersions,
+    },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
   console.log(
@@ -207,6 +239,22 @@ if (newRlsEntries.length) {
   console.error('  → add ALTER TABLE public.<table> ENABLE ROW LEVEL SECURITY (plus policies) in the same migration.')
 }
 
+// 4. duplicate migration versions: exact legacy filename sets are allowlisted.
+const duplicateMigrationBaselineSet = new Set(
+  baseline.duplicateMigrationVersions?.entries ?? [],
+)
+const newDuplicateMigrationVersions = current.duplicateMigrationVersions.filter(
+  (entry) => !duplicateMigrationBaselineSet.has(entry),
+)
+if (newDuplicateMigrationVersions.length) {
+  failed = true
+  console.error(
+    `\n✗ duplicate-migration-version: ${newDuplicateMigrationVersions.length} new or changed duplicate timestamp set(s):`,
+  )
+  newDuplicateMigrationVersions.forEach((entry) => console.error(`    ${entry}`))
+  console.error('  → assign every new migration a unique, monotonically increasing timestamp.')
+}
+
 // Report ratchet-down progress (informational, never fails).
 if (fixedAuthFiles.length || current.naiveOreRound < baseline.naiveOreRound.count) {
   console.log('\n✓ Progress since baseline:')
@@ -221,5 +269,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, legacy-duplicate-migration-sets: ${current.duplicateMigrationVersions.length}).`,
 )

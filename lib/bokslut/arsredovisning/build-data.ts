@@ -17,6 +17,7 @@ import {
 } from './k3-noter-builder'
 import { buildAnlaggningstillgangarNote } from './anlaggningstillgangar-note'
 import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { roundOre } from '@/lib/money'
 import {
   buildK2FormalReportModel,
   formalBalanceSheetLines,
@@ -100,11 +101,22 @@ export async function buildArsredovisningData(
   }
   const period = periodResult.data
   const settings = settingsResult.data
+  const lockedCompanySnapshot = await loadLockedCompanySnapshot(
+    supabase,
+    companyId,
+    fiscalPeriodId,
+  )
+  const structuredDisposition = await loadStructuredProfitDisposition(
+    supabase,
+    companyId,
+    fiscalPeriodId,
+  )
   const companyRow = companyResult.data as
     | { entity_type?: string | null; accounting_framework?: AccountingFramework | null }
     | null
-  const companyName = settings?.company_name ?? 'Bolaget'
-  const orgNumber = settings?.org_number ?? ''
+  const companyName = lockedCompanySnapshot?.legal_name ?? settings?.company_name ?? 'Bolaget'
+  const orgNumber =
+    lockedCompanySnapshot?.organisation_number ?? settings?.org_number ?? ''
   // Default to 'unknown' (not 'aktiebolag') when entity_type isn't set —
   // otherwise the K2 guard in buildK2Noter would claim K2 for every
   // unconfigured company, which is exactly the false-assertion the guard
@@ -121,7 +133,10 @@ export async function buildArsredovisningData(
   type AddressShape = { city?: string | null; postal_city?: string | null } | null
   const addressUnknown = (settings as { address?: AddressShape } | null)?.address ?? null
   const city =
-    (addressUnknown && (addressUnknown.city ?? addressUnknown.postal_city)) || null
+    lockedCompanySnapshot?.registered_office
+    ?? lockedCompanySnapshot?.city
+    ?? (addressUnknown && (addressUnknown.city ?? addressUnknown.postal_city))
+    ?? null
 
   // Merge precedence: caller overrides → persisted narrative → boilerplate
   const persistedDescription = narrative?.description ?? undefined
@@ -193,6 +208,18 @@ export async function buildArsredovisningData(
           period.period_end,
           narrative,
         )
+  const annualReportAnnotations = await loadAnnualReportAnnotations(
+    supabase,
+    companyId,
+    fiscalPeriodId,
+  )
+  for (const annotation of annualReportAnnotations) {
+    noter.push({
+      number: noter.length + 1,
+      title: annotation.target_id || 'Övrig upplysning',
+      body: annotation.annotation_text,
+    })
+  }
 
   // Kassaflödesanalys + separate equity-changes statement — K3 only. K2
   // mindre företag is exempt from kassaflödesanalys (BFNAR 2016:10 punkt
@@ -362,7 +389,11 @@ export async function buildArsredovisningData(
   if (overrides.important_events === undefined && persistedEvents === undefined) {
     unconfirmedDefaults.push('important_events')
   }
-  if (overrides.resultatdisposition === undefined && persistedRd === undefined) {
+  if (
+    overrides.resultatdisposition === undefined
+    && persistedRd === undefined
+    && structuredDisposition === null
+  ) {
     unconfirmedDefaults.push('resultatdisposition')
   }
   if (unconfirmedDefaults.length > 0) {
@@ -406,6 +437,7 @@ export async function buildArsredovisningData(
       resultatdisposition:
         overrides.resultatdisposition ??
         persistedRd ??
+        structuredDisposition ??
         'Styrelsen föreslår att årets resultat balanseras i ny räkning.',
       agm_date: persistedAgmDate,
     },
@@ -431,6 +463,93 @@ export async function buildArsredovisningData(
       parent_company_org_number: narrative?.parent_company_org_number ?? null,
       parent_company_city: narrative?.parent_company_city ?? null,
     },
+  }
+}
+
+interface LockedCompanySnapshot {
+  organisation_number: string
+  legal_name: string
+  city: string | null
+  registered_office: string | null
+}
+
+async function loadLockedCompanySnapshot(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<LockedCompanySnapshot | null> {
+  try {
+    const { data, error } = await supabase
+      .from('year_end_company_snapshots')
+      .select('organisation_number, legal_name, city, registered_office')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .not('locked_at', 'is', null)
+      .is('superseded_at', null)
+      .order('locked_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw error
+    return data as LockedCompanySnapshot | null
+  } catch {
+    // Forward-compatible while the migration is being rolled out. Final
+    // generation is still blocked by year_end_control_status until a locked
+    // snapshot exists.
+    return null
+  }
+}
+
+async function loadStructuredProfitDisposition(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from('year_end_profit_dispositions')
+      .select(
+        'current_year_result, proposed_dividend, carried_forward, narrative_override, status',
+      )
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .in('status', ['approved', 'locked'])
+      .maybeSingle()
+    if (error || !data) return null
+    if (data.narrative_override) return String(data.narrative_override)
+
+    const dividend = Number(data.proposed_dividend) || 0
+    const carried = Number(data.carried_forward) || 0
+    const format = (value: number) =>
+      new Intl.NumberFormat('sv-SE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value)
+    return dividend > 0
+      ? `Styrelsen föreslår att ${format(dividend)} kr lämnas i utdelning och att ${format(carried)} kr balanseras i ny räkning.`
+      : `Styrelsen föreslår att ${format(carried)} kr balanseras i ny räkning.`
+  } catch {
+    return null
+  }
+}
+
+async function loadAnnualReportAnnotations(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<Array<{ target_id: string | null; annotation_text: string }>> {
+  try {
+    const { data, error } = await supabase
+      .from('year_end_annotations')
+      .select('target_id, annotation_text')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .eq('visibility', 'annual_report')
+      .is('superseded_at', null)
+      .order('created_at')
+    if (error) throw error
+    return (data ?? []) as Array<{ target_id: string | null; annotation_text: string }>
+  } catch {
+    return []
   }
 }
 
@@ -1040,11 +1159,14 @@ async function buildK3EquityChangesStatement(
     account_number: string
     debit_amount: number | string | null
     credit_amount: number | string | null
-    journal_entries: { source_type: string; status: string } | { source_type: string; status: string }[] | null
+    journal_entries:
+      | { id: string; source_type: string; status: string }
+      | { id: string; source_type: string; status: string }[]
+      | null
   }>(({ from, to }) =>
     supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, source_type, status)')
+      .select('account_number, debit_amount, credit_amount, journal_entries!inner(id, company_id, fiscal_period_id, source_type, status)')
       .gte('account_number', '2080')
       .lte('account_number', '2099')
       .eq('journal_entries.company_id', companyId)
@@ -1059,17 +1181,39 @@ async function buildK3EquityChangesStatement(
     if (!je) return ''
     return (Array.isArray(je) ? je[0]?.source_type : je.source_type) ?? ''
   }
+  const entryIdOf = (l: (typeof equityLines)[number]): string => {
+    const je = l.journal_entries
+    if (!je) return ''
+    return (Array.isArray(je) ? je[0]?.id : je.id) ?? ''
+  }
   const creditNet = (l: (typeof equityLines)[number]): number =>
-    Math.round(((Number(l.credit_amount) || 0) - (Number(l.debit_amount) || 0)) * 100) / 100
+    roundOre((Number(l.credit_amount) || 0) - (Number(l.debit_amount) || 0))
 
   let nyemission = 0
   let utdelning = 0
   let aktieagartillskott = 0
   let ovriga = 0
   let totalEquityMovement = 0
+  const structuredEventByEntry = new Map<string, string>()
+  try {
+    const { data: events, error } = await supabase
+      .from('year_end_equity_events')
+      .select('event_type, journal_entry_id')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .not('journal_entry_id', 'is', null)
+    if (error) throw error
+    for (const event of events ?? []) {
+      structuredEventByEntry.set(String(event.journal_entry_id), String(event.event_type))
+    }
+  } catch {
+    // During a rolling migration there may be no structured event table yet.
+    // In that state no line is ever guessed to be a dividend.
+  }
 
   for (const line of equityLines) {
     const src = sourceOf(line)
+    const structuredEvent = structuredEventByEntry.get(entryIdOf(line))
     // Opening balances establish the IB — not a movement. The year-end
     // closing entry books årets resultat into 2099 — reported on its own
     // line, not as an "other" movement.
@@ -1078,23 +1222,28 @@ async function buildK3EquityChangesStatement(
     if (net === 0) continue
     if (src === 'year_end') continue
 
-    totalEquityMovement = Math.round((totalEquityMovement + net) * 100) / 100
+    totalEquityMovement = roundOre(totalEquityMovement + net)
     const acct = line.account_number
-    if (acct >= '2081' && acct <= '2084' && net > 0) {
-      nyemission = Math.round((nyemission + net) * 100) / 100
+    if (structuredEvent === 'dividend_decision') {
+      utdelning = roundOre(utdelning + net)
+    } else if (structuredEvent === 'shareholder_contribution') {
+      aktieagartillskott = roundOre(aktieagartillskott + net)
+    } else if (structuredEvent === 'prior_year_result_transfer') {
+      // A transfer between 2099 and 2098 is internal and cancels across the
+      // structured event's lines. It is never a dividend.
+      ovriga = roundOre(ovriga + net)
+    } else if (acct >= '2081' && acct <= '2084' && net > 0) {
+      nyemission = roundOre(nyemission + net)
     } else if (acct === '2097' && net > 0) {
       // Överkursfond — part of the emission proceeds.
-      nyemission = Math.round((nyemission + net) * 100) / 100
+      nyemission = roundOre(nyemission + net)
     } else if (acct === '2093' && net > 0) {
-      aktieagartillskott = Math.round((aktieagartillskott + net) * 100) / 100
-    } else if ((acct === '2091' || acct === '2098') && net < 0 && src === 'result_appropriation') {
-      utdelning = Math.round((utdelning + net) * 100) / 100
-    } else if (acct === '2098' && net !== 0 && src === 'result_appropriation') {
-      // Omföring föregående års resultat — internal transfer, net zero
-      // across 209x; classified under övriga only if it doesn't cancel.
-      ovriga = Math.round((ovriga + net) * 100) / 100
+      aktieagartillskott = roundOre(aktieagartillskott + net)
     } else {
-      ovriga = Math.round((ovriga + net) * 100) / 100
+      // Generic result_appropriation entries are deliberately kept as other
+      // equity movements. Only a structured dividend_decision may be called
+      // a dividend in the annual report.
+      ovriga = roundOre(ovriga + net)
     }
   }
 
@@ -1105,16 +1254,16 @@ async function buildK3EquityChangesStatement(
 
   // Opening = closing − all recognized movements − årets resultat.
   const opening = {
-    aktiekapital: Math.round(aktiekapitalClosing * 100) / 100,
-    bundna_reserver: Math.round(bundnaClosing * 100) / 100,
-    balanserade_vinstmedel: Math.round((fritProtClosing - netResult) * 100) / 100,
+    aktiekapital: roundOre(aktiekapitalClosing),
+    bundna_reserver: roundOre(bundnaClosing),
+    balanserade_vinstmedel: roundOre(fritProtClosing - netResult),
   }
   // Subtract classified movements from the naive opening approximation so
   // the roll-forward (opening + movements + result = closing) is exact.
-  opening.aktiekapital = Math.round((opening.aktiekapital - nyemission) * 100) / 100
-  opening.balanserade_vinstmedel = Math.round(
-    (opening.balanserade_vinstmedel - utdelning - aktieagartillskott - ovriga) * 100,
-  ) / 100
+  opening.aktiekapital = roundOre(opening.aktiekapital - nyemission)
+  opening.balanserade_vinstmedel = roundOre(
+    opening.balanserade_vinstmedel - utdelning - aktieagartillskott - ovriga,
+  )
 
   const changes = {
     nyemission,
@@ -1122,7 +1271,7 @@ async function buildK3EquityChangesStatement(
     aktieagartillskott: aktieagartillskott || undefined,
     fondemission: fondemission || undefined,
     ovriga_forandringar: ovriga || undefined,
-    arets_resultat: Math.round(netResult * 100) / 100,
+    arets_resultat: roundOre(netResult),
   }
   return buildEquityChangesNote({ opening, changes })
 }

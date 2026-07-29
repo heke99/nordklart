@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { parseSIEFile, validateSIEFile, detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
+import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { suggestMappings } from '@/lib/import/account-mapper'
 import { executeSIEImport, checkDuplicateImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
@@ -8,12 +8,12 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { AccountMapping, SIEAccountMappingRecord } from '@/lib/import/types'
 import { isSieFiscalPeriodAllowed, resolveSieFiscalYearAccess } from '@/lib/import/access'
+import { loadArchivedSIEParseSession } from '@/lib/import/sie-parse-session'
+import { verifySIECompanyIdentity } from '@/lib/import/company-identity-server'
+import { createServiceClient } from '@/lib/supabase/server'
 
 // SIE imports with many vouchers need extended execution time
 export const maxDuration = 300
-
-/** 20 MB — same ceiling as the parse endpoint. */
-const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 
 /**
  * Strict runtime schemas (revision item I14): unknown or malformed option
@@ -61,30 +61,20 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
 
     const formData = await request.formData()
-    const file = formData.get('file') as File | null
+    const parseSessionIdRaw = formData.get('parseSessionId')
     const mappingsJson = formData.get('mappings') as string | null
     const optionsJson = formData.get('options') as string | null
 
-    if (!file) {
-      return errorResponseFromCode('SIE_PARSE_NO_FILE', log, { requestId })
-    }
-
-    const opLog = log.child({ filename: file.name, sizeBytes: file.size })
-
-    // Server-side file validation on execute (I13): the client can never
-    // bypass type/size/emptiness checks by skipping the parse endpoint.
-    if (file.size === 0) {
-      return errorResponseFromCode('VALIDATION_FAILED', opLog, {
+    const parseSessionId = z.string().uuid().safeParse(parseSessionIdRaw)
+    if (!parseSessionId.success) {
+      return errorResponseFromCode('SIE_PARSE_SESSION_INVALID', log, {
         requestId,
-        details: { reason: 'Filen är tom' },
+        details: { reason: 'parseSessionId saknas eller är ogiltigt.' },
       })
     }
-    if (file.size > MAX_FILE_SIZE_BYTES) {
-      return errorResponseFromCode('VALIDATION_FAILED', opLog, {
-        requestId,
-        details: { reason: `Filen är för stor (max ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB)` },
-      })
-    }
+
+    const opLog = log.child({ parseSessionId: parseSessionId.data })
+    const sessionDb = createServiceClient()
 
     try {
       // Strict options schema (I14).
@@ -133,14 +123,56 @@ export const POST = withRouteContext(
         .maybeSingle()
       const companyDefaultSeries = companySettings?.default_voucher_series || 'B'
 
-      const arrayBuffer = await file.arrayBuffer()
-      const rawBytes = new Uint8Array(arrayBuffer)
-      const encoding = detectEncoding(arrayBuffer)
-      const content = decodeBuffer(arrayBuffer, encoding)
+      const archivedSession = await loadArchivedSIEParseSession({
+        supabase: sessionDb,
+        companyId,
+        userId: user.id,
+        sessionId: parseSessionId.data,
+      }).catch((error: unknown) => {
+        opLog.warn('invalid archived SIE parse session', {
+          reason: error instanceof Error ? error.message : 'unknown',
+        })
+        return null
+      })
+      if (!archivedSession) {
+        return errorResponseFromCode('SIE_PARSE_SESSION_INVALID', opLog, {
+          requestId,
+        })
+      }
+      const { session, rawBytes, content } = archivedSession
+      if (
+        (session.replace_import_id ?? null)
+        !== (options.replaceImportId ?? null)
+      ) {
+        return errorResponseFromCode('SIE_PARSE_SESSION_INVALID', opLog, {
+          requestId,
+          details: {
+            reason:
+              'Importsessionens ersättningsmål stämmer inte med execute-anropet.',
+          },
+        })
+      }
 
       // Full server-side re-parse AND re-validation of the original file
       // (I13): the execute endpoint never trusts client-parsed data.
       const parsed = parseSIEFile(content)
+      const { identity } = await verifySIECompanyIdentity(
+        supabase,
+        companyId,
+        {
+          organisationNumber: parsed.header.orgNumber,
+          companyName: parsed.header.companyName,
+        },
+      )
+      if (identity.status !== 'match') {
+        return errorResponseFromCode(
+          identity.status === 'mismatch'
+            ? 'SIE_COMPANY_IDENTITY_MISMATCH'
+            : 'SIE_COMPANY_IDENTITY_MISSING',
+          opLog,
+          { requestId, details: { identity } },
+        )
+      }
       const fiscalAccess = await resolveSieFiscalYearAccess(
         supabase,
         ctx.sieImportAccess,
@@ -247,6 +279,45 @@ export const POST = withRouteContext(
         })
       }
 
+      const mappingCorrections = mappings
+        .filter(
+          (mapping) =>
+            mapping.targetAccount
+            && mapping.targetAccount !== mapping.sourceAccount,
+        )
+        .map((mapping) => ({
+          source_line_identifier: mapping.sourceAccount,
+          field_name: 'account_number',
+          original_value: mapping.sourceAccount,
+          corrected_value: mapping.targetAccount,
+          correction_type: 'account_mapping',
+          reason: `Kontomappning godkänd inför import (${mapping.matchType}).`,
+          accounting_impact: {
+            changes_booking_account: true,
+            changes_total_debit: false,
+            changes_total_credit: false,
+          },
+        }))
+      if (mappingCorrections.length > 0) {
+        const { error: correctionError } = await sessionDb.rpc(
+          'record_sie_import_corrections',
+          {
+            p_company_id: companyId,
+            p_parse_session_id: session.id,
+            p_user_id: user.id,
+            p_corrections: mappingCorrections,
+          },
+        )
+        if (correctionError) {
+          return errorResponseFromCode('SIE_IMPORT_UNEXPECTED', opLog, {
+            requestId,
+            details: {
+              reason: `Korrigeringsloggen kunde inte sparas: ${correctionError.message}`,
+            },
+          })
+        }
+      }
+
       // Account creation (and #KONTO renames) happen inside executeSIEImport
       // via syncMappedAccounts — the pre-create block that used to live here
       // was a duplicate of that logic.
@@ -257,7 +328,7 @@ export const POST = withRouteContext(
         parsed,
         mappings,
         {
-          filename: file.name,
+          filename: session.file_name,
           fileContent: content,
           createFiscalPeriod: options.createFiscalPeriod,
           importOpeningBalances: options.importOpeningBalances,
@@ -271,8 +342,20 @@ export const POST = withRouteContext(
           approveMigrationAdjustment: options.approveMigrationAdjustment,
           ignoreKsummaMismatch: options.ignoreKsummaMismatch,
           rawFileBytes: rawBytes,
+          parseSessionId: session.id,
         },
       )
+
+      await sessionDb
+        .from('sie_parse_sessions')
+        .update({
+          status: result.success ? 'completed' : 'failed',
+          sie_import_id: result.importId,
+          completed_at: result.success ? new Date().toISOString() : null,
+          error_message: result.success ? null : result.errors.join('; '),
+        })
+        .eq('id', session.id)
+        .eq('company_id', companyId)
 
       if (!result.success) {
         return errorResponseFromCode('SIE_IMPORT_FAILED', opLog, {

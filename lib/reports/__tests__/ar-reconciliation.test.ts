@@ -24,6 +24,7 @@ const mockedOpenInvoices = vi.mocked(getHistoricalOpenInvoices)
 // Mock — sequential result queue for the direct supabase reads:
 //   0: fiscal_periods (.single())
 //   1: currency_revaluation_items (awaited chain)
+//   2: canonical customer-receivable control accounts
 // ============================================================
 
 let resultIdx: number
@@ -51,6 +52,10 @@ const PERIOD_RESULT = {
   error: null,
 }
 const EMPTY_REVAL = { data: [], error: null }
+const CONTROL_ACCOUNTS = {
+  data: [{ account_number: '1510' }, { account_number: '1513' }],
+  error: null,
+}
 
 function makeOpenItem(overrides: Partial<HistoricalOpenItem> = {}): HistoricalOpenItem {
   return {
@@ -100,7 +105,7 @@ let supabase: ReturnType<typeof makeClient>
 beforeEach(() => {
   vi.clearAllMocks()
   resultIdx = 0
-  results = [PERIOD_RESULT, EMPTY_REVAL]
+  results = [PERIOD_RESULT, EMPTY_REVAL, CONTROL_ACCOUNTS]
   supabase = makeClient()
   mockedOpenInvoices.mockResolvedValue([])
   mockTrialBalanceRows([])
@@ -182,6 +187,7 @@ describe('generateARReconciliation', () => {
     results = [
       { data: { period_start: '2024-01-01', period_end: '2099-12-31' }, error: null },
       EMPTY_REVAL,
+      CONTROL_ACCOUNTS,
     ]
     const running = await generateARReconciliation(supabase, 'company-1', 'period-1')
     expect(running.as_of_date).toBe(today)
@@ -231,6 +237,7 @@ describe('generateARReconciliation', () => {
     results = [
       PERIOD_RESULT,
       { data: [{ unrealized_diff_sek: 50, invoice_id: 'inv-1' }], error: null },
+      CONTROL_ACCOUNTS,
     ]
     mockTrialBalanceRows([tbRow('1510', { debit: 1050 })])
 

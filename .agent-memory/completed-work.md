@@ -1,25 +1,26 @@
 # Slutfört arbete
 
-## 2026-07-29
+## 2026-07-29 — SIE och historiska bokslutsunderlag
 
-- Etablerade en orörd baslinje från det mottagna projektarkivet.
-- Ersatte den trasiga bokslutsavstämningslänken med en verklig route.
-- Införde manuell serververifierad avstämning för företag utan bankdata.
-- Gjorde verifiering, underlag och invalidation append-only.
-- Skyddade accepterade dokumentunderlag mot ändring och borttagning.
-- Lät huvudboksändringar ogiltigförklara tidigare verifieringar.
-- Återanvände samma kanoniska blockerfunktion i UI och atomisk stängning.
-- Propagerade vald bolagskontext genom hela boksluts- och årsredovisningsflödet.
-- Säkrade periodbunden skrivåtkomst för engångsköpt bokslut utan att den
-  generiska feature-/write-gaten stoppar flödet i förtid.
-- Korrigerade NE-parametern från `fiscal_period_id` till `period_id`.
-- Lade TypeScript-, unit-, featurepolicy- och pg-real-regressionstester.
-- Verifierade typecheck, unit, lint, guards, featurepolicy, SQL-syntax och
-  fullständigt Next-produktionsbygge.
+- Etablerade en checksummad baslinje från mottaget projektarkiv.
+- Samordnade filgräns, statusmodell, juridisk identitet och parse/execute.
+- Införde beständig parse-session och oförändrat SIE-original.
+- Införde korrigeringsproveniens för kontomappningar.
+- Byggde separata historiska stödregister utan faktura- eller journalbiverkan.
+- Införde serverberäknad AR/AP-, bank-, EK-, skatt- och momsavstämning.
+- Införde dokumentbevis, idempotens, append-only-historik och invalidation.
+- Införde gemensamma explicit konfigurerade kontrollkonton.
+- Byggde tenant- och periodbundet API/UI för bokslutsunderlag.
+- Införde företagssnapshot, strukturerad resultatdisposition/utdelning och
+  synlighetsstyrda anteckningar.
+- Kopplade samma kontrollkontrakt till readiness och atomisk stängning.
+- Kopplade resultatöverföringen till produktionsflödet.
+- Rättade årsredovisningens utdelningsheuristik och fryste juridisk identitet.
+- Uppdaterade AR-rapporten till gemensam kontrollkontokonfiguration.
+- Lade unit- och pg-real-regressionstester.
+- Verifierade unit, typecheck, lint, guards och Next-produktionsbygge.
 
-## 2026-07-25
+## 2026-07-29 — tidigare pass
 
-- Införde systemisk separation mellan featureavslag och databasfel.
-- Propagerade bokslutsåtkomstorsak genom period- och rapport-API:er.
-- Säkrade periodbundet engångsköp vid feature-resolveravbrott.
-- Lade regressionstester för åtkomst- och resolverfallen.
+- Införde manuell serververifierad likvidkontoavstämning med dokument,
+  invalidation och samma bokslutsblockerare.

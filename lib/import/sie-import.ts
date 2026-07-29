@@ -961,7 +961,8 @@ async function createPendingImportRecord(
   parsed: ParsedSIEFile,
   fileContent: string,
   filename: string,
-  replacesImportId?: string | null
+  replacesImportId?: string | null,
+  parseSessionId?: string | null,
 ): Promise<string> {
   const fileHash = await calculateFileHash(fileContent)
 
@@ -988,6 +989,7 @@ async function createPendingImportRecord(
       // (a replace of the identical file legitimately shares the hash with
       // the row it supersedes — I06).
       replaces_import_id: replacesImportId ?? null,
+      parse_session_id: parseSessionId ?? null,
     })
     .select('id')
     .single()
@@ -1314,6 +1316,8 @@ export async function executeSIEImport(
     ignoreKsummaMismatch?: boolean
     /** Raw file bytes (pre-decoding) for #KSUMMA verification. */
     rawFileBytes?: Uint8Array
+    /** Durable parse session whose archived original is the execute source. */
+    parseSessionId?: string | null
   }
 ): Promise<ImportResult> {
   const result: ImportResult = {
@@ -1434,6 +1438,7 @@ export async function executeSIEImport(
       options.fileContent,
       options.filename,
       replacesImportId,
+      options.parseSessionId,
     )
 
     // Persist the KSUMMA verification outcome on the import row.

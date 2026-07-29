@@ -421,6 +421,7 @@ function SIEImportWizard() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const [, setSieAccounts] = useState<{ number: string; name: string }[]>([])
   const [isCreatingAccounts, setIsCreatingAccounts] = useState(false)
+  const [parseSessionId, setParseSessionId] = useState<string | null>(null)
 
   // Skip the mapping step when all accounts are already mapped
   const hasUnmapped = mappings.some((m) => !m.targetAccount)
@@ -433,6 +434,7 @@ function SIEImportWizard() {
 
   const handleFileSelect = useCallback(async (selectedFile: File, replaceImportId?: string) => {
     setFile(selectedFile)
+    setParseSessionId(null)
     setError(null)
     setErrorType(undefined)
     setValidationErrors([])
@@ -506,6 +508,7 @@ function SIEImportWizard() {
       setPreview(data.preview)
       setIssues(data.parsed.issues)
       setSieAccounts(data.parsed.accounts)
+      setParseSessionId(data.parseSessionId)
 
       const accountsRes = await fetch('/api/bookkeeping/accounts')
       if (accountsRes.ok) {
@@ -562,6 +565,7 @@ function SIEImportWizard() {
       setValidationWarnings([])
       setDuplicateImportId(null)
       setSieAccounts([])
+      setParseSessionId(null)
     } catch {
       toast({ title: 'Anslutningsfel', description: 'Kunde inte nå servern.', variant: 'destructive' })
     } finally {
@@ -667,7 +671,10 @@ function SIEImportWizard() {
   }, [missingAccounts, toast])
 
   const handleExecuteImport = useCallback(async (options: ImportExecuteOptions) => {
-    if (!file) { setError('No file selected'); return }
+    if (!file || !parseSessionId) {
+      setError('Den arkiverade importsessionen saknas. Analysera filen igen.')
+      return
+    }
 
     setIsLoading(true)
     setError(null)
@@ -675,6 +682,7 @@ function SIEImportWizard() {
     try {
       const formData = new FormData()
       formData.append('file', file)
+      formData.append('parseSessionId', parseSessionId)
       formData.append('mappings', JSON.stringify(mappings))
       formData.append('options', JSON.stringify({
         ...options,
@@ -732,7 +740,7 @@ function SIEImportWizard() {
     } finally {
       setIsLoading(false)
     }
-  }, [file, mappings, toast, duplicateImportId])
+  }, [file, mappings, toast, duplicateImportId, parseSessionId])
 
   const goToStep = (targetStep: ImportWizardStep) => { setStep(targetStep); setError(null); setValidationErrors([]); setValidationWarnings([]) }
   const goBack = () => { const i = sieSteps.indexOf(step); if (i > 0) setStep(sieSteps[i - 1]) }
@@ -742,6 +750,7 @@ function SIEImportWizard() {
     setPreview(null); setIssues([]); setImportResult(null); setError(null); setErrorType(undefined)
     setValidationErrors([]); setValidationWarnings([]); setDuplicateImportId(null)
     setSieAccounts([]); setIsCreatingAccounts(false)
+    setParseSessionId(null)
   }
 
   return (

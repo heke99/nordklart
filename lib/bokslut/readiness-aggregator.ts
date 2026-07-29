@@ -34,6 +34,27 @@ export interface BokslutBlockerDetail {
   actionLabel?: string
 }
 
+export type YearEndControlStatusCode =
+  | 'reconciled'
+  | 'completion_required'
+  | 'manual_verification_required'
+  | 'accounting_error'
+
+export interface YearEndControlStatus {
+  control_code: string
+  label: string
+  status: YearEndControlStatusCode
+  ledger_balance: number | null
+  support_balance: number | null
+  difference: number | null
+  is_stale: boolean
+  is_blocking: boolean
+  message: string
+  available_actions: string[]
+  metadata: Record<string, unknown>
+  href: string
+}
+
 export interface BokslutReadinessReport {
   /** True ⇔ no blocking errors AND every check completed. */
   ready: boolean
@@ -58,6 +79,8 @@ export interface BokslutReadinessReport {
   } | null
   /** Per-account canonical status, including manual SIE-only reconciliations. */
   cashReconciliations: YearEndCashReconciliationStatus[]
+  /** Canonical server-computed support-ledger and legal-identity controls. */
+  controls?: YearEndControlStatus[]
   /** Period metadata so the UI can show name/dates without an extra fetch. */
   period: {
     id: string
@@ -113,6 +136,9 @@ export async function buildBokslutReadinessReport(
   const reconciliationHref = `/bookkeeping/year-end/reconciliation?period=${encodeURIComponent(
     fiscalPeriodId,
   )}&company_id=${encodeURIComponent(companyId)}`
+  const historicalSupportHref = `/bookkeeping/year-end/historical-support?period=${encodeURIComponent(
+    fiscalPeriodId,
+  )}&company_id=${encodeURIComponent(companyId)}`
 
   const blockerDetails: BokslutBlockerDetail[] = []
 
@@ -161,9 +187,65 @@ export async function buildBokslutReadinessReport(
               href: reconciliationHref,
               actionLabel: 'Öppna avstämning',
             }
-          : {}),
+          : /^(company_identity|company_snapshot|customer_receivables|supplier_payables|equity|tax|vat|profit_disposition|historical_)/.test(
+                row.code,
+              )
+            ? {
+                href: historicalSupportHref,
+                actionLabel: 'Öppna bokslutsunderlag',
+              }
+            : {}),
       })
     }
+  }
+
+  let controls: YearEndControlStatus[] = []
+  const { data: controlRows, error: controlsError } = await supabase.rpc(
+    'year_end_control_status',
+    { p_company_id: companyId, p_fiscal_period_id: fiscalPeriodId },
+  )
+  if (controlsError) {
+    blockerDetails.push({
+      code: 'year_end_control_status_failed',
+      message: `Bokslutets stödregister kunde inte kontrolleras (${controlsError.message}). Bokslut blockeras tills kontrollen kan köras.`,
+      count: 0,
+      checkCompleted: false,
+      href: historicalSupportHref,
+      actionLabel: 'Öppna bokslutsunderlag',
+    })
+  } else {
+    controls = ((controlRows ?? []) as Array<{
+      control_code: string
+      control_category: string
+      status: YearEndControlStatusCode
+      ledger_amount: number | string | null
+      supporting_register_amount: number | string | null
+      difference: number | string | null
+      is_stale: boolean
+      is_blocking: boolean
+      message: string
+      available_actions: string[] | null
+      metadata: Record<string, unknown> | null
+    }>).map((row) => ({
+      control_code: row.control_code,
+      label: controlLabel(row.control_category),
+      status: row.status,
+      ledger_balance: row.ledger_amount == null ? null : Number(row.ledger_amount),
+      support_balance:
+        row.supporting_register_amount == null
+          ? null
+          : Number(row.supporting_register_amount),
+      difference: row.difference == null ? null : Number(row.difference),
+      is_stale: row.is_stale,
+      is_blocking: row.is_blocking,
+      message: row.message,
+      available_actions: row.available_actions ?? [],
+      metadata: row.metadata ?? {},
+      href:
+        row.control_code === 'bank'
+          ? reconciliationHref
+          : historicalSupportHref,
+    }))
   }
 
   // Canonical per-account reconciliation status. This RPC is also consumed by
@@ -290,8 +372,22 @@ export async function buildBokslutReadinessReport(
     trialBalanceBalanced: validation.trialBalanceBalanced,
     reconciliation,
     cashReconciliations,
+    controls,
     period,
     entityType,
     rawValidation: validation,
   }
+}
+
+function controlLabel(category: string): string {
+  return {
+    company_identity: 'Företagsidentitet',
+    customer_receivables: 'Kundreskontra',
+    supplier_payables: 'Leverantörsreskontra',
+    bank: 'Bank och kassa',
+    equity: 'Eget kapital',
+    tax: 'Skatt',
+    vat: 'Moms',
+    profit_disposition: 'Resultatdisposition',
+  }[category] ?? category
 }

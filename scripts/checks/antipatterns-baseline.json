@@ -181,5 +181,12 @@
       "supabase/migrations/20260321120000_oauth_used_codes.sql#oauth_used_codes",
       "supabase/migrations/20260421130000_drop_legacy_supplier_invoice_user_id_uniqueness.sql#used"
     ]
+  },
+  "duplicateMigrationVersions": {
+    "count": 2,
+    "entries": [
+      "20260629120000:20260629120000_accounting_intelligence_core.sql,20260629120000_opendataloader_ocr_foundation_and_founder_access.sql",
+      "20260704120000:20260704120000_nordklart_sync_hardening_patch.sql,20260704120000_skatteverket_sysorg_api_contract.sql"
+    ]
   }
 }

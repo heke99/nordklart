@@ -11,8 +11,9 @@ export type SIEType = 1 | 2 | 3 | 4
 // Encoding types supported by SIE files
 export type SIEEncoding = 'cp437' | 'utf8' | 'windows1252'
 
-// Import status
-export type SIEImportStatus = 'pending' | 'mapped' | 'completed' | 'failed' | 'replaced'
+// Import status — single source shared by UI, routes and database-facing code.
+export type { SIEImportStatus } from './sie-status'
+import type { SIEImportStatus } from './sie-status'
 
 // Match type for account mapping
 export type AccountMatchType = 'exact' | 'name' | 'class' | 'manual' | 'bas_range'
@@ -358,6 +359,12 @@ export interface ImportPreview {
   // Company info from file
   companyName: string | null
   orgNumber: string | null
+  selectedCompanyName?: string | null
+  selectedCompanyOrgNumber?: string | null
+  companyIdentity?: import('./company-identity').SIECompanyIdentityResult
+  parseSessionId?: string
+  sourceSystem?: string | null
+  sourceVersion?: string | null
 
   // Fiscal year
   fiscalYearStart: string | null   // "YYYY-MM-DD"

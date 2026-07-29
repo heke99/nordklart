@@ -34,6 +34,7 @@ import {
 } from '@/lib/api/v1/operations'
 import {
   parseSIEFile,
+  validateSIEFile,
   detectEncoding,
   decodeBuffer,
   calculateFileHash,
@@ -45,6 +46,12 @@ import {
 import { suggestMappings } from '@/lib/import/account-mapper'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { verifySIECompanyIdentity } from '@/lib/import/company-identity-server'
+import { archiveSIEParseSession } from '@/lib/import/sie-parse-session'
+import {
+  MAX_SIE_FILE_SIZE_BYTES,
+  hasAllowedSIEFileExtension,
+} from '@/lib/import/sie-limits'
 
 const SieImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -52,8 +59,6 @@ const SieImportAccepted = z.object({
   status: z.literal('queued'),
   poll_url: z.string(),
 })
-
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB — matches the dashboard's limit
 
 export const maxDuration = 300 // 5 minutes — large multi-year SIE files
 
@@ -118,12 +123,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         details: { field: 'file', message: 'Missing or invalid `file` field.' },
       })
     }
-    if (file.size > MAX_FILE_SIZE) {
+    if (!hasAllowedSIEFileExtension(file.name)) {
+      return v1ErrorResponseFromCode('SIE_PARSE_INVALID_TYPE', ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
+    if (file.size > MAX_SIE_FILE_SIZE_BYTES) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {
           field: 'file',
-          message: `File too large (${file.size} bytes). Max ${MAX_FILE_SIZE} bytes.`,
+          message: `File too large (${file.size} bytes). Max ${MAX_SIE_FILE_SIZE_BYTES} bytes.`,
         },
       })
     }
@@ -208,6 +218,43 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         details: { reason: err instanceof Error ? err.message : 'unknown' },
       })
     }
+    const validation = validateSIEFile(parsed)
+    if (!validation.valid) {
+      return v1ErrorResponseFromCode('SIE_PARSE_VALIDATION_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { errors: validation.errors, warnings: validation.warnings },
+      })
+    }
+    const { identity } = await verifySIECompanyIdentity(
+      ctx.supabase,
+      ctx.companyId!,
+      {
+        organisationNumber: parsed.header.orgNumber,
+        companyName: parsed.header.companyName,
+      },
+    )
+    if (identity.status !== 'match') {
+      const failedSession = await archiveSIEParseSession({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        fileName: file.name,
+        rawBytes: new Uint8Array(buffer),
+        fileHash,
+        parsed,
+        identity,
+      })
+      return v1ErrorResponseFromCode(
+        identity.status === 'mismatch'
+          ? 'SIE_COMPANY_IDENTITY_MISMATCH'
+          : 'SIE_COMPANY_IDENTITY_MISSING',
+        ctx.log,
+        {
+          requestId: ctx.requestId,
+          details: { identity, parse_session_id: failedSession.id },
+        },
+      )
+    }
 
     // Duplicate-file check before starting the operation. Log the
     // existing import id + timestamp server-side for operator forensics
@@ -227,6 +274,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         // Deliberately empty details. Server log has the forensic info.
       })
     }
+    const parseSession = await archiveSIEParseSession({
+      supabase: ctx.supabase,
+      companyId: ctx.companyId!,
+      userId: ctx.userId,
+      fileName: file.name,
+      rawBytes: new Uint8Array(buffer),
+      fileHash,
+      parsed,
+      identity,
+    })
 
     // Build account mappings server-side from the file's #KONTO records and
     // any stored per-company overrides — same as the dashboard execute route.
@@ -258,6 +315,42 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           })),
         },
       })
+    }
+    const mappingCorrections = mappings
+      .filter(
+        (mapping) =>
+          mapping.targetAccount
+          && mapping.targetAccount !== mapping.sourceAccount,
+      )
+      .map((mapping) => ({
+        source_line_identifier: mapping.sourceAccount,
+        field_name: 'account_number',
+        original_value: mapping.sourceAccount,
+        corrected_value: mapping.targetAccount,
+        correction_type: 'account_mapping',
+        reason: `Servergenererad kontomappning (${mapping.matchType}).`,
+        accounting_impact: {
+          changes_booking_account: true,
+          changes_total_debit: false,
+          changes_total_credit: false,
+        },
+      }))
+    if (mappingCorrections.length > 0) {
+      const { error: correctionError } = await ctx.supabase.rpc(
+        'record_sie_import_corrections',
+        {
+          p_company_id: ctx.companyId!,
+          p_parse_session_id: parseSession.id,
+          p_user_id: ctx.userId,
+          p_corrections: mappingCorrections,
+        },
+      )
+      if (correctionError) {
+        return v1ErrorResponseFromCode('SIE_IMPORT_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+          details: { reason: `Correction log failed: ${correctionError.message}` },
+        })
+      }
     }
 
     // Start the operation row — caller polls /operations/{id} for status.
@@ -294,6 +387,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           importTransactions: options.importTransactions,
           voucherSeries: options.voucherSeries,
           updateAccountNames: options.updateAccountNames,
+          rawFileBytes: new Uint8Array(buffer),
+          parseSessionId: parseSession.id,
         },
       )
       await completeOperation(ctx.supabase, { id: op.id, result }, ctx.log)

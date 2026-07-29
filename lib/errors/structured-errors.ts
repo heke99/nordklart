@@ -1188,6 +1188,25 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'SIE-filen innehåller valideringsfel som måste åtgärdas innan import.',
     message_en: 'SIE file failed validation.',
   },
+  SIE_COMPANY_IDENTITY_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'SIE-filen tillhör inte det valda företaget. Importen har blockerats.',
+    message_en: 'The SIE file does not belong to the selected company.',
+    remediation: {
+      description:
+        'Select the company whose organisation number matches the SIE file, or correct the company profile before retrying.',
+    },
+  },
+  SIE_COMPANY_IDENTITY_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Organisationsnummer saknas eller är ogiltigt. Importen har blockerats tills företagsidentiteten kan verifieras.',
+    message_en: 'The organisation number is missing or invalid.',
+  },
+  SIE_PARSE_SESSION_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Den arkiverade importsessionen saknas, har löpt ut eller har ändrats. Analysera originalfilen igen.',
+    message_en: 'The archived SIE parse session is missing, expired, or changed.',
+  },
   SIE_DUPLICATE_FILE: {
     httpStatus: 409,
     message_sv: 'Den här filen har redan importerats.',

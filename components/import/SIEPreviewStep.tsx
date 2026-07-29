@@ -41,7 +41,10 @@ export default function SIEPreviewStep({
 
   // Only block on actual parsing errors, not unmapped accounts
   // (users need to proceed to mapping step to fix unmapped accounts)
-  const hasBlockingErrors = errors.length > 0
+  const hasBlockingErrors =
+    errors.length > 0
+    || (preview.companyIdentity?.status !== undefined
+      && preview.companyIdentity.status !== 'match')
 
   return (
     <div className="space-y-6">
@@ -52,19 +55,60 @@ export default function SIEPreviewStep({
             <Building2 className="h-5 w-5" />
             Företagsinformation
           </CardTitle>
-          <CardDescription>Information från SIE-filen</CardDescription>
+          <CardDescription>
+            Juridisk identitet jämförd mellan originalfilen och det valda företaget
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <p className="text-sm text-muted-foreground">Företagsnamn</p>
+              <p className="text-sm text-muted-foreground">SIE-filens företag</p>
               <p className="font-medium">{preview.companyName || 'Ej angivet'}</p>
+              <p className="text-sm tabular-nums text-muted-foreground">
+                {preview.orgNumber || 'Organisationsnummer saknas'}
+              </p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Organisationsnummer</p>
-              <p className="font-medium">{preview.orgNumber || 'Ej angivet'}</p>
+              <p className="text-sm text-muted-foreground">Valt Nordklart-företag</p>
+              <p className="font-medium">
+                {preview.selectedCompanyName || 'Ej angivet'}
+              </p>
+              <p className="text-sm tabular-nums text-muted-foreground">
+                {preview.selectedCompanyOrgNumber || 'Organisationsnummer saknas'}
+              </p>
             </div>
           </div>
+          {preview.companyIdentity && (
+            <div className="mt-4 flex items-start gap-3 rounded-lg border p-3">
+              {preview.companyIdentity.status === 'match' ? (
+                <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+              ) : (
+                <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              )}
+              <div>
+                <Badge
+                  variant={
+                    preview.companyIdentity.status === 'match'
+                      ? 'success'
+                      : 'destructive'
+                  }
+                >
+                  {preview.companyIdentity.status === 'match'
+                    ? 'Juridisk identitet verifierad'
+                    : 'Juridisk identitet kan inte verifieras'}
+                </Badge>
+                <p className="mt-1 text-sm">
+                  {preview.companyIdentity.message}
+                </p>
+              </div>
+            </div>
+          )}
+          {(preview.sourceSystem || preview.sourceVersion) && (
+            <p className="mt-4 text-xs text-muted-foreground">
+              Källsystem: {preview.sourceSystem || 'okänt'}
+              {preview.sourceVersion ? ` ${preview.sourceVersion}` : ''}
+            </p>
+          )}
         </CardContent>
       </Card>
 

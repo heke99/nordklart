@@ -1,3 +1,5 @@
+import type { SIEImportStatus } from '@/lib/import/sie-status'
+
 // Entity types
 export type EntityType = 'enskild_firma' | 'aktiebolag'
 
@@ -2224,8 +2226,8 @@ export const TAX_DEADLINE_TYPE_LABELS: Record<TaxDeadlineType, string> = {
 // SIE Import Types
 // ============================================================
 
-// SIE import status
-export type SIEImportStatus = 'pending' | 'mapped' | 'completed' | 'partial' | 'failed' | 'replaced' | 'undone'
+// SIE import status — re-exported from the canonical import state model.
+export type { SIEImportStatus } from '@/lib/import/sie-status'
 
 // SIE import record
 export interface SIEImport {
@@ -3514,4 +3516,3 @@ export interface AGIDeclaration {
   created_at: string
   updated_at: string
 }
-

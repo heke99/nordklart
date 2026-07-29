@@ -98,14 +98,32 @@ export async function generateARReconciliation(
   }
   arLedgerTotal = roundOre(arLedgerTotal + fxAdjustment)
 
-  // GL: CLOSING balance of 1510 + 1513 as of the same date (opening +
-  // movements), via the paginated trial balance (A06/A07).
+  const { data: configuredAccounts, error: controlAccountError } = await supabase
+    .from('year_end_control_accounts')
+    .select('account_number')
+    .eq('company_id', companyId)
+    .eq('control_category', 'customer_receivables')
+    .eq('active', true)
+  if (controlAccountError) {
+    throw new Error(
+      `Kontrollkontona för kundfordringar kunde inte läsas: ${controlAccountError.message}`,
+    )
+  }
+  const controlAccounts = new Set(
+    (configuredAccounts ?? []).map((row) => String(row.account_number)),
+  )
+  if (controlAccounts.size === 0) {
+    throw new Error('Inga aktiva kontrollkonton är konfigurerade för kundfordringar')
+  }
+
+  // GL: CLOSING balance of the explicit canonical control-account set as of
+  // the same date, via the paginated trial balance (A06/A07).
   const { rows } = await generateTrialBalance(supabase, companyId, periodId, {
     toDate: effectiveAsOf,
   })
   let account1510Balance = 0
   for (const row of rows) {
-    if (row.account_number === '1510' || row.account_number === '1513') {
+    if (controlAccounts.has(row.account_number)) {
       account1510Balance =
         roundOre(account1510Balance + row.closing_debit - row.closing_credit)
     }

@@ -14,6 +14,13 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { isSieFiscalPeriodAllowed, resolveSieFiscalYearAccess } from '@/lib/import/access'
+import {
+  MAX_SIE_FILE_SIZE_BYTES,
+  hasAllowedSIEFileExtension,
+} from '@/lib/import/sie-limits'
+import { verifySIECompanyIdentity } from '@/lib/import/company-identity-server'
+import { archiveSIEParseSession } from '@/lib/import/sie-parse-session'
+import { createServiceClient } from '@/lib/supabase/server'
 
 /**
  * POST /api/import/sie/parse
@@ -22,7 +29,7 @@ import { isSieFiscalPeriodAllowed, resolveSieFiscalYearAccess } from '@/lib/impo
 export const POST = withRouteContext(
   'sie_import.parse',
   async (request, ctx) => {
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
 
     const formData = await request.formData()
     const file = formData.get('file') as File | null
@@ -39,16 +46,14 @@ export const POST = withRouteContext(
       return errorResponseFromCode('SIE_PARSE_NO_FILE', log, { requestId })
     }
 
-    const filename = file.name.toLowerCase()
-    if (!filename.endsWith('.sie') && !filename.endsWith('.se')) {
+    if (!hasAllowedSIEFileExtension(file.name)) {
       return errorResponseFromCode('SIE_PARSE_INVALID_TYPE', log, {
         requestId,
         details: { filename: file.name },
       })
     }
 
-    const MAX_FILE_SIZE = 50 * 1024 * 1024
-    if (file.size > MAX_FILE_SIZE) {
+    if (file.size > MAX_SIE_FILE_SIZE_BYTES) {
       return errorResponseFromCode('SIE_PARSE_FILE_TOO_LARGE', log, {
         requestId,
         details: { sizeMb: +(file.size / 1024 / 1024).toFixed(1) },
@@ -63,6 +68,7 @@ export const POST = withRouteContext(
 
     try {
       const arrayBuffer = await file.arrayBuffer()
+      const rawBytes = new Uint8Array(arrayBuffer)
       const encoding = detectEncoding(arrayBuffer)
       const content = decodeBuffer(arrayBuffer, encoding)
 
@@ -134,6 +140,44 @@ export const POST = withRouteContext(
         })
       }
 
+      const { company, identity } = await verifySIECompanyIdentity(
+        supabase,
+        companyId,
+        {
+          organisationNumber: parsed.header.orgNumber,
+          companyName: parsed.header.companyName,
+        },
+      )
+      const fileHash = await calculateFileHash(content)
+      const parseSession = await archiveSIEParseSession({
+        supabase: createServiceClient(),
+        companyId,
+        userId: user.id,
+        fileName: file.name,
+        rawBytes,
+        fileHash,
+        parsed,
+        identity,
+        replaceImportId: replacementRecord?.id ?? null,
+      })
+
+      if (identity.status !== 'match') {
+        return errorResponseFromCode(
+          identity.status === 'mismatch'
+            ? 'SIE_COMPANY_IDENTITY_MISMATCH'
+            : 'SIE_COMPANY_IDENTITY_MISSING',
+          opLog,
+          {
+            requestId,
+            details: {
+              identity,
+              parseSessionId: parseSession.id,
+              errors: [identity.message],
+            },
+          },
+        )
+      }
+
       const excludedSystemAccounts = parsed.accounts
         .filter((a) => isSystemAccount(a.number))
         .map((a) => ({ number: a.number, name: a.name }))
@@ -153,6 +197,12 @@ export const POST = withRouteContext(
       const preview = generateImportPreview(parsed, mappings)
       preview.excludedSystemAccounts = excludedSystemAccounts
       preview.accountCount = bookkeepingAccounts.length
+      preview.selectedCompanyName = company.companyName
+      preview.selectedCompanyOrgNumber = company.organisationNumber
+      preview.companyIdentity = identity
+      preview.parseSessionId = parseSession.id
+      preview.sourceSystem = parsed.header.program
+      preview.sourceVersion = parsed.header.programVersion
 
       // Preflight bank-overlap check: bank transactions already imported in
       // the file's fiscal-year range mean double-booking risk. The execute
@@ -173,12 +223,12 @@ export const POST = withRouteContext(
         }
       }
 
-      const fileHash = await calculateFileHash(content)
-
       return NextResponse.json({
         success: true,
         encoding,
         fileHash,
+        parseSessionId: parseSession.id,
+        companyIdentity: identity,
         parsed: {
           header: parsed.header,
           accounts: parsed.accounts,

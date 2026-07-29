@@ -73,7 +73,15 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
     }
     return new Proxy({}, handler)
   }
-  return { from: vi.fn((table: string) => buildChain(table)) }
+  return {
+    from: vi.fn((table: string) => buildChain(table)),
+    rpc: vi.fn().mockResolvedValue({ data: 0, error: null }),
+    storage: {
+      from: vi.fn().mockReturnValue({
+        upload: vi.fn().mockResolvedValue({ data: { path: 'archive.se' }, error: null }),
+      }),
+    },
+  }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -138,7 +146,13 @@ beforeEach(() => {
   mockServiceClient.mockReturnValue(
     makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      companies: { data: { name: 'Import AB', org_number: '5566778899' }, error: null },
+      company_settings: {
+        data: { company_name: 'Import AB', org_number: '5566778899' },
+        error: null,
+      },
       sie_account_mappings: { data: [], error: null },
+      sie_parse_sessions: { data: null, error: null },
     }),
   )
 })

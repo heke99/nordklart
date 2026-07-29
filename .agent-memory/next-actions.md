@@ -1,16 +1,13 @@
 # Nästa exakta åtgärder
 
-1. Applicera
-   `supabase/migrations/20260728143000_year_end_manual_cash_reconciliation.sql`
-   mot en separat testdatabas.
-2. Kör `npm run test:pg` och verifiera skapande, differensavslag,
-   dokumentimmutabilitet, invalidation och tenantisolering.
-3. Kontrollera målmiljöns migrationsstatus och applicera migrationen innan den
-   nya applikationskoden driftsätts.
-4. Smoke-testa ett SIE-only-bolag: ladda upp kontoutdrag, verifiera 0,00 kr,
-   ändra huvudboken, kontrollera att avstämningen blir stale och verifiera på
-   nytt.
-5. Smoke-testa engångsbokslut för valt kundbolag genom hela guiden inklusive
-   årsredovisning och NE-underlag.
-6. Fortsätt minska den befintliga auth- och avrundningsskulden utan att höja
-   guardbaslinjerna.
+1. Säkerhetskopiera mål-DB och sätt `SUPABASE_DB_URL`.
+2. Lös de två befintliga dubbla migrationsversionerna mot faktisk
+   migrationshistorik innan `db push`.
+3. Applicera migrationerna i ordningen `20260729160000`,
+   `20260729161000`, `20260729162000`.
+4. Kör pg-real-testet och hela `npm run test:pg`.
+5. Smoke-testa SIE parse→execute med matchande och avvikande organisationsnummer.
+6. Verifiera acceptansbeloppen 11 250,00 kr, 13 595,31 kr och 13 792,50 kr i
+   en separat kopia av produktionsdata.
+7. Implementera den kvarvarande atomiska betalningsrouten och historiska
+   bankradimporten innan de funktionerna aktiveras för slutanvändare.

@@ -1,12 +1,20 @@
 # Aktiva blockerare och skuld
 
-1. Den nya migrationen är PostgreSQL-parsad men kan inte exekveras mot
-   målmiljön utan en databasanslutning.
-2. pg-real-, RLS- och tenantisoleringstester kan inte köras utan en separat
-   PostgreSQL-testdatabas.
-3. 167 routefiler finns kvar i guard-baslinjen för rå auth.
-4. 653 naiva avrundningsmönster finns kvar i guard-baslinjen.
-5. Två befintliga statiska migration/RLS-träffar behöver livegranskning.
+1. `SUPABASE_DB_URL`/`DATABASE_URL` saknas. De tre nya migrationerna kan därför
+   inte appliceras eller exekveras i detta arbetsutrymme.
+2. pg-real/RLS-testfilen finns men försöket stoppades av
+   `ECONNREFUSED 127.0.0.1:5432`; inga PostgreSQL-testresultat påstås.
+3. Mottagen baslinje innehåller två dubbla migrationsversioner:
+   `20260629120000` och `20260704120000`. De gamla migrationerna har inte
+   namnändrats eftersom applicerade migrationsfiler är immutabla.
+4. Betalning av migrerade AR/AP-poster har datamodell och dublettskydd men
+   saknar ännu en samlad produktionsroute som både länkar och vid behov bokar
+   betalningen atomiskt.
+5. Historiska banktabeller och manuell verifiering finns, men import av ett
+   äldre kontoutdrag till radnivå kräver fortsatt parser-/UI-arbete.
+6. Bolagsverket-snapshot kan användas via befintlig registerintegration, men
+   den nya bokslutsytan väljer i denna leverans profilfält och låser dem; ett
+   fullständigt fält-för-fält merge-UI mot registerkällan återstår.
 
-Punkt 3–5 är existerande skuld i mottagen baslinje och har inte dolts genom
-ändrade guardundantag.
+Punkt 1–3 är miljö-/baslinjeförhållanden. Punkt 4–6 är uttryckligt kvarvarande
+produktarbete och ska inte betraktas som färdigverifierat.
