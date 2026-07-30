@@ -29,3 +29,12 @@ produktarbete och ska inte betraktas som färdigverifierat.
    arbetsmiljön; `SUPABASE_DB_URL`/`DATABASE_URL` saknas.
 9. De nya pg-real-scenarierna för preview-staleness, rollback och samtidighet
    behöver köras mot den migrerade testdatabasen innan produktionsaktivering.
+
+## Slutförandereparation 2026-07-30
+
+10. Migration `20260730213000_canonical_year_end_completion_repair.sql` är
+    syntax-, ordnings-, unit- och buildverifierad men inte applicerad mot en
+    riktig databas här eftersom `SUPABASE_DB_URL`/`DATABASE_URL` saknas.
+11. Processorerna för återföring och outbox behöver köras i pg-real mot
+    migration 423 före produktionsaktivering för att verifiera låsning,
+    samtidighet, backoff och dead-letter i den faktiska PostgreSQL-versionen.

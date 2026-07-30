@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { ArrowRight, Loader2, Plus, Trash2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 import type { AccrualsProposal } from '@/lib/bokslut/accruals/types'
 
 interface AccrualsStepProps {
@@ -33,6 +34,19 @@ interface ManualEntry {
   prepaidAccount: string
   accruedAccount: string
   liabilityAccount: '2991' | '2992'
+  saved?: boolean
+}
+
+interface StagedAccrual {
+  adjustment_kind: string
+  calculation_payload?: {
+    request?: Record<string, unknown>
+  }
+}
+
+type AccrualsResponse = AccrualsProposal & {
+  groupTouched?: boolean
+  stagedAdjustments?: StagedAccrual[]
 }
 
 function makeId() {
@@ -46,6 +60,7 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
   const [error, setError] = useState<string | null>(null)
   const [auto, setAuto] = useState<AutoState>({ vacation: { accept: true } })
   const [manual, setManual] = useState<ManualEntry[]>([])
+  const [manualErrors, setManualErrors] = useState<Record<string, string>>({})
   const [posting, setPosting] = useState(false)
 
   useEffect(() => {
@@ -61,10 +76,25 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
           const body = await res.json()
           if (cancelled) return
           if (!res.ok) {
-            setError(body?.error?.message ?? 'Kunde inte ladda periodiseringar')
+            setError(getYearEndApiErrorMessage(
+              body,
+              'Kunde inte ladda periodiseringar',
+              res.status,
+            ))
             return
           }
-          setProposal(body.data as AccrualsProposal)
+          const data = body.data as AccrualsResponse
+          setProposal(data)
+          const staged = data.stagedAdjustments ?? []
+          setAuto({
+            vacation: {
+              accept: data.groupTouched
+                ? staged.some((item) => item.adjustment_kind === 'vacation_liability_change')
+                : true,
+            },
+          })
+          setManual(staged.flatMap(stagedAccrualToManualEntry))
+          setManualErrors({})
         })
         .catch(() => {
           if (!cancelled) setError('Kunde inte ladda periodiseringar')
@@ -97,27 +127,47 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
 
   const removeManual = useCallback((id: string) => {
     setManual((prev) => prev.filter((m) => m.id !== id))
+    setManualErrors((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
   }, [])
 
   const updateManual = useCallback((id: string, patch: Partial<ManualEntry>) => {
-    setManual((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
+    setManual((prev) => prev.map((m) => (
+      m.id === id ? { ...m, ...patch, saved: false } : m
+    )))
+    setManualErrors((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
   }, [])
 
   const handleCommit = useCallback(async () => {
     if (!proposal) return
     setPosting(true)
+    setError(null)
     try {
       const items: unknown[] = []
       if (proposal.proposals.find((p) => p.kind === 'vacation_liability_change') && auto.vacation.accept) {
         items.push({ kind: 'vacation_liability_change' })
       }
+      const validationErrors: Record<string, string> = {}
       for (const m of manual) {
         const amount = parseFloat(m.amount)
-        if (!Number.isFinite(amount) || amount <= 0) continue
+        if (!Number.isFinite(amount) || amount <= 0) {
+          validationErrors[m.id] = 'Ange ett belopp större än 0.'
+          continue
+        }
         if (m.kind === 'audit_fee') {
           items.push({ kind: 'audit_fee', amount, liability_account: m.liabilityAccount })
         } else if (m.kind === 'manual_prepaid_expense') {
-          if (!m.expenseAccount || !m.prepaidAccount || !m.description) continue
+          if (!m.expenseAccount) validationErrors[m.id] = 'Ange kostnadskonto.'
+          else if (!m.prepaidAccount) validationErrors[m.id] = 'Ange ett 17xx-konto.'
+          else if (!m.description.trim()) validationErrors[m.id] = 'Ange en beskrivning.'
+          if (validationErrors[m.id]) continue
           items.push({
             kind: 'manual_prepaid_expense',
             amount,
@@ -126,7 +176,10 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
             description: m.description,
           })
         } else if (m.kind === 'manual_accrued_expense') {
-          if (!m.expenseAccount || !m.accruedAccount || !m.description) continue
+          if (!m.expenseAccount) validationErrors[m.id] = 'Ange kostnadskonto.'
+          else if (!m.accruedAccount) validationErrors[m.id] = 'Ange ett 29xx-konto.'
+          else if (!m.description.trim()) validationErrors[m.id] = 'Ange en beskrivning.'
+          if (validationErrors[m.id]) continue
           items.push({
             kind: 'manual_accrued_expense',
             amount,
@@ -136,8 +189,9 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
           })
         }
       }
-      if (items.length === 0) {
-        onContinue()
+      if (Object.keys(validationErrors).length > 0) {
+        setManualErrors(validationErrors)
+        setError('Komplettera de markerade manuella periodiseringarna innan du fortsätter.')
         return
       }
       const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
@@ -148,7 +202,11 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
       })
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte bokföra periodiseringarna')
+        setError(getYearEndApiErrorMessage(
+          body,
+          'Kunde inte spara periodiseringarna',
+          res.status,
+        ))
         return
       }
       const staged = body.data?.staged?.count ?? 0
@@ -255,6 +313,7 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
             <ManualEntryEditor
               key={m.id}
               entry={m}
+              error={manualErrors[m.id]}
               onChange={(patch) => updateManual(m.id, patch)}
               onRemove={() => removeManual(m.id)}
             />
@@ -301,25 +360,31 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
 
 function ManualEntryEditor({
   entry,
+  error,
   onChange,
   onRemove,
 }: {
   entry: ManualEntry
+  error?: string
   onChange: (patch: Partial<ManualEntry>) => void
   onRemove: () => void
 }) {
   return (
-    <div className="rounded-md border border-border p-3 space-y-3">
+    <div className={`rounded-md border p-3 space-y-3 ${
+      error ? 'border-destructive' : 'border-border'
+    }`}>
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">
           {entry.kind === 'audit_fee' && 'Revisions-/bokslutsarvode'}
           {entry.kind === 'manual_prepaid_expense' && 'Förutbetald kostnad'}
           {entry.kind === 'manual_accrued_expense' && 'Upplupen kostnad'}
         </p>
+        {entry.saved && <Badge variant="success">Sparad till bokslutet</Badge>}
         <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
           <Label className="text-xs">Belopp (kr)</Label>
@@ -394,4 +459,31 @@ function ManualEntryEditor({
       </div>
     </div>
   )
+}
+
+function stagedAccrualToManualEntry(adjustment: StagedAccrual): ManualEntry[] {
+  const request = adjustment.calculation_payload?.request
+  if (!request) return []
+  const kind = request.kind
+  if (
+    kind !== 'audit_fee'
+    && kind !== 'manual_prepaid_expense'
+    && kind !== 'manual_accrued_expense'
+  ) {
+    return []
+  }
+  const amount = typeof request.amount === 'number' ? String(request.amount) : ''
+  return [{
+    id: makeId(),
+    kind,
+    amount,
+    description: typeof request.description === 'string' ? request.description : '',
+    expenseAccount: typeof request.expense_account === 'string'
+      ? request.expense_account
+      : kind === 'audit_fee' ? '6420' : '',
+    prepaidAccount: typeof request.prepaid_account === 'string' ? request.prepaid_account : '',
+    accruedAccount: typeof request.accrued_account === 'string' ? request.accrued_account : '',
+    liabilityAccount: request.liability_account === '2991' ? '2991' : '2992',
+    saved: true,
+  }]
 }

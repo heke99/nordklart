@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AlertTriangle, FileDown, Info } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 import type { EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
 import type { EfDeclarationItem } from '@/lib/bokslut/enskild-firma/types'
 
@@ -138,7 +139,11 @@ export function EfDeclarationSection({
       )
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte ladda EF-deklaration')
+        setError(getYearEndApiErrorMessage(
+          body,
+          'Kunde inte ladda EF-deklaration',
+          res.status,
+        ))
         setPreview(null)
         return
       }

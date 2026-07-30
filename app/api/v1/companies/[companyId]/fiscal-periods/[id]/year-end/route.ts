@@ -162,12 +162,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ctx.supabase,
         {
           id: operationId,
-          result: {
-            closing_entry_id: result.closingEntry?.id ?? null,
-            revaluation_entry_id: result.revaluationEntry?.id ?? null,
-            opening_balance_entry_id: result.openingBalanceEntry?.id ?? null,
-            next_period_id: result.nextPeriod?.id ?? null,
-          },
+          result: result.resultViewComplete === false
+            ? {
+                status: result.status,
+                result_view_complete: false,
+                execution_id: result.executionId,
+                preview_id: result.previewId,
+                closing_entry_id: result.closingEntryId,
+                next_period_id: result.nextPeriodId,
+                opening_balances_created: result.openingBalancesCreated,
+                warning: result.warning,
+              }
+            : {
+                status: 'executed',
+                result_view_complete: true,
+                execution_id: result.executionId ?? result.runId,
+                preview_id: result.previewId,
+                closing_entry_id: result.closingEntry.id,
+                revaluation_entry_id: result.revaluationEntry?.id ?? null,
+                opening_balance_entry_id: result.openingBalanceEntry.id,
+                next_period_id: result.nextPeriod.id,
+                opening_balances_created: result.openingBalancesCreated ?? true,
+              },
         },
         ctx.log,
       )

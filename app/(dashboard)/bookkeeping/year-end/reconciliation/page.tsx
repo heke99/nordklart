@@ -20,6 +20,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 import type { YearEndCashReconciliationStatus } from '@/lib/bokslut/manual-cash-reconciliation'
 
 type Draft = {
@@ -70,7 +71,11 @@ export default function YearEndReconciliationPage() {
           const body = await response.json()
           if (cancelled) return
           if (!response.ok) {
-            setLoadError(body?.error?.message ?? 'Avstämningen kunde inte hämtas.')
+            setLoadError(getYearEndApiErrorMessage(
+              body,
+              'Avstämningen kunde inte hämtas.',
+              response.status,
+            ))
             setAccounts([])
             return
           }
@@ -146,7 +151,11 @@ export default function YearEndReconciliationPage() {
         const body = await response.json()
         if (!response.ok) {
           updateDraft(key, {
-            error: body?.error?.message ?? 'Avstämningen kunde inte verifieras.',
+            error: getYearEndApiErrorMessage(
+              body,
+              'Avstämningen kunde inte verifieras.',
+              response.status,
+            ),
           })
           return
         }

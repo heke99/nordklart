@@ -41,6 +41,8 @@ export interface PfondAvsattningInput {
   /** Closing year of the fiscal period (e.g. 2025 for FY ending 2025-12-31).
    *  Determines which cohort account to use. */
   fiscalYear: number
+  /** Versioned maximum rate from the year-end ruleset. */
+  rate?: number
 }
 
 export interface PfondAvsattningComputation {
@@ -61,7 +63,9 @@ export interface PfondAvsattningComputation {
  */
 export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposition | null {
   const base = Math.max(0, Math.floor(input.skattemassigtResultatBeforeAvsattning))
-  const maxAmount = Math.floor(base * PFOND_AB_RATE)
+  const rate = input.rate ?? PFOND_AB_RATE
+  const rateLabel = `${Math.round(rate * 10_000) / 100} %`
+  const maxAmount = Math.floor(base * rate)
   const desiredAmount = Math.max(0, Math.floor(input.desiredAmount ?? maxAmount))
   const actualAmount = Math.min(desiredAmount, maxAmount)
   const cohortAccount = getPeriodiseringsfondCohortAccount(input.fiscalYear)
@@ -72,7 +76,7 @@ export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposit
   }
 
   const computation: PfondAvsattningComputation = {
-    rate: PFOND_AB_RATE,
+    rate,
     maxAmount,
     desiredAmount,
     actualAmount,
@@ -84,14 +88,14 @@ export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposit
   const warnings: string[] = []
   if (cappedToMax) {
     warnings.push(
-      `Begärt belopp (${desiredAmount} kr) översteg ${PFOND_AB_RATE_PCT}-taket. Avsättningen begränsades till ${maxAmount} kr.`,
+      `Begärt belopp (${desiredAmount} kr) översteg ${rateLabel}-taket. Avsättningen begränsades till ${maxAmount} kr.`,
     )
   }
 
   return {
     kind: 'periodiseringsfond_avsattning',
     label: `Avsättning till periodiseringsfond ${input.fiscalYear}`,
-    description: `Debet 8811, kredit ${cohortAccount}. Max ${PFOND_AB_RATE_PCT} av skattemässigt resultat.`,
+    description: `Debet 8811, kredit ${cohortAccount}. Max ${rateLabel} av skattemässigt resultat.`,
     amount: actualAmount,
     lines: [
       {

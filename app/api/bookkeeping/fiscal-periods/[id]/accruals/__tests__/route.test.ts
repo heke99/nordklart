@@ -43,11 +43,30 @@ vi.mock('@/lib/bokslut/accruals/auto-detect', () => ({
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
+function createYearEndQueryClient() {
+  return {
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
+    from: vi.fn(() => {
+      const result = { data: [], error: null, count: 0 }
+      const handler: ProxyHandler<object> = {
+        get(_target, property) {
+          if (property === 'then') {
+            return (
+              resolve: (value: typeof result) => void,
+              reject: (reason?: unknown) => void,
+            ) => Promise.resolve(result).then(resolve, reject)
+          }
+          return () => new Proxy({}, handler)
+        },
+      }
+      return new Proxy({}, handler)
+    }),
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
-  mockCreateClient.mockResolvedValue({
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
-  })
+  mockCreateClient.mockResolvedValue(createYearEndQueryClient())
   mockCreateServiceClient.mockReturnValue({})
 })
 

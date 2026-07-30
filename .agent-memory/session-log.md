@@ -42,3 +42,13 @@
 - Lade serverbaserad resultatbekräftelse och återläsning av stängd körning.
 - Körde typecheck, lintbaseline, guards, 6 114 unit-tester,
   PostgreSQL-parser och produktionsbygge med godkänt resultat.
+- Slutförde gemensam projicerad huvudbok, tom gruppersättning, strukturerad
+  API-felhantering och periodbunden rapportåtkomst.
+- Lade migration 423 med separata justeringskällor, idempotensåterspelning och
+  retry/dead-letter-processorer för återföring och outbox.
+- Rättade processorns transaktionsgränser, handlerfel och de sista API-/kö-
+  kompatibilitetsfallen.
+- Slutverifierade 6 120 unit-tester, typecheck, lintbaseline, guards,
+  feature-policy, 35 PostgreSQL-statements, migrationsordning och ett komplett
+  produktionsbygge med 356 routes/sidor.
+- Dokumenterade live-DB och pg-real som ej körda eftersom databas-URL saknas.

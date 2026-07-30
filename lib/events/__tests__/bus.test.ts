@@ -49,6 +49,22 @@ describe('EventBus', () => {
     expect(goodHandler).toHaveBeenCalled()
   })
 
+  it('emitStrict() rejects after all handlers run when a handler fails', async () => {
+    const failingHandler = vi.fn().mockRejectedValue(new Error('retry me'))
+    const goodHandler = vi.fn()
+
+    eventBus.on('journal_entry.committed', failingHandler)
+    eventBus.on('journal_entry.committed', goodHandler)
+
+    await expect(eventBus.emitStrict({
+      type: 'journal_entry.committed',
+      payload: { entry: fakeEntry, userId: 'u1', companyId: 'company-1' },
+    })).rejects.toThrow('1 handler(s) failed')
+
+    expect(failingHandler).toHaveBeenCalled()
+    expect(goodHandler).toHaveBeenCalled()
+  })
+
   it('emit() with no handlers is a no-op', async () => {
     // Should not throw
     await eventBus.emit({

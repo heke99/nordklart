@@ -61,8 +61,9 @@ export function registerWebhookHandler(): void {
         // bug that silently breaks webhook delivery for that event. Logging
         // at error level ensures it shows up in monitoring rather than
         // disappearing into routine warn-noise.
-        log.error('event missing companyId — webhook fanout skipped', new Error('missing companyId'), { eventType })
-        return
+        const error = new Error('missing companyId')
+        log.error('event missing companyId — webhook fanout skipped', error, { eventType })
+        throw error
       }
 
       try {
@@ -81,6 +82,7 @@ export function registerWebhookHandler(): void {
         })
       } catch (err) {
         log.error('webhook fanout failed', err as Error, { eventType, companyId })
+        throw err
       }
     })
   }
@@ -149,7 +151,7 @@ async function fanOutToWebhooks(args: {
       companyId: args.companyId,
       eventType: args.eventType,
     })
-    return
+    throw new Error(`Webhook lookup failed: ${fetchErr.message}`)
   }
   if (!webhooks || webhooks.length === 0) return
 
@@ -182,5 +184,6 @@ async function fanOutToWebhooks(args: {
       eventType: args.eventType,
       webhookCount: rows.length,
     })
+    throw new Error(`Webhook delivery insert failed: ${insertErr.message}`)
   }
 }

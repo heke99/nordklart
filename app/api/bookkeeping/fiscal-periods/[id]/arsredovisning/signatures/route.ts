@@ -73,5 +73,5 @@ export const POST = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { allowRequestedCompany: true },
+  { allowRequestedCompany: true, requireWrite: true },
 )

@@ -1672,11 +1672,30 @@ async function commitRunYearEnd(
     const result = await executeYearEndClosing(supabase, companyId, userId, id, {
       previewId,
     })
+    if (result.resultViewComplete === false) {
+      return {
+        data: {
+          status: result.status,
+          result_view_complete: false,
+          execution_id: result.executionId,
+          preview_id: result.previewId,
+          closing_entry_id: result.closingEntryId,
+          next_period_id: result.nextPeriodId,
+          opening_balances_created: result.openingBalancesCreated,
+          warning: result.warning,
+        },
+      }
+    }
     return {
       data: {
-        closing_entry_id: result.closingEntry?.id ?? null,
-        next_period_id: result.nextPeriod?.id ?? null,
-        opening_balance_entry_id: result.openingBalanceEntry?.id ?? null,
+        status: 'executed',
+        result_view_complete: true,
+        execution_id: result.executionId ?? result.runId,
+        preview_id: result.previewId,
+        closing_entry_id: result.closingEntry.id,
+        next_period_id: result.nextPeriod.id,
+        opening_balance_entry_id: result.openingBalanceEntry.id,
+        opening_balances_created: result.openingBalancesCreated ?? true,
       },
     }
   } catch (err) {

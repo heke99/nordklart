@@ -470,5 +470,5 @@ export const POST = withRouteContext(
       )
     }
   },
-  { allowRequestedCompany: true },
+  { allowRequestedCompany: true, requireWrite: true },
 )

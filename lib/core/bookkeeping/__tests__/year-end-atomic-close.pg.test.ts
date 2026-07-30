@@ -97,12 +97,41 @@ async function closePeriodViaRpc(
   fiscalPeriodId: string,
   userId: string,
   idempotencyKey: string,
+  previewId?: string,
 ): Promise<Record<string, unknown>> {
+  const canonicalPreviewId = previewId
+    ?? await createCanonicalPreview(companyId, fiscalPeriodId, userId)
   const { rows } = await getPool().query(
-    `SELECT public.execute_year_end_closing($1::uuid, $2::uuid, $3::uuid, $4, NULL) AS result`,
-    [companyId, fiscalPeriodId, userId, idempotencyKey],
+    `SELECT public.execute_year_end_closing(
+       $1::uuid, $2::uuid, $3::uuid, $4, NULL, $5::uuid
+     ) AS result`,
+    [companyId, fiscalPeriodId, userId, idempotencyKey, canonicalPreviewId],
   )
   return rows[0].result as Record<string, unknown>
+}
+
+async function createCanonicalPreview(
+  companyId: string,
+  fiscalPeriodId: string,
+  userId: string,
+): Promise<string> {
+  const { rows: existing } = await getPool().query<{ id: string }>(
+    `SELECT id
+     FROM public.year_end_previews
+     WHERE company_id = $1 AND fiscal_period_id = $2
+     ORDER BY generated_at DESC
+     LIMIT 1`,
+    [companyId, fiscalPeriodId],
+  )
+  if (existing[0]?.id) return existing[0].id
+
+  const { rows } = await getPool().query<{ result: { preview_id: string } }>(
+    `SELECT public.create_year_end_preview(
+       $1::uuid, $2::uuid, $3::uuid, '{}'::jsonb
+     ) AS result`,
+    [companyId, fiscalPeriodId, userId],
+  )
+  return rows[0].result.preview_id
 }
 
 describe('execute_year_end_closing (atomic close)', () => {
@@ -159,8 +188,21 @@ describe('execute_year_end_closing (atomic close)', () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await postSimpleActivity({ userId, companyId, fiscalPeriodId })
 
-    const first = await closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'retry-key')
-    const replay = await closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'retry-key')
+    const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
+    const first = await closePeriodViaRpc(
+      companyId,
+      fiscalPeriodId,
+      userId,
+      'retry-key',
+      previewId,
+    )
+    const replay = await closePeriodViaRpc(
+      companyId,
+      fiscalPeriodId,
+      userId,
+      'retry-key',
+      previewId,
+    )
     expect(replay.idempotent).toBe(true)
     expect(replay.closing_entry_id).toBe(first.closing_entry_id)
 
@@ -180,10 +222,11 @@ describe('execute_year_end_closing (atomic close)', () => {
   it('two concurrent closes yield exactly one closing entry and one IB (B09)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await postSimpleActivity({ userId, companyId, fiscalPeriodId })
+    const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
 
     const results = await Promise.allSettled([
-      closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'conc-key'),
-      closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'conc-key'),
+      closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'conc-key', previewId),
+      closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'conc-key', previewId),
     ])
     // Both should resolve (second is an idempotent replay after the advisory
     // lock releases) — or the second may fail with ALREADY_CLOSED if it used
@@ -327,7 +370,7 @@ describe('execute_year_end_closing (atomic close)', () => {
 
       await insertPostedYearEnd(9001)
       await expect(insertPostedYearEnd(9002)).rejects.toThrow(
-        /journal_entries_one_year_end_per_period|duplicate key/,
+        /journal_entries_one_year_end_closing_per_period|duplicate key/,
       )
       await client.query('ROLLBACK').catch(() => {})
     } finally {
@@ -412,11 +455,21 @@ describe('FX verification through the atomic close (B01 + B08)', () => {
       ],
       items: [],
     }
+    const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
 
     await expect(
       getPool().query(
-        `SELECT public.execute_year_end_closing($1::uuid, $2::uuid, $3::uuid, $4, $5::jsonb) AS result`,
-        [companyId, fiscalPeriodId, userId, 'fx-close-key', JSON.stringify(manipulated)],
+        `SELECT public.execute_year_end_closing(
+           $1::uuid, $2::uuid, $3::uuid, $4, $5::jsonb, $6::uuid
+         ) AS result`,
+        [
+          companyId,
+          fiscalPeriodId,
+          userId,
+          'fx-close-key',
+          JSON.stringify(manipulated),
+          previewId,
+        ],
       ),
     ).rejects.toThrow(/FX_LINES_MISMATCH/)
 
@@ -435,7 +488,7 @@ describe('FX verification through the atomic close (B01 + B08)', () => {
       `SELECT count(*)::int AS n
        FROM public.journal_entries
        WHERE fiscal_period_id = $1
-         AND source_type IN ('year_end', 'currency_revaluation')`,
+         AND source_type IN ('year_end', 'year_end_closing', 'currency_revaluation')`,
       [fiscalPeriodId],
     )
     expect(entries[0].n).toBe(0)

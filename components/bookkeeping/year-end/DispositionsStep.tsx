@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { ArrowRight, AlertTriangle, Loader2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 import { DepreciationPanel } from './DepreciationPanel'
 import { EfDeclarationSection } from './EfDeclarationSection'
 import type {
@@ -29,6 +30,19 @@ interface DispositionsStepProps {
 interface UiState {
   /** kind → user-controlled selection state */
   selections: Record<string, { accept: boolean; overrideAmount?: number; lockedSkip: boolean }>
+}
+
+interface StagedDisposition {
+  adjustment_kind: string
+  calculation_payload?: {
+    request?: Record<string, unknown>
+    proposal?: { amount?: number }
+  }
+}
+
+type DispositionsResponse = DispositionsProposal & {
+  groupTouched?: boolean
+  stagedAdjustments?: StagedDisposition[]
 }
 
 /**
@@ -65,23 +79,29 @@ export function DispositionsStep({
       )
       const body = await res.json()
       if (!res.ok) {
-        setFetchError(body?.error?.message ?? 'Kunde inte ladda dispositioner')
+        setFetchError(getYearEndApiErrorMessage(
+          body,
+          'Kunde inte ladda dispositioner',
+          res.status,
+        ))
         return
       }
-      const data = body.data as DispositionsProposal
+      const data = body.data as DispositionsResponse
       setProposal(data)
       const selections: UiState['selections'] = {}
+      const staged = data.stagedAdjustments ?? []
       for (const p of data.proposals) {
         const key = proposalKey(p)
+        const saved = savedDispositionForProposal(p, staged)
         selections[key] = {
-          accept: true,
-          overrideAmount: p.amount,
+          accept: Boolean(p.required) || (data.groupTouched ? Boolean(saved) : true),
+          overrideAmount: saved?.amount ?? p.amount,
           lockedSkip: Boolean(p.required),
         }
       }
       setUi({ selections })
-    } catch {
-      setFetchError('Kunde inte ladda dispositioner')
+    } catch (error) {
+      setFetchError(error instanceof Error ? error.message : 'Kunde inte ladda dispositioner')
     } finally {
       setLoading(false)
     }
@@ -103,11 +123,6 @@ export function DispositionsStep({
     setPostError(null)
     try {
       const items = buildPostItems(proposal, ui)
-      if (items.length === 0) {
-        // Nothing selected — just move on
-        onContinue()
-        return
-      }
       const companySuffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/bokslutsdispositioner${companySuffix}`, {
         method: 'POST',
@@ -116,7 +131,11 @@ export function DispositionsStep({
       })
       const body = await res.json()
       if (!res.ok) {
-        setPostError(body?.error?.message ?? 'Kunde inte bokföra dispositioner')
+        setPostError(getYearEndApiErrorMessage(
+          body,
+          'Kunde inte spara dispositioner',
+          res.status,
+        ))
         return
       }
       const staged = body.data?.staged?.count ?? 0
@@ -277,6 +296,27 @@ export function DispositionsStep({
       </div>
     </div>
   )
+}
+
+function savedDispositionForProposal(
+  proposal: ProposedDisposition,
+  staged: StagedDisposition[],
+): { amount?: number } | undefined {
+  const saved = staged.find((adjustment) => adjustment.adjustment_kind === proposal.kind)
+  if (!saved) return undefined
+  const request = saved.calculation_payload?.request
+  if (proposal.kind === 'periodiseringsfond_ateforing') {
+    const account = proposal.lines[0]?.account_number
+    const returns = request?.returns
+    if (!account || !returns || typeof returns !== 'object') return undefined
+    const amount = (returns as Record<string, unknown>)[account]
+    return typeof amount === 'number' ? { amount } : undefined
+  }
+  const requested =
+    request?.desiredAmount
+    ?? request?.additionalAmount
+    ?? saved.calculation_payload?.proposal?.amount
+  return typeof requested === 'number' ? { amount: requested } : {}
 }
 
 function ProposalCard({

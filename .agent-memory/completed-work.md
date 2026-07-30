@@ -61,3 +61,17 @@
 - Lade regressionstest för staged preview utan journalföring.
 - Verifierade typecheck, 6 114 unit-tester, lint, guards, PostgreSQL-parser och
   Next-produktionsbygge.
+
+## 2026-07-30 — bokslutets slutförandereparation
+
+- Samlade bokslutets kalkylatorer och rapportunderlag på samma projicerade
+  huvudbok.
+- Införde tom gruppersättning och gemensamma strukturerade API-fel.
+- Separade justeringskällor från den reserverade slutstängningen och gjorde
+  idempotensåterspelning oberoende av preview-status.
+- Implementerade fungerande retry/dead-letter-processorer för återföringar och
+  outbox, inklusive korrekt återföring av handlerfel.
+- Samordnade v1-rutt och bakgrundskö med genomfört-resultat-med-varning.
+- Rättade periodbunden rapportåtkomst, rollåtkomst och hårdkodade skatteregler.
+- Verifierade 6 120 unit-tester, typecheck, lint, guards, feature-policy,
+  PostgreSQL-syntax och Next-produktionsbygge.

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Loader2 } from 'lucide-react'
 import Link from 'next/link'
@@ -17,6 +18,7 @@ import {
 } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 import type { Asset } from '@/types'
 
 interface ProposalItem {
@@ -32,6 +34,8 @@ interface Proposal {
   fiscalPeriod: { id: string; name: string; period_start: string; period_end: string }
   items: ProposalItem[]
   totalAmount: number
+  stagedAssetIds?: string[]
+  groupTouched?: boolean
 }
 
 interface DepreciationPanelProps {
@@ -47,6 +51,7 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [posting, setPosting] = useState(false)
+  const [selectedAssetIds, setSelectedAssetIds] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -56,10 +61,21 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/depreciation${companySuffix}`)
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte ladda avskrivningar')
+        setError(getYearEndApiErrorMessage(
+          body,
+          'Kunde inte ladda avskrivningar',
+          res.status,
+        ))
         return
       }
-      setProposal(body.data as Proposal)
+      const data = body.data as Proposal
+      setProposal(data)
+      const staged = new Set(data.stagedAssetIds ?? [])
+      setSelectedAssetIds(data.groupTouched
+        ? staged
+        : new Set(data.items
+          .filter((item) => !item.existingJournalEntryId)
+          .map((item) => item.asset.id)))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Okänt fel')
     } finally {
@@ -83,11 +99,15 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/depreciation${companySuffix}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ asset_ids: [...selectedAssetIds] }),
       })
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte bokföra avskrivningar')
+        setError(getYearEndApiErrorMessage(
+          body,
+          'Kunde inte spara avskrivningar',
+          res.status,
+        ))
         return
       }
       const staged = body.data?.staged?.count ?? 0
@@ -104,7 +124,7 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
     } finally {
       setPosting(false)
     }
-  }, [periodId, companyId, onPosted, load, toast])
+  }, [periodId, companyId, onPosted, load, toast, selectedAssetIds])
 
   if (loading) {
     return (
@@ -181,7 +201,25 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
           <TableBody>
             {proposal.items.map((item) => (
               <TableRow key={item.asset.id}>
-                <TableCell className="text-sm">{item.asset.name}</TableCell>
+                <TableCell className="text-sm">
+                  <div className="flex items-center gap-3">
+                    {!item.existingJournalEntryId && (
+                      <Checkbox
+                        checked={selectedAssetIds.has(item.asset.id)}
+                        onCheckedChange={(checked) => {
+                          setSelectedAssetIds((previous) => {
+                            const next = new Set(previous)
+                            if (checked) next.add(item.asset.id)
+                            else next.delete(item.asset.id)
+                            return next
+                          })
+                        }}
+                        aria-label={`Ta med avskrivning för ${item.asset.name}`}
+                      />
+                    )}
+                    <span>{item.asset.name}</span>
+                  </div>
+                </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {formatCurrency(item.amount)}
                   {item.proRated && (
@@ -194,8 +232,10 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
                 <TableCell>
                   {item.existingJournalEntryId ? (
                     <Badge variant="success">Bokförd</Badge>
+                  ) : selectedAssetIds.has(item.asset.id) ? (
+                    <Badge variant="outline">Vald</Badge>
                   ) : (
-                    <Badge variant="outline">Föreslagen</Badge>
+                    <Badge variant="secondary">Borttagen</Badge>
                   )}
                 </TableCell>
               </TableRow>
@@ -211,7 +251,7 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
                 </>
               ) : (
-                'Spara alla avskrivningar'
+                'Spara valda avskrivningar'
               )}
             </Button>
           </div>

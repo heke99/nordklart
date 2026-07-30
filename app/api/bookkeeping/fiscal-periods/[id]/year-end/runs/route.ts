@@ -32,7 +32,7 @@ export const GET = withRouteContext(
     const { data, error } = await serviceDb
       .from('year_end_runs')
       .select(
-        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, idempotency_key, preview_id, ledger_hash, readiness_hash, adjustment_hash, ruleset_version, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, committed_at, started_at, finished_at, created_at',
+        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, idempotency_key, preview_id, ledger_hash, readiness_hash, adjustment_hash, ruleset_version, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, next_period_created, committed_at, started_at, finished_at, created_at',
       )
       .eq('company_id', companyId!)
       .eq('fiscal_period_id', id)
@@ -52,7 +52,7 @@ export const GET = withRouteContext(
       closedRun.next_period_id &&
       closedRun.preview_id
     ) {
-      const [closing, opening, nextPeriod, revaluation, continuity] = await Promise.all([
+      const [closing, opening, nextPeriod, revaluation, continuity, acknowledgement] = await Promise.all([
         serviceDb
           .from('journal_entries')
           .select('*')
@@ -80,6 +80,16 @@ export const GET = withRouteContext(
               .single()
           : Promise.resolve({ data: null, error: null }),
         validateBalanceContinuity(serviceDb, companyId!, closedRun.next_period_id),
+        serviceDb
+          .from('year_end_run_acknowledgements')
+          .select('acknowledged_at, acknowledged_by, statement_version')
+          .eq('company_id', companyId!)
+          .eq('fiscal_period_id', id)
+          .eq('year_end_run_id', closedRun.id)
+          .eq('acknowledged_by', user.id)
+          .order('acknowledged_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ])
       if (!closing.error && !opening.error && !nextPeriod.error) {
         committedResult = {
@@ -93,6 +103,17 @@ export const GET = withRouteContext(
           openingBalanceEntry: opening.data as JournalEntry,
           nextPeriod: nextPeriod.data as FiscalPeriod,
           revaluationEntry: (revaluation.data as JournalEntry | null) ?? null,
+          resultViewComplete: true,
+          nextPeriodCreated: Boolean(
+            (closedRun as { next_period_created?: boolean | null }).next_period_created,
+          ),
+          nextPeriodId: closedRun.next_period_id,
+          openingBalancesCreated: true,
+          closingEntryId: closedRun.closing_entry_id,
+          executionId: closedRun.id,
+          acknowledgedAt: acknowledgement.data?.acknowledged_at ?? null,
+          acknowledgedBy: acknowledgement.data?.acknowledged_by ?? null,
+          acknowledgementVersion: acknowledgement.data?.statement_version ?? null,
           continuity,
         }
       }

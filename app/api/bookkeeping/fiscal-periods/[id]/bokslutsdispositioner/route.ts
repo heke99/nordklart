@@ -11,7 +11,6 @@ import {
   proposeAteforing,
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-service'
-import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import {
   buildDispositionsProposal,
   buildLatentTaxProposal,
@@ -20,10 +19,15 @@ import type { ProposedDisposition } from '@/lib/bokslut/types'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import {
   getYearEndRuleset,
+  listStagedYearEndAdjustments,
   stageYearEndAdjustments,
   type StageYearEndAdjustmentInput,
   type YearEndRuleset,
 } from '@/lib/core/bookkeeping/year-end-staging'
+import {
+  buildProjectedLedger,
+  type ProjectedLedger,
+} from '@/lib/core/bookkeeping/projected-ledger'
 
 /**
  * Canonical bokslut order. Each calculator re-reads the trial balance to
@@ -61,8 +65,26 @@ export const GET = withRouteContext(
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
-      const data = await buildDispositionsProposal(supabase, companyId, id)
-      return NextResponse.json({ data })
+      const [data, stagedAdjustments, history] = await Promise.all([
+        buildDispositionsProposal(supabase, companyId, id),
+        listStagedYearEndAdjustments(supabase, companyId, id),
+        supabase
+          .from('year_end_staged_adjustments')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', id)
+          .eq('adjustment_group', 'disposition'),
+      ])
+      if (history.error) throw new Error(history.error.message)
+      return NextResponse.json({
+        data: {
+          ...data,
+          groupTouched: (history.count ?? 0) > 0,
+          stagedAdjustments: stagedAdjustments.filter(
+            (adjustment) => adjustment.adjustment_group === 'disposition',
+          ),
+        },
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : ''
       if (/not found/i.test(message)) {
@@ -119,7 +141,7 @@ const ItemSchema = z.discriminatedUnion('kind', [
 ])
 
 const PostBodySchema = z.object({
-  items: z.array(ItemSchema).min(1),
+  items: z.array(ItemSchema),
 }).superRefine(({ items }, ctx) => {
   const kinds = new Set<string>()
   for (const [index, item] of items.entries()) {
@@ -167,6 +189,9 @@ export const POST = withRouteContext(
 
       const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
       const ruleset = await getYearEndRuleset(supabase, fiscalYear)
+      const projected = await buildProjectedLedger(supabase, companyId, id, {
+        excludeGroups: ['disposition'],
+      })
 
       // Process items in canonical bokslut order regardless of client array
       // ordering — each computation pulls the current income statement, so
@@ -185,8 +210,10 @@ export const POST = withRouteContext(
           id,
           fiscalYear,
           ruleset,
+          projected,
         )
         if (!proposal) continue
+        if (proposal.lines.length < 2 || proposal.amount <= 0) continue
 
         stagedItems.push({
           stable_key: proposal.kind,
@@ -197,6 +224,7 @@ export const POST = withRouteContext(
           calculation_payload: { request: item, proposal, tax_year: fiscalYear },
           ruleset_version: ruleset.version,
         })
+        projected.applyLines(proposal.lines)
       }
 
       const staged = await stageYearEndAdjustments(
@@ -213,7 +241,7 @@ export const POST = withRouteContext(
       return errorResponse(err, opLog, { requestId })
     }
   },
-  { allowRequestedCompany: true },
+  { allowRequestedCompany: true, requireWrite: true },
 )
 
 type PostItem = z.infer<typeof ItemSchema>
@@ -225,24 +253,24 @@ async function computeProposal(
   fiscalPeriodId: string,
   fiscalYear: number,
   ruleset: YearEndRuleset,
+  projected: ProjectedLedger,
 ): Promise<ProposedDisposition | null> {
   switch (item.kind) {
     case 'bolagsskatt':
       return calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
+        resultBeforeTax: projected.resultBeforeTax(),
+        taxRate: ruleset.corporate_tax_rate,
         manualAdjustments: item.manualAdjustments,
       })
     case 'sarskild_loneskatt':
       return calculateSarskildLoneskatt(supabase, companyId, fiscalPeriodId, {
         manualAdjustment: item.manualAdjustment,
+        pensionCostsBooked: projected.debitMovementInRange('7410', '7419'),
+        rate: ruleset.slp_rate,
       })
     case 'periodiseringsfond_avsattning': {
       // Re-derive the cap base from current state so the user can't sneak in
       // a higher desiredAmount than 25 % of actual skattemässigt resultat.
-      const incomeStatement = await generateIncomeStatement(
-        supabase,
-        companyId,
-        fiscalPeriodId,
-      )
       const { data: periodRow } = await supabase
         .from('fiscal_periods')
         .select('period_end')
@@ -256,11 +284,12 @@ async function computeProposal(
         (sum, f) => sum + f.balance * schablonintaktRate,
         0,
       )
-      const base = incomeStatement.net_result + Math.round(schablonintakt)
+      const base = projected.resultBeforeTax() + Math.round(schablonintakt)
       return proposeAvsattning({
         skattemassigtResultatBeforeAvsattning: base,
         desiredAmount: item.desiredAmount,
         fiscalYear,
+        rate: ruleset.periodiseringsfond_rate,
       })
     }
     case 'periodiseringsfond_ateforing': {
@@ -301,6 +330,8 @@ async function computeProposal(
         supabase,
         companyId,
         fiscalPeriodId,
+        projectedRows: projected.rows,
+        taxRate: ruleset.corporate_tax_rate,
       })
   }
 }

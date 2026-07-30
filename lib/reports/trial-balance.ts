@@ -78,7 +78,9 @@ export async function generateTrialBalance(
       }
 
       if (options?.excludeYearEndClosing) {
-        query = query.neq('journal_entries.source_type', 'year_end')
+        query = query
+          .neq('journal_entries.source_type', 'year_end')
+          .neq('journal_entries.source_type', 'year_end_closing')
       }
 
       return query.range(from, to)
@@ -129,7 +131,9 @@ export async function generateTrialBalance(
     }
 
     if (options?.excludeYearEndClosing) {
-      query = query.neq('journal_entries.source_type', 'year_end')
+      query = query
+        .neq('journal_entries.source_type', 'year_end')
+        .neq('journal_entries.source_type', 'year_end_closing')
     }
 
     return query.range(from, to)

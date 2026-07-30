@@ -79,6 +79,26 @@ function makeSupabase(opts: {
         }),
       }
     }
+    if (table === 'year_end_rulesets') {
+      return {
+        select: () => ({
+          eq: () => ({
+            single: () =>
+              Promise.resolve({
+                data: {
+                  tax_year: Number(periodEnd.slice(0, 4)),
+                  version: `${periodEnd.slice(0, 4)}.1`,
+                  corporate_tax_rate: 0.206,
+                  slp_rate: 0.2426,
+                  periodiseringsfond_rate: 0.25,
+                  schablonintakt_rate: 0.0355,
+                },
+                error: null,
+              }),
+          }),
+        }),
+      }
+    }
     if (table === 'journal_entry_lines') {
       // Used by listExistingPeriodiseringsfonder and calculateSarskildLoneskatt.
       // We return either the test-supplied periodiseringsfond rows (when the

@@ -411,7 +411,7 @@ export async function commitAnnualPostings(
       fiscal_period_id: fiscalPeriodId,
       entry_date: periodEnd,
       description: `Planenlig avskrivning ${periodName}: ${item.asset.name}`,
-      source_type: 'year_end',
+      source_type: 'year_end_depreciation',
       lines,
     })
 

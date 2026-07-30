@@ -51,5 +51,7 @@ export interface DispositionsProposal {
   }
   /** Result before any new dispositions, from the income statement (positive = profit). */
   netResultBefore: number
+  /** Versioned tax rules used for every amount in this proposal snapshot. */
+  rulesetVersion?: string
   proposals: ProposedDisposition[]
 }

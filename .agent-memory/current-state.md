@@ -79,3 +79,31 @@ Verifierat i detta pass:
 - Lintbaseline och antipattern-guard: passerar.
 - PostgreSQL-parser: migrationens 49 statements accepteras.
 - Produktionsbygge: passerar, 355 sidor.
+
+## Slutförandereparation 2026-07-30
+
+- Alla bokslutsdelar läser samma projicerade huvudbok från sparade staged
+  adjustments innan preview och execute.
+- Tom ersättning av periodiseringar, avskrivningar och dispositioner tar bort
+  den tidigare sparade gruppen i stället för att lämna kvar gamla rader.
+- Bokslutsstängning använder `year_end_closing`; vanliga bokslutsjusteringar
+  har separata källtyper och avskrivningsmotorn använder inte den reserverade
+  stängningstypen.
+- Idempotens återspelas före preview-statuskontroll.
+- Återföringar och outbox har låsta, retrybara processorer med beständiga
+  försök, backoff och dead-letter; handlerfel markeras inte som levererade.
+- API- och köanropare hanterar ett bokfört resultat med varning utan att
+  felrapportera en redan genomförd bokslutstransaktion.
+- Periodbunden köprätt används för bokslutsrapporter och skrivåtkomst kan inte
+  återöppnas via den gamla `client_user`-rollen.
+
+Slutverifierat 2026-07-30:
+
+- TypeScript: 0 fel.
+- Full unit-svit: 488 filer passerar, 1 skip; 6 120 tester passerar, 2 skip.
+- Lintbaseline, antipattern-guard och feature-policy: passerar.
+- Feature-policy: 465 routefiler och 296 operationer täcks.
+- PostgreSQL-parser: migration
+  `20260730213000_canonical_year_end_completion_repair.sql` har 35 giltiga
+  statements och ligger sist som migration 423.
+- Produktionsbygge: passerar med 356 genererade routes/sidor.

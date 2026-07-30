@@ -1395,6 +1395,13 @@ export type JournalEntrySourceType =
   | 'salary_payment'
   | 'opening_balance'
   | 'year_end'
+  | 'year_end_accrual'
+  | 'year_end_depreciation'
+  | 'year_end_fx_revaluation'
+  | 'year_end_tax_adjustment'
+  | 'year_end_disposition'
+  | 'year_end_deferred_tax'
+  | 'year_end_closing'
   | 'storno'
   | 'correction'
   | 'import'
@@ -2908,6 +2915,15 @@ export interface YearEndResult {
   nextPeriod: FiscalPeriod
   openingBalanceEntry: JournalEntry
   revaluationEntry: JournalEntry | null
+  resultViewComplete?: true
+  nextPeriodCreated?: boolean
+  nextPeriodId?: string | null
+  openingBalancesCreated?: boolean
+  closingEntryId?: string
+  executionId?: string
+  acknowledgedAt?: string | null
+  acknowledgedBy?: string | null
+  acknowledgementVersion?: string | null
   /**
    * IB/UB reconciliation per balance sheet account, computed after the
    * opening balances are posted. Surfaced to the UI's ResultStep so the
@@ -2915,6 +2931,21 @@ export interface YearEndResult {
    * ORE_TOLERANCE — otherwise executeYearEndClosing would have thrown.
    */
   continuity?: ContinuityCheckResult
+}
+
+export interface YearEndCommittedWarning {
+  status: 'executed'
+  resultViewComplete: false
+  runId: string
+  executionId: string
+  previewId: string
+  closingEntryId: string
+  nextPeriodId: string | null
+  openingBalancesCreated: boolean
+  warning: {
+    code: 'YEAR_END_RESULT_REFRESH_FAILED'
+    message: string
+  }
 }
 
 // ============================================================

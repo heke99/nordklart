@@ -34,3 +34,18 @@ Ej körda kontroller räknas inte som godkända.
 | Git whitespace | `git diff --check` | PASS |
 | Live migration | `npm run db:migrate` | NOT RUN, DB-URL saknas |
 | pg-real/RLS/transaktion | `npm run test:pg` | NOT RUN, PostgreSQL saknas |
+
+## Slutförandereparation 2026-07-30
+
+| Kontroll | Kommando/metod | Utfall |
+|---|---|---|
+| Typkontroll | `NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck` | PASS, 0 fel |
+| Full unit-svit | `npm test` | PASS, 488 filer / 6 120 tester; 1 fil och 2 tester skip |
+| Lintbaseline | `npm run check:lint` | PASS, 0 nya fel |
+| Guards | `npm run check:guards` | PASS, naiv öresavrundning −15 |
+| Feature-policy | direkt körning av kontrollskriptet | PASS, 465 routes / 296 operationer |
+| PostgreSQL-syntax | `pgsql-parser` | PASS, 35 statements |
+| Migrationsordning | `npm run db:migrate:list` | PASS, migration 423 sist |
+| Produktionsbygge | generatorer + `next build` | PASS, 356 routes/sidor |
+| Live migration | `npm run db:migrate` | NOT RUN, DB-URL saknas |
+| pg-real/processorer | `npm run test:pg` | NOT RUN, PostgreSQL saknas |

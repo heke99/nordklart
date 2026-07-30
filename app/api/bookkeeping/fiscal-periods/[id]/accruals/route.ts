@@ -18,6 +18,7 @@ import type { AccrualProposal } from '@/lib/bokslut/accruals/types'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
+  listStagedYearEndAdjustments,
   stageYearEndAdjustments,
   type StageYearEndAdjustmentInput,
 } from '@/lib/core/bookkeeping/year-end-staging'
@@ -42,7 +43,7 @@ export const GET = withRouteContext(
 
       // Run the two independent scans in parallel so the wizard's first
       // paint isn't gated on the slower auto-detect query.
-      const [proposal, autoDetected] = await Promise.all([
+      const [proposal, autoDetected, stagedAdjustments, history] = await Promise.all([
         buildAccrualsProposal(supabase, companyId, id),
         detectPeriodisering(supabase, companyId, id).catch((err) => {
           // Auto-detect is best-effort — a malformed invoice description
@@ -50,8 +51,25 @@ export const GET = withRouteContext(
           log.warn('auto-detect failed', { error: (err as Error)?.message })
           return []
         }),
+        listStagedYearEndAdjustments(supabase, companyId, id),
+        supabase
+          .from('year_end_staged_adjustments')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', id)
+          .eq('adjustment_group', 'accrual'),
       ])
-      return NextResponse.json({ data: { ...proposal, autoDetected } })
+      if (history.error) throw new Error(history.error.message)
+      return NextResponse.json({
+        data: {
+          ...proposal,
+          autoDetected,
+          groupTouched: (history.count ?? 0) > 0,
+          stagedAdjustments: stagedAdjustments.filter(
+            (adjustment) => adjustment.adjustment_group === 'accrual',
+          ),
+        },
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : ''
       if (/not found/i.test(message)) {
@@ -121,7 +139,7 @@ const PostItemSchema = z.discriminatedUnion('kind', [
 ])
 
 const PostBodySchema = z.object({
-  items: z.array(PostItemSchema).min(1),
+  items: z.array(PostItemSchema),
 })
 
 export const POST = withRouteContext(
@@ -258,5 +276,5 @@ export const POST = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { allowRequestedCompany: true },
+  { allowRequestedCompany: true, requireWrite: true },
 )

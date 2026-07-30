@@ -85,7 +85,7 @@ describe('resolveFiscalPeriodAccess', () => {
     })
   })
 
-  it('allows an unassigned active one-off purchase to create a fiscal year', async () => {
+  it('does not reopen fiscal-year writes when canonical access is read-only', async () => {
     const { db } = dbFor({
       access: { ...directAccess, can_write: false, effective_role: 'client_user' },
       purchases: [{
@@ -96,7 +96,8 @@ describe('resolveFiscalPeriodAccess', () => {
     await expect(resolveFiscalPeriodAccess(db as never, 'user-1', 'company-1')).resolves.toMatchObject({
       allowed: true,
       accessSource: 'one_time_purchase',
-      canCreateFiscalYear: true,
+      canWrite: false,
+      canCreateFiscalYear: false,
       unassignedPurchaseId: 'purchase-1',
       allowedPeriodIds: [],
     })

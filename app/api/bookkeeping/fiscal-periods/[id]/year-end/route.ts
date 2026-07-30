@@ -123,5 +123,5 @@ export const POST = withRouteContext(
       return fallback
     }
   },
-  { allowRequestedCompany: true },
+  { allowRequestedCompany: true, requireWrite: true },
 )

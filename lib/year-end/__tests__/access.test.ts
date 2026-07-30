@@ -46,7 +46,11 @@ const db = {
 
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => db }))
 
-import { requireYearEndAccess, resolveYearEndAccess } from '../access'
+import {
+  requireYearEndAccess,
+  requireYearEndReportAccess,
+  resolveYearEndAccess,
+} from '../access'
 
 const companyAccess = {
   can_read: true,
@@ -95,6 +99,27 @@ describe('year-end period-scoped access', () => {
     })
   })
 
+  it('allows purchased-period reports without unlocking unrelated periods', async () => {
+    purchaseRow = {
+      id: 'purchase-1',
+      permanent_access: true,
+      access_starts_at: null,
+      access_expires_at: null,
+    }
+    const decision = await requireYearEndReportAccess(
+      db as never,
+      'company-1',
+      'user-1',
+      'period-1',
+    )
+    expect(decision).toMatchObject({
+      allowed: true,
+      source: 'one_time_purchase',
+      sourceId: 'purchase-1',
+    })
+    expect(purchaseFilters).toContainEqual(['fiscal_period_id', 'period-1'])
+  })
+
   it('reports a technical failure instead of sending the customer to purchase', async () => {
     checkFeatureAccessMock.mockResolvedValue({ allowed: false, reason: 'database_error' })
 
@@ -129,6 +154,32 @@ describe('year-end period-scoped access', () => {
       allowIxbrlFeature: false,
       requireWrite: true,
     })).resolves.toMatchObject({ allowed: false, reason: 'missing_entitlement' })
+  })
+
+  it('does not reopen canonical can_write=false through a role label', async () => {
+    accessRow = {
+      ...companyAccess,
+      can_write: false,
+      effective_role: 'client_user',
+    }
+    purchaseRow = {
+      id: 'purchase-1',
+      permanent_access: true,
+      access_starts_at: null,
+      access_expires_at: null,
+    }
+
+    await expect(resolveYearEndAccess(
+      db as never,
+      'company-1',
+      'period-1',
+      'user-1',
+      { requireWrite: true },
+    )).resolves.toMatchObject({
+      allowed: false,
+      reason: 'unauthorized',
+    })
+    expect(checkFeatureAccessMock).not.toHaveBeenCalled()
   })
 
   it('audits platform bypass with actor, target company and request id', async () => {

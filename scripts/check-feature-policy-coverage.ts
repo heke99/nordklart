@@ -16,7 +16,7 @@
  *        API_V1_CORE_OPERATIONS),
  *      - a platform operation (and the file enforces a platform role),
  *      - a period-bound year-end operation (and the file calls
- *        requireYearEndAccess), or
+ *        requireYearEndAccess / requireYearEndReportAccess), or
  *      - listed in NON_COMMERCIAL_OPERATIONS below with a reason.
  *
  *    This is what guarantees "a monetized route cannot ship without a real
@@ -128,6 +128,11 @@ function hasServerSideFeatureCheck(source: string): boolean {
     || source.includes('resolveFiscalPeriodAccess(')
 }
 
+function hasPeriodBoundYearEndCheck(source: string): boolean {
+  return source.includes('requireYearEndAccess')
+    || source.includes('requireYearEndReportAccess')
+}
+
 const OPERATION_PATTERNS = [
   /withRouteContext(?:<[^>]*>)?\(\s*'([^']+)'/g,
   /withRouteContext(?:<[\s\S]*?>)?\(\s*\n\s*'([^']+)'/g,
@@ -179,10 +184,10 @@ for (const file of allRoutes) {
     }
 
     if (isPeriodBoundYearEndOperation(operation)) {
-      if (!source.includes('requireYearEndAccess')) {
+      if (!hasPeriodBoundYearEndCheck(source)) {
         findings.push({
           file: relFile,
-          reason: `operation '${operation}' är period-bunden year-end men routen saknar requireYearEndAccess()`,
+          reason: `operation '${operation}' är period-bunden year-end men routen saknar requireYearEndAccess()/requireYearEndReportAccess()`,
         })
       }
       continue
@@ -217,10 +222,10 @@ for (const file of allRoutes) {
     // Period-bound year-end v1 routes must additionally enforce the
     // period-specific access check in the handler.
     if (isPeriodBoundYearEndOperation(operation)) {
-      if (!source.includes('requireYearEndAccess')) {
+      if (!hasPeriodBoundYearEndCheck(source)) {
         findings.push({
           file: relFile,
-          reason: `v1-operation '${operation}' är period-bunden year-end men routen saknar requireYearEndAccess()`,
+          reason: `v1-operation '${operation}' är period-bunden year-end men routen saknar requireYearEndAccess()/requireYearEndReportAccess()`,
         })
       }
       continue

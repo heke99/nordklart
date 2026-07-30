@@ -17,6 +17,7 @@ import type {
   YearEndValidation,
   YearEndPreview,
   YearEndResult,
+  YearEndCommittedWarning,
   CreateJournalEntryLineInput,
   FiscalPeriod,
   JournalEntry,
@@ -493,7 +494,7 @@ export async function executeYearEndClosing(
   userId: string,
   fiscalPeriodId: string,
   options: { previewId: string; idempotencyKey?: string; correlationId?: string }
-): Promise<YearEndResult> {
+): Promise<YearEndResult | YearEndCommittedWarning> {
   const idempotencyKey = options?.idempotencyKey ?? `close:${fiscalPeriodId}`
 
   // Fetch the period for the balance date. The RPC re-validates everything
@@ -509,6 +510,11 @@ export async function executeYearEndClosing(
   if (periodError || !period) {
     throw new Error('Fiscal period not found')
   }
+  const existingNextPeriod = await findNextPeriod(
+    supabase,
+    companyId,
+    fiscalPeriodId,
+  )
 
   // Compute the currency revaluation underlag (historical open items as of
   // the balance date, B06/B07) and its deterministic snapshot key (B05).
@@ -631,23 +637,56 @@ export async function executeYearEndClosing(
       : Promise.resolve({ data: null, error: null }),
   ])
 
-  if (closingEntryRes.error || !closingEntryRes.data) {
-    throw new Error('Year-end closed but the closing entry could not be fetched')
-  }
-  if (obEntryRes.error || !obEntryRes.data) {
-    throw new Error('Year-end closed but the opening balance entry could not be fetched')
-  }
-  if (nextPeriodRes.error || !nextPeriodRes.data) {
-    throw new Error('Year-end closed but the next period could not be fetched')
+  if (
+    closingEntryRes.error
+    || !closingEntryRes.data
+    || obEntryRes.error
+    || !obEntryRes.data
+    || nextPeriodRes.error
+    || !nextPeriodRes.data
+    || revalEntryRes.error
+  ) {
+    return {
+      status: 'executed',
+      resultViewComplete: false,
+      runId: result.run_id,
+      executionId: result.run_id,
+      previewId: result.preview_id,
+      closingEntryId: result.closing_entry_id,
+      nextPeriodId: result.next_period_id,
+      openingBalancesCreated: Boolean(result.opening_balance_entry_id),
+      warning: {
+        code: 'YEAR_END_RESULT_REFRESH_FAILED',
+        message: 'Bokslutet är genomfört men resultatvyn kunde inte laddas fullständigt.',
+      },
+    }
   }
 
   // Independent continuity verification for the result payload. The RPC
   // already enforced exactness inside the transaction.
-  const continuity = await validateBalanceContinuity(
-    supabase,
-    companyId,
-    result.next_period_id
-  )
+  let continuity
+  try {
+    continuity = await validateBalanceContinuity(
+      supabase,
+      companyId,
+      result.next_period_id,
+    )
+  } catch {
+    return {
+      status: 'executed',
+      resultViewComplete: false,
+      runId: result.run_id,
+      executionId: result.run_id,
+      previewId: result.preview_id,
+      closingEntryId: result.closing_entry_id,
+      nextPeriodId: result.next_period_id,
+      openingBalancesCreated: true,
+      warning: {
+        code: 'YEAR_END_RESULT_REFRESH_FAILED',
+        message: 'Bokslutet är genomfört men resultatvyn kunde inte laddas fullständigt.',
+      },
+    }
+  }
 
   return {
     runId: result.run_id,
@@ -660,6 +699,12 @@ export async function executeYearEndClosing(
     nextPeriod: nextPeriodRes.data as FiscalPeriod,
     openingBalanceEntry: obEntryRes.data as JournalEntry,
     revaluationEntry: (revalEntryRes.data as JournalEntry | null) ?? null,
+    resultViewComplete: true,
+    nextPeriodCreated: !existingNextPeriod,
+    nextPeriodId: result.next_period_id,
+    openingBalancesCreated: true,
+    closingEntryId: result.closing_entry_id,
+    executionId: result.run_id,
     continuity,
   }
 }

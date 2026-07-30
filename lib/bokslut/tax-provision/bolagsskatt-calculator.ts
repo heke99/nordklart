@@ -1,11 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { roundOre } from '@/lib/money'
 import type { ProposedDisposition } from '../types'
 
 /** Bolagsskatt rate. 20.6 % since 2021 (gäller räkenskapsår påbörjat efter 31 dec 2020). */
 export const BOLAGSSKATT_RATE = 0.206
 
 export interface BolagsskattInput {
+  /** Canonical projected result. When omitted, the posted income statement is used. */
+  resultBeforeTax?: number
+  /** Versioned ruleset rate. Legacy non-year-end callers use the statutory fallback. */
+  taxRate?: number
   /** Manual adjustments to taxable result that the calculator can't derive.
    *  Each is a SEK amount that ADDS to taxable result (so e.g. non-deductible
    *  representation costs are positive; non-taxable dividend income is negative). */
@@ -56,8 +61,9 @@ export async function calculateBolagsskatt(
   fiscalPeriodId: string,
   input: BolagsskattInput = {},
 ): Promise<ProposedDisposition | null> {
-  const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
-  const resultBeforeTax = incomeStatement.net_result
+  const resultBeforeTax = input.resultBeforeTax ?? (
+    await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
+  ).net_result
 
   const adjustments = input.manualAdjustments ?? {}
   const nonDeductibleExpenses = adjustments.nonDeductibleExpenses ?? 0
@@ -75,7 +81,9 @@ export async function calculateBolagsskatt(
   // Truncate to whole krona before applying rate. Negative taxable result =
   // no tax provision (handled as inrullat underskott in INK2, not here).
   const taxableResultClamped = Math.max(0, Math.floor(taxableResult))
-  const taxAmount = Math.round(taxableResultClamped * BOLAGSSKATT_RATE)
+  const taxRate = input.taxRate ?? BOLAGSSKATT_RATE
+  const taxAmount = Math.round(taxableResultClamped * taxRate)
+  const taxRateLabel = `${roundOre(taxRate * 100).toLocaleString('sv-SE')} %`
 
   const computation: BolagsskattComputation = {
     resultBeforeTax,
@@ -85,7 +93,7 @@ export async function calculateBolagsskatt(
     otherAdjustments,
     taxableResult,
     taxableResultClamped,
-    taxRate: BOLAGSSKATT_RATE,
+    taxRate,
     taxAmount,
   }
 
@@ -94,7 +102,7 @@ export async function calculateBolagsskatt(
     // why nothing was booked.
     return {
       kind: 'bolagsskatt',
-      label: 'Bolagsskatt 20,6 %',
+      label: `Bolagsskatt ${taxRateLabel}`,
       description:
         taxableResult <= 0
           ? 'Ingen skatt — året visar förlust eller noll resultat. Underskottet rullas in i nästa år (hanteras i INK2).'
@@ -108,7 +116,7 @@ export async function calculateBolagsskatt(
 
   return {
     kind: 'bolagsskatt',
-    label: 'Bolagsskatt 20,6 %',
+    label: `Bolagsskatt ${taxRateLabel}`,
     description: `Skatt på årets skattemässiga resultat. Debet 8910, kredit 2512.`,
     amount: taxAmount,
     lines: [
@@ -116,7 +124,7 @@ export async function calculateBolagsskatt(
         account_number: '8910',
         debit_amount: taxAmount,
         credit_amount: 0,
-        line_description: `Bolagsskatt 20,6 % på ${taxableResultClamped} kr`,
+        line_description: `Bolagsskatt ${taxRateLabel} på ${taxableResultClamped} kr`,
       },
       {
         account_number: '2512',

@@ -29,6 +29,7 @@ export interface StagedYearEndAdjustment {
   entry_date: string
   reversal_date: string | null
   journal_lines: CreateJournalEntryLineInput[]
+  calculation_payload: Record<string, unknown>
   ruleset_version: string | null
   status: 'approved' | 'included_in_preview'
   version: number
@@ -94,7 +95,7 @@ export async function listStagedYearEndAdjustments(
   const { data, error } = await supabase
     .from('year_end_staged_adjustments')
     .select(
-      'id, adjustment_group, adjustment_kind, stable_key, description, entry_date, reversal_date, journal_lines, ruleset_version, status, version',
+      'id, adjustment_group, adjustment_kind, stable_key, description, entry_date, reversal_date, journal_lines, calculation_payload, ruleset_version, status, version',
     )
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)

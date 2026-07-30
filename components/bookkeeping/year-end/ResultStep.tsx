@@ -18,6 +18,7 @@ import Link from 'next/link'
 import type { YearEndResult, ContinuityDiscrepancy } from '@/types'
 import { formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 
 interface ResultStepProps {
   result: YearEndResult
@@ -29,7 +30,7 @@ const ACKNOWLEDGEMENT_TEXT =
   'Jag har granskat bokslutet och IB/UB-kontinuiteten ovan, och bekräftar att alla balanskonton stämmer mot föregående periods utgående balans.'
 
 export function ResultStep({ result, companyId }: ResultStepProps) {
-  const [acknowledged, setAcknowledged] = useState(false)
+  const [acknowledged, setAcknowledged] = useState(Boolean(result.acknowledgedAt))
   const [savingAcknowledgement, setSavingAcknowledgement] = useState(false)
   const [acknowledgementError, setAcknowledgementError] = useState<string | null>(null)
 
@@ -60,7 +61,11 @@ export function ResultStep({ result, companyId }: ResultStepProps) {
       )
       const body = await res.json()
       if (!res.ok) {
-        setAcknowledgementError(body?.error?.message ?? 'Bekräftelsen kunde inte sparas.')
+        setAcknowledgementError(getYearEndApiErrorMessage(
+          body,
+          'Bekräftelsen kunde inte sparas.',
+          res.status,
+        ))
         return
       }
       setAcknowledged(true)
@@ -83,7 +88,9 @@ export function ResultStep({ result, companyId }: ResultStepProps) {
           </div>
           <h2 className="font-display text-2xl">Bokslutet är klart</h2>
           <p className="text-muted-foreground">
-            Perioden är stängd och en ny räkenskapsperiod har skapats.
+            {result.nextPeriodCreated === false
+              ? 'Perioden är stängd och ett befintligt nästa räkenskapsår återanvändes.'
+              : 'Perioden är stängd och nästa räkenskapsår skapades.'}
           </p>
         </CardContent>
       </Card>

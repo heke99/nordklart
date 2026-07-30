@@ -45,7 +45,14 @@ export const POST = withRouteContext(
         p_continuity_snapshot: validation.data.continuity_snapshot,
       })
       if (error) throw new Error(error.message)
-      return NextResponse.json({ data: { acknowledgement_id: data } })
+      return NextResponse.json({
+        data: {
+          acknowledgement_id: data,
+          acknowledged_at: new Date().toISOString(),
+          acknowledged_by: user.id,
+          acknowledgement_version: validation.data.statement_version,
+        },
+      })
     } catch (error) {
       if (/YE_RUN_NOT_COMMITTED/i.test(error instanceof Error ? error.message : '')) {
         return errorResponseFromCode('YEAR_END_FAILED', log, { requestId })
@@ -53,5 +60,5 @@ export const POST = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
   },
-  { allowRequestedCompany: true },
+  { allowRequestedCompany: true, requireWrite: true },
 )

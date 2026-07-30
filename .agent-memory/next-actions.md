@@ -19,3 +19,10 @@
 11. Kör `npm run test:pg` mot den migrerade testdatabasen och smoke-testa:
     staging utan journal, stale preview, samtidig execute, rollback vid fel,
     återläsning av resultat samt iXBRL från låst disposition.
+12. Applicera därefter
+    `20260730213000_canonical_year_end_completion_repair.sql`.
+13. Kör åter `npm run test:pg` och verifiera särskilt tom gruppersättning,
+    idempotent återspelning efter genomförd preview, parallella
+    återföringsarbetare, outbox-retry och dead-letter.
+14. Aktivera cron-anropet till `/api/bookkeeping/year-end/process/cron` först
+    efter att migration 423 och pg-real-kontrollerna har passerat.

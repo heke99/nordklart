@@ -17,6 +17,7 @@ import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
 import { ConsentSigningDialog } from '@/components/bankid/ConsentSigningDialog'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 
 export default function ArsredovisningPage() {
   const router = useRouter()
@@ -176,7 +177,7 @@ export default function ArsredovisningPage() {
       if (!res.ok) {
         toast({
           title: 'Kunde inte spara texten',
-          description: body?.error?.message ?? '',
+          description: getYearEndApiErrorMessage(body, 'Åtgärden misslyckades.', res.status),
           variant: 'destructive',
         })
         return
@@ -233,7 +234,7 @@ export default function ArsredovisningPage() {
         if (!res.ok) {
           toast({
             title: 'Kunde inte markera som signerad',
-            description: body?.error?.message ?? '',
+            description: getYearEndApiErrorMessage(body, 'Åtgärden misslyckades.', res.status),
             variant: 'destructive',
           })
           return
@@ -268,7 +269,7 @@ export default function ArsredovisningPage() {
       if (!res.ok) {
         toast({
           title: 'Kunde inte lägga till undertecknare',
-          description: body?.error?.message ?? '',
+          description: getYearEndApiErrorMessage(body, 'Åtgärden misslyckades.', res.status),
           variant: 'destructive',
         })
         return

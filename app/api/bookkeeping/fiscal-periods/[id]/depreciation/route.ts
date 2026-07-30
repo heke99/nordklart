@@ -6,7 +6,10 @@ import { validateBody } from '@/lib/api/validate'
 import { proposeAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { createServiceClient } from '@/lib/supabase/server'
-import { stageYearEndAdjustments } from '@/lib/core/bookkeeping/year-end-staging'
+import {
+  listStagedYearEndAdjustments,
+  stageYearEndAdjustments,
+} from '@/lib/core/bookkeeping/year-end-staging'
 
 const CommitSchema = z.object({
   /** Optional whitelist — when supplied, only assets in this list are posted.
@@ -32,8 +35,28 @@ export const GET = withRouteContext(
       )
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
-      const proposal = await proposeAnnualPostings(supabase, companyId, id)
-      return NextResponse.json({ data: proposal })
+      const [proposal, stagedAdjustments, history] = await Promise.all([
+        proposeAnnualPostings(supabase, companyId, id),
+        listStagedYearEndAdjustments(supabase, companyId, id),
+        supabase
+          .from('year_end_staged_adjustments')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', id)
+          .eq('adjustment_group', 'depreciation'),
+      ])
+      if (history.error) throw new Error(history.error.message)
+      const stagedAssetIds = stagedAdjustments
+        .filter((adjustment) => adjustment.adjustment_group === 'depreciation')
+        .map((adjustment) => adjustment.calculation_payload.asset_id)
+        .filter((assetId): assetId is string => typeof assetId === 'string')
+      return NextResponse.json({
+        data: {
+          ...proposal,
+          stagedAssetIds,
+          groupTouched: (history.count ?? 0) > 0,
+        },
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : ''
       if (/not found/i.test(message)) {
@@ -127,5 +150,5 @@ export const POST = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { allowRequestedCompany: true },
+  { allowRequestedCompany: true, requireWrite: true },
 )

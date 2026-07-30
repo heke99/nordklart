@@ -152,6 +152,7 @@ async function persistEvent(
 
   if (error) {
     log.error(`Failed to persist event ${eventType}:`, error.message)
+    throw new Error(`Failed to persist event ${eventType}: ${error.message}`)
   }
 }
 
@@ -173,7 +174,7 @@ export function registerEventLogHandler(): (() => void)[] {
         // would make the row invisible to the company_id-scoped SELECT RLS policy.
         if (typeof companyId !== 'string' || companyId.length === 0) {
           log.error(`Event ${eventType} missing companyId; skipping persistence`)
-          return
+          throw new Error(`Event ${eventType} missing companyId`)
         }
 
         // transaction.synced carries an array — batch insert
@@ -193,6 +194,7 @@ export function registerEventLogHandler(): (() => void)[] {
           const { error } = await supabase.from('event_log').insert(rows)
           if (error) {
             log.error(`Failed to persist batch transaction.synced:`, error.message)
+            throw new Error(`Failed to persist batch transaction.synced: ${error.message}`)
           }
           return
         }
@@ -202,6 +204,7 @@ export function registerEventLogHandler(): (() => void)[] {
         await persistEvent(eventType, userId, companyId, entityId, data)
       } catch (err) {
         log.error(`Event log handler error for ${eventType}:`, err)
+        throw err
       }
     })
   )

@@ -28,6 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 import {
   HISTORICAL_WORKPAPER_LABELS,
   historicalWorkpaperSourceLabel,
@@ -175,7 +176,11 @@ export default function HistoricalSupportPage() {
         `/api/bookkeeping/fiscal-periods/${encodeURIComponent(periodId)}/historical-support${suffix}`,
       )
       const body = await response.json()
-      if (!response.ok) throw new Error(body?.error?.message ?? 'Underlagen kunde inte hämtas.')
+      if (!response.ok) throw new Error(getYearEndApiErrorMessage(
+        body,
+        'Underlagen kunde inte hämtas.',
+        response.status,
+      ))
       const workspace = body.data as Workspace
       setData(workspace)
       setSelectedWorkpapers(
@@ -230,7 +235,11 @@ export default function HistoricalSupportPage() {
         },
       )
       const body = await response.json()
-      if (!response.ok) throw new Error(body?.error?.message ?? 'Åtgärden misslyckades.')
+      if (!response.ok) throw new Error(getYearEndApiErrorMessage(
+        body,
+        'Åtgärden misslyckades.',
+        response.status,
+      ))
       toast({ title: 'Sparat', description: 'Bokslutsunderlaget har uppdaterats.' })
       setRefresh((value) => value + 1)
     } catch (postError) {
@@ -345,7 +354,11 @@ export default function HistoricalSupportPage() {
         { method: 'POST', body: form },
       )
       const body = await response.json()
-      if (!response.ok) throw new Error(body?.error?.message ?? 'Verifieringen misslyckades.')
+      if (!response.ok) throw new Error(getYearEndApiErrorMessage(
+        body,
+        'Verifieringen misslyckades.',
+        response.status,
+      ))
       toast({ title: 'Verifierat', description: 'Underlaget är arkiverat och differensen är noll.' })
       setRefresh((value) => value + 1)
       event.currentTarget.reset()
@@ -377,7 +390,11 @@ export default function HistoricalSupportPage() {
         { method: 'POST', body: form },
       )
       const body = await response.json()
-      if (!response.ok) throw new Error(body?.error?.message ?? 'Underlaget kunde inte sparas.')
+      if (!response.ok) throw new Error(getYearEndApiErrorMessage(
+        body,
+        'Underlaget kunde inte sparas.',
+        response.status,
+      ))
       toast({ title: 'Underlag sparat' })
       setRefresh((value) => value + 1)
     } catch (submitError) {

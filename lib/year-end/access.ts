@@ -127,7 +127,7 @@ export async function resolveYearEndAccess(
     effectiveRole = access.effective_role ?? null
     canWrite = Boolean(access.can_write)
     canManagePlatform = Boolean(access.can_manage_platform) && effectiveRole === 'platform_admin'
-    if (options.requireWrite && !canWrite && !canManagePlatform && !['company_owner','company_admin','accountant','client_user'].includes(effectiveRole ?? '')) {
+    if (options.requireWrite && !canWrite && !canManagePlatform) {
       return { allowed: false, reason: 'unauthorized' }
     }
   }
@@ -213,6 +213,39 @@ export async function requireYearEndAccess(
     )
   }
   return decision
+}
+
+/**
+ * Period-bound statutory reports are included in a one-time year-end purchase
+ * without unlocking unrelated reports. A normal reports.core entitlement
+ * remains sufficient.
+ */
+export async function requireYearEndReportAccess(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  fiscalPeriodId: string,
+  options: Pick<RequireYearEndAccessOptions, 'operation' | 'requestId'> = {},
+): Promise<YearEndAccessDecision> {
+  const reportEntitlement = await checkFeatureAccess(
+    supabase,
+    companyId,
+    'reports.core',
+  )
+  if (reportEntitlement.allowed) {
+    return {
+      allowed: true,
+      source: 'feature_entitlement',
+      sourceId: reportEntitlement.sourceId ?? null,
+    }
+  }
+  return requireYearEndAccess(
+    supabase,
+    companyId,
+    userId,
+    fiscalPeriodId,
+    options,
+  )
 }
 
 export function yearEndAccessDeniedResponse(

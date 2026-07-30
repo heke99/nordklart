@@ -71,6 +71,9 @@ export function isPeriodBoundYearEndOperation(operation: string): boolean {
     || normalized.startsWith('period.depreciation_')
     || normalized === 'report.ink2'
     || normalized === 'report.ne_bilaga'
+    || normalized === 'report.balance_sheet'
+    || normalized === 'report.income_statement'
+    || normalized === 'report.general_ledger'
     || normalized.startsWith('tax_declaration.')
     // v1 API: year-end closing on a specific fiscal period. The wrapper's
     // company-wide feature check would wrongly deny one-time buyers (their

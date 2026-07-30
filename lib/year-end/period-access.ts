@@ -195,21 +195,10 @@ export async function resolveFiscalPeriodAccess(
   )]
 
   if (activePurchases.length > 0) {
-    // active_limited memberships deliberately cannot write across the whole
-    // product, but an active one-off case grants these specific year-end
-    // operations to normal company/accounting roles.
-    const roleCanOperateOneOff = [
-      'company_owner',
-      'company_admin',
-      'accountant',
-      'client_user',
-    ].includes(access.effective_role)
-    const canWrite = access.can_write || roleCanOperateOneOff
-
     return {
       allowed: true,
-      canWrite,
-      canCreateFiscalYear: canWrite && Boolean(unassigned),
+      canWrite: access.can_write,
+      canCreateFiscalYear: access.can_write && Boolean(unassigned),
       companyExists: true,
       accessSource: 'one_time_purchase',
       effectiveRole: access.effective_role,

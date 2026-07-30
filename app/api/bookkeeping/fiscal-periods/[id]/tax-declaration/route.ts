@@ -80,6 +80,7 @@ export const POST = withRouteContext(
       const access = await requireYearEndAccess(supabase, companyId, user.id, id, {
         operation: 'tax_declaration.project_update',
         requestId,
+        requireWrite: true,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 

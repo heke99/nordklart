@@ -71,9 +71,9 @@ const LATENT_TAX_ORE_TOLERANCE = 0.01
  *   - target < current → latent tax LIABILITY shrank → debit 2240, credit
  *     8940 (income — a reversal of prior expense).
  *
- * The entry posts as `source_type='year_end'` and is meant to be created via
- * `createJournalEntry()` so the engine assigns the voucher number atomically
- * and enforces the balance/period rules.
+ * When posted as part of year-end, the entry uses the dedicated
+ * `year_end_deferred_tax` source type so it cannot collide with the single
+ * final `year_end_closing` entry.
  */
 export function proposeLatentTaxChange(
   currentLatentTax2240: number,

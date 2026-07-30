@@ -59,6 +59,10 @@
     {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
+    },
+    {
+      "path": "/api/bookkeeping/year-end/process/cron",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

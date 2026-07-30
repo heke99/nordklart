@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
 import { cn, formatCurrency } from '@/lib/utils'
 import {
   PERIODISERING_TEMPLATES,
@@ -165,7 +166,11 @@ export default function PeriodiseringWizardPage() {
           const body = await res.json()
           if (cancelled) return
           if (!res.ok) {
-            setLoadError(body?.error?.message ?? 'Kunde inte ladda periodiseringar')
+            setLoadError(getYearEndApiErrorMessage(
+              body,
+              'Kunde inte ladda periodiseringar',
+              res.status,
+            ))
             return
           }
           const data = body.data as ProposalResponse
@@ -336,7 +341,11 @@ export default function PeriodiseringWizardPage() {
       })
       const body = await res.json()
       if (!res.ok) {
-        setPostError(body?.error?.message ?? 'Kunde inte bokföra periodiseringarna')
+        setPostError(getYearEndApiErrorMessage(
+          body,
+          'Kunde inte spara periodiseringarna',
+          res.status,
+        ))
         return
       }
       const created = body.data?.created?.length ?? 0

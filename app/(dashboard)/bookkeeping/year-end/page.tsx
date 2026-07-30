@@ -14,12 +14,18 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, RefreshCw } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { FiscalPeriod, YearEndPreview, YearEndResult } from '@/types'
+import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
+import type {
+  FiscalPeriod,
+  YearEndCommittedWarning,
+  YearEndPreview,
+  YearEndResult,
+} from '@/types'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 import { PreflightStep } from '@/components/bookkeeping/year-end/PreflightStep'
 import { DispositionsStep } from '@/components/bookkeeping/year-end/DispositionsStep'
@@ -79,6 +85,7 @@ export default function YearEndPage() {
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [executing, setExecuting] = useState(false)
   const [executeError, setExecuteError] = useState<string | null>(null)
+  const [committedWarning, setCommittedWarning] = useState<string | null>(null)
   const [result, setResult] = useState<YearEndResult | null>(null)
 
   // ---- Load eligible periods ----
@@ -89,7 +96,13 @@ export default function YearEndPage() {
         const res = await fetch(`/api/bookkeeping/fiscal-periods${companySuffix}`)
         const body = await res.json()
         if (!res.ok) {
-          if (!cancelled) setPeriodsError(body?.error?.message ?? 'Kunde inte hämta perioder')
+          if (!cancelled) {
+            setPeriodsError(getYearEndApiErrorMessage(
+              body,
+              'Kunde inte hämta perioder',
+              res.status,
+            ))
+          }
           return
         }
         const data = (body.periods ?? body.data ?? []) as FiscalPeriod[]
@@ -99,9 +112,20 @@ export default function YearEndPage() {
         // Oldest first — accountants close in order.
         eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
         if (cancelled) return
+        const selectedIsAllowed = Boolean(
+          selectedPeriodId && eligible.some((period) => period.id === selectedPeriodId),
+        )
+        const nextPeriodId = selectedIsAllowed
+          ? selectedPeriodId
+          : eligible[0]?.id ?? null
         setPeriods(eligible)
-        if (!selectedPeriodId && eligible.length > 0) {
-          setSelectedPeriodId(eligible[0].id)
+        if (nextPeriodId !== selectedPeriodId) {
+          setSelectedPeriodId(nextPeriodId)
+          setStep('preflight')
+          setReport(null)
+          setPreview(null)
+          setResult(null)
+          setExecuteError(null)
         }
       } catch (error) {
         if (!cancelled) setPeriodsError(getErrorMessage(error))
@@ -115,12 +139,21 @@ export default function YearEndPage() {
 
   // ---- Sync selected period to URL so users can bookmark / share ----
   useEffect(() => {
-    if (!selectedPeriodId) return
+    if (periods === null) return
     const params = new URLSearchParams(searchParams.toString())
+    if (!selectedPeriodId) {
+      if (!params.has('period')) return
+      params.delete('period')
+      const query = params.toString()
+      router.replace(query ? `/bookkeeping/year-end?${query}` : '/bookkeeping/year-end', {
+        scroll: false,
+      })
+      return
+    }
     if (params.get('period') === selectedPeriodId) return
     params.set('period', selectedPeriodId)
     router.replace(`/bookkeeping/year-end?${params.toString()}`, { scroll: false })
-  }, [selectedPeriodId, router, searchParams])
+  }, [selectedPeriodId, periods, router, searchParams])
 
   // ---- Failed year-end runs (B10): surface failed attempts so the user can
   // see what happened and retry through the wizard (the close is atomic and
@@ -150,6 +183,7 @@ export default function YearEndPage() {
           setFailedRuns(runs.filter((r) => r.status === 'failed'))
           if (body.committedResult) {
             setResult(body.committedResult as YearEndResult)
+            setCommittedWarning(null)
             setStep('result')
           }
         })
@@ -160,6 +194,34 @@ export default function YearEndPage() {
     return () => {
       cancelled = true
       clearTimeout(timer)
+    }
+  }, [selectedPeriodId, companySuffix])
+
+  const loadCommittedResult = useCallback(async (): Promise<boolean> => {
+    if (!selectedPeriodId) return false
+    try {
+      const response = await fetch(
+        `/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end/runs${companySuffix}`,
+      )
+      const body = await response.json()
+      if (!response.ok) {
+        setCommittedWarning(getYearEndApiErrorMessage(
+          body,
+          'Bokslutet är genomfört, men resultatet kunde inte hämtas.',
+          response.status,
+        ))
+        return false
+      }
+      if (!body.committedResult) return false
+      setResult(body.committedResult as YearEndResult)
+      setCommittedWarning(null)
+      setStep('result')
+      return true
+    } catch (error) {
+      setCommittedWarning(
+        `Bokslutet är genomfört, men resultatet kunde inte hämtas. ${getErrorMessage(error)}`,
+      )
+      return false
     }
   }, [selectedPeriodId, companySuffix])
 
@@ -185,7 +247,11 @@ export default function YearEndPage() {
           const body = await res.json()
           if (cancelled) return
           if (!res.ok) {
-            setReportError(body?.error?.message ?? 'Kunde inte ladda bokslutskontroll')
+            setReportError(getYearEndApiErrorMessage(
+              body,
+              'Kunde inte ladda bokslutskontroll',
+              res.status,
+            ))
             return
           }
           setReport(body.data as BokslutReadinessReport)
@@ -213,7 +279,11 @@ export default function YearEndPage() {
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end${companySuffix}`)
       const body = await res.json()
       if (!res.ok) {
-        setPreviewError(body?.error?.message ?? 'Kunde inte hämta förhandsgranskning')
+        setPreviewError(getYearEndApiErrorMessage(
+          body,
+          'Kunde inte hämta förhandsgranskning',
+          res.status,
+        ))
         return
       }
       setPreview(body.data.preview as YearEndPreview)
@@ -244,7 +314,11 @@ export default function YearEndPage() {
         // body.error.message is the localized Swedish message picked by
         // the structured-error registry. Do NOT interpolate raw details
         // here — they can contain DB-sourced strings (V2.3 finding).
-        setExecuteError(body?.error?.message ?? 'Bokslutet kunde inte verkställas')
+        setExecuteError(getYearEndApiErrorMessage(
+          body,
+          'Bokslutet kunde inte verkställas',
+          res.status,
+        ))
         if (body?.error?.code === 'YEAR_END_PREVIEW_STALE') {
           setPreview(null)
           // Return to the final editable step. Moving to preview with a cleared
@@ -253,7 +327,19 @@ export default function YearEndPage() {
         }
         return
       }
-      setResult(body.data as YearEndResult)
+      const executionResult = body.data as YearEndResult | YearEndCommittedWarning
+      if (executionResult.resultViewComplete === false) {
+        setCommittedWarning(executionResult.warning.message)
+        setStep('execute')
+        toast({
+          title: 'Bokslut verkställt',
+          description: executionResult.warning.message,
+        })
+        await loadCommittedResult()
+        return
+      }
+      setResult(executionResult)
+      setCommittedWarning(null)
       setStep('result')
       toast({
         title: 'Bokslut verkställt',
@@ -264,7 +350,14 @@ export default function YearEndPage() {
     } finally {
       setExecuting(false)
     }
-  }, [selectedPeriodId, preview, reportPeriodName, toast, companySuffix])
+  }, [
+    selectedPeriodId,
+    preview,
+    reportPeriodName,
+    toast,
+    companySuffix,
+    loadCommittedResult,
+  ])
 
   const createFiscalYear = useCallback(async () => {
     setCreatingPeriod(true)
@@ -281,7 +374,11 @@ export default function YearEndPage() {
       })
       const body = await res.json()
       if (!res.ok) {
-        setPeriodsError(body?.error?.message ?? 'Räkenskapsåret kunde inte skapas')
+        setPeriodsError(getYearEndApiErrorMessage(
+          body,
+          'Räkenskapsåret kunde inte skapas',
+          res.status,
+        ))
         return
       }
       setSelectedPeriodId(body.data.id)
@@ -366,6 +463,7 @@ export default function YearEndPage() {
                 setPreview(null)
                 setResult(null)
                 setExecuteError(null)
+                setCommittedWarning(null)
               }}
             >
               <SelectTrigger className="w-full max-w-sm">
@@ -466,7 +564,25 @@ export default function YearEndPage() {
         />
       )}
 
-      {showWizard && step === 'execute' && report && (
+      {showWizard && step === 'execute' && committedWarning && (
+        <Card>
+          <CardContent className="space-y-4 p-6">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 text-success" />
+              <div>
+                <p className="font-medium">Bokslutet är genomfört</p>
+                <p className="mt-1 text-sm text-muted-foreground">{committedWarning}</p>
+              </div>
+            </div>
+            <Button variant="outline" onClick={() => void loadCommittedResult()}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Ladda resultatet igen
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {showWizard && step === 'execute' && report && !committedWarning && (
         <ExecuteStep
           periodName={report.period.name}
           isRunning={executing}

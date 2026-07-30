@@ -68,7 +68,20 @@ describe('featureForOperation', () => {
   })
 
   it('keeps period-bound year-end operations null (gated via requireYearEndAccess)', () => {
-    for (const op of ['period.year_end', 'period.year_end_preview', 'period.bokslut_readiness', 'period.arsredovisning_pdf', 'period.accruals_preview', 'period.depreciation_commit', 'report.ink2', 'report.ne_bilaga', 'tax_declaration.ef_preview']) {
+    for (const op of [
+      'period.year_end',
+      'period.year_end_preview',
+      'period.bokslut_readiness',
+      'period.arsredovisning_pdf',
+      'period.accruals_preview',
+      'period.depreciation_commit',
+      'report.ink2',
+      'report.ne_bilaga',
+      'report.balance_sheet',
+      'report.income_statement',
+      'report.general_ledger',
+      'tax_declaration.ef_preview',
+    ]) {
       expect(featureForOperation(op)).toBeNull()
       expect(isPeriodBoundYearEndOperation(op)).toBe(true)
     }
@@ -88,7 +101,7 @@ describe('featureForOperation', () => {
   })
 
   it('maps reports/agency/api operations', () => {
-    expect(featureForOperation('report.balance_sheet')).toBe(NORDKLART_FEATURES.reportsCore)
+    expect(featureForOperation('report.vat_declaration')).toBe(NORDKLART_FEATURES.reportsCore)
     expect(featureForOperation('agency.clients.list')).toBe(NORDKLART_FEATURES.agencyClients)
     expect(featureForOperation('api_key.create')).toBe(NORDKLART_FEATURES.apiAccess)
     expect(featureForOperation('webhook.manage.create')).toBe(NORDKLART_FEATURES.apiWebhooks)

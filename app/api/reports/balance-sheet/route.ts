@@ -3,17 +3,31 @@ import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import {
+  requireYearEndReportAccess,
+  yearEndAccessDeniedResponse,
+} from '@/lib/year-end/access'
 
 export const GET = withRouteContext(
   'report.balance_sheet',
   async (request, ctx) => {
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
 
     const { searchParams } = new URL(request.url)
     const periodId = searchParams.get('period_id')
 
     if (!periodId) {
       return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, { requestId })
+    }
+    const access = await requireYearEndReportAccess(
+      supabase,
+      companyId,
+      user.id,
+      periodId,
+      { operation: 'report.balance_sheet', requestId },
+    )
+    if (!access.allowed) {
+      return yearEndAccessDeniedResponse('reports.core', access.reason)
     }
 
     const opLog = log.child({ periodId })

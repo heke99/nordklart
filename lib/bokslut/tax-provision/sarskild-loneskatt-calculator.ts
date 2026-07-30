@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { roundOre } from '@/lib/money'
 import type { ProposedDisposition } from '../types'
 
 /** Särskild löneskatt på pensionskostnader (SLP). 24.26 % per SLF 1991:687. */
@@ -33,38 +34,46 @@ export async function calculateSarskildLoneskatt(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options: { manualAdjustment?: number } = {},
+  options: {
+    manualAdjustment?: number
+    pensionCostsBooked?: number
+    rate?: number
+  } = {},
 ): Promise<ProposedDisposition | null> {
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      'account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status)',
-    )
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-    .eq('journal_entries.status', 'posted')
-    .gte('account_number', '7410')
-    .lte('account_number', '7419')
+  let pensionCostsBooked = options.pensionCostsBooked
+  if (pensionCostsBooked === undefined) {
+    const { data, error } = await supabase
+      .from('journal_entry_lines')
+      .select(
+        'account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status)',
+      )
+      .eq('journal_entries.company_id', companyId)
+      .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
+      .eq('journal_entries.status', 'posted')
+      .gte('account_number', '7410')
+      .lte('account_number', '7419')
 
-  if (error) {
-    throw new Error(`Failed to fetch pension costs: ${error.message}`)
+    if (error) {
+      throw new Error(`Failed to fetch pension costs: ${error.message}`)
+    }
+
+    type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
+    pensionCostsBooked = ((data ?? []) as Row[]).reduce((sum, row) => {
+      return sum + ((Number(row.debit_amount) || 0) - (Number(row.credit_amount) || 0))
+    }, 0)
   }
-
-  type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
-  const pensionCostsBooked = ((data ?? []) as Row[]).reduce((sum, row) => {
-    // Cost account — normal balance is debit, so net = debit − credit.
-    return sum + ((Number(row.debit_amount) || 0) - (Number(row.credit_amount) || 0))
-  }, 0)
 
   const manualAdjustment = options.manualAdjustment ?? 0
   const base = Math.max(0, pensionCostsBooked + manualAdjustment)
-  const slpAmount = Math.round(base * SLP_RATE)
+  const rate = options.rate ?? SLP_RATE
+  const slpAmount = Math.round(base * rate)
+  const rateLabel = `${roundOre(rate * 100).toLocaleString('sv-SE')} %`
 
   const computation: SlpComputation = {
-    pensionCostsBooked: Math.round(pensionCostsBooked * 100) / 100,
+    pensionCostsBooked: roundOre(pensionCostsBooked),
     manualAdjustment,
     base,
-    rate: SLP_RATE,
+    rate,
     slpAmount,
   }
 
@@ -74,7 +83,7 @@ export async function calculateSarskildLoneskatt(
 
   return {
     kind: 'sarskild_loneskatt',
-    label: 'Särskild löneskatt på pensionskostnader (24,26 %)',
+    label: `Särskild löneskatt på pensionskostnader (${rateLabel})`,
     description: 'Debet 7533, kredit 2514.',
     amount: slpAmount,
     lines: [
@@ -82,7 +91,7 @@ export async function calculateSarskildLoneskatt(
         account_number: '7533',
         debit_amount: slpAmount,
         credit_amount: 0,
-        line_description: `SLP 24,26 % på ${base} kr pensionskostnader`,
+        line_description: `SLP ${rateLabel} på ${base} kr pensionskostnader`,
       },
       {
         account_number: '2514',

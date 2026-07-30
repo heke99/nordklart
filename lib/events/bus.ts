@@ -40,6 +40,22 @@ class EventBus {
   }
 
   async emit(event: CoreEvent): Promise<void> {
+    await this.dispatch(event, false)
+  }
+
+  /**
+   * Dispatch an event and reject if any subscriber fails.
+   *
+   * Normal request-path emitters deliberately use emit(), where secondary
+   * handlers cannot fail the already-committed business operation. Durable
+   * outbox workers use emitStrict() so a failed subscriber keeps the outbox
+   * row retryable instead of being falsely marked delivered.
+   */
+  async emitStrict(event: CoreEvent): Promise<void> {
+    await this.dispatch(event, true)
+  }
+
+  private async dispatch(event: CoreEvent, rejectOnFailure: boolean): Promise<void> {
     const handlerSet = this.handlers.get(event.type)
     if (!handlerSet || handlerSet.size === 0) return
 
@@ -48,20 +64,32 @@ class EventBus {
       handlers.map((handler) => handler(event.payload))
     )
 
+    const failures: Error[] = []
     for (let i = 0; i < results.length; i++) {
       const result = results[i]
       if (result.status === 'rejected') {
         const handler = handlers[i]
         const handlerName = handler.name || 'anonymous'
         const payload = event.payload as Record<string, unknown>
+        const failure = result.reason instanceof Error
+          ? result.reason
+          : new Error(String(result.reason))
+        failures.push(failure)
 
-        log.error('handler failed', result.reason, {
+        log.error('handler failed', failure, {
           eventType: event.type,
           handler: handlerName,
           companyId: typeof payload.companyId === 'string' ? payload.companyId : undefined,
           userId: typeof payload.userId === 'string' ? payload.userId : undefined,
         })
       }
+    }
+
+    if (rejectOnFailure && failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `${failures.length} handler(s) failed for ${event.type}`,
+      )
     }
   }
 
