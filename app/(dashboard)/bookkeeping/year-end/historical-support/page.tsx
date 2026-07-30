@@ -1,26 +1,81 @@
 'use client'
 
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, RefreshCw } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  CircleAlert,
+  FileCheck2,
+  Loader2,
+  RefreshCw,
+} from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
+import { PageHeader } from '@/components/ui/page-header'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  HISTORICAL_WORKPAPER_LABELS,
+  historicalWorkpaperSourceLabel,
+  historicalWorkpaperStatusLabel,
+  isAccountingErrorStatus,
+  isCompletedStatus,
+  isConfirmationStatus,
+  type HistoricalWorkpaperCategory,
+  type HistoricalWorkpaperStatus,
+} from '@/lib/bokslut/historical-workpapers'
 
 type Control = {
   control_code: string
   label: string
-  status: 'reconciled' | 'completion_required' | 'manual_verification_required' | 'accounting_error'
+  status:
+    | HistoricalWorkpaperStatus
+    | 'reconciled'
+    | 'manual_verification_required'
+    | 'accounting_error'
   ledger_balance: number | null
   support_balance: number | null
   difference: number | null
   is_blocking: boolean
   message: string
   available_actions: string[]
+  source_type?: string
+  metadata?: Record<string, unknown>
+}
+
+type Workpaper = {
+  id: string
+  category: HistoricalWorkpaperCategory
+  source_sie_import_id: string | null
+  imported_amount: number | null
+  current_amount: number | null
+  external_amount: number | null
+  actual_difference: number | null
+  support_register_available: boolean
+  status: HistoricalWorkpaperStatus
+  source_type: string
+  account_numbers: string[]
+  verification_method: string | null
+  comment: string | null
+  pending_sie_import_id: string | null
+  pending_imported_amount: number | null
+  conflict_detected_at: string | null
+  confirmed_by_name: string | null
+  confirmed_at: string | null
 }
 
 type OpenItem = {
@@ -52,6 +107,32 @@ type Workspace = {
     status: string
     narrative_override: string | null
   } | null
+  profit_disposition_proposal: {
+    current_year_result: number
+    free_equity: number
+    proposed_dividend: number
+    carried_forward: number
+    proposal_text: string
+  }
+  workpapers: Workpaper[]
+  workpaper_events: Array<{
+    id: string
+    workpaper_id: string
+    event_type: string
+    reason: string | null
+    created_at: string
+  }>
+  control_accounts: Record<string, string[]>
+  source_import: {
+    id: string
+    filename: string
+    sie_type: number
+    accounts_count: number
+    transactions_count: number
+    total_vouchers: number
+    posted_vouchers: number
+    imported_at: string
+  } | null
   annotations: Array<{
     id: string
     target_type: string
@@ -77,6 +158,8 @@ export default function HistoricalSupportPage() {
   const [loading, setLoading] = useState(true)
   const [refresh, setRefresh] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [selectedWorkpapers, setSelectedWorkpapers] = useState<Set<string>>(new Set())
+  const focus = search.get('focus')
 
   const suffix = companyId ? `?company_id=${encodeURIComponent(companyId)}` : ''
   const load = useCallback(async () => {
@@ -93,7 +176,15 @@ export default function HistoricalSupportPage() {
       )
       const body = await response.json()
       if (!response.ok) throw new Error(body?.error?.message ?? 'Underlagen kunde inte hämtas.')
-      setData(body.data)
+      const workspace = body.data as Workspace
+      setData(workspace)
+      setSelectedWorkpapers(
+        new Set(
+          workspace.workpapers
+            .filter((workpaper) => workpaper.status === 'imported_from_sie')
+            .map((workpaper) => workpaper.id),
+        ),
+      )
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Underlagen kunde inte hämtas.')
     } finally {
@@ -105,6 +196,26 @@ export default function HistoricalSupportPage() {
     const timer = setTimeout(() => void load(), 0)
     return () => clearTimeout(timer)
   }, [load, refresh])
+
+  useEffect(() => {
+    if (!data || !focus) return
+    const timer = setTimeout(() => {
+      document.getElementById(`control-${focus}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      })
+    }, 100)
+    return () => clearTimeout(timer)
+  }, [data, focus])
+
+  const groupedControls = useMemo(() => {
+    const controls = data?.controls ?? []
+    return {
+      completed: controls.filter((control) => isCompletedStatus(control.status)),
+      confirmation: controls.filter((control) => isConfirmationStatus(control.status)),
+      errors: controls.filter((control) => isAccountingErrorStatus(control.status)),
+    }
+  }, [data])
 
   const postJson = async (payload: Record<string, unknown>) => {
     if (!periodId) return
@@ -147,10 +258,45 @@ export default function HistoricalSupportPage() {
       original_amount_currency: Number(form.get('amount')),
       paid_amount_currency: 0,
       remaining_amount_currency: Number(form.get('amount')),
-      control_account: kind === 'ar' ? '1510' : '2440',
+      control_account: form.get('control_account'),
       comment: form.get('comment') || undefined,
     })
     event.currentTarget.reset()
+  }
+
+  const acceptSelectedWorkpapers = async () => {
+    if (selectedWorkpapers.size === 0) return
+    await postJson({
+      action: 'accept_sie_workpapers',
+      workpaper_ids: [...selectedWorkpapers],
+      comment: 'Importerat SIE-saldo granskat och accepterat som historiskt bokslutsunderlag.',
+    })
+  }
+
+  const resolveConflict = async (workpaperId: string, choice: 'keep' | 'replace') => {
+    await postJson({
+      action: 'accept_sie_workpapers',
+      workpaper_ids: [workpaperId],
+      comment:
+        choice === 'replace'
+          ? 'Det nya SIE-saldot ersätter tidigare bokslutsunderlag efter uttrycklig granskning.'
+          : 'Tidigare bokslutsunderlag behålls efter uttrycklig granskning av den nya SIE-importen.',
+      reimport_choice: choice,
+    })
+  }
+
+  const submitWorkpaperAdjustment = async (
+    event: FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    await postJson({
+      action: 'adjust_workpaper',
+      workpaper_id: form.get('workpaper_id'),
+      amount: Number(form.get('amount')),
+      adjustment_kind: form.get('adjustment_kind'),
+      comment: form.get('comment'),
+    })
   }
 
   const submitProfitDisposition = async (event: FormEvent<HTMLFormElement>) => {
@@ -255,21 +401,19 @@ export default function HistoricalSupportPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <Button variant="ghost" size="sm" asChild className="-ml-3">
-            <Link href={backHref}><ArrowLeft className="mr-2 h-4 w-4" />Till bokslutet</Link>
+    <div className="space-y-8">
+      <Button variant="ghost" size="sm" asChild className="-ml-3">
+        <Link href={backHref}><ArrowLeft className="mr-2 h-4 w-4" />Till bokslutet</Link>
+      </Button>
+      <PageHeader
+        title="Bokslutsunderlag"
+        description={`${data?.period.name ?? ''} · Bekräfta det som redan finns i SIE och komplettera bara det som faktiskt saknas.`}
+        action={(
+          <Button variant="outline" onClick={() => setRefresh((value) => value + 1)}>
+            <RefreshCw className="mr-2 h-4 w-4" />Uppdatera
           </Button>
-          <h1 className="text-2xl font-semibold">Historiska bokslutsunderlag</h1>
-          <p className="text-sm text-muted-foreground">
-            {data?.period.name} · stödregistren förklarar huvudboken utan att skapa ny bokföring.
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => setRefresh((value) => value + 1)}>
-          <RefreshCw className="mr-2 h-4 w-4" />Uppdatera
-        </Button>
-      </div>
+        )}
+      />
 
       {error && (
         <Card><CardContent className="flex gap-2 p-4 text-sm text-destructive">
@@ -279,25 +423,217 @@ export default function HistoricalSupportPage() {
 
       {data && (
         <>
+          {data.source_import && (
+            <Card>
+              <CardHeader><CardTitle className="text-base">Importerad bokföring</CardTitle></CardHeader>
+              <CardContent className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <p className="text-xs text-muted-foreground">Fil</p>
+                  <p>{data.source_import.filename}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">SIE-typ</p>
+                  <p className="tabular-nums">SIE {data.source_import.sie_type}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Konton</p>
+                  <p className="tabular-nums">{data.source_import.accounts_count}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Verifikationer</p>
+                  <p className="tabular-nums">
+                    {data.source_import.posted_vouchers} av {data.source_import.total_vouchers}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <ControlGroup
+            title="Klart automatiskt"
+            description="Underlag som har kunnat läsas, härledas eller redan har bekräftats."
+            controls={groupedControls.completed}
+            icon={<CheckCircle2 className="h-4 w-4" />}
+          />
+          <ControlGroup
+            title="Behöver bekräftas"
+            description="Granska och bekräfta. Detta är inte ett konstaterat bokföringsfel."
+            controls={groupedControls.confirmation}
+            icon={<FileCheck2 className="h-4 w-4" />}
+          />
+          <ControlGroup
+            title="Måste åtgärdas"
+            description="Här finns en verklig differens eller ett blockerande bokföringsfel."
+            controls={groupedControls.errors}
+            icon={<CircleAlert className="h-4 w-4 text-destructive" />}
+          />
+
           <Card>
-            <CardHeader><CardTitle className="text-base">Kontrollöversikt</CardTitle></CardHeader>
-            <CardContent className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead className="border-b text-left text-xs text-muted-foreground">
-                  <tr><th className="pb-2">Kontroll</th><th>Huvudbok</th><th>Underlag</th><th>Differens</th><th>Status</th></tr>
-                </thead>
-                <tbody>
-                  {data.controls.map((control) => (
-                    <tr key={control.control_code} className="border-b last:border-0">
-                      <td className="py-3 pr-4"><p className="font-medium">{control.label}</p><p className="text-xs text-muted-foreground">{control.message}</p></td>
-                      <td className="tabular-nums">{formatAmount(control.ledger_balance)}</td>
-                      <td className="tabular-nums">{formatAmount(control.support_balance)}</td>
-                      <td className="tabular-nums">{formatAmount(control.difference)}</td>
-                      <td><Badge variant={control.is_blocking ? 'destructive' : 'success'}>{control.status === 'reconciled' ? 'Avstämd' : 'Åtgärd krävs'}</Badge></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <CardHeader className="flex-row items-center justify-between gap-4">
+              <div>
+                <CardTitle className="text-base">Importerade historiska saldon</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Saknat stödregister visas som saknat – aldrig som 0 kr.
+                </p>
+              </div>
+              <Button
+                disabled={busy || selectedWorkpapers.size === 0}
+                onClick={() => void acceptSelectedWorkpapers()}
+              >
+                {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Bekräfta valda ({selectedWorkpapers.size})
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10"><span className="sr-only">Välj</span></TableHead>
+                      <TableHead>Område</TableHead>
+                      <TableHead>Källa</TableHead>
+                      <TableHead>Konton</TableHead>
+                      <TableHead className="text-right">Importerat värde</TableHead>
+                      <TableHead className="text-right">Aktuellt värde</TableHead>
+                      <TableHead className="text-right">Differens</TableHead>
+                      <TableHead>Detaljstöd</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Senast verifierat</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.workpapers.map((workpaper) => (
+                      <TableRow key={workpaper.id}>
+                        <TableCell>
+                          <Checkbox
+                            aria-label={`Välj ${HISTORICAL_WORKPAPER_LABELS[workpaper.category]}`}
+                            disabled={workpaper.status !== 'imported_from_sie'}
+                            checked={selectedWorkpapers.has(workpaper.id)}
+                            onCheckedChange={(checked) => {
+                              setSelectedWorkpapers((current) => {
+                                const next = new Set(current)
+                                if (checked) next.add(workpaper.id)
+                                else next.delete(workpaper.id)
+                                return next
+                              })
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <p>{HISTORICAL_WORKPAPER_LABELS[workpaper.category]}</p>
+                          {workpaper.pending_sie_import_id && (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => void resolveConflict(workpaper.id, 'keep')}
+                              >
+                                Behåll tidigare
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => void resolveConflict(workpaper.id, 'replace')}
+                              >
+                                Använd ny import
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>{historicalWorkpaperSourceLabel(workpaper.source_type)}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {workpaper.account_numbers.join(', ') || '–'}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatAmount(workpaper.imported_amount)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatAmount(workpaper.current_amount)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatAmount(workpaper.actual_difference)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {workpaper.support_register_available
+                            ? workpaper.verification_method || 'Tillgängligt'
+                            : 'Saknas i Nordklart'}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={workpaperBadgeVariant(workpaper.status)}>
+                            {workpaper.pending_sie_import_id
+                              ? 'Konflikt vid återimport'
+                              : historicalWorkpaperStatusLabel(workpaper.status)}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {workpaper.confirmed_at
+                            ? `${new Intl.DateTimeFormat('sv-SE', {
+                                dateStyle: 'short',
+                                timeStyle: 'short',
+                              }).format(new Date(workpaper.confirmed_at))} · ${workpaper.confirmed_by_name ?? 'Användare'}`
+                            : '–'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Manuell komplettering</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form
+                onSubmit={(event) => void submitWorkpaperAdjustment(event)}
+                className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+              >
+                <Field label="Område">
+                  <select
+                    name="workpaper_id"
+                    required
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                  >
+                    {data.workpapers.map((workpaper) => (
+                      <option key={workpaper.id} value={workpaper.id}>
+                        {HISTORICAL_WORKPAPER_LABELS[workpaper.category]}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Belopp">
+                  <Input name="amount" type="number" step="0.01" required />
+                </Field>
+                <Field label="Typ av ändring">
+                  <select
+                    name="adjustment_kind"
+                    required
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                  >
+                    <option value="verification_only">Endast verifieringsuppgift</option>
+                    <option value="support_register_completion">Historiskt stödregister</option>
+                    <option value="annual_report_reclassification">Omklassificering i årsredovisning</option>
+                    <option value="comment">Kommentar eller dokumentation</option>
+                    <option value="accounting_correction">Bokföringsmässig korrigering</option>
+                  </select>
+                </Field>
+                <Field label="Ändringsorsak">
+                  <Input name="comment" required />
+                </Field>
+                <div className="sm:col-span-2 lg:col-span-4 flex justify-end">
+                  <Button type="submit" variant="outline" disabled={busy}>
+                    Spara utan ny bokföring
+                  </Button>
+                </div>
+              </form>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Om beloppet avviker från huvudboken markeras en verklig differens. En
+                bokföringsmässig korrigering skickas vidare till rättelseflödet och skapar
+                aldrig automatiskt en verifikation här.
+              </p>
             </CardContent>
           </Card>
 
@@ -325,6 +661,7 @@ export default function HistoricalSupportPage() {
               title="Historisk kundreskontra"
               kind="ar"
               rows={data.receivables}
+              controlAccounts={data.control_accounts.customer_receivables ?? []}
               disabled={busy}
               onSubmit={submitOpenItem}
               onEvidence={submitItemEvidence}
@@ -333,6 +670,7 @@ export default function HistoricalSupportPage() {
               title="Historisk leverantörsreskontra"
               kind="ap"
               rows={data.payables}
+              controlAccounts={data.control_accounts.supplier_payables ?? []}
               disabled={busy}
               onSubmit={submitOpenItem}
               onEvidence={submitItemEvidence}
@@ -344,16 +682,16 @@ export default function HistoricalSupportPage() {
             <CardContent>
               <form onSubmit={submitProfitDisposition} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Field label="Årets resultat">
-                  <Input name="current_year_result" type="number" step="0.01" required defaultValue={data.profit_disposition?.current_year_result} />
+                  <Input name="current_year_result" type="number" step="0.01" required defaultValue={data.profit_disposition?.current_year_result ?? data.profit_disposition_proposal.current_year_result} />
                 </Field>
                 <Field label="Fritt eget kapital">
-                  <Input name="free_equity" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.free_equity} />
+                  <Input name="free_equity" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.free_equity ?? data.profit_disposition_proposal.free_equity} />
                 </Field>
                 <Field label="Föreslagen utdelning">
-                  <Input name="proposed_dividend" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.proposed_dividend ?? 0} />
+                  <Input name="proposed_dividend" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.proposed_dividend ?? data.profit_disposition_proposal.proposed_dividend} />
                 </Field>
                 <Field label="Balanseras i ny räkning">
-                  <Input name="carried_forward" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.carried_forward} />
+                  <Input name="carried_forward" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.carried_forward ?? data.profit_disposition_proposal.carried_forward} />
                 </Field>
                 <Field label="Belopp per aktie"><Input name="amount_per_share" type="number" min="0" step="0.000001" /></Field>
                 <Field label="Antal aktier"><Input name="share_count" type="number" min="1" step="1" /></Field>
@@ -370,6 +708,7 @@ export default function HistoricalSupportPage() {
                 </div>
               </form>
               <p className="mt-3 text-xs text-muted-foreground">
+                Förslag: {data.profit_disposition_proposal.proposal_text}{' '}
                 Ett utdelningsförslag bokför inte någon skuld i det avslutade året. Belopp per aktie, antal aktier, datum och motiveringar krävs när utdelningen är större än noll.
               </p>
             </CardContent>
@@ -458,6 +797,7 @@ function OpenItemsCard({
   title,
   kind,
   rows,
+  controlAccounts,
   disabled,
   onSubmit,
   onEvidence,
@@ -465,6 +805,7 @@ function OpenItemsCard({
   title: string
   kind: 'ar' | 'ap'
   rows: OpenItem[]
+  controlAccounts: string[]
   disabled: boolean
   onSubmit: (event: FormEvent<HTMLFormElement>, kind: 'ar' | 'ap') => Promise<void>
   onEvidence: (
@@ -502,6 +843,17 @@ function OpenItemsCard({
           <Field label="Fakturadatum"><Input name="invoice_date" type="date" required /></Field>
           <Field label="Förfallodatum"><Input name="due_date" type="date" required /></Field>
           <Field label="Kvarstående SEK"><Input name="amount" type="number" min="0" step="0.01" required /></Field>
+          <Field label="Kontrollkonto">
+            <select
+              name="control_account"
+              required
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+            >
+              {controlAccounts.map((account) => (
+                <option key={account} value={account}>{account}</option>
+              ))}
+            </select>
+          </Field>
           <Field label="Kommentar"><Input name="comment" /></Field>
           <div className="sm:col-span-2 flex justify-end">
             <Button disabled={disabled} type="submit" variant="outline">
@@ -516,6 +868,76 @@ function OpenItemsCard({
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="space-y-1"><Label>{label}</Label>{children}</div>
+}
+
+function ControlGroup({
+  title,
+  description,
+  controls,
+  icon,
+}: {
+  title: string
+  description: string
+  controls: Control[]
+  icon: React.ReactNode
+}) {
+  if (controls.length === 0) return null
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          {icon}
+          {title}
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {controls.map((control) => (
+          <div
+            id={`control-${control.control_code}`}
+            key={control.control_code}
+            className="grid scroll-mt-24 gap-3 rounded-md border p-4 sm:grid-cols-[minmax(0,1fr)_auto]"
+          >
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium">{control.label}</p>
+                <Badge variant={controlBadgeVariant(control)}>
+                  {historicalWorkpaperStatusLabel(control.status)}
+                </Badge>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">{control.message}</p>
+              {(control.ledger_balance != null || control.support_balance != null) && (
+                <p className="mt-2 text-xs tabular-nums text-muted-foreground">
+                  Huvudbok {formatAmount(control.ledger_balance)}
+                  {' · '}Underlag {formatAmount(control.support_balance)}
+                  {' · '}Differens {formatAmount(control.difference)}
+                </p>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {historicalWorkpaperSourceLabel(control.source_type ?? 'system_calculation')}
+            </p>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
+}
+
+function controlBadgeVariant(
+  control: Control,
+): 'success' | 'warning' | 'destructive' | 'secondary' {
+  if (isAccountingErrorStatus(control.status)) return 'destructive'
+  if (isConfirmationStatus(control.status)) return 'warning'
+  return control.status === 'imported_from_sie' ? 'secondary' : 'success'
+}
+
+function workpaperBadgeVariant(
+  status: HistoricalWorkpaperStatus,
+): 'success' | 'warning' | 'destructive' | 'secondary' {
+  if (isAccountingErrorStatus(status)) return 'destructive'
+  if (isConfirmationStatus(status)) return 'warning'
+  return status === 'imported_from_sie' ? 'secondary' : 'success'
 }
 
 function formatAmount(value: number | null): string {

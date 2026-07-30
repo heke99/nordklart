@@ -7,6 +7,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { CheckCircle2, AlertTriangle, XCircle, Info } from 'lucide-react'
 import Link from 'next/link'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
+import {
+  historicalWorkpaperSourceLabel,
+  historicalWorkpaperStatusLabel,
+  isAccountingErrorStatus,
+  isCompletedStatus,
+  isConfirmationStatus,
+} from '@/lib/bokslut/historical-workpapers'
 
 interface PreflightStepProps {
   report: BokslutReadinessReport | null
@@ -42,6 +49,16 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
   if (!report) {
     return null
   }
+
+  const completedControls = report.controls?.filter((control) =>
+    isCompletedStatus(control.status),
+  ) ?? []
+  const confirmationControls = report.controls?.filter((control) =>
+    isConfirmationStatus(control.status),
+  ) ?? []
+  const errorControls = report.controls?.filter((control) =>
+    isAccountingErrorStatus(control.status),
+  ) ?? []
 
   return (
     <div className="space-y-6">
@@ -83,51 +100,23 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
         </Card>
       )}
 
-      {(report.controls?.length ?? 0) > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Bokslutskontroller</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {report.controls?.map((control) => (
-              <div
-                key={control.control_code}
-                className="grid gap-2 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-medium">{control.label}</p>
-                    <Badge variant={control.is_blocking ? 'destructive' : 'success'}>
-                      {control.status === 'reconciled'
-                        ? 'Avstämd'
-                        : control.status === 'manual_verification_required'
-                          ? 'Manuell verifiering'
-                          : control.status === 'accounting_error'
-                            ? 'Bokföringsfel'
-                            : 'Komplettering krävs'}
-                    </Badge>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">{control.message}</p>
-                  {(control.ledger_balance != null || control.support_balance != null) && (
-                    <p className="mt-1 text-xs tabular-nums text-muted-foreground">
-                      Huvudbok {formatControlAmount(control.ledger_balance)}
-                      {' · '}Underlag {formatControlAmount(control.support_balance)}
-                      {' · '}Differens {formatControlAmount(control.difference)}
-                    </p>
-                  )}
-                </div>
-                {control.available_actions.length > 0 && (
-                  <Button variant="outline" size="sm" asChild>
-                    <Link href={control.href}>
-                      {actionLabel(control.available_actions[0])}
-                    </Link>
-                  </Button>
-                )}
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
+      <ControlSection
+        title="Klart automatiskt"
+        controls={completedControls}
+        variant="success"
+      />
+      <ControlSection
+        title="Behöver bekräftas"
+        description="Det importerade saldot finns redan i huvudboken. Granska och bekräfta utan att registrera beloppet på nytt."
+        controls={confirmationControls}
+        variant="warning"
+      />
+      <ControlSection
+        title="Verkliga differenser"
+        description="Här finns två jämförbara värden som skiljer sig eller ett faktiskt bokföringsfel."
+        controls={errorControls}
+        variant="destructive"
+      />
 
       {report.warnings.length > 0 && (
         <Card>
@@ -211,8 +200,69 @@ function actionLabel(action: string): string {
     view_imported_vouchers: 'Visa importerade verifikationer',
     create_correction_voucher: 'Skapa rättelseverifikation',
     approve_profit_disposition: 'Godkänn resultatdisposition',
+    accept_sie_balance: 'Bekräfta SIE-saldo',
+    verify_external_evidence: 'Verifiera externt underlag',
+    adjust_workpaper: 'Ändra bokslutsunderlag',
+    resolve_reimport_conflict: 'Lös återimportskonflikt',
   }
   return labels[action] ?? 'Öppna'
+}
+
+function ControlSection({
+  title,
+  description,
+  controls,
+  variant,
+}: {
+  title: string
+  description?: string
+  controls: NonNullable<BokslutReadinessReport['controls']>
+  variant: 'success' | 'warning' | 'destructive'
+}) {
+  if (controls.length === 0) return null
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {controls.map((control) => (
+          <div
+            key={control.control_code}
+            className="grid gap-3 rounded-md border p-4 sm:grid-cols-[minmax(0,1fr)_auto]"
+          >
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-medium">{control.label}</p>
+                <Badge variant={variant}>
+                  {historicalWorkpaperStatusLabel(control.status)}
+                </Badge>
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">{control.message}</p>
+              {(control.ledger_balance != null || control.support_balance != null) && (
+                <p className="mt-2 text-xs tabular-nums text-muted-foreground">
+                  Huvudbok {formatControlAmount(control.ledger_balance)}
+                  {' · '}Underlag {formatControlAmount(control.support_balance)}
+                  {' · '}Differens {formatControlAmount(control.difference)}
+                </p>
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">
+                Källa: {historicalWorkpaperSourceLabel(control.source_type)}
+              </p>
+            </div>
+            {control.available_actions.length > 0 && (
+              <Button variant="outline" size="sm" asChild>
+                <Link href={control.href}>
+                  {actionLabel(control.available_actions[0])}
+                </Link>
+              </Button>
+            )}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
 }
 
 /**

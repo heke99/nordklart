@@ -65,11 +65,34 @@ const annotationSchema = z.object({
   annotation_text: z.string().trim().min(1).max(8000),
 })
 
+const acceptWorkpapersSchema = z.object({
+  action: z.literal('accept_sie_workpapers'),
+  workpaper_ids: z.array(z.string().uuid()).min(1).max(20),
+  comment: z.string().trim().min(3).max(1000),
+  reimport_choice: z.enum(['keep', 'replace']).optional(),
+})
+
+const adjustWorkpaperSchema = z.object({
+  action: z.literal('adjust_workpaper'),
+  workpaper_id: z.string().uuid(),
+  amount: z.number(),
+  adjustment_kind: z.enum([
+    'verification_only',
+    'support_register_completion',
+    'annual_report_reclassification',
+    'comment',
+    'accounting_correction',
+  ]),
+  comment: z.string().trim().min(3).max(1000),
+})
+
 const commandSchema = z.discriminatedUnion('action', [
   openItemSchema,
   snapshotSchema,
   profitDispositionSchema,
   annotationSchema,
+  acceptWorkpapersSchema,
+  adjustWorkpaperSchema,
 ])
 
 export const GET = withRouteContext(
@@ -92,6 +115,11 @@ export const GET = withRouteContext(
       snapshot,
       profitDisposition,
       annotations,
+      workpapers,
+      workpaperEvents,
+      controlAccounts,
+      profitDispositionProposal,
+      sourceImport,
     ] = await Promise.all([
       db
         .from('fiscal_periods')
@@ -145,6 +173,44 @@ export const GET = withRouteContext(
         .eq('fiscal_period_id', id)
         .is('superseded_at', null)
         .order('created_at', { ascending: false }),
+      db
+        .from('year_end_historical_workpapers')
+        .select(
+          'id, category, source_sie_import_id, imported_amount, current_amount, external_amount, actual_difference, support_register_available, status, source_type, account_numbers, verification_method, comment, metadata, pending_sie_import_id, pending_imported_amount, conflict_detected_at, confirmed_by, confirmed_at, updated_at',
+        )
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', id)
+        .order('category'),
+      db
+        .from('year_end_historical_workpaper_events')
+        .select(
+          'id, workpaper_id, event_type, previous_status, new_status, previous_amount, new_amount, source_sie_import_id, adjustment_kind, reason, actor_id, created_at',
+        )
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', id)
+        .order('created_at', { ascending: false })
+        .limit(100),
+      db
+        .from('year_end_control_accounts')
+        .select('control_category, account_number, active')
+        .eq('company_id', companyId)
+        .eq('active', true)
+        .order('account_number'),
+      db.rpc('year_end_profit_disposition_proposal', {
+        p_company_id: companyId,
+        p_fiscal_period_id: id,
+      }),
+      db
+        .from('sie_imports')
+        .select(
+          'id, filename, file_hash, sie_type, fiscal_year_start, fiscal_year_end, accounts_count, transactions_count, total_vouchers, posted_vouchers, warnings, imported_at',
+        )
+        .eq('company_id', companyId)
+        .eq('status', 'completed')
+        .eq('fiscal_period_id', id)
+        .order('imported_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ])
 
     const failure = [
@@ -155,6 +221,11 @@ export const GET = withRouteContext(
       snapshot,
       profitDisposition,
       annotations,
+      workpapers,
+      workpaperEvents,
+      controlAccounts,
+      profitDispositionProposal,
+      sourceImport,
     ].find((result) => result.error)
     if (failure?.error) {
       ctx.log.error('historical support read failed', new Error(failure.error.message))
@@ -163,6 +234,38 @@ export const GET = withRouteContext(
         { status: 500 },
       )
     }
+
+    const confirmerIds = [
+      ...new Set(
+        (workpapers.data ?? [])
+          .map((workpaper) => workpaper.confirmed_by)
+          .filter((value): value is string => typeof value === 'string'),
+      ),
+    ]
+    const confirmers = confirmerIds.length > 0
+      ? await db.from('profiles').select('id, full_name').in('id', confirmerIds)
+      : { data: [], error: null }
+    if (confirmers.error) {
+      ctx.log.error(
+        'historical support confirmer read failed',
+        new Error(confirmers.error.message),
+      )
+      return NextResponse.json(
+        {
+          error: {
+            code: 'HISTORICAL_SUPPORT_CONFIRMER_READ_FAILED',
+            message: 'Godkännandehistoriken kunde inte hämtas.',
+          },
+        },
+        { status: 500 },
+      )
+    }
+    const confirmerNames = new Map(
+      (confirmers.data ?? []).map((profile) => [
+        profile.id,
+        profile.full_name || 'Användare',
+      ]),
+    )
 
     return NextResponse.json({
       data: {
@@ -177,7 +280,25 @@ export const GET = withRouteContext(
         payables: payables.data ?? [],
         company_snapshot: snapshot.data,
         profit_disposition: profitDisposition.data,
+        profit_disposition_proposal: profitDispositionProposal.data,
         annotations: annotations.data ?? [],
+        workpapers: (workpapers.data ?? []).map((workpaper) => ({
+          ...workpaper,
+          confirmed_by_name: workpaper.confirmed_by
+            ? confirmerNames.get(workpaper.confirmed_by) ?? 'Användare'
+            : null,
+        })),
+        workpaper_events: workpaperEvents.data ?? [],
+        control_accounts: (controlAccounts.data ?? []).reduce<Record<string, string[]>>(
+          (groups, row) => {
+            const category = String(row.control_category)
+            groups[category] ??= []
+            groups[category].push(String(row.account_number))
+            return groups
+          },
+          {},
+        ),
+        source_import: sourceImport.data,
       },
     })
   },
@@ -225,6 +346,43 @@ export const POST = withRouteContext(
     }
 
     try {
+      if (parsed.data.action === 'accept_sie_workpapers') {
+        const { data, error } = await db.rpc('accept_year_end_historical_workpapers', {
+          p_company_id: companyId,
+          p_fiscal_period_id: id,
+          p_user_id: user.id,
+          p_workpaper_ids: parsed.data.workpaper_ids,
+          p_comment: parsed.data.comment,
+          p_reimport_choice: parsed.data.reimport_choice ?? null,
+        })
+        if (error) throw error
+        return NextResponse.json({ data })
+      }
+      if (parsed.data.action === 'adjust_workpaper') {
+        if (parsed.data.adjustment_kind === 'accounting_correction') {
+          return NextResponse.json(
+            {
+              error: {
+                code: 'ACCOUNTING_CORRECTION_REQUIRES_JOURNAL',
+                message:
+                  'En bokföringsmässig korrigering måste skapas som rättelseverifikation i bokföringen.',
+              },
+            },
+            { status: 409 },
+          )
+        }
+        const { data, error } = await db.rpc('adjust_year_end_historical_workpaper', {
+          p_company_id: companyId,
+          p_fiscal_period_id: id,
+          p_user_id: user.id,
+          p_workpaper_id: parsed.data.workpaper_id,
+          p_amount: parsed.data.amount,
+          p_adjustment_kind: parsed.data.adjustment_kind,
+          p_comment: parsed.data.comment,
+        })
+        if (error) throw error
+        return NextResponse.json({ data })
+      }
       if (parsed.data.action === 'add_open_item') {
         const { action: _action, kind, idempotency_key, ...payload } = parsed.data
         const { data, error } = await db.rpc('record_migrated_open_item', {

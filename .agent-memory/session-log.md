@@ -18,3 +18,18 @@
   produktionsbygge.
 - Försökte köra pg-real och migrationsstatus; dokumenterade de verkliga
   miljöblockeringarna utan att markera dem som passerade.
+
+## 2026-07-30
+
+- Kartlade kvarvarande falska blockerare i det historiska bokslutsflödet.
+- Införde kanoniska workpapers, källprioritet, append-only historik,
+  återimportskonflikt, automatisk refresh och idempotent backfill.
+- Samordnade status/belopp/källa mellan databas, API, readiness och UI.
+- Lade massbekräftelse utan journal, klassificerad manuell justering,
+  resultatdispositionsförslag och explicit kontrollkontomappning.
+- Uppdaterade evidensflödet så starkare källor synkroniseras till workpaper.
+- Lade diagnostik, teknisk leveransrapport och regressionstester.
+- Körde 6 112 unit-tester, typecheck, ändrad-fil-lint, lintbaseline, guards,
+  PostgreSQL-parser, migrationslista och produktionsbygge.
+- Försökte köra pg-real; dokumenterade `ECONNREFUSED :5432` som
+  miljöblockering.

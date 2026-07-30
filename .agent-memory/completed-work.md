@@ -1,5 +1,27 @@
 # Slutfört arbete
 
+## 2026-07-30 — kanoniska historiska bokslutsunderlag
+
+- Införde en unik, tenant- och periodbunden workpaper-modell ovanpå befintlig
+  SIE-huvudbok och historiska stödregister.
+- Införde nullable semantik för saknat stödregister och separerade bekräftelse
+  från faktisk bokföringsdifferens.
+- Införde automatisk refresh/backfill från slutförd SIE-import och explicit
+  källhierarki.
+- Införde append-only händelser, audit, återimportskonflikt och atomär
+  massbekräftelse utan journalverifikation.
+- Synkroniserade starkare interna/externa bevis till workpaper efter
+  evidensflödet.
+- Införde serverförslag för resultatdisposition och bredare explicit
+  kontrollkontomappning.
+- Samordnade API, readiness och historikvyn med samma status, källa, belopp och
+  fokusroute.
+- Delade UI i klart, bekräftelse och verkliga fel och lade till selektiv
+  massbekräftelse.
+- Lade diagnostik, teknisk dokumentation, unit- och pg-real-regressionstester.
+- Verifierade typecheck, lint, guards, 6 112 unit-tester, PostgreSQL-parsning,
+  migrationsordning och Next-produktionsbygge.
+
 ## 2026-07-29 — SIE och historiska bokslutsunderlag
 
 - Etablerade en checksummad baslinje från mottaget projektarkiv.

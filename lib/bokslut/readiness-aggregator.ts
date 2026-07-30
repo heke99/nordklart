@@ -7,6 +7,10 @@ import {
   type YearEndCashReconciliationStatus,
 } from '@/lib/bokslut/manual-cash-reconciliation'
 import type { YearEndValidation } from '@/types'
+import {
+  isConfirmationStatus,
+  type YearEndControlStatusCode,
+} from '@/lib/bokslut/historical-workpapers'
 
 export type ReminderSeverity = 'info' | 'warning'
 
@@ -32,13 +36,9 @@ export interface BokslutBlockerDetail {
   /** Canonical resolution surface when the blocker has a safe guided flow. */
   href?: string
   actionLabel?: string
+  /** Confirmation means no accounting correction is required. */
+  resolutionKind?: 'confirmation' | 'accounting_correction'
 }
-
-export type YearEndControlStatusCode =
-  | 'reconciled'
-  | 'completion_required'
-  | 'manual_verification_required'
-  | 'accounting_error'
 
 export interface YearEndControlStatus {
   control_code: string
@@ -53,6 +53,9 @@ export interface YearEndControlStatus {
   available_actions: string[]
   metadata: Record<string, unknown>
   href: string
+  source_type: string
+  verification_method: string | null
+  evidence_count: number
 }
 
 export interface BokslutReadinessReport {
@@ -81,6 +84,8 @@ export interface BokslutReadinessReport {
   cashReconciliations: YearEndCashReconciliationStatus[]
   /** Canonical server-computed support-ledger and legal-identity controls. */
   controls?: YearEndControlStatus[]
+  /** Controls that only need review/confirmation, not a corrective voucher. */
+  confirmationCount: number
   /** Period metadata so the UI can show name/dates without an extra fetch. */
   period: {
     id: string
@@ -226,7 +231,12 @@ export async function buildBokslutReadinessReport(
       message: string
       available_actions: string[] | null
       metadata: Record<string, unknown> | null
-    }>).map((row) => ({
+      source_type: string | null
+      verification_method: string | null
+      evidence_count: number | null
+    }>)
+      .filter((row) => typeof row.control_code === 'string')
+      .map((row) => ({
       control_code: row.control_code,
       label: controlLabel(row.control_category),
       status: row.status,
@@ -241,10 +251,13 @@ export async function buildBokslutReadinessReport(
       message: row.message,
       available_actions: row.available_actions ?? [],
       metadata: row.metadata ?? {},
+      source_type: row.source_type ?? 'system_calculation',
+      verification_method: row.verification_method,
+      evidence_count: row.evidence_count ?? 0,
       href:
         row.control_code === 'bank'
           ? reconciliationHref
-          : historicalSupportHref,
+          : `${historicalSupportHref}&focus=${encodeURIComponent(row.control_code)}`,
     }))
   }
 
@@ -356,13 +369,32 @@ export async function buildBokslutReadinessReport(
   // De-duplicate: the legal validator and the DB function overlap on several
   // checks (drafts, gaps, TB, next-period OB). The message texts differ, so
   // keep validator errors verbatim and DB blockers by code.
+  const controlByCode = new Map(controls.map((control) => [control.control_code, control]))
+  for (const detail of blockerDetails) {
+    const control = controlByCode.get(detail.code)
+    if (!control) continue
+    detail.resolutionKind = isConfirmationStatus(control.status)
+      ? 'confirmation'
+      : 'accounting_correction'
+  }
+
   const blockers = [
     ...validation.errors,
-    ...blockerDetails.map((d) => d.message),
+    ...blockerDetails
+      .filter((detail) => !controlByCode.has(detail.code))
+      .map((detail) => detail.message),
   ]
+  const confirmationCount = controls.filter((control) =>
+    isConfirmationStatus(control.status),
+  ).length
+  const accountingErrorCount = controls.filter((control) =>
+    control.is_blocking && !isConfirmationStatus(control.status),
+  ).length
 
   return {
-    ready: blockers.length === 0,
+    ready: blockers.length === 0
+      && confirmationCount === 0
+      && accountingErrorCount === 0,
     blockers,
     blockerDetails,
     warnings: validation.warnings,
@@ -373,6 +405,7 @@ export async function buildBokslutReadinessReport(
     reconciliation,
     cashReconciliations,
     controls,
+    confirmationCount,
     period,
     entityType,
     rawValidation: validation,

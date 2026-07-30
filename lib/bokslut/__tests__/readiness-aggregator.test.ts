@@ -29,6 +29,8 @@ function makeSupabase(handlers: {
   company?: { data: unknown; error: unknown }
   /** year_end_db_blockers RPC result (B03/B04). */
   dbBlockers?: { data: unknown; error: unknown }
+  /** year_end_control_status RPC result. */
+  controlRows?: { data: unknown; error: unknown }
   /** year_end_cash_reconciliation_status RPC result. */
   cashStatus?: { data: unknown; error: unknown }
 }) {
@@ -51,6 +53,9 @@ function makeSupabase(handlers: {
   const rpc = vi.fn(async (fn: string) => {
     if (fn === 'year_end_cash_reconciliation_status') {
       return handlers.cashStatus ?? { data: CASH_RECON_CLEAN, error: null }
+    }
+    if (fn === 'year_end_control_status') {
+      return handlers.controlRows ?? { data: [], error: null }
     }
     return handlers.dbBlockers ?? { data: [], error: null }
   })
@@ -409,5 +414,62 @@ describe('buildBokslutReadinessReport', () => {
     })
     expect(report.reminders.find((item) => item.code === 'bank_reconciliation_incomplete')?.href)
       .toBe('/bookkeeping/year-end/reconciliation?period=fp-1&company_id=co-1')
+  })
+
+  it('separates an imported SIE confirmation from accounting errors and deep-links it', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    const message =
+      'Kundfordringar enligt importerad SIE: 11 250 kr. Bekräfta saldot.'
+    const { supabase } = makeSupabase({
+      period: { data: PERIOD, error: null },
+      company: AB_COMPANY,
+      dbBlockers: {
+        data: [{
+          code: 'customer_receivables_reconciliation',
+          message,
+          detail_count: 1,
+        }],
+        error: null,
+      },
+      controlRows: {
+        data: [{
+          control_code: 'customer_receivables_reconciliation',
+          control_category: 'customer_receivables',
+          status: 'imported_from_sie',
+          ledger_amount: '11250.00',
+          supporting_register_amount: null,
+          difference: null,
+          source_type: 'sie_ledger',
+          verification_method: null,
+          evidence_count: 0,
+          is_stale: false,
+          is_blocking: true,
+          message,
+          available_actions: ['accept_sie_balance'],
+          metadata: { workpaper_id: 'wp-1' },
+        }],
+        error: null,
+      },
+    })
+
+    const report = await buildBokslutReadinessReport(
+      supabase,
+      'co-1',
+      'user-1',
+      'fp-1',
+    )
+
+    expect(report.ready).toBe(false)
+    expect(report.confirmationCount).toBe(1)
+    expect(report.blockers).not.toContain(message)
+    expect(report.controls?.[0]).toMatchObject({
+      status: 'imported_from_sie',
+      support_balance: null,
+      difference: null,
+      href:
+        '/bookkeeping/year-end/historical-support?period=fp-1&company_id=co-1'
+        + '&focus=customer_receivables_reconciliation',
+    })
+    expect(report.blockerDetails[0]?.resolutionKind).toBe('confirmation')
   })
 })

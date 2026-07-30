@@ -72,6 +72,15 @@ export const POST = withRouteContext(
         )
         if (linkError) throw linkError
         persisted = true
+        const { error: refreshError } = await db.rpc(
+          'refresh_year_end_historical_workpapers',
+          {
+            p_company_id: companyId,
+            p_fiscal_period_id: id,
+            p_source_sie_import_id: null,
+          },
+        )
+        if (refreshError) throw refreshError
         return NextResponse.json(
           { data: { item_id: itemId, document_id: uploaded.id } },
           { status: 201 },
@@ -110,6 +119,15 @@ export const POST = withRouteContext(
             })
       if (result.error) throw result.error
       persisted = true
+      const { error: refreshError } = await db.rpc(
+        'refresh_year_end_historical_workpapers',
+        {
+          p_company_id: companyId,
+          p_fiscal_period_id: id,
+          p_source_sie_import_id: null,
+        },
+      )
+      if (refreshError) throw refreshError
       return NextResponse.json({ data: result.data }, { status: 201 })
     } catch (error) {
       if (uploaded && !persisted) {

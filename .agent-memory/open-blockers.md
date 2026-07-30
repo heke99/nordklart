@@ -1,6 +1,6 @@
 # Aktiva blockerare och skuld
 
-1. `SUPABASE_DB_URL`/`DATABASE_URL` saknas. De tre nya migrationerna kan därför
+1. `SUPABASE_DB_URL`/`DATABASE_URL` saknas. De fyra nya migrationerna kan därför
    inte appliceras eller exekveras i detta arbetsutrymme.
 2. pg-real/RLS-testfilen finns men försöket stoppades av
    `ECONNREFUSED 127.0.0.1:5432`; inga PostgreSQL-testresultat påstås.
@@ -15,6 +15,9 @@
 6. Bolagsverket-snapshot kan användas via befintlig registerintegration, men
    den nya bokslutsytan väljer i denna leverans profilfält och låser dem; ett
    fullständigt fält-för-fält merge-UI mot registerkällan återstår.
+7. Produktionsbygget behöver nätåtkomst till Google Fonts. Själva bygget
+   passerade med build-only mocks, men en omockad körning i sandlådan fick
+   HTTP 502 från `fonts.gstatic.com`.
 
-Punkt 1–3 är miljö-/baslinjeförhållanden. Punkt 4–6 är uttryckligt kvarvarande
+Punkt 1–3 och 7 är miljö-/baslinjeförhållanden. Punkt 4–6 är uttryckligt kvarvarande
 produktarbete och ska inte betraktas som färdigverifierat.
