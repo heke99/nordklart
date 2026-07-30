@@ -15,7 +15,9 @@ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-en
  *
  * Query params:
  *   - download=1   → Content-Disposition: attachment
- *   - utdelning=N  → proposed dividend in whole SEK for the resultatdisposition
+ *
+ * Economic values are read exclusively from the approved, server-persisted
+ * profit disposition. Query parameters can never override them.
  */
 export const GET = withRouteContext(
   'period.arsredovisning_ixbrl',
@@ -32,12 +34,8 @@ export const GET = withRouteContext(
 
       const url = new URL(request.url)
       const download = url.searchParams.get('download') === '1'
-      const utdelningRaw = url.searchParams.get('utdelning')
-      const proposedDividend = utdelningRaw ? Number(utdelningRaw) : 0
 
-      const input = await buildIxbrlInput(supabase, companyId, id, {
-        proposedDividend: Number.isFinite(proposedDividend) ? proposedDividend : 0,
-      })
+      const input = await buildIxbrlInput(supabase, companyId, id)
 
       // Mandatory preflight (R13): download AND preview are blocked on
       // critical validation errors — the user gets the structured issue

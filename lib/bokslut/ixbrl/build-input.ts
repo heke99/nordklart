@@ -30,8 +30,6 @@ export interface BuildIxbrlOptions {
   /** Undertecknare of the fastställelseintyg (chosen in the wizard). When
    *  omitted, the first signed board member is used. */
   undertecknare?: { firstName: string; lastName: string; role: string }
-  /** Proposed dividend in SEK (0 = balansera allt). */
-  proposedDividend?: number
   /** Override "today" for deterministic tests (ISO date). */
   todayIso?: string
 }
@@ -56,7 +54,7 @@ export async function buildIxbrlInput(
   // lib/reports' generateIncomeStatement uses) drives the RR. A single TB can
   // never serve both: with bokslut booked every RR concept would map to 0,
   // without it the BR would not tie.
-  const [pdfData, periodRow, signatureRequests] = await Promise.all([
+  const [pdfData, periodRow, signatureRequests, profitDisposition, committedRun] = await Promise.all([
     buildArsredovisningData(supabase, companyId, fiscalPeriodId),
     supabase
       .from('fiscal_periods')
@@ -65,10 +63,30 @@ export async function buildIxbrlInput(
       .eq('company_id', companyId)
       .single(),
     listSignatureRequests(supabase, companyId, fiscalPeriodId),
+    supabase
+      .from('year_end_profit_dispositions')
+      .select('id, proposed_dividend, carried_forward, status')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .in('status', ['approved', 'locked'])
+      .maybeSingle(),
+    supabase
+      .from('year_end_runs')
+      .select('id, status, preview_id')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .eq('status', 'closed')
+      .maybeSingle(),
   ])
 
   if (periodRow.error || !periodRow.data) throw new Error('Fiscal period not found')
   const period = periodRow.data
+  if (committedRun.error || !committedRun.data?.preview_id) {
+    throw new Error('IXBRL_NOT_READY: canonical year-end run is missing')
+  }
+  if (profitDisposition.error || !profitDisposition.data) {
+    throw new Error('IXBRL_NOT_READY: approved profit disposition is missing')
+  }
 
   if (pdfData.accounting_framework !== 'k2') {
     throw new Error(
@@ -214,7 +232,10 @@ export async function buildIxbrlInput(
   // same context — the disposition row must carry the identical value
   // (TA §2.7.3), so fri överkursfond (2097) is its own row tagged with the
   // separate Overkursfond concept instead of being folded into balanserat.
-  const proposedDividend = Math.max(0, Math.round(options.proposedDividend ?? 0))
+  const proposedDividend = Math.max(
+    0,
+    Math.round(Number(profitDisposition.data.proposed_dividend) || 0),
+  )
   const dispBalanserat = br['BalanseratResultat']?.current ?? 0
   const dispOverkursfond = br['Overkursfond']?.current ?? 0
   const dispArets = br['AretsResultatEgetKapital']?.current ?? 0

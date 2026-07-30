@@ -141,16 +141,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const [utfall, setUtfall] = useState<KontrolleraUtfall[] | null>(null)
   const [kvittens, setKvittens] = useState<{ idnummer: string; url: string } | null>(null)
 
-  // Proposed dividend (utdelning) for the resultatdisposition. There is no
-  // persisted dividend proposal in the year-end flow yet, so the value is
-  // entered here and forwarded to the preview, the download and the
-  // submission so all three render the same disposition.
-  const [utdelning, setUtdelning] = useState('')
-  const parsedUtdelning = Math.round(Number(utdelning.replace(/\s/g, '').replace(',', '.')))
-  const utdelningValue = Number.isFinite(parsedUtdelning) && parsedUtdelning > 0 ? parsedUtdelning : 0
-  const previewUrl = utdelningValue > 0 ? `${ixbrlUrl}?utdelning=${utdelningValue}` : ixbrlUrl
-  const downloadUrl =
-    utdelningValue > 0 ? `${ixbrlUrl}?download=1&utdelning=${utdelningValue}` : `${ixbrlUrl}?download=1`
+  const previewUrl = ixbrlUrl
+  const downloadUrl = `${ixbrlUrl}?download=1`
 
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
@@ -204,9 +196,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const handleValidate = async () => {
     setValidating(true)
     try {
-      const res = await fetch(
-        `${ixbrlUrl}/validate${utdelningValue > 0 ? `?utdelning=${utdelningValue}` : ''}`,
-      )
+      const res = await fetch(`${ixbrlUrl}/validate`)
       const body = await res.json()
       if (body?.error) {
         toast({ title: 'Kunde inte validera', description: body.error.message, variant: 'destructive' })
@@ -249,7 +239,6 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             roll,
             epost: epost.trim(),
           },
-          ...(utdelningValue > 0 ? { utdelning: utdelningValue } : {}),
           ...(avtal?.accepted ? { accepted_avtalstext_andrad: avtal.andrad } : {}),
           ...(opts.ignoreWarnings ? { ignore_warnings: true } : {}),
         }),
@@ -340,21 +329,11 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
           </p>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
-          <div className="space-y-1.5 max-w-xs">
-            <Label htmlFor="di-utdelning">Föreslagen utdelning (kr)</Label>
-            <Input
-              id="di-utdelning"
-              inputMode="numeric"
-              placeholder="0"
-              value={utdelning}
-              onChange={(event) => setUtdelning(event.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Ingår i resultatdispositionen i dokumentet — 0 betyder att allt
-              balanseras i ny räkning. Beloppet följer med förhandsgranskning,
-              nedladdning och inlämning.
-            </p>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Resultatdisposition och utdelning hämtas från den godkända,
+            serverlagrade bokslutsdispositionen och kan inte ändras i
+            inlämningssteget.
+          </p>
           <div className="flex flex-wrap gap-3">
             <Button variant="outline" onClick={() => setShowPreview((value) => !value)}>
               {showPreview ? 'Dölj förhandsgranskning' : 'Förhandsgranska iXBRL'}

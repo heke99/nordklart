@@ -107,6 +107,45 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
         </Card>
       )}
 
+      {preview.stagedEntries.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Bokslutsjusteringar som kommer att bokföras</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              {preview.stagedEntries.length} beständiga poster ingår i denna förhandsgranskning.
+              De har ännu inte påverkat huvudboken.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {preview.stagedEntries.map((entry) => (
+              <div key={entry.id} className="rounded-md border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-medium text-sm">{entry.description}</p>
+                  <div className="flex gap-2">
+                    <Badge variant="outline">{entry.group}</Badge>
+                    {entry.reversalDate && (
+                      <Badge variant="secondary">Vänds {entry.reversalDate}</Badge>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  {entry.lines.map((line, index) => (
+                    <div key={`${entry.id}:${index}`} className="flex justify-between gap-4">
+                      <span>{line.account_number} · {line.line_description}</span>
+                      <span className="tabular-nums">
+                        {line.debit_amount > 0
+                          ? `Debet ${formatCurrency(line.debit_amount)}`
+                          : `Kredit ${formatCurrency(line.credit_amount)}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Bokslutsverifikation — förhandsgranskning</CardTitle>
@@ -150,6 +189,12 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
           Verkställ bokslut <ArrowRight className="ml-1 h-4 w-4" />
         </Button>
       </div>
+      {preview.previewId && (
+        <p className="text-center text-xs text-muted-foreground">
+          Preview-ID {preview.previewId} · regelverk {preview.rulesetVersion} · giltig till{' '}
+          {preview.expiresAt ? new Date(preview.expiresAt).toLocaleString('sv-SE') : 'okänd tid'}
+        </p>
+      )}
     </div>
   )
 }

@@ -36,7 +36,7 @@ interface ManualEntry {
 }
 
 function makeId() {
-  return Math.random().toString(36).slice(2, 10)
+  return crypto.randomUUID()
 }
 
 export function AccrualsStep({ periodId, companyId, onBack, onContinue }: AccrualsStepProps) {
@@ -151,12 +151,12 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
         setError(body?.error?.message ?? 'Kunde inte bokföra periodiseringarna')
         return
       }
-      const created = body.data?.created?.length ?? 0
+      const staged = body.data?.staged?.count ?? 0
       toast({
-        title: `${created} periodisering${created === 1 ? '' : 'ar'} bokförd${
-          created === 1 ? '' : 'a'
+        title: `${staged} periodisering${staged === 1 ? '' : 'ar'} sparad${
+          staged === 1 ? '' : 'e'
         }`,
-        description: 'Vänd dem första dagen i nästa räkenskapsår.',
+        description: 'Posterna bokförs atomiskt först i steget Verkställ.',
       })
       onContinue()
     } catch (err) {
@@ -196,8 +196,8 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
           <CardTitle className="text-base">Periodiseringar</CardTitle>
           <p className="text-sm text-muted-foreground">
             Förutbetalda kostnader (17xx) och upplupna kostnader (29xx). Posteringarna
-            ska vändas på första dagen av nästa räkenskapsår — datumet visas per
-            verifikation. Automatisk omvändning är planerad till en kommande version.
+            som ska vändas får en beständig reverseringsplan med datum. Ingen
+            bokföring sker innan hela bokslutet verkställs.
           </p>
         </CardHeader>
       </Card>
@@ -232,7 +232,7 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
                 onCheckedChange={(c) => setAuto({ vacation: { accept: Boolean(c) } })}
               />
               <Label htmlFor="accept-vacation" className="text-sm cursor-pointer select-none">
-                Boka denna justering
+                Ta med denna justering
               </Label>
             </div>
           </CardContent>
@@ -286,7 +286,7 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
         <Button onClick={handleCommit} disabled={posting}>
           {posting ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
             </>
           ) : (
             <>

@@ -56,3 +56,26 @@ Verifierat 2026-07-30:
 
 Live-DB, pg-real och migrationsstatus kräver en PostgreSQL/Supabase-anslutning
 och redovisas som ej körda i `open-blockers.md`.
+
+## Kanonisk bokslutskedja 2026-07-30
+
+- Periodiseringar, avskrivningar och bokslutsdispositioner sparas som
+  justeringar utan journalföring.
+- Preview är beständig och bunden till huvudboks-, readiness-, justerings- och
+  regelverkshash.
+- Execute kräver exakt preview-ID och bokför alla justeringar, stänger perioden
+  samt skapar nästa periods IB i samma PostgreSQL-transaktion.
+- Resultatet kan återläsas från den stängda körningen och användarens
+  granskningsbekräftelse sparas serverbaserat.
+- iXBRL hämtar utdelning från låst resultatdisposition och kräver en stängd
+  bokslutskörning; klient- och queryparametrar styr inte utdelningen.
+- SIE-undantag för AR/AP kräver exakt period, slutförd import, accepterat
+  workpaper och matchande aktuell ledger-fingerprint.
+
+Verifierat i detta pass:
+
+- TypeScript: 0 fel.
+- Full unit-svit: 487 filer passerar, 1 skip; 6 114 tester passerar, 2 skip.
+- Lintbaseline och antipattern-guard: passerar.
+- PostgreSQL-parser: migrationens 49 statements accepteras.
+- Produktionsbygge: passerar, 355 sidor.

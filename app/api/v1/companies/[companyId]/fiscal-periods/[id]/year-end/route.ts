@@ -30,6 +30,9 @@ const YearEndAcceptedResponse = z.object({
   poll_url: z.string(),
   webhook_event: z.literal('operation.completed'),
 })
+const YearEndRequest = z.object({
+  preview_id: z.string().uuid(),
+})
 
 registerEndpoint({
   operation: 'fiscal-periods.year-end',
@@ -68,7 +71,7 @@ registerEndpoint({
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'fiscal-periods.year-end',
-  async (_request, ctx, params) => {
+  async (request, ctx, params) => {
     const { id } = await params.params
     const idParse = z.string().uuid().safeParse(id)
     if (!idParse.success) {
@@ -78,6 +81,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const fiscalPeriodId = idParse.data
+    const body = YearEndRequest.safeParse(
+      await request.json().catch(() => null),
+    )
+    if (!body.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'preview_id',
+          message: 'A persisted canonical preview_id is required.',
+        },
+      })
+    }
 
     // Ownership pre-check on the URL period — fail fast before recording
     // an operation row for a period the caller doesn't own.
@@ -137,6 +152,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ctx.companyId!,
         ctx.userId,
         fiscalPeriodId,
+        {
+          previewId: body.data.preview_id,
+          idempotencyKey: ctx.idempotencyKey ?? undefined,
+          correlationId: ctx.requestId,
+        },
       )
       await completeOperation(
         ctx.supabase,

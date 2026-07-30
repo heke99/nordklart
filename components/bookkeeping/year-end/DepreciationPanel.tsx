@@ -37,8 +37,7 @@ interface Proposal {
 interface DepreciationPanelProps {
   periodId: string
   companyId?: string | null
-  /** Called after a successful post — parent refetches dispositions because
-   *  posted avskrivningar change the result which affects bolagsskatt etc. */
+  /** Called after staging — parent refetches disposition proposals. */
   onPosted: () => void
 }
 
@@ -91,11 +90,12 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
         setError(body?.error?.message ?? 'Kunde inte bokföra avskrivningar')
         return
       }
-      const posted = body.data?.posted?.length ?? 0
+      const staged = body.data?.staged?.count ?? 0
       toast({
-        title: `${posted} avskrivning${posted === 1 ? '' : 'ar'} bokförd${
-          posted === 1 ? '' : 'a'
+        title: `${staged} avskrivning${staged === 1 ? '' : 'ar'} sparad${
+          staged === 1 ? '' : 'e'
         }`,
+        description: 'Avskrivningarna bokförs först när bokslutet verkställs.',
       })
       onPosted()
       await load()
@@ -160,7 +160,7 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
             <CardTitle className="text-base">Planenliga avskrivningar</CardTitle>
             <p className="text-sm text-muted-foreground mt-1">
               {proposal.items.length} tillgång{proposal.items.length === 1 ? '' : 'ar'}.
-              {allPosted ? ' Allt redan bokfört.' : ' Bokförs som separata verifikationer.'}
+              {allPosted ? ' Allt redan bokfört.' : ' Sparas till bokslutets gemensamma verkställning.'}
             </p>
           </div>
           <p className="font-display text-2xl tabular-nums shrink-0">
@@ -208,10 +208,10 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
             <Button onClick={handlePost} disabled={posting}>
               {posting ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
                 </>
               ) : (
-                'Bokför alla avskrivningar'
+                'Spara alla avskrivningar'
               )}
             </Button>
           </div>

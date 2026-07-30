@@ -399,11 +399,83 @@ describe('validateYearEndReadiness', () => {
 })
 
 describe('previewYearEndClosing', () => {
+  it('includes staged adjustments without posting them', async () => {
+    results = [
+      { data: { entity_type: 'aktiebolag' }, error: null },
+      {
+        data: [{
+          id: 'adjustment-1',
+          adjustment_group: 'accrual',
+          adjustment_kind: 'expense_accrual',
+          stable_key: 'accrual:invoice-1',
+          description: 'Upplupen kostnad',
+          entry_date: '2024-12-31',
+          reversal_date: '2025-01-01',
+          journal_lines: [
+            {
+              account_number: '6990',
+              debit_amount: 10000,
+              credit_amount: 0,
+              line_description: 'Upplupen kostnad',
+            },
+            {
+              account_number: '2990',
+              debit_amount: 0,
+              credit_amount: 10000,
+              line_description: 'Upplupen kostnad',
+            },
+          ],
+          ruleset_version: 'se-year-end-2024-v1',
+          status: 'approved',
+          version: 1,
+        }],
+        error: null,
+      },
+      { data: { period_end: '2024-12-31' }, error: null },
+    ]
+
+    vi.mocked(generateIncomeStatement).mockResolvedValue({ net_result: 50000 } as never)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        {
+          account_number: '3001',
+          account_name: 'Intäkter',
+          account_class: 3,
+          closing_debit: 0,
+          closing_credit: 50000,
+        },
+      ],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 50000,
+    } as never)
+
+    const supabase = makeClient()
+    const preview = await previewYearEndClosing(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'fp-1',
+    )
+
+    expect(preview.netResult).toBe(40000)
+    expect(preview.stagedEntries).toEqual([
+      expect.objectContaining({
+        id: 'adjustment-1',
+        group: 'accrual',
+        reversalDate: '2025-01-01',
+      }),
+    ])
+    expect(supabase.rpc).not.toHaveBeenCalledWith('create_journal_entry', expect.anything())
+  })
+
   it('calculates net result from class 3-8 accounts', async () => {
     results = [
       // 0: fetch company_settings (.single)
       { data: { entity_type: 'aktiebolag' }, error: null },
-      // 1: fetch fiscal period for closing date (.single)
+      // 1: staged adjustments included in the preview
+      { data: [], error: null },
+      // 2: fetch fiscal period for closing date (.single)
       { data: { period_end: '2024-12-31' }, error: null },
     ]
 
@@ -435,6 +507,7 @@ describe('previewYearEndClosing', () => {
   it('uses 2010 for EF entity type', async () => {
     results = [
       { data: { entity_type: 'enskild_firma' }, error: null },
+      { data: [], error: null },
       // fetch fiscal period for closing date (.single)
       { data: { period_end: '2024-12-31' }, error: null },
     ]

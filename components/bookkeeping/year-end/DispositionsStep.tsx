@@ -119,12 +119,12 @@ export function DispositionsStep({
         setPostError(body?.error?.message ?? 'Kunde inte bokföra dispositioner')
         return
       }
-      const created = body.data?.created ?? []
+      const staged = body.data?.staged?.count ?? 0
       toast({
-        title: `${created.length} verifikation${created.length === 1 ? '' : 'er'} bokförd${
-          created.length === 1 ? '' : 'a'
+        title: `${staged} disposition${staged === 1 ? '' : 'er'} sparad${
+          staged === 1 ? '' : 'e'
         }`,
-        description: 'Dispositionerna ligger nu i bokföringen.',
+        description: 'Dispositionerna bokförs först när hela bokslutet verkställs.',
       })
       onContinue()
     } catch (err) {
@@ -233,8 +233,8 @@ export function DispositionsStep({
         </CardHeader>
       </Card>
 
-      {proposal.proposals.map((p, i) => {
-        const key = proposalKey(p, i)
+      {proposal.proposals.map((p) => {
+        const key = proposalKey(p)
         const sel = ui.selections[key]
         if (!sel) return null
         return (
@@ -266,11 +266,11 @@ export function DispositionsStep({
         <Button onClick={handleCommit} disabled={posting}>
           {posting ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
             </>
           ) : (
             <>
-              Bokför valda dispositioner <ArrowRight className="ml-1 h-4 w-4" />
+              Spara valda dispositioner <ArrowRight className="ml-1 h-4 w-4" />
             </>
           )}
         </Button>
@@ -369,13 +369,13 @@ function isOverridable(kind: DispositionKind): boolean {
   return kind === 'periodiseringsfond_avsattning' || kind === 'overavskrivningar'
 }
 
-function proposalKey(p: ProposedDisposition, index = 0): string {
+function proposalKey(p: ProposedDisposition): string {
   // For återföring there can be multiple cards (one per cohort) — disambiguate
   // by including the line account in the key. For other kinds, the kind is unique.
   if (p.kind === 'periodiseringsfond_ateforing') {
-    return `${p.kind}:${p.lines[0]?.account_number ?? index}`
+    return `${p.kind}:${p.lines[0]?.account_number ?? 'missing-account'}`
   }
-  return `${p.kind}:${index}`
+  return p.kind
 }
 
 interface PostItem {
@@ -389,7 +389,7 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
   // map keyed by cohort account.
   const ateforingReturns: Record<string, number> = {}
   for (const p of proposal.proposals) {
-    const key = proposalKey(p, proposal.proposals.indexOf(p))
+    const key = proposalKey(p)
     const sel = ui.selections[key]
     if (!sel || !sel.accept) continue
 

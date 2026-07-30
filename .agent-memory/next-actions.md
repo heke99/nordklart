@@ -14,3 +14,8 @@
    en separat kopia av produktionsdata.
 9. Implementera den kvarvarande atomiska betalningsrouten och historiska
    bankradimporten innan de funktionerna aktiveras för slutanvändare.
+10. Applicera därefter
+    `20260730170000_canonical_year_end_staging_preview_execute.sql`.
+11. Kör `npm run test:pg` mot den migrerade testdatabasen och smoke-testa:
+    staging utan journal, stale preview, samtidig execute, rollback vid fel,
+    återläsning av resultat samt iXBRL från låst disposition.

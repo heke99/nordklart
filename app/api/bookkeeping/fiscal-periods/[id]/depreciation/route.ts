@@ -3,12 +3,10 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
-import {
-  proposeAnnualPostings,
-  commitAnnualPostings,
-} from '@/lib/bokslut/assets/depreciation-engine'
+import { proposeAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { createServiceClient } from '@/lib/supabase/server'
+import { stageYearEndAdjustments } from '@/lib/core/bookkeeping/year-end-staging'
 
 const CommitSchema = z.object({
   /** Optional whitelist — when supplied, only assets in this list are posted.
@@ -83,10 +81,48 @@ export const POST = withRouteContext(
         return errorResponseFromCode('PERIOD_LOCKED', log, { requestId })
       }
 
-      const result = await commitAnnualPostings(supabase, companyId, user.id, id, {
-        assetIds: validation.data.asset_ids,
-      })
-      return NextResponse.json({ data: result })
+      const proposal = await proposeAnnualPostings(supabase, companyId, id)
+      const allowed = validation.data.asset_ids
+        ? new Set(validation.data.asset_ids)
+        : null
+      const selected = proposal.items.filter(
+        (item) =>
+          !item.existingJournalEntryId &&
+          (allowed === null || allowed.has(item.asset.id)),
+      )
+      const staged = await stageYearEndAdjustments(
+        supabase,
+        companyId,
+        id,
+        user.id,
+        'depreciation',
+        selected.map((item) => ({
+          stable_key: `asset:${item.asset.id}`,
+          adjustment_kind: 'planned_depreciation',
+          description: `Planenlig avskrivning ${proposal.fiscalPeriod.name}: ${item.asset.name}`,
+          entry_date: proposal.fiscalPeriod.period_end,
+          journal_lines: [
+            {
+              account_number: item.asset.bas_expense_account,
+              debit_amount: item.amount,
+              credit_amount: 0,
+              line_description: `Avskrivning ${item.asset.name}`,
+            },
+            {
+              account_number: item.asset.bas_accumulated_account,
+              debit_amount: 0,
+              credit_amount: item.amount,
+              line_description: `Ack. avskrivning ${item.asset.name}`,
+            },
+          ],
+          calculation_payload: {
+            asset_id: item.asset.id,
+            schedule_id: item.existingScheduleId ?? null,
+            planned_depreciation: item.amount,
+          },
+        })),
+      )
+      return NextResponse.json({ data: { staged } })
     } catch (err) {
       return errorResponse(err, log, { requestId })
     }

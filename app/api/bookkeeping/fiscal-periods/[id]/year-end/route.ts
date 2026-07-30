@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import {
   validateYearEndReadiness,
   previewYearEndClosing,
@@ -8,6 +9,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { createServiceClient } from '@/lib/supabase/server'
+import { persistYearEndPreview } from '@/lib/core/bookkeeping/year-end-staging'
+import { validateBody } from '@/lib/api/validate'
 
 /** GET: validate readiness + preview the year-end entries. */
 export const GET = withRouteContext(
@@ -25,10 +28,21 @@ export const GET = withRouteContext(
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
-      const [validation, preview] = await Promise.all([
-        validateYearEndReadiness(serviceDb, companyId, user.id, id),
-        previewYearEndClosing(serviceDb, companyId, user.id, id),
-      ])
+      const validation = await validateYearEndReadiness(serviceDb, companyId, user.id, id)
+      if (!validation.ready) {
+        return errorResponseFromCode('YEAR_END_READINESS_BLOCKED', opLog, {
+          requestId,
+          details: { errors: validation.errors, warnings: validation.warnings },
+        })
+      }
+      const computedPreview = await previewYearEndClosing(serviceDb, companyId, user.id, id)
+      const preview = await persistYearEndPreview(
+        serviceDb,
+        companyId,
+        id,
+        user.id,
+        computedPreview,
+      )
       return NextResponse.json({ data: { validation, preview } })
     } catch (err) {
       opLog.error('year-end preview failed', err as Error)
@@ -42,6 +56,10 @@ export const GET = withRouteContext(
   { allowRequestedCompany: true },
 )
 
+const ExecuteBodySchema = z.object({
+  preview_id: z.string().uuid(),
+})
+
 /** POST: actually run year-end closing (atomic, idempotent — B01/B09). */
 export const POST = withRouteContext(
   'period.year_end',
@@ -49,6 +67,8 @@ export const POST = withRouteContext(
     const { id } = await params
     const { user, companyId, log, requestId } = ctx
     const opLog = log.child({ periodId: id })
+    const validation = await validateBody(request, ExecuteBodySchema)
+    if (!validation.success) return validation.response
 
     try {
       const serviceDb = createServiceClient()
@@ -66,7 +86,9 @@ export const POST = withRouteContext(
         request.headers.get('idempotency-key')?.slice(0, 128) ?? undefined
 
       const result = await executeYearEndClosing(serviceDb, companyId, user.id, id, {
+        previewId: validation.data.preview_id,
         idempotencyKey,
+        correlationId: requestId,
       })
       return NextResponse.json({ data: result })
     } catch (err) {
@@ -87,6 +109,11 @@ export const POST = withRouteContext(
       }
       if (/not found/i.test(message)) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
+      }
+      if (/YE_PREVIEW_STALE|YE_PREVIEW_REQUIRED/i.test(message)) {
+        return errorResponseFromCode('YEAR_END_PREVIEW_STALE', opLog, {
+          requestId,
+        })
       }
       // Fall through bookkeeping/Zod/etc to errorResponse, but cap to YEAR_END_FAILED.
       const fallback = errorResponse(err, opLog, { requestId })

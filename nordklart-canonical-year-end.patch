@@ -1,0 +1,3380 @@
+diff --git a/.agent-memory/completed-work.md b/.agent-memory/completed-work.md
+index 564d0f7..58c6a23 100644
+--- a/.agent-memory/completed-work.md
++++ b/.agent-memory/completed-work.md
+@@ -46,3 +46,18 @@
+ 
+ - Införde manuell serververifierad likvidkontoavstämning med dokument,
+   invalidation och samma bokslutsblockerare.
++
++## 2026-07-30 — staging, beständig preview och atomisk execute
++
++- Ersatte direktbokning från periodisering, avskrivning och disposition med
++  tenant- och periodbunden staging.
++- Införde versionsstyrda skatteregler, beständig preview och fyra snapshots.
++- Band execute till preview-ID och lade justeringsbokning, stängning, IB,
++  reverseringsschema, run-resultat och outbox i en transaktion.
++- Gjorde dispositionsbatchen odelbar och tog bort klientstyrda skattesatser.
++- Rättade det breda SIE-undantaget till exakt workpaper-/import-/ledger-match.
++- Tog bort query- och UI-styrd utdelning från iXBRL/Bolagsverket.
++- Lade återöppningsbart slutresultat och beständig granskningsbekräftelse.
++- Lade regressionstest för staged preview utan journalföring.
++- Verifierade typecheck, 6 114 unit-tester, lint, guards, PostgreSQL-parser och
++  Next-produktionsbygge.
+diff --git a/.agent-memory/current-state.md b/.agent-memory/current-state.md
+index 111a9fc..a26da53 100644
+--- a/.agent-memory/current-state.md
++++ b/.agent-memory/current-state.md
+@@ -56,3 +56,26 @@ Verifierat 2026-07-30:
+ 
+ Live-DB, pg-real och migrationsstatus kräver en PostgreSQL/Supabase-anslutning
+ och redovisas som ej körda i `open-blockers.md`.
++
++## Kanonisk bokslutskedja 2026-07-30
++
++- Periodiseringar, avskrivningar och bokslutsdispositioner sparas som
++  justeringar utan journalföring.
++- Preview är beständig och bunden till huvudboks-, readiness-, justerings- och
++  regelverkshash.
++- Execute kräver exakt preview-ID och bokför alla justeringar, stänger perioden
++  samt skapar nästa periods IB i samma PostgreSQL-transaktion.
++- Resultatet kan återläsas från den stängda körningen och användarens
++  granskningsbekräftelse sparas serverbaserat.
++- iXBRL hämtar utdelning från låst resultatdisposition och kräver en stängd
++  bokslutskörning; klient- och queryparametrar styr inte utdelningen.
++- SIE-undantag för AR/AP kräver exakt period, slutförd import, accepterat
++  workpaper och matchande aktuell ledger-fingerprint.
++
++Verifierat i detta pass:
++
++- TypeScript: 0 fel.
++- Full unit-svit: 487 filer passerar, 1 skip; 6 114 tester passerar, 2 skip.
++- Lintbaseline och antipattern-guard: passerar.
++- PostgreSQL-parser: migrationens 49 statements accepteras.
++- Produktionsbygge: passerar, 355 sidor.
+diff --git a/.agent-memory/next-actions.md b/.agent-memory/next-actions.md
+index a9cbf93..99f7e94 100644
+--- a/.agent-memory/next-actions.md
++++ b/.agent-memory/next-actions.md
+@@ -14,3 +14,8 @@
+    en separat kopia av produktionsdata.
+ 9. Implementera den kvarvarande atomiska betalningsrouten och historiska
+    bankradimporten innan de funktionerna aktiveras för slutanvändare.
++10. Applicera därefter
++    `20260730170000_canonical_year_end_staging_preview_execute.sql`.
++11. Kör `npm run test:pg` mot den migrerade testdatabasen och smoke-testa:
++    staging utan journal, stale preview, samtidig execute, rollback vid fel,
++    återläsning av resultat samt iXBRL från låst disposition.
+diff --git a/.agent-memory/open-blockers.md b/.agent-memory/open-blockers.md
+index 0deff15..c4d516e 100644
+--- a/.agent-memory/open-blockers.md
++++ b/.agent-memory/open-blockers.md
+@@ -21,3 +21,11 @@
+ 
+ Punkt 1–3 och 7 är miljö-/baslinjeförhållanden. Punkt 4–6 är uttryckligt kvarvarande
+ produktarbete och ska inte betraktas som färdigverifierat.
++
++## Tillägg 2026-07-30
++
++8. Migration `20260730170000_canonical_year_end_staging_preview_execute.sql`
++   är parser- och build-verifierad men inte applicerad mot en riktig databas i
++   arbetsmiljön; `SUPABASE_DB_URL`/`DATABASE_URL` saknas.
++9. De nya pg-real-scenarierna för preview-staleness, rollback och samtidighet
++   behöver köras mot den migrerade testdatabasen innan produktionsaktivering.
+diff --git a/.agent-memory/session-log.md b/.agent-memory/session-log.md
+index 8bd0622..e0b83e3 100644
+--- a/.agent-memory/session-log.md
++++ b/.agent-memory/session-log.md
+@@ -33,3 +33,12 @@
+   PostgreSQL-parser, migrationslista och produktionsbygge.
+ - Försökte köra pg-real; dokumenterade `ECONNREFUSED :5432` som
+   miljöblockering.
++- Återställde mottagen projektbaslinje och etablerade exakt lokal Git-diff.
++- Kartlade direktbokning, delbatch, flyktig preview, klientstyrd utdelning och
++  det breda SIE-undantaget som konkreta P0-avvikelser.
++- Byggde staging → beständig preview → atomisk execute med versionsbundna
++  snapshots, reverseringsschema, run-resultat och outbox.
++- Samordnade API, wizard, iXBRL och Bolagsverket med den kanoniska kedjan.
++- Lade serverbaserad resultatbekräftelse och återläsning av stängd körning.
++- Körde typecheck, lintbaseline, guards, 6 114 unit-tester,
++  PostgreSQL-parser och produktionsbygge med godkänt resultat.
+diff --git a/.agent-memory/verification-matrix.md b/.agent-memory/verification-matrix.md
+index 5176f69..4a1e54b 100644
+--- a/.agent-memory/verification-matrix.md
++++ b/.agent-memory/verification-matrix.md
+@@ -19,3 +19,18 @@
+ | Routing | Next route-manifest + readiness unit-test | PASS, sida/API och period/company/focus finns |
+ 
+ Ej körda kontroller räknas inte som godkända.
++
++## Kanonisk bokslutskedja 2026-07-30
++
++| Kontroll | Kommando/metod | Utfall |
++|---|---|---|
++| Typkontroll | `NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck` | PASS, 0 fel |
++| Riktade bokslutstester | 4 filer | PASS, 47/47 |
++| Full unit-svit | `npm test` | PASS, 6 114 pass / 2 skip |
++| Lintbaseline | `npm run check:lint` | PASS, 0 nya fel |
++| Guards | `npm run check:guards` | PASS |
++| PostgreSQL-syntax | `libpg-query` | PASS, 49 statements |
++| Produktionsbygge | `NODE_OPTIONS=--max-old-space-size=4096 npx next build` | PASS, 355 sidor |
++| Git whitespace | `git diff --check` | PASS |
++| Live migration | `npm run db:migrate` | NOT RUN, DB-URL saknas |
++| pg-real/RLS/transaktion | `npm run test:pg` | NOT RUN, PostgreSQL saknas |
+diff --git a/CHANGED_FILES.md b/CHANGED_FILES.md
+index 04e692a..03b47fc 100644
+--- a/CHANGED_FILES.md
++++ b/CHANGED_FILES.md
+@@ -1,52 +1,15 @@
+ # Ändrade och tillagda filer
+ 
+-## Ändrade
+-
+-- `.agent-memory/completed-work.md`
+-- `.agent-memory/current-state.md`
+-- `.agent-memory/next-actions.md`
+-- `.agent-memory/open-blockers.md`
+-- `.agent-memory/session-log.md`
+-- `.agent-memory/verification-matrix.md`
+-- `app/(dashboard)/import/page.tsx`
+-- `app/api/import/sie/execute/route.ts`
+-- `app/api/import/sie/parse/route.ts`
+-- `app/api/v1/companies/[companyId]/imports/sie/__tests__/route.test.ts`
+-- `app/api/v1/companies/[companyId]/imports/sie/route.ts`
+-- `components/bookkeeping/year-end/PreflightStep.tsx`
+-- `components/import/SIEPreviewStep.tsx`
+-- `lib/bokslut/arsredovisning/build-data.ts`
+-- `lib/bokslut/readiness-aggregator.ts`
+-- `lib/errors/structured-errors.ts`
+-- `lib/import/sie-import.ts`
+-- `lib/import/types.ts`
+-- `lib/reports/__tests__/ar-reconciliation.test.ts`
+-- `lib/reports/ar-reconciliation.ts`
+-- `scripts/checks/antipatterns-baseline.json`
+-- `scripts/checks/no-new-antipatterns.mjs`
+-- `types/index.ts`
+-- `IMPLEMENTATION_REPORT.md`
+-- `TEST_RESULTS.md`
+-
+-## Tillagda
+-
+-- `app/(dashboard)/bookkeeping/year-end/historical-support/page.tsx`
+-- `app/api/bookkeeping/fiscal-periods/[id]/historical-support/evidence/route.ts`
+-- `app/api/bookkeeping/fiscal-periods/[id]/historical-support/route.ts`
+-- `lib/core/bookkeeping/__tests__/year-end-historical-support.pg.test.ts`
+-- `lib/import/__tests__/company-identity.test.ts`
+-- `lib/import/__tests__/sie-status.test.ts`
+-- `lib/import/company-identity-server.ts`
+-- `lib/import/company-identity.ts`
+-- `lib/import/sie-limits.ts`
+-- `lib/import/sie-parse-session.ts`
+-- `lib/import/sie-status.ts`
+-- `supabase/migrations/20260729160000_sie_identity_parse_sessions_and_corrections.sql`
+-- `supabase/migrations/20260729161000_historical_ar_ap_support_ledgers.sql`
+-- `supabase/migrations/20260729162000_historical_year_end_controls_and_atomic_close.sql`
+-- `CHANGED_FILES.md`
+-- `MIGRATION_ORDER.md`
+-- `KNOWN_LIMITATIONS.md`
+-
+-Paketet innehåller inte `node_modules`, `.next`, `.git`, miljöfiler,
+-hemligheter eller bygggenererade filer.
++Ziparkivet innehåller endast filer som skiljer sig från den mottagna
++baslinjen. Huvudgrupper:
++
++- API och wizard för periodisering, avskrivning, disposition, preview, execute
++  och resultat.
++- Bokslutstjänst, stagingtjänst, typer och strukturerade fel.
++- iXBRL- och Bolagsverket-koppling utan klientstyrd utdelning.
++- Forward-only migration
++  `20260730170000_canonical_year_end_staging_preview_execute.sql`.
++- Regressionstest samt projektminne och leveransdokumentation.
++
++Den fullständiga maskinläsbara diffen finns i
++`nordklart-canonical-year-end.patch`.
+diff --git a/IMPLEMENTATION_REPORT.md b/IMPLEMENTATION_REPORT.md
+index 70d59eb..10665d9 100644
+--- a/IMPLEMENTATION_REPORT.md
++++ b/IMPLEMENTATION_REPORT.md
+@@ -1,152 +1,16 @@
+-# Implementeringsrapport — kanonisk SIE-import och historiska stödregister
++# Implementationsrapport
+ 
+-Datum: 2026-07-29
++Leveransen inför en kanonisk bokslutskedja:
+ 
+-## Resultat
++1. Bokslutsjusteringar sparas som staging och skapar inga verifikationer.
++2. Preview sparas med ID och hash för huvudbok, readiness, justeringar och
++   regelverk.
++3. Execute accepterar endast den exakta, aktuella previewn.
++4. Justeringar, periodstängning och ingående balans genomförs atomiskt i samma
++   PostgreSQL-transaktion.
++5. Resultat och bekräftelse kan återläsas efter stängning.
+ 
+-Ändringen etablerar en gemensam identitets- och statusmodell för SIE, hållbara
+-parse-sessioner med arkiverat original, separata historiska stödregister och ett
+-gemensamt kontrollkontrakt för bokslut. Huvudboken förblir den enda
+-redovisningsmässiga sanningen; komplettering av stödregister skapar inte
+-verifikationer.
++Även iXBRL-flödet har låsts till serverns godkända resultatdisposition och det
++tidigare breda SIE-undantaget har ersatts med en exakt evidensmatchning.
+ 
+-Leveransen är kod- och byggverifierad. Den är inte produktionsgodkänd förrän de
+-tre nya migrationerna och pg-real/RLS/concurrency-testerna har körts mot en
+-riktig PostgreSQL-testdatabas. Se `KNOWN_LIMITATIONS.md`.
+-
+-## Verifierade grundorsaker
+-
+-- SIE-status fanns duplicerad i TypeScript och motsvarade inte alla
+-  databaslägen; särskilt `staged` saknades i delar av bokslutsflödet.
+-- Parse och execute använde inte samma storleksgräns och execute kunde arbeta
+-  från en ny klientuppladdning i stället för det arkiverade parse-originalet.
+-- Juridisk identitet kontrollerades inte konsekvent vid parse, execute,
+-  databasfinalisering och ersättning.
+-- Kundreskontra och bokslut använde olika uppsättningar kontrollkonton.
+-- Det saknades en separat modell för redan bokförda historiska AR/AP-poster.
+-- Bokslutskontrollerna saknade ett strukturerat kontrakt för belopp, differens,
+-  underlag, stale-status och möjliga åtgärder.
+-- Årsredovisningens eget-kapitalflöde kunde härleda utdelning från ett generiskt
+-  `result_appropriation` i stället för ett uttryckligt beslut.
+-
+-## Implementerad lösning
+-
+-### SIE
+-
+-- En kanonisk statusdefinition:
+-  `pending`, `validating`, `staged`, `importing`, `partial`, `mapped`,
+-  `completed`, `failed`, `replaced`, `undone`.
+-- Gemensam normalisering och jämförelse av organisationsnummer med resultaten
+-  `match`, `missing_in_sie`, `missing_in_company` och `mismatch`.
+-- Samma identitetskontroll körs vid parse och execute. Databasmigrationen lägger
+-  ett fail-closed-omslag runt `finalize_sie_import`.
+-- Parse skapar en hållbar session och arkiverar originalfilen före ekonomisk
+-  commit. Execute laddar ned, hashverifierar, parserar om och identitetskontrollerar
+-  det arkiverade originalet.
+-- Gemensam gräns på 50 MiB används i parse och execute.
+-- Append-only `sie_import_corrections` bevarar originalvärden och godkännanden.
+-- Dashboard- och v1-routen använder samma session- och identitetsmodell.
+-
+-### Historiska stödregister
+-
+-- Gemensam, explicit `year_end_control_accounts` används av avstämningar och
+-  AR-rapport i stället för hårdkodad 1510-logik.
+-- Separata migrerade kund- och leverantörsposter, dokument,
+-  verifikationskopplingar och betalningsreferenser.
+-- Varje migrerad post låses till
+-  `accounting_origin = imported_sie` och
+-  `recognition_status = already_booked`.
+-- Itemiserat och externt verifierat läge är ömsesidigt uteslutande per
+-  period/kontrollkonto.
+-- Serverfunktionerna `customer_receivables_reconciliation_at` och
+-  `supplier_payables_reconciliation_at` räknar huvudbok, intern reskontra,
+-  historiskt stöd, differens, underlag och stale/import-invalidation.
+-- Historiska bank-, eget-kapital-, skatt- och momsavstämningar samt dokument och
+-  append-only-invalidationer har införts.
+-- UI och API stödjer företag/periodbundna kompletteringar och verifieringar utan
+-  att skapa bokföring.
+-
+-### Bokslut och årsredovisning
+-
+-- `year_end_control_status` returnerar
+-  `reconciled`, `completion_required`, `manual_verification_required` eller
+-  `accounting_error` med belopp, differens, stale-status, blockeringsstatus och
+-  åtgärder.
+-- `year_end_db_blockers` blockerar även `staged` samt övriga icke-slutliga eller
+-  felaktiga SIE-lägen.
+-- Den atomiska stängningsfunktionen återkontrollerar blockerare under lås och
+-  hanterar föregående års resultatöverföring exakt en gång, alternativt länkar
+-  en motsvarande SIE-överföring.
+-- Företagssnapshot kan låsas för perioden och årsredovisningen läser den låsta
+-  snapshoten, inte en senare ändrad profil.
+-- Strukturerad resultatdisposition, utdelningsförslag, utdelningsbeslut,
+-  dokument och eget-kapitalhändelser ersätter utdelningsgissning.
+-- Årsredovisningen använder huvudbokssaldo och lägger inte historiska
+-  stödobjekt ovanpå huvudboken.
+-- Bokslutsanteckningar har uttrycklig synlighet; endast
+-  `annual_report` hämtas till årsredovisningen.
+-
+-## Databas- och säkerhetsregler
+-
+-- Endast nya framåtriktade migrationer har lagts till; inga befintliga
+-  migrationsfiler ändrades.
+-- CI-guarden tillåter endast de två exakta äldre dubblettuppsättningarna och
+-  stoppar nya dubblettversioner eller en ny fil i en äldre uppsättning.
+-- Tabeller är företag- och periodbundna med RLS för läsning.
+-- Skrivning sker genom serverroutes eller säkra RPC:er; append-only-tabeller har
+-  spärrar mot direkt ändring.
+-- `SECURITY DEFINER`-funktioner använder fast `search_path`, kontrollerar
+-  företag/aktör och återkallar breda standardrättigheter.
+-- Snapshot-hashar och invalidationer gör att ändrad huvudbok, import eller
+-  stöddata öppnar kontrollen igen.
+-- Slutförande och resultatöverföring sker under databaslås och
+-  idempotensskydd.
+-
+-## Migrationer
+-
+-1. `20260729160000_sie_identity_parse_sessions_and_corrections.sql`
+-2. `20260729161000_historical_ar_ap_support_ledgers.sql`
+-3. `20260729162000_historical_year_end_controls_and_atomic_close.sql`
+-
+-Migrationerna ska appliceras i denna ordning före applikationskoden. Full
+-driftsättnings- och återställningsinformation finns i `MIGRATION_ORDER.md`.
+-
+-## Verifiering
+-
+-- TypeScript: PASS.
+-- Ändringslint: PASS, 0 fel och 10 varningar.
+-- Lint-baslinje: PASS, 0 nya fel.
+-- Guards: PASS.
+-- Riktade regressionstester: PASS, 41 tester.
+-- Full unit-svit: PASS, 6 109 tester; 2 skip.
+-- Next-produktionsbygge: PASS, 355 sidor.
+-- Befintliga migrationschecksummor: PASS, 416 SQL-filer oförändrade.
+-- pg-real/RLS/concurrency och live migrationsstatus: INTE KÖRDA; ingen
+-  PostgreSQL-anslutning finns i leveransmiljön.
+-
+-Detaljer och exakta kommandon finns i `TEST_RESULTS.md`.
+-
+-## Rollback
+-
+-Ta alltid en databasbackup före migration. Migrationerna är additiva, men de
+-lägger även omslag runt befintliga finaliserings- och stängningsfunktioner.
+-Rollback ska därför ske genom en ny framåtriktad kompensationsmigration som
+-återställer funktionsnamn och tar bort nya objekt först när all ny data har
+-exporterats eller bedömts obehövlig. Redigera eller byt inte namn på redan
+-applicerade migrationsfiler.
+-
+-Applikationsrollback bör ske efter att ett kompatibelt databasomslag finns;
+-gammal kod mot delvis återställd databas är inte en säker rollback.
+-
+-## Externa beroenden
+-
+-- Supabase/PostgreSQL för migrationer, RLS- och concurrency-verifiering.
+-- Supabase Storage-bucket `sie-files` för arkiverade original.
+-- Befintliga Bolagsverket-/registersnapshot-flöden används där data finns.
+-
+-## Kvarvarande begränsningar
+-
+-Se `KNOWN_LIMITATIONS.md`. De viktigaste är att produktionsroute för atomisk
+-betalning av migrerade AR/AP-poster och radimport av historiska kontoutdrag
+-ännu inte är fullständiga, samt att företagssnapshot-UI:t ännu inte erbjuder
+-fältvis merge mellan samtliga fyra källor.
++Se `TEST_RESULTS.md`, `MIGRATION_ORDER.md` och `KNOWN_LIMITATIONS.md`.
+diff --git a/KNOWN_LIMITATIONS.md b/KNOWN_LIMITATIONS.md
+index 58ff363..b237641 100644
+--- a/KNOWN_LIMITATIONS.md
++++ b/KNOWN_LIMITATIONS.md
+@@ -1,32 +1,8 @@
+-# Kända begränsningar och produktionsblockerare
+-
+-## Måste lösas före produktionsgodkännande
+-
+-1. De tre migrationerna har inte applicerats eller körts i denna miljö eftersom
+-   `SUPABASE_DB_URL`/`DATABASE_URL` saknas.
+-2. pg-real-, RLS-, concurrency- och end-to-end-bokslutstester har inte kunnat
+-   köras. Lokalt PostgreSQL-försök gav `ECONNREFUSED` på port 5432.
+-3. Källprojektet innehåller redan två dubbla migrationsversioner:
+-   `20260629120000` och `20260704120000`. De ska inte döpas om om de redan har
+-   applicerats. Målmiljöns migrationshistorik måste avstämmas före push.
+-
+-## Funktionella avgränsningar
+-
+-4. Datamodellen har betalningstabeller och spärrar mot dubbelanvändning,
+-   överbetalning samt både länkning och nybokföring. En enda komplett
+-   produktionsroute/RPC som atomiskt bokför eller länkar alla varianter av
+-   migrerad AR/AP-betalning är ännu inte implementerad.
+-5. Historisk bank har schema, dokumentation, länkar och manuell
+-   balansverifiering. Full parser och radbaserat UI för import av äldre
+-   kontoutdrag är ännu inte implementerade.
+-6. Företagssnapshoten kan låsa periodens aktuella profil och årsredovisningen
+-   använder den låsta versionen. UI för fältvis val mellan SIE, Nordklart-profil,
+-   registeruppgift och vald bokslutsuppgift är ännu inte komplett.
+-
+-## Konsekvens
+-
+-Leveransen löser de centrala identitets-, status-, arkiv-, stödregister-,
+-kontroll-, årsredovisnings- och stängningsproblemen, men uppfyller inte ärligt
+-varje obligatoriskt betalnings-, bankimport- och snapshot-acceptanstest ännu.
+-Produktionsmerge bör därför villkoras av databasverifieringen och de tre
+-funktionella kompletteringarna ovan.
++# Kända begränsningar
++
++- Den nya migrationen är parserkontrollerad men måste fortfarande appliceras
++  och verifieras mot projektets riktiga stagingdatabas.
++- Kör `npm run test:pg` efter migration och smoke-testa samtidig execute,
++  stale preview och full rollback innan produktionsaktivering.
++- Baslinjens två befintliga dubbla migrationsversioner måste stämmas av mot
++  faktisk migrationshistorik före en generell migration av hela katalogen.
+diff --git a/MIGRATION_ORDER.md b/MIGRATION_ORDER.md
+index c6ce30c..6a4d771 100644
+--- a/MIGRATION_ORDER.md
++++ b/MIGRATION_ORDER.md
+@@ -1,72 +1,11 @@
+-# Migrationsordning och återställning
++# Migrationsordning
+ 
+-## Förkontroller
++Alla befintliga migrationer ska först vara applicerade i filnamnsordning.
++Applicera därefter:
+ 
+-1. Ta en verifierad databasbackup.
+-2. Kontrollera nuvarande migrationsstatus mot målmiljön.
+-3. Hantera målmiljöns befintliga migrationshistorik för de två redan existerande
+-   dubblettversionerna utan att byta namn på applicerade filer:
+-   `20260629120000` och `20260704120000`.
+-4. Kör plan/status igen och säkerställ att inga oväntade äldre migrationer
+-   väntar.
+-
+-## Deterministisk ordning
+-
+-Applicera exakt:
+-
+-1. `supabase/migrations/20260729160000_sie_identity_parse_sessions_and_corrections.sql`
+-2. `supabase/migrations/20260729161000_historical_ar_ap_support_ledgers.sql`
+-3. `supabase/migrations/20260729162000_historical_year_end_controls_and_atomic_close.sql`
+-
+-Ordningen är obligatorisk: stödregistren refererar SIE-sessionerna och den
+-slutliga kontroll-/stängningsmigrationen refererar båda tidigare migrationerna.
+-Applikationskoden ska driftsättas först när samtliga tre har applicerats.
+-
+-## Rekommenderade kommandon
+-
+-```bash
+-export SUPABASE_DB_URL='postgresql://...'
+-npm run db:migrate:status
+-npm run db:migrate
+-npm run db:migrate:status
+-npm run test:pg
++```text
++supabase/migrations/20260730170000_canonical_year_end_staging_preview_execute.sql
+ ```
+ 
+-Supabase CLI kan användas om det är projektets etablerade produktionsflöde:
+-
+-```bash
+-npx supabase migration list --linked
+-npx supabase db push --linked --include-all
+-```
+-
+-Kör inte båda migreringsmotorerna mot samma miljö utan att först verifiera att
+-de delar samma migrationshistorik.
+-
+-## Smoke-test efter migration
+-
+-- Parse av SIE med matchande respektive avvikande organisationsnummer.
+-- Execute från arkiverad parse-session.
+-- Itemiserad och extern AR/AP-avstämning med differens 0.
+-- Invalidation efter ändrad huvudbok eller ersatt SIE-import.
+-- Bokslutsblockering för `staged`.
+-- Två samtidiga försök att stänga samma period.
+-- Årsredovisning från låst företagssnapshot.
+-
+-## Rollback
+-
+-Ingen gammal migration ska redigeras eller tas bort. Vid rollback:
+-
+-1. stoppa skrivtrafik till berörda SIE- och bokslutsflöden;
+-2. exportera nya sessioner, stödregister, dokumentreferenser och auditdata;
+-3. skapa en ny kompensationsmigration;
+-4. återställ de tidigare kärnfunktionerna från de versionsnamn som migrationerna
+-   skapade:
+-   `__finalize_sie_import_identity_core_20260729` och
+-   `__execute_year_end_closing_result_transfer_core_20260729`;
+-5. återkalla nya grants/policies och ta bort nya objekt i omvänd
+-   beroendeordning endast när datan får tas bort;
+-6. verifiera RLS, funktioner och migrationsstatus innan trafiken öppnas.
+-
+-Att enbart rulla tillbaka applikationskoden är inte en komplett
+-databasrollback, men databasmigrationerna är utformade så att äldre kärnlogik
+-bevaras bakom versionsnamn.
++Migrationen är forward-only och de äldre migrationsfilerna har inte ändrats.
++Ta en databasbackup och kör först i staging.
+diff --git a/SYNC_COMMANDS.md b/SYNC_COMMANDS.md
+new file mode 100644
+index 0000000..0e54082
+--- /dev/null
++++ b/SYNC_COMMANDS.md
+@@ -0,0 +1,18 @@
++# Synkkommandon
++
++Exempel när zippen ligger i `~/Downloads` och projektet i
++`~/Projects/nordklart`:
++
++```bash
++PATCH_DIR="$(mktemp -d)"
++unzip -oq ~/Downloads/nordklart-canonical-year-end-2026-07-30.zip -d "$PATCH_DIR"
++rsync -a --exclude 'nordklart-canonical-year-end.patch' \
++  "$PATCH_DIR"/ ~/Projects/nordklart/
++cd ~/Projects/nordklart
++npm ci
++NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck
++npm test
++npm run db:migrate
++```
++
++Ta databasbackup och kör migrationen i staging före produktion.
+diff --git a/TEST_RESULTS.md b/TEST_RESULTS.md
+index 1bc4f39..e8b73d1 100644
+--- a/TEST_RESULTS.md
++++ b/TEST_RESULTS.md
+@@ -1,74 +1,16 @@
+ # Testresultat
+ 
+-Datum: 2026-07-29
+-
+-## Slutförda kontroller
+-
+ | Kontroll | Resultat |
+ |---|---|
+-| `npm ci --no-audit --no-fund` | PASS, 1 120 paket |
+-| `NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck` | PASS, 0 typfel |
+-| ESLint på ändrade TS/TSX-filer | PASS, 0 fel / 10 varningar |
+-| `npm run check:lint` | PASS, 0 nya fel mot baseline |
+-| `npm run check:guards` | PASS |
+-| Riktade SIE/AR/årsredovisningstester | PASS, 41/41 |
+-| `npm run test -- --run` | PASS, 486 filer / 6 109 tester; 1 fil och 2 tester skip |
++| TypeScript | PASS, 0 fel |
++| Riktade bokslutstester | PASS, 47/47 |
++| Full unit-svit | PASS, 6 114 pass / 2 skip |
++| Lintbaseline | PASS, 0 nya fel |
++| Antipattern-guard | PASS |
++| PostgreSQL-parser | PASS, 49 statements |
+ | Next-produktionsbygge | PASS, 355 sidor |
+-| Befintliga migrationschecksummor | PASS, 416/416 SQL-filer oförändrade |
+-| Nya migrationsversioner | PASS, tre unika och stigande versioner |
+-
+-Guards rapporterade `raw-route-auth: 167`, `naive-ore-round: 640`, två exakt
+-allowlistade äldre dubblettuppsättningar och en förbättring på 13
+-avrundningsförekomster jämfört med baseline.
+-
+-Standardkommandot `npm run build` kunde inte starta sin förgenerator i
+-sandboxen eftersom `tsx` inte fick skapa sin IPC-socket (`EPERM`). Samma
+-projektsteg kördes utan IPC-wrapper och hela Next-bygget slutfördes:
+-
+-```bash
+-node --import tsx scripts/generate-extension-registry.ts
+-node scripts/inject-public-branding.mjs
+-NODE_OPTIONS=--max-old-space-size=4096 npx next build
+-```
+-
+-## Databasberoende kontroller
+-
+-| Kontroll | Resultat |
+-|---|---|
+-| `npm run db:migrate:status` | INTE KÖRD — `SUPABASE_DB_URL`/`DATABASE_URL` saknas |
+-| pg-real-test för historiska stödregister | BLOCKERAD — `ECONNREFUSED` på localhost:5432 |
+-| Full `npm run test:pg` | INTE KÖRD — PostgreSQL saknas |
+-| RLS- och concurrency-tester mot riktig PostgreSQL | INTE KÖRDA |
+-| End-to-end bokslut mot migrerad databas | INTE KÖRT |
+-
+-Det nya pg-real-testet innehåller fyra tester, bland annat `staged`-blockering
+-och AR/AP utan nya verifikationer. De kunde inte ges PASS utan en riktig
+-databas.
+-
+-## Migrationskontroll
+-
+-- Inga av de 416 befintliga SQL-migrationerna har ändrats eller försvunnit.
+-- Följande äldre dubblettversioner fanns redan i källprojektet:
+-  - `20260629120000`
+-  - `20260704120000`
+-- De nya versionerna är unika:
+-  - `20260729160000`
+-  - `20260729161000`
+-  - `20260729162000`
+-
+-## Kommandon för slutlig miljöverifiering
++| `git diff --check` | PASS |
++| Live migration | Inte körd: DB-URL saknas |
++| pg-real/RLS | Inte körd: PostgreSQL saknas |
+ 
+-```bash
+-npm ci
+-export SUPABASE_DB_URL='postgresql://...'
+-npm run db:migrate:status
+-npm run db:migrate
+-npm run test:pg
+-npm run nordklart:platform-accounting-regression
+-NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck
+-npm run lint
+-npm run check:guards
+-npm run check:lint
+-npm test
+-npm run build
+-```
++Ej körda kontroller räknas inte som godkända.
+diff --git a/app/(dashboard)/bookkeeping/year-end/page.tsx b/app/(dashboard)/bookkeeping/year-end/page.tsx
+index 9e942d8..18b5739 100644
+--- a/app/(dashboard)/bookkeeping/year-end/page.tsx
++++ b/app/(dashboard)/bookkeeping/year-end/page.tsx
+@@ -45,6 +45,7 @@ interface PeriodOption {
+   name: string
+   period_start: string
+   period_end: string
++  is_closed: boolean
+ }
+ 
+ export default function YearEndPage() {
+@@ -94,9 +95,7 @@ export default function YearEndPage() {
+         const data = (body.periods ?? body.data ?? []) as FiscalPeriod[]
+         if (!cancelled) setCanCreateFiscalYear(Boolean(body.canCreateFiscalYear))
+         const today = new Date().toISOString().split('T')[0]
+-        const eligible = data.filter(
+-          (p) => !p.is_closed && p.period_end <= today,
+-        )
++        const eligible = data.filter((p) => p.period_end <= today)
+         // Oldest first — accountants close in order.
+         eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
+         if (cancelled) return
+@@ -149,6 +148,10 @@ export default function YearEndPage() {
+             started_at: string
+           }[]
+           setFailedRuns(runs.filter((r) => r.status === 'failed'))
++          if (body.committedResult) {
++            setResult(body.committedResult as YearEndResult)
++            setStep('result')
++          }
+         })
+         .catch(() => {
+           // Non-blocking enrichment.
+@@ -163,10 +166,17 @@ export default function YearEndPage() {
+   // ---- Fetch readiness report whenever selected period changes ----
+   useEffect(() => {
+     if (!selectedPeriodId) return
++    const selectedPeriod = periods?.find((period) => period.id === selectedPeriodId)
+     let cancelled = false
+     // Defer to the next macrotask so the synchronous setState calls do not
+     // run directly within the effect body.
+     const timer = setTimeout(() => {
++      if (selectedPeriod?.is_closed) {
++        setReport(null)
++        setReportError(null)
++        setReportLoading(false)
++        return
++      }
+       setReportLoading(true)
+       setReportError(null)
+       setReport(null)
+@@ -191,7 +201,7 @@ export default function YearEndPage() {
+       cancelled = true
+       clearTimeout(timer)
+     }
+-  }, [selectedPeriodId, companySuffix])
++  }, [selectedPeriodId, companySuffix, periods])
+ 
+   // ---- Step navigation ----
+   const goToPreview = useCallback(async () => {
+@@ -216,12 +226,18 @@ export default function YearEndPage() {
+ 
+   const reportPeriodName = report?.period.name
+   const executeYearEnd = useCallback(async () => {
+-    if (!selectedPeriodId) return
++    if (!selectedPeriodId || !preview?.previewId) {
++      setExecuteError('Förhandsgranskningen saknar ett giltigt preview-ID. Skapa om förhandsgranskningen.')
++      setStep('preview')
++      return
++    }
+     setExecuting(true)
+     setExecuteError(null)
+     try {
+       const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end${companySuffix}`, {
+         method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ preview_id: preview.previewId }),
+       })
+       const body = await res.json()
+       if (!res.ok) {
+@@ -229,6 +245,12 @@ export default function YearEndPage() {
+         // the structured-error registry. Do NOT interpolate raw details
+         // here — they can contain DB-sourced strings (V2.3 finding).
+         setExecuteError(body?.error?.message ?? 'Bokslutet kunde inte verkställas')
++        if (body?.error?.code === 'YEAR_END_PREVIEW_STALE') {
++          setPreview(null)
++          // Return to the final editable step. Moving to preview with a cleared
++          // payload rendered an empty screen and could not generate a fresh ID.
++          setStep('dispositions')
++        }
+         return
+       }
+       setResult(body.data as YearEndResult)
+@@ -242,7 +264,7 @@ export default function YearEndPage() {
+     } finally {
+       setExecuting(false)
+     }
+-  }, [selectedPeriodId, reportPeriodName, toast, companySuffix])
++  }, [selectedPeriodId, preview, reportPeriodName, toast, companySuffix])
+ 
+   const createFiscalYear = useCallback(async () => {
+     setCreatingPeriod(true)
+@@ -352,7 +374,7 @@ export default function YearEndPage() {
+               <SelectContent>
+                 {periods.map((p) => (
+                   <SelectItem key={p.id} value={p.id}>
+-                    {p.name} ({p.period_start} – {p.period_end})
++                    {p.name} ({p.period_start} – {p.period_end}){p.is_closed ? ' · stängd' : ''}
+                   </SelectItem>
+                 ))}
+               </SelectContent>
+diff --git a/app/api/bookkeeping/fiscal-periods/[id]/accruals/route.ts b/app/api/bookkeeping/fiscal-periods/[id]/accruals/route.ts
+index 1a79b24..d9f1a8d 100644
+--- a/app/api/bookkeeping/fiscal-periods/[id]/accruals/route.ts
++++ b/app/api/bookkeeping/fiscal-periods/[id]/accruals/route.ts
+@@ -3,7 +3,6 @@ import { z } from 'zod'
+ import { withRouteContext } from '@/lib/api/with-route-context'
+ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+ import { validateBody } from '@/lib/api/validate'
+-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+ import {
+   buildAccrualsProposal,
+   proposeAccruedInterest,
+@@ -16,9 +15,12 @@ import {
+ } from '@/lib/bokslut/accruals/accrual-detector'
+ import { detectPeriodisering } from '@/lib/bokslut/accruals/auto-detect'
+ import type { AccrualProposal } from '@/lib/bokslut/accruals/types'
+-import type { JournalEntry } from '@/types'
+ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+ import { createServiceClient } from '@/lib/supabase/server'
++import {
++  stageYearEndAdjustments,
++  type StageYearEndAdjustmentInput,
++} from '@/lib/core/bookkeeping/year-end-staging'
+ 
+ export const GET = withRouteContext(
+   'period.accruals_preview',
+@@ -158,24 +160,9 @@ export const POST = withRouteContext(
+         return errorResponseFromCode('PERIOD_LOCKED', log, { requestId })
+       }
+ 
+-      const created: { kind: string; entry: JournalEntry; reverses_on: string | null }[] = []
+-      const skipped: { kind: string; existing_entry_id: string; reason: string }[] = []
++      const stagedItems: StageYearEndAdjustmentInput[] = []
+ 
+       for (const item of validation.data.items) {
+-        // Idempotency: refuse to post a duplicate accrual of the same kind for
+-        // the same period. Without this, re-running the wizard (or a retried
+-        // request after a flaky network) would create duplicate entries that
+-        // distort both the balance sheet and the trial balance.
+-        const existingId = await findExistingAccrualEntry(supabase, companyId, id, item)
+-        if (existingId) {
+-          skipped.push({
+-            kind: item.kind,
+-            existing_entry_id: existingId,
+-            reason: 'already_posted',
+-          })
+-          continue
+-        }
+-
+         let proposal: AccrualProposal | null = null
+         switch (item.kind) {
+           case 'vacation_liability_change':
+@@ -238,92 +225,38 @@ export const POST = withRouteContext(
+         }
+         if (!proposal) continue
+ 
+-        // Mark the entry's description with the reversal date so future
+-        // bookkeepers (and a future cron) can spot the periodisering. The
+-        // accrual_reversals cron is follow-up infra — once it lands, the
+-        // entry's source_type or a metadata column can drive the auto-flip.
+-        //
+-        // Vacation-liability adjustments deliberately have empty reverses_on
+-        // since 2920 carries forward — emit a different description in that
+-        // case so future readers don't expect a Jan 1 reversal.
+         const description = proposal.reverses_on
+           ? `Periodisering: ${proposal.label} (vänds ${proposal.reverses_on})`
+           : `Bokslutsjustering: ${proposal.label}`
+-        const entry = await createJournalEntry(supabase, companyId, user.id, {
+-          fiscal_period_id: id,
+-          entry_date: period.period_end,
++        const stableKeyParts = [
++          item.kind,
++          'description' in item ? item.description : '',
++          'expense_account' in item ? item.expense_account : '',
++          'liability_account' in item ? item.liability_account ?? '' : '',
++        ]
++        stagedItems.push({
++          stable_key: stableKeyParts.join(':'),
++          adjustment_kind: item.kind,
+           description,
+-          source_type: 'manual',
+-          voucher_series: 'A',
+-          lines: proposal.lines,
++          entry_date: period.period_end,
++          reversal_date: proposal.reverses_on,
++          journal_lines: proposal.lines,
++          calculation_payload: { request: item, proposal },
+         })
+-
+-        created.push({ kind: item.kind, entry, reverses_on: proposal.reverses_on })
+       }
+ 
+-      return NextResponse.json({ data: { created, skipped } })
++      const staged = await stageYearEndAdjustments(
++        supabase,
++        companyId,
++        id,
++        user.id,
++        'accrual',
++        stagedItems,
++      )
++      return NextResponse.json({ data: { staged } })
+     } catch (err) {
+       return errorResponse(err, log, { requestId })
+     }
+   },
+   { allowRequestedCompany: true },
+ )
+-
+-type PostItem = z.infer<typeof PostItemSchema>
+-
+-/**
+- * Find a previously-posted accrual journal entry for the same kind in the
+- * same period — used by the POST handler to enforce idempotency. Matches
+- * on the description prefix that each calculator emits (see
+- * accrual-detector.ts and the POST handler's description construction).
+- *
+- * For manual prepaid/accrued the dedup key includes the user-supplied
+- * description, so different items with different descriptions don't collide.
+- */
+-async function findExistingAccrualEntry(
+-  supabase: Awaited<ReturnType<typeof import('@/lib/supabase/server')['createClient']>>,
+-  companyId: string,
+-  fiscalPeriodId: string,
+-  item: PostItem,
+-): Promise<string | null> {
+-  let pattern: string
+-  switch (item.kind) {
+-    case 'vacation_liability_change':
+-      pattern = '%semesterlöneskuld%'
+-      break
+-    case 'audit_fee': {
+-      const account = item.liability_account ?? '2992'
+-      pattern = account === '2991' ? '%arvode för bokslut%' : '%arvode för revision%'
+-      break
+-    }
+-    case 'manual_prepaid_expense':
+-      pattern = `Periodisering: Förutbetald kostnad: ${escapeLike(item.description)}%`
+-      break
+-    case 'manual_accrued_expense':
+-      pattern = `Periodisering: Upplupen kostnad: ${escapeLike(item.description)}%`
+-      break
+-    case 'deferred_revenue':
+-      pattern = `Periodisering: Förutbetald intäkt: ${escapeLike(item.description)}%`
+-      break
+-    case 'accrued_interest':
+-      pattern = `Periodisering: Upplupen ränta: ${escapeLike(item.description)}%`
+-      break
+-    case 'accrued_utility':
+-      pattern = `Periodisering: Upplupen förbrukning: ${escapeLike(item.description)}%`
+-      break
+-  }
+-
+-  const { data } = await supabase
+-    .from('journal_entries')
+-    .select('id')
+-    .eq('company_id', companyId)
+-    .eq('fiscal_period_id', fiscalPeriodId)
+-    .eq('status', 'posted')
+-    .ilike('description', pattern)
+-    .limit(1)
+-  return (data?.[0]?.id as string | undefined) ?? null
+-}
+-
+-function escapeLike(s: string): string {
+-  return s.replace(/[\\%_]/g, (c) => `\\${c}`)
+-}
+diff --git a/app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl/route.ts b/app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl/route.ts
+index 6e4bb7c..65a3e39 100644
+--- a/app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl/route.ts
++++ b/app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl/route.ts
+@@ -15,7 +15,9 @@ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-en
+  *
+  * Query params:
+  *   - download=1   → Content-Disposition: attachment
+- *   - utdelning=N  → proposed dividend in whole SEK for the resultatdisposition
++ *
++ * Economic values are read exclusively from the approved, server-persisted
++ * profit disposition. Query parameters can never override them.
+  */
+ export const GET = withRouteContext(
+   'period.arsredovisning_ixbrl',
+@@ -32,12 +34,8 @@ export const GET = withRouteContext(
+ 
+       const url = new URL(request.url)
+       const download = url.searchParams.get('download') === '1'
+-      const utdelningRaw = url.searchParams.get('utdelning')
+-      const proposedDividend = utdelningRaw ? Number(utdelningRaw) : 0
+ 
+-      const input = await buildIxbrlInput(supabase, companyId, id, {
+-        proposedDividend: Number.isFinite(proposedDividend) ? proposedDividend : 0,
+-      })
++      const input = await buildIxbrlInput(supabase, companyId, id)
+ 
+       // Mandatory preflight (R13): download AND preview are blocked on
+       // critical validation errors — the user gets the structured issue
+diff --git a/app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl/validate/route.ts b/app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl/validate/route.ts
+index f450d6b..cacdb4a 100644
+--- a/app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl/validate/route.ts
++++ b/app/api/bookkeeping/fiscal-periods/[id]/arsredovisning/ixbrl/validate/route.ts
+@@ -17,7 +17,7 @@ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-en
+  */
+ export const GET = withRouteContext(
+   'period.arsredovisning_ixbrl_validate',
+-  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
++  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+     const { id } = await params
+     const { user, supabase, companyId, log, requestId } = ctx
+     try {
+@@ -28,13 +28,7 @@ export const GET = withRouteContext(
+       })
+       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.ixbrl', access.reason)
+ 
+-      const url = new URL(request.url)
+-      const utdelningRaw = url.searchParams.get('utdelning')
+-      const proposedDividend = utdelningRaw ? Number(utdelningRaw) : 0
+-
+-      const input = await buildIxbrlInput(supabase, companyId, id, {
+-        proposedDividend: Number.isFinite(proposedDividend) ? proposedDividend : 0,
+-      })
++      const input = await buildIxbrlInput(supabase, companyId, id)
+       const result = runPreflightChecks(input)
+ 
+       // Generation dry-run: a document that cannot even be generated must
+diff --git a/app/api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner/route.ts b/app/api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner/route.ts
+index 8f4a661..5301b36 100644
+--- a/app/api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner/route.ts
++++ b/app/api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner/route.ts
+@@ -3,7 +3,6 @@ import { z } from 'zod'
+ import { withRouteContext } from '@/lib/api/with-route-context'
+ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+ import { validateBody } from '@/lib/api/validate'
+-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+ import { calculateBolagsskatt } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
+ import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
+ import {
+@@ -18,22 +17,13 @@ import {
+   buildLatentTaxProposal,
+ } from '@/lib/bokslut/dispositions-proposal-builder'
+ import type { ProposedDisposition } from '@/lib/bokslut/types'
+-import type { JournalEntry } from '@/types'
+ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+-
+-/**
+- * Default schablonintäkt rate on periodiseringsfond (IL 30 kap 6a §).
+- * Statslåneräntan 30 november föregående år + 1 procentenhet, lägst 0.5 %.
+- *
+- *   - inkomstår 2025: SLR 2024-11-30 = 1.96 % → 2.96 % (rounded to 3 %)
+- *   - inkomstår 2026: SLR 2025-11-30 = 2.55 % → 3.55 %
+- *
+- * The default below is the FY2026 rate since that is the year customers are
+- * currently closing. Caller can override per request via `schablonintaktRate`
+- * in the POST body; a future Riksbanken integration will fetch the rate by
+- * the fiscal year automatically.
+- */
+-const DEFAULT_SCHABLONINTAKT_RATE = 0.0355
++import {
++  getYearEndRuleset,
++  stageYearEndAdjustments,
++  type StageYearEndAdjustmentInput,
++  type YearEndRuleset,
++} from '@/lib/core/bookkeeping/year-end-staging'
+ 
+ /**
+  * Canonical bokslut order. Each calculator re-reads the trial balance to
+@@ -106,16 +96,11 @@ const ItemSchema = z.discriminatedUnion('kind', [
+   }),
+   z.object({
+     kind: z.literal('periodiseringsfond_avsattning'),
+-    /** Optional override for the SLR-based schablonintäkt rate; defaults to
+-     *  the server-side constant. Used both to compute the cap base and to
+-     *  feed back into bolagsskatt's adjustment if present in the same batch. */
+-    schablonintaktRate: z.number().optional(),
+     desiredAmount: z.number().optional(),
+   }),
+   z.object({
+     kind: z.literal('periodiseringsfond_ateforing'),
+     returns: z.record(z.string(), z.number()).default({}),
+-    schablonintaktRate: z.number().default(DEFAULT_SCHABLONINTAKT_RATE),
+   }),
+   z.object({
+     kind: z.literal('overavskrivningar'),
+@@ -135,6 +120,18 @@ const ItemSchema = z.discriminatedUnion('kind', [
+ 
+ const PostBodySchema = z.object({
+   items: z.array(ItemSchema).min(1),
++}).superRefine(({ items }, ctx) => {
++  const kinds = new Set<string>()
++  for (const [index, item] of items.entries()) {
++    if (kinds.has(item.kind)) {
++      ctx.addIssue({
++        code: 'custom',
++        path: ['items', index, 'kind'],
++        message: `Dispositionstypen ${item.kind} får bara förekomma en gång i batchen.`,
++      })
++    }
++    kinds.add(item.kind)
++  }
+ })
+ 
+ export const POST = withRouteContext(
+@@ -169,7 +166,7 @@ export const POST = withRouteContext(
+       }
+ 
+       const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
+-      const created: { kind: string; entry: JournalEntry }[] = []
++      const ruleset = await getYearEndRuleset(supabase, fiscalYear)
+ 
+       // Process items in canonical bokslut order regardless of client array
+       // ordering — each computation pulls the current income statement, so
+@@ -179,29 +176,38 @@ export const POST = withRouteContext(
+         (a, b) => DISPOSITION_ORDER[a.kind] - DISPOSITION_ORDER[b.kind],
+       )
+ 
+-      // KNOWN LIMITATION (SOC 2 PI1.3): the loop is not wrapped in a database
+-      // transaction — each item posts its own journal entry via the engine.
+-      // A failure midway leaves earlier items committed and later ones not.
+-      // Recovery: the UI can re-POST omitting already-committed kinds; each
+-      // calculator re-derives from the current trial balance so the next run
+-      // produces correct amounts on top of what's already there. A future
+-      // RPC-level wrapper (Phase 5+) will make this atomic.
++      const stagedItems: StageYearEndAdjustmentInput[] = []
+       for (const item of sortedItems) {
+-        const proposal = await computeProposal(item, supabase, companyId, id, fiscalYear)
++        const proposal = await computeProposal(
++          item,
++          supabase,
++          companyId,
++          id,
++          fiscalYear,
++          ruleset,
++        )
+         if (!proposal) continue
+ 
+-        const entry = await createJournalEntry(supabase, companyId, user.id, {
+-          fiscal_period_id: id,
+-          entry_date: period.period_end,
++        stagedItems.push({
++          stable_key: proposal.kind,
++          adjustment_kind: proposal.kind,
+           description: `Bokslutsdisposition: ${proposal.label}`,
+-          source_type: 'year_end',
+-          voucher_series: 'A',
+-          lines: proposal.lines,
++          entry_date: period.period_end,
++          journal_lines: proposal.lines,
++          calculation_payload: { request: item, proposal, tax_year: fiscalYear },
++          ruleset_version: ruleset.version,
+         })
+-        created.push({ kind: item.kind, entry })
+       }
+ 
+-      return NextResponse.json({ data: { created } })
++      const staged = await stageYearEndAdjustments(
++        supabase,
++        companyId,
++        id,
++        user.id,
++        'disposition',
++        stagedItems,
++      )
++      return NextResponse.json({ data: { staged, ruleset } })
+     } catch (err) {
+       opLog.error('bokslutsdispositioner post failed', err as Error)
+       return errorResponse(err, opLog, { requestId })
+@@ -218,6 +224,7 @@ async function computeProposal(
+   companyId: string,
+   fiscalPeriodId: string,
+   fiscalYear: number,
++  ruleset: YearEndRuleset,
+ ): Promise<ProposedDisposition | null> {
+   switch (item.kind) {
+     case 'bolagsskatt':
+@@ -244,7 +251,7 @@ async function computeProposal(
+         .single()
+       const periodEnd = periodRow?.period_end ?? `${fiscalYear}-12-31`
+       const existing = await listExistingPeriodiseringsfonder(supabase, companyId, periodEnd)
+-      const schablonintaktRate = item.schablonintaktRate ?? DEFAULT_SCHABLONINTAKT_RATE
++      const schablonintaktRate = ruleset.schablonintakt_rate
+       const schablonintakt = existing.reduce(
+         (sum, f) => sum + f.balance * schablonintaktRate,
+         0,
+@@ -273,7 +280,7 @@ async function computeProposal(
+       )
+       const result = proposeAteforing(existing, {
+         returns: item.returns,
+-        schablonintaktRate: item.schablonintaktRate,
++        schablonintaktRate: ruleset.schablonintakt_rate,
+       })
+       // Combine multiple cohort reversals into a single voucher with multiple
+       // lines so we don't blow up voucher numbering — but each fond is its own
+diff --git a/app/api/bookkeeping/fiscal-periods/[id]/depreciation/route.ts b/app/api/bookkeeping/fiscal-periods/[id]/depreciation/route.ts
+index 48159e4..35b8707 100644
+--- a/app/api/bookkeeping/fiscal-periods/[id]/depreciation/route.ts
++++ b/app/api/bookkeeping/fiscal-periods/[id]/depreciation/route.ts
+@@ -3,12 +3,10 @@ import { z } from 'zod'
+ import { withRouteContext } from '@/lib/api/with-route-context'
+ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+ import { validateBody } from '@/lib/api/validate'
+-import {
+-  proposeAnnualPostings,
+-  commitAnnualPostings,
+-} from '@/lib/bokslut/assets/depreciation-engine'
++import { proposeAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
+ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+ import { createServiceClient } from '@/lib/supabase/server'
++import { stageYearEndAdjustments } from '@/lib/core/bookkeeping/year-end-staging'
+ 
+ const CommitSchema = z.object({
+   /** Optional whitelist — when supplied, only assets in this list are posted.
+@@ -83,10 +81,48 @@ export const POST = withRouteContext(
+         return errorResponseFromCode('PERIOD_LOCKED', log, { requestId })
+       }
+ 
+-      const result = await commitAnnualPostings(supabase, companyId, user.id, id, {
+-        assetIds: validation.data.asset_ids,
+-      })
+-      return NextResponse.json({ data: result })
++      const proposal = await proposeAnnualPostings(supabase, companyId, id)
++      const allowed = validation.data.asset_ids
++        ? new Set(validation.data.asset_ids)
++        : null
++      const selected = proposal.items.filter(
++        (item) =>
++          !item.existingJournalEntryId &&
++          (allowed === null || allowed.has(item.asset.id)),
++      )
++      const staged = await stageYearEndAdjustments(
++        supabase,
++        companyId,
++        id,
++        user.id,
++        'depreciation',
++        selected.map((item) => ({
++          stable_key: `asset:${item.asset.id}`,
++          adjustment_kind: 'planned_depreciation',
++          description: `Planenlig avskrivning ${proposal.fiscalPeriod.name}: ${item.asset.name}`,
++          entry_date: proposal.fiscalPeriod.period_end,
++          journal_lines: [
++            {
++              account_number: item.asset.bas_expense_account,
++              debit_amount: item.amount,
++              credit_amount: 0,
++              line_description: `Avskrivning ${item.asset.name}`,
++            },
++            {
++              account_number: item.asset.bas_accumulated_account,
++              debit_amount: 0,
++              credit_amount: item.amount,
++              line_description: `Ack. avskrivning ${item.asset.name}`,
++            },
++          ],
++          calculation_payload: {
++            asset_id: item.asset.id,
++            schedule_id: item.existingScheduleId ?? null,
++            planned_depreciation: item.amount,
++          },
++        })),
++      )
++      return NextResponse.json({ data: { staged } })
+     } catch (err) {
+       return errorResponse(err, log, { requestId })
+     }
+diff --git a/app/api/bookkeeping/fiscal-periods/[id]/year-end/route.ts b/app/api/bookkeeping/fiscal-periods/[id]/year-end/route.ts
+index e393b63..d1ed1df 100644
+--- a/app/api/bookkeeping/fiscal-periods/[id]/year-end/route.ts
++++ b/app/api/bookkeeping/fiscal-periods/[id]/year-end/route.ts
+@@ -1,4 +1,5 @@
+ import { NextResponse } from 'next/server'
++import { z } from 'zod'
+ import {
+   validateYearEndReadiness,
+   previewYearEndClosing,
+@@ -8,6 +9,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
+ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+ import { createServiceClient } from '@/lib/supabase/server'
++import { persistYearEndPreview } from '@/lib/core/bookkeeping/year-end-staging'
++import { validateBody } from '@/lib/api/validate'
+ 
+ /** GET: validate readiness + preview the year-end entries. */
+ export const GET = withRouteContext(
+@@ -25,10 +28,21 @@ export const GET = withRouteContext(
+       })
+       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
+ 
+-      const [validation, preview] = await Promise.all([
+-        validateYearEndReadiness(serviceDb, companyId, user.id, id),
+-        previewYearEndClosing(serviceDb, companyId, user.id, id),
+-      ])
++      const validation = await validateYearEndReadiness(serviceDb, companyId, user.id, id)
++      if (!validation.ready) {
++        return errorResponseFromCode('YEAR_END_READINESS_BLOCKED', opLog, {
++          requestId,
++          details: { errors: validation.errors, warnings: validation.warnings },
++        })
++      }
++      const computedPreview = await previewYearEndClosing(serviceDb, companyId, user.id, id)
++      const preview = await persistYearEndPreview(
++        serviceDb,
++        companyId,
++        id,
++        user.id,
++        computedPreview,
++      )
+       return NextResponse.json({ data: { validation, preview } })
+     } catch (err) {
+       opLog.error('year-end preview failed', err as Error)
+@@ -42,6 +56,10 @@ export const GET = withRouteContext(
+   { allowRequestedCompany: true },
+ )
+ 
++const ExecuteBodySchema = z.object({
++  preview_id: z.string().uuid(),
++})
++
+ /** POST: actually run year-end closing (atomic, idempotent — B01/B09). */
+ export const POST = withRouteContext(
+   'period.year_end',
+@@ -49,6 +67,8 @@ export const POST = withRouteContext(
+     const { id } = await params
+     const { user, companyId, log, requestId } = ctx
+     const opLog = log.child({ periodId: id })
++    const validation = await validateBody(request, ExecuteBodySchema)
++    if (!validation.success) return validation.response
+ 
+     try {
+       const serviceDb = createServiceClient()
+@@ -66,7 +86,9 @@ export const POST = withRouteContext(
+         request.headers.get('idempotency-key')?.slice(0, 128) ?? undefined
+ 
+       const result = await executeYearEndClosing(serviceDb, companyId, user.id, id, {
++        previewId: validation.data.preview_id,
+         idempotencyKey,
++        correlationId: requestId,
+       })
+       return NextResponse.json({ data: result })
+     } catch (err) {
+@@ -88,6 +110,11 @@ export const POST = withRouteContext(
+       if (/not found/i.test(message)) {
+         return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
+       }
++      if (/YE_PREVIEW_STALE|YE_PREVIEW_REQUIRED/i.test(message)) {
++        return errorResponseFromCode('YEAR_END_PREVIEW_STALE', opLog, {
++          requestId,
++        })
++      }
+       // Fall through bookkeeping/Zod/etc to errorResponse, but cap to YEAR_END_FAILED.
+       const fallback = errorResponse(err, opLog, { requestId })
+       if (fallback.status === 500) {
+diff --git a/app/api/bookkeeping/fiscal-periods/[id]/year-end/runs/[runId]/acknowledge/route.ts b/app/api/bookkeeping/fiscal-periods/[id]/year-end/runs/[runId]/acknowledge/route.ts
+new file mode 100644
+index 0000000..b4b3235
+--- /dev/null
++++ b/app/api/bookkeeping/fiscal-periods/[id]/year-end/runs/[runId]/acknowledge/route.ts
+@@ -0,0 +1,57 @@
++import { NextResponse } from 'next/server'
++import { z } from 'zod'
++import { withRouteContext } from '@/lib/api/with-route-context'
++import { validateBody } from '@/lib/api/validate'
++import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
++import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
++import { createServiceClient } from '@/lib/supabase/server'
++
++const BodySchema = z.object({
++  statement_version: z.literal('ib-ub-review-v1'),
++  statement_text: z.string().min(20).max(1000),
++  continuity_snapshot: z.record(z.string(), z.unknown()),
++})
++
++export const POST = withRouteContext(
++  'period.year_end_acknowledge',
++  async (
++    request,
++    ctx,
++    { params }: { params: Promise<{ id: string; runId: string }> },
++  ) => {
++    const { id, runId } = await params
++    const { user, companyId, log, requestId } = ctx
++    const validation = await validateBody(request, BodySchema)
++    if (!validation.success) return validation.response
++
++    try {
++      const serviceDb = createServiceClient()
++      const access = await requireYearEndAccess(serviceDb, companyId, user.id, id, {
++        operation: 'period.year_end_acknowledge',
++        requestId,
++        requireWrite: true,
++      })
++      if (!access.allowed) {
++        return yearEndAccessDeniedResponse('year_end.projects', access.reason)
++      }
++
++      const { data, error } = await serviceDb.rpc('acknowledge_year_end_run', {
++        p_company_id: companyId,
++        p_fiscal_period_id: id,
++        p_year_end_run_id: runId,
++        p_user_id: user.id,
++        p_statement_version: validation.data.statement_version,
++        p_statement_text: validation.data.statement_text,
++        p_continuity_snapshot: validation.data.continuity_snapshot,
++      })
++      if (error) throw new Error(error.message)
++      return NextResponse.json({ data: { acknowledgement_id: data } })
++    } catch (error) {
++      if (/YE_RUN_NOT_COMMITTED/i.test(error instanceof Error ? error.message : '')) {
++        return errorResponseFromCode('YEAR_END_FAILED', log, { requestId })
++      }
++      return errorResponse(error, log, { requestId })
++    }
++  },
++  { allowRequestedCompany: true },
++)
+diff --git a/app/api/bookkeeping/fiscal-periods/[id]/year-end/runs/route.ts b/app/api/bookkeeping/fiscal-periods/[id]/year-end/runs/route.ts
+index 635af11..1688b7d 100644
+--- a/app/api/bookkeeping/fiscal-periods/[id]/year-end/runs/route.ts
++++ b/app/api/bookkeeping/fiscal-periods/[id]/year-end/runs/route.ts
+@@ -3,6 +3,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
+ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+ import { createServiceClient } from '@/lib/supabase/server'
++import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
++import type { FiscalPeriod, JournalEntry, YearEndResult } from '@/types'
+ 
+ /**
+  * GET: list year-end runs for a fiscal period (revision item B10).
+@@ -30,7 +32,7 @@ export const GET = withRouteContext(
+     const { data, error } = await serviceDb
+       .from('year_end_runs')
+       .select(
+-        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, idempotency_key, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, started_at, finished_at, created_at',
++        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, idempotency_key, preview_id, ledger_hash, readiness_hash, adjustment_hash, ruleset_version, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, committed_at, started_at, finished_at, created_at',
+       )
+       .eq('company_id', companyId!)
+       .eq('fiscal_period_id', id)
+@@ -42,7 +44,61 @@ export const GET = withRouteContext(
+       return errorResponseFromCode('INTERNAL_ERROR', opLog, { requestId })
+     }
+ 
+-    return NextResponse.json({ data: data ?? [] })
++    const closedRun = (data ?? []).find((run) => run.status === 'closed')
++    let committedResult: YearEndResult | null = null
++    if (
++      closedRun?.closing_entry_id &&
++      closedRun.opening_balance_entry_id &&
++      closedRun.next_period_id &&
++      closedRun.preview_id
++    ) {
++      const [closing, opening, nextPeriod, revaluation, continuity] = await Promise.all([
++        serviceDb
++          .from('journal_entries')
++          .select('*')
++          .eq('company_id', companyId!)
++          .eq('id', closedRun.closing_entry_id)
++          .single(),
++        serviceDb
++          .from('journal_entries')
++          .select('*')
++          .eq('company_id', companyId!)
++          .eq('id', closedRun.opening_balance_entry_id)
++          .single(),
++        serviceDb
++          .from('fiscal_periods')
++          .select('*')
++          .eq('company_id', companyId!)
++          .eq('id', closedRun.next_period_id)
++          .single(),
++        closedRun.revaluation_entry_id
++          ? serviceDb
++              .from('journal_entries')
++              .select('*')
++              .eq('company_id', companyId!)
++              .eq('id', closedRun.revaluation_entry_id)
++              .single()
++          : Promise.resolve({ data: null, error: null }),
++        validateBalanceContinuity(serviceDb, companyId!, closedRun.next_period_id),
++      ])
++      if (!closing.error && !opening.error && !nextPeriod.error) {
++        committedResult = {
++          runId: closedRun.id,
++          previewId: closedRun.preview_id,
++          ledgerHash: closedRun.ledger_hash ?? '',
++          readinessHash: closedRun.readiness_hash ?? '',
++          adjustmentHash: closedRun.adjustment_hash ?? '',
++          rulesetVersion: closedRun.ruleset_version ?? '',
++          closingEntry: closing.data as JournalEntry,
++          openingBalanceEntry: opening.data as JournalEntry,
++          nextPeriod: nextPeriod.data as FiscalPeriod,
++          revaluationEntry: (revaluation.data as JournalEntry | null) ?? null,
++          continuity,
++        }
++      }
++    }
++
++    return NextResponse.json({ data: data ?? [], committedResult })
+   },
+   { allowRequestedCompany: true },
+ )
+diff --git a/app/api/v1/companies/[companyId]/fiscal-periods/[id]/year-end/route.ts b/app/api/v1/companies/[companyId]/fiscal-periods/[id]/year-end/route.ts
+index 0895cf2..7470c44 100644
+--- a/app/api/v1/companies/[companyId]/fiscal-periods/[id]/year-end/route.ts
++++ b/app/api/v1/companies/[companyId]/fiscal-periods/[id]/year-end/route.ts
+@@ -30,6 +30,9 @@ const YearEndAcceptedResponse = z.object({
+   poll_url: z.string(),
+   webhook_event: z.literal('operation.completed'),
+ })
++const YearEndRequest = z.object({
++  preview_id: z.string().uuid(),
++})
+ 
+ registerEndpoint({
+   operation: 'fiscal-periods.year-end',
+@@ -68,7 +71,7 @@ registerEndpoint({
+ 
+ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
+   'fiscal-periods.year-end',
+-  async (_request, ctx, params) => {
++  async (request, ctx, params) => {
+     const { id } = await params.params
+     const idParse = z.string().uuid().safeParse(id)
+     if (!idParse.success) {
+@@ -78,6 +81,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string
+       })
+     }
+     const fiscalPeriodId = idParse.data
++    const body = YearEndRequest.safeParse(
++      await request.json().catch(() => null),
++    )
++    if (!body.success) {
++      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
++        requestId: ctx.requestId,
++        details: {
++          field: 'preview_id',
++          message: 'A persisted canonical preview_id is required.',
++        },
++      })
++    }
+ 
+     // Ownership pre-check on the URL period — fail fast before recording
+     // an operation row for a period the caller doesn't own.
+@@ -137,6 +152,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string
+         ctx.companyId!,
+         ctx.userId,
+         fiscalPeriodId,
++        {
++          previewId: body.data.preview_id,
++          idempotencyKey: ctx.idempotencyKey ?? undefined,
++          correlationId: ctx.requestId,
++        },
+       )
+       await completeOperation(
+         ctx.supabase,
+diff --git a/components/bokslut/DigitalInlamning.tsx b/components/bokslut/DigitalInlamning.tsx
+index 9939981..1c3c7b5 100644
+--- a/components/bokslut/DigitalInlamning.tsx
++++ b/components/bokslut/DigitalInlamning.tsx
+@@ -141,16 +141,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
+   const [utfall, setUtfall] = useState<KontrolleraUtfall[] | null>(null)
+   const [kvittens, setKvittens] = useState<{ idnummer: string; url: string } | null>(null)
+ 
+-  // Proposed dividend (utdelning) for the resultatdisposition. There is no
+-  // persisted dividend proposal in the year-end flow yet, so the value is
+-  // entered here and forwarded to the preview, the download and the
+-  // submission so all three render the same disposition.
+-  const [utdelning, setUtdelning] = useState('')
+-  const parsedUtdelning = Math.round(Number(utdelning.replace(/\s/g, '').replace(',', '.')))
+-  const utdelningValue = Number.isFinite(parsedUtdelning) && parsedUtdelning > 0 ? parsedUtdelning : 0
+-  const previewUrl = utdelningValue > 0 ? `${ixbrlUrl}?utdelning=${utdelningValue}` : ixbrlUrl
+-  const downloadUrl =
+-    utdelningValue > 0 ? `${ixbrlUrl}?download=1&utdelning=${utdelningValue}` : `${ixbrlUrl}?download=1`
++  const previewUrl = ixbrlUrl
++  const downloadUrl = `${ixbrlUrl}?download=1`
+ 
+   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
+   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
+@@ -204,9 +196,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
+   const handleValidate = async () => {
+     setValidating(true)
+     try {
+-      const res = await fetch(
+-        `${ixbrlUrl}/validate${utdelningValue > 0 ? `?utdelning=${utdelningValue}` : ''}`,
+-      )
++      const res = await fetch(`${ixbrlUrl}/validate`)
+       const body = await res.json()
+       if (body?.error) {
+         toast({ title: 'Kunde inte validera', description: body.error.message, variant: 'destructive' })
+@@ -249,7 +239,6 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
+             roll,
+             epost: epost.trim(),
+           },
+-          ...(utdelningValue > 0 ? { utdelning: utdelningValue } : {}),
+           ...(avtal?.accepted ? { accepted_avtalstext_andrad: avtal.andrad } : {}),
+           ...(opts.ignoreWarnings ? { ignore_warnings: true } : {}),
+         }),
+@@ -340,21 +329,11 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
+           </p>
+         </CardHeader>
+         <CardContent className="space-y-4 text-sm">
+-          <div className="space-y-1.5 max-w-xs">
+-            <Label htmlFor="di-utdelning">Föreslagen utdelning (kr)</Label>
+-            <Input
+-              id="di-utdelning"
+-              inputMode="numeric"
+-              placeholder="0"
+-              value={utdelning}
+-              onChange={(event) => setUtdelning(event.target.value)}
+-            />
+-            <p className="text-xs text-muted-foreground">
+-              Ingår i resultatdispositionen i dokumentet — 0 betyder att allt
+-              balanseras i ny räkning. Beloppet följer med förhandsgranskning,
+-              nedladdning och inlämning.
+-            </p>
+-          </div>
++          <p className="text-xs text-muted-foreground">
++            Resultatdisposition och utdelning hämtas från den godkända,
++            serverlagrade bokslutsdispositionen och kan inte ändras i
++            inlämningssteget.
++          </p>
+           <div className="flex flex-wrap gap-3">
+             <Button variant="outline" onClick={() => setShowPreview((value) => !value)}>
+               {showPreview ? 'Dölj förhandsgranskning' : 'Förhandsgranska iXBRL'}
+diff --git a/components/bookkeeping/year-end/AccrualsStep.tsx b/components/bookkeeping/year-end/AccrualsStep.tsx
+index f3b4bdb..a5ea496 100644
+--- a/components/bookkeeping/year-end/AccrualsStep.tsx
++++ b/components/bookkeeping/year-end/AccrualsStep.tsx
+@@ -36,7 +36,7 @@ interface ManualEntry {
+ }
+ 
+ function makeId() {
+-  return Math.random().toString(36).slice(2, 10)
++  return crypto.randomUUID()
+ }
+ 
+ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: AccrualsStepProps) {
+@@ -151,12 +151,12 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
+         setError(body?.error?.message ?? 'Kunde inte bokföra periodiseringarna')
+         return
+       }
+-      const created = body.data?.created?.length ?? 0
++      const staged = body.data?.staged?.count ?? 0
+       toast({
+-        title: `${created} periodisering${created === 1 ? '' : 'ar'} bokförd${
+-          created === 1 ? '' : 'a'
++        title: `${staged} periodisering${staged === 1 ? '' : 'ar'} sparad${
++          staged === 1 ? '' : 'e'
+         }`,
+-        description: 'Vänd dem första dagen i nästa räkenskapsår.',
++        description: 'Posterna bokförs atomiskt först i steget Verkställ.',
+       })
+       onContinue()
+     } catch (err) {
+@@ -196,8 +196,8 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
+           <CardTitle className="text-base">Periodiseringar</CardTitle>
+           <p className="text-sm text-muted-foreground">
+             Förutbetalda kostnader (17xx) och upplupna kostnader (29xx). Posteringarna
+-            ska vändas på första dagen av nästa räkenskapsår — datumet visas per
+-            verifikation. Automatisk omvändning är planerad till en kommande version.
++            som ska vändas får en beständig reverseringsplan med datum. Ingen
++            bokföring sker innan hela bokslutet verkställs.
+           </p>
+         </CardHeader>
+       </Card>
+@@ -232,7 +232,7 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
+                 onCheckedChange={(c) => setAuto({ vacation: { accept: Boolean(c) } })}
+               />
+               <Label htmlFor="accept-vacation" className="text-sm cursor-pointer select-none">
+-                Boka denna justering
++                Ta med denna justering
+               </Label>
+             </div>
+           </CardContent>
+@@ -286,7 +286,7 @@ export function AccrualsStep({ periodId, companyId, onBack, onContinue }: Accrua
+         <Button onClick={handleCommit} disabled={posting}>
+           {posting ? (
+             <>
+-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
++              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
+             </>
+           ) : (
+             <>
+diff --git a/components/bookkeeping/year-end/DepreciationPanel.tsx b/components/bookkeeping/year-end/DepreciationPanel.tsx
+index b540d21..b7d9d95 100644
+--- a/components/bookkeeping/year-end/DepreciationPanel.tsx
++++ b/components/bookkeeping/year-end/DepreciationPanel.tsx
+@@ -37,8 +37,7 @@ interface Proposal {
+ interface DepreciationPanelProps {
+   periodId: string
+   companyId?: string | null
+-  /** Called after a successful post — parent refetches dispositions because
+-   *  posted avskrivningar change the result which affects bolagsskatt etc. */
++  /** Called after staging — parent refetches disposition proposals. */
+   onPosted: () => void
+ }
+ 
+@@ -91,11 +90,12 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
+         setError(body?.error?.message ?? 'Kunde inte bokföra avskrivningar')
+         return
+       }
+-      const posted = body.data?.posted?.length ?? 0
++      const staged = body.data?.staged?.count ?? 0
+       toast({
+-        title: `${posted} avskrivning${posted === 1 ? '' : 'ar'} bokförd${
+-          posted === 1 ? '' : 'a'
++        title: `${staged} avskrivning${staged === 1 ? '' : 'ar'} sparad${
++          staged === 1 ? '' : 'e'
+         }`,
++        description: 'Avskrivningarna bokförs först när bokslutet verkställs.',
+       })
+       onPosted()
+       await load()
+@@ -160,7 +160,7 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
+             <CardTitle className="text-base">Planenliga avskrivningar</CardTitle>
+             <p className="text-sm text-muted-foreground mt-1">
+               {proposal.items.length} tillgång{proposal.items.length === 1 ? '' : 'ar'}.
+-              {allPosted ? ' Allt redan bokfört.' : ' Bokförs som separata verifikationer.'}
++              {allPosted ? ' Allt redan bokfört.' : ' Sparas till bokslutets gemensamma verkställning.'}
+             </p>
+           </div>
+           <p className="font-display text-2xl tabular-nums shrink-0">
+@@ -208,10 +208,10 @@ export function DepreciationPanel({ periodId, companyId, onPosted }: Depreciatio
+             <Button onClick={handlePost} disabled={posting}>
+               {posting ? (
+                 <>
+-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
++                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
+                 </>
+               ) : (
+-                'Bokför alla avskrivningar'
++                'Spara alla avskrivningar'
+               )}
+             </Button>
+           </div>
+diff --git a/components/bookkeeping/year-end/DispositionsStep.tsx b/components/bookkeeping/year-end/DispositionsStep.tsx
+index 9d3a8ab..a875c37 100644
+--- a/components/bookkeeping/year-end/DispositionsStep.tsx
++++ b/components/bookkeeping/year-end/DispositionsStep.tsx
+@@ -119,12 +119,12 @@ export function DispositionsStep({
+         setPostError(body?.error?.message ?? 'Kunde inte bokföra dispositioner')
+         return
+       }
+-      const created = body.data?.created ?? []
++      const staged = body.data?.staged?.count ?? 0
+       toast({
+-        title: `${created.length} verifikation${created.length === 1 ? '' : 'er'} bokförd${
+-          created.length === 1 ? '' : 'a'
++        title: `${staged} disposition${staged === 1 ? '' : 'er'} sparad${
++          staged === 1 ? '' : 'e'
+         }`,
+-        description: 'Dispositionerna ligger nu i bokföringen.',
++        description: 'Dispositionerna bokförs först när hela bokslutet verkställs.',
+       })
+       onContinue()
+     } catch (err) {
+@@ -233,8 +233,8 @@ export function DispositionsStep({
+         </CardHeader>
+       </Card>
+ 
+-      {proposal.proposals.map((p, i) => {
+-        const key = proposalKey(p, i)
++      {proposal.proposals.map((p) => {
++        const key = proposalKey(p)
+         const sel = ui.selections[key]
+         if (!sel) return null
+         return (
+@@ -266,11 +266,11 @@ export function DispositionsStep({
+         <Button onClick={handleCommit} disabled={posting}>
+           {posting ? (
+             <>
+-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
++              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
+             </>
+           ) : (
+             <>
+-              Bokför valda dispositioner <ArrowRight className="ml-1 h-4 w-4" />
++              Spara valda dispositioner <ArrowRight className="ml-1 h-4 w-4" />
+             </>
+           )}
+         </Button>
+@@ -369,13 +369,13 @@ function isOverridable(kind: DispositionKind): boolean {
+   return kind === 'periodiseringsfond_avsattning' || kind === 'overavskrivningar'
+ }
+ 
+-function proposalKey(p: ProposedDisposition, index = 0): string {
++function proposalKey(p: ProposedDisposition): string {
+   // For återföring there can be multiple cards (one per cohort) — disambiguate
+   // by including the line account in the key. For other kinds, the kind is unique.
+   if (p.kind === 'periodiseringsfond_ateforing') {
+-    return `${p.kind}:${p.lines[0]?.account_number ?? index}`
++    return `${p.kind}:${p.lines[0]?.account_number ?? 'missing-account'}`
+   }
+-  return `${p.kind}:${index}`
++  return p.kind
+ }
+ 
+ interface PostItem {
+@@ -389,7 +389,7 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
+   // map keyed by cohort account.
+   const ateforingReturns: Record<string, number> = {}
+   for (const p of proposal.proposals) {
+-    const key = proposalKey(p, proposal.proposals.indexOf(p))
++    const key = proposalKey(p)
+     const sel = ui.selections[key]
+     if (!sel || !sel.accept) continue
+ 
+diff --git a/components/bookkeeping/year-end/PreviewStep.tsx b/components/bookkeeping/year-end/PreviewStep.tsx
+index e35b349..ee682b2 100644
+--- a/components/bookkeeping/year-end/PreviewStep.tsx
++++ b/components/bookkeeping/year-end/PreviewStep.tsx
+@@ -107,6 +107,45 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
+         </Card>
+       )}
+ 
++      {preview.stagedEntries.length > 0 && (
++        <Card>
++          <CardHeader>
++            <CardTitle className="text-base">Bokslutsjusteringar som kommer att bokföras</CardTitle>
++            <p className="text-sm text-muted-foreground">
++              {preview.stagedEntries.length} beständiga poster ingår i denna förhandsgranskning.
++              De har ännu inte påverkat huvudboken.
++            </p>
++          </CardHeader>
++          <CardContent className="space-y-4">
++            {preview.stagedEntries.map((entry) => (
++              <div key={entry.id} className="rounded-md border p-3">
++                <div className="flex flex-wrap items-center justify-between gap-2">
++                  <p className="font-medium text-sm">{entry.description}</p>
++                  <div className="flex gap-2">
++                    <Badge variant="outline">{entry.group}</Badge>
++                    {entry.reversalDate && (
++                      <Badge variant="secondary">Vänds {entry.reversalDate}</Badge>
++                    )}
++                  </div>
++                </div>
++                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
++                  {entry.lines.map((line, index) => (
++                    <div key={`${entry.id}:${index}`} className="flex justify-between gap-4">
++                      <span>{line.account_number} · {line.line_description}</span>
++                      <span className="tabular-nums">
++                        {line.debit_amount > 0
++                          ? `Debet ${formatCurrency(line.debit_amount)}`
++                          : `Kredit ${formatCurrency(line.credit_amount)}`}
++                      </span>
++                    </div>
++                  ))}
++                </div>
++              </div>
++            ))}
++          </CardContent>
++        </Card>
++      )}
++
+       <Card>
+         <CardHeader>
+           <CardTitle className="text-base">Bokslutsverifikation — förhandsgranskning</CardTitle>
+@@ -150,6 +189,12 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
+           Verkställ bokslut <ArrowRight className="ml-1 h-4 w-4" />
+         </Button>
+       </div>
++      {preview.previewId && (
++        <p className="text-center text-xs text-muted-foreground">
++          Preview-ID {preview.previewId} · regelverk {preview.rulesetVersion} · giltig till{' '}
++          {preview.expiresAt ? new Date(preview.expiresAt).toLocaleString('sv-SE') : 'okänd tid'}
++        </p>
++      )}
+     </div>
+   )
+ }
+diff --git a/components/bookkeeping/year-end/ResultStep.tsx b/components/bookkeeping/year-end/ResultStep.tsx
+index 05e4af3..f040526 100644
+--- a/components/bookkeeping/year-end/ResultStep.tsx
++++ b/components/bookkeeping/year-end/ResultStep.tsx
+@@ -1,6 +1,6 @@
+ 'use client'
+ 
+-import { useMemo, useState } from 'react'
++import { useCallback, useMemo, useState } from 'react'
+ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+ import { Button } from '@/components/ui/button'
+ import { Badge } from '@/components/ui/badge'
+@@ -13,7 +13,7 @@ import {
+   TableHeader,
+   TableRow,
+ } from '@/components/ui/table'
+-import { CheckCircle2, AlertTriangle } from 'lucide-react'
++import { CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react'
+ import Link from 'next/link'
+ import type { YearEndResult, ContinuityDiscrepancy } from '@/types'
+ import { formatCurrency } from '@/lib/utils'
+@@ -25,12 +25,51 @@ interface ResultStepProps {
+ }
+ 
+ const ORE_TOLERANCE = 0.005
++const ACKNOWLEDGEMENT_TEXT =
++  'Jag har granskat bokslutet och IB/UB-kontinuiteten ovan, och bekräftar att alla balanskonton stämmer mot föregående periods utgående balans.'
+ 
+ export function ResultStep({ result, companyId }: ResultStepProps) {
+   const [acknowledged, setAcknowledged] = useState(false)
++  const [savingAcknowledgement, setSavingAcknowledgement] = useState(false)
++  const [acknowledgementError, setAcknowledgementError] = useState<string | null>(null)
+ 
+   const continuity = result.continuity
+   const discrepancies = continuity?.discrepancies ?? []
++  const acknowledge = useCallback(async () => {
++    if (acknowledged || savingAcknowledgement) return
++    setSavingAcknowledgement(true)
++    setAcknowledgementError(null)
++    try {
++      const companySuffix = companyId
++        ? `?company_id=${encodeURIComponent(companyId)}`
++        : ''
++      const res = await fetch(
++        `/api/bookkeeping/fiscal-periods/${result.closingEntry.fiscal_period_id}/year-end/runs/${result.runId}/acknowledge${companySuffix}`,
++        {
++          method: 'POST',
++          headers: { 'Content-Type': 'application/json' },
++          body: JSON.stringify({
++            statement_version: 'ib-ub-review-v1',
++            statement_text: ACKNOWLEDGEMENT_TEXT,
++            continuity_snapshot: continuity ?? {
++              checked_accounts: 0,
++              discrepancies: [],
++            },
++          }),
++        },
++      )
++      const body = await res.json()
++      if (!res.ok) {
++        setAcknowledgementError(body?.error?.message ?? 'Bekräftelsen kunde inte sparas.')
++        return
++      }
++      setAcknowledged(true)
++    } catch {
++      setAcknowledgementError('Bekräftelsen kunde inte sparas.')
++    } finally {
++      setSavingAcknowledgement(false)
++    }
++  }, [acknowledged, savingAcknowledgement, companyId, result, continuity])
+ 
+   // If the wizard reached ResultStep, executeYearEndClosing already enforced
+   // that no per-account diff exceeded ORE_TOLERANCE — but surface a panel
+@@ -72,6 +111,8 @@ export function ResultStep({ result, companyId }: ResultStepProps) {
+             href={withCompany(`/bookkeeping/${result.openingBalanceEntry.id}`, companyId)}
+           />
+           <ResultRow label="Ny räkenskapsperiod" value={result.nextPeriod.name} />
++          <ResultRow label="Boksluts-run" value={result.runId} />
++          <ResultRow label="Regelversion" value={result.rulesetVersion} />
+         </CardContent>
+       </Card>
+ 
+@@ -87,16 +128,25 @@ export function ResultStep({ result, companyId }: ResultStepProps) {
+           <label className="flex items-start gap-3 cursor-pointer">
+             <Checkbox
+               checked={acknowledged}
+-              onCheckedChange={(v) => setAcknowledged(v === true)}
++              disabled={savingAcknowledgement}
++              onCheckedChange={(v) => {
++                if (v === true) void acknowledge()
++              }}
+               className="mt-0.5"
+               aria-label="Bekräfta bokslut"
+             />
+             <span className="text-sm leading-relaxed">
+-              Jag har granskat bokslutet och IB/UB-kontinuiteten ovan, och
+-              bekräftar att alla balanskonton stämmer mot föregående periods
+-              utgående balans.
++              {ACKNOWLEDGEMENT_TEXT}
+             </span>
+           </label>
++          {savingAcknowledgement && (
++            <p className="flex items-center gap-2 text-sm text-muted-foreground">
++              <Loader2 className="h-4 w-4 animate-spin" /> Sparar bekräftelsen…
++            </p>
++          )}
++          {acknowledgementError && (
++            <p className="text-sm text-destructive">{acknowledgementError}</p>
++          )}
+ 
+           <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
+             <Button variant="outline" asChild disabled={!acknowledged}>
+diff --git a/extensions/general/bolagsverket/index.ts b/extensions/general/bolagsverket/index.ts
+index 9d1300d..4761d9e 100644
+--- a/extensions/general/bolagsverket/index.ts
++++ b/extensions/general/bolagsverket/index.ts
+@@ -198,7 +198,6 @@ const SubmitSchema = z.object({
+     epost: z.string().email(),
+   }),
+   kvittens_epost: z.array(z.string().email()).max(5).optional(),
+-  utdelning: z.number().min(0).optional(),
+   accepted_avtalstext_andrad: z.string().optional(),
+   ignore_warnings: z.boolean().optional(),
+ })
+@@ -330,7 +329,6 @@ export const bolagsverketExtension: Extension = {
+               avsandarePnr: parsed.avsandare_pnr,
+               undertecknare: parsed.undertecknare,
+               kvittensEpost: parsed.kvittens_epost,
+-              proposedDividend: parsed.utdelning,
+               acceptedAvtalstextAndrad: parsed.accepted_avtalstext_andrad,
+               ignoreWarnings: parsed.ignore_warnings,
+             },
+diff --git a/extensions/general/bolagsverket/lib/submission-service.ts b/extensions/general/bolagsverket/lib/submission-service.ts
+index 61650f9..80b0066 100644
+--- a/extensions/general/bolagsverket/lib/submission-service.ts
++++ b/extensions/general/bolagsverket/lib/submission-service.ts
+@@ -85,7 +85,6 @@ export interface SubmitParams {
+     epost: string
+   }
+   kvittensEpost?: string[]
+-  proposedDividend?: number
+   /** User accepted the current avtalstext (avtalstextAndrad value). */
+   acceptedAvtalstextAndrad?: string
+   /** Upload even when kontrollera returns warn-level utfall (GUIDE §4.2.2). */
+@@ -205,7 +204,6 @@ export async function submitArsredovisning(
+   // 3. Generate the iXBRL + local pre-flight (layer 1) — cheaper than a
+   //    kontrollera round-trip and catches data problems with better messages.
+   const input = await buildIxbrlInput(supabase, params.companyId, params.fiscalPeriodId, {
+-    proposedDividend: params.proposedDividend,
+     undertecknare: {
+       firstName: params.undertecknare.fornamn,
+       lastName: params.undertecknare.efternamn,
+diff --git a/lib/bokslut/ixbrl/build-input.ts b/lib/bokslut/ixbrl/build-input.ts
+index f6f897d..2820069 100644
+--- a/lib/bokslut/ixbrl/build-input.ts
++++ b/lib/bokslut/ixbrl/build-input.ts
+@@ -30,8 +30,6 @@ export interface BuildIxbrlOptions {
+   /** Undertecknare of the fastställelseintyg (chosen in the wizard). When
+    *  omitted, the first signed board member is used. */
+   undertecknare?: { firstName: string; lastName: string; role: string }
+-  /** Proposed dividend in SEK (0 = balansera allt). */
+-  proposedDividend?: number
+   /** Override "today" for deterministic tests (ISO date). */
+   todayIso?: string
+ }
+@@ -56,7 +54,7 @@ export async function buildIxbrlInput(
+   // lib/reports' generateIncomeStatement uses) drives the RR. A single TB can
+   // never serve both: with bokslut booked every RR concept would map to 0,
+   // without it the BR would not tie.
+-  const [pdfData, periodRow, signatureRequests] = await Promise.all([
++  const [pdfData, periodRow, signatureRequests, profitDisposition, committedRun] = await Promise.all([
+     buildArsredovisningData(supabase, companyId, fiscalPeriodId),
+     supabase
+       .from('fiscal_periods')
+@@ -65,10 +63,30 @@ export async function buildIxbrlInput(
+       .eq('company_id', companyId)
+       .single(),
+     listSignatureRequests(supabase, companyId, fiscalPeriodId),
++    supabase
++      .from('year_end_profit_dispositions')
++      .select('id, proposed_dividend, carried_forward, status')
++      .eq('company_id', companyId)
++      .eq('fiscal_period_id', fiscalPeriodId)
++      .in('status', ['approved', 'locked'])
++      .maybeSingle(),
++    supabase
++      .from('year_end_runs')
++      .select('id, status, preview_id')
++      .eq('company_id', companyId)
++      .eq('fiscal_period_id', fiscalPeriodId)
++      .eq('status', 'closed')
++      .maybeSingle(),
+   ])
+ 
+   if (periodRow.error || !periodRow.data) throw new Error('Fiscal period not found')
+   const period = periodRow.data
++  if (committedRun.error || !committedRun.data?.preview_id) {
++    throw new Error('IXBRL_NOT_READY: canonical year-end run is missing')
++  }
++  if (profitDisposition.error || !profitDisposition.data) {
++    throw new Error('IXBRL_NOT_READY: approved profit disposition is missing')
++  }
+ 
+   if (pdfData.accounting_framework !== 'k2') {
+     throw new Error(
+@@ -214,7 +232,10 @@ export async function buildIxbrlInput(
+   // same context — the disposition row must carry the identical value
+   // (TA §2.7.3), so fri överkursfond (2097) is its own row tagged with the
+   // separate Overkursfond concept instead of being folded into balanserat.
+-  const proposedDividend = Math.max(0, Math.round(options.proposedDividend ?? 0))
++  const proposedDividend = Math.max(
++    0,
++    Math.round(Number(profitDisposition.data.proposed_dividend) || 0),
++  )
+   const dispBalanserat = br['BalanseratResultat']?.current ?? 0
+   const dispOverkursfond = br['Overkursfond']?.current ?? 0
+   const dispArets = br['AretsResultatEgetKapital']?.current ?? 0
+diff --git a/lib/core/bookkeeping/__tests__/year-end-service.test.ts b/lib/core/bookkeeping/__tests__/year-end-service.test.ts
+index 1147e45..5ee108c 100644
+--- a/lib/core/bookkeeping/__tests__/year-end-service.test.ts
++++ b/lib/core/bookkeeping/__tests__/year-end-service.test.ts
+@@ -399,11 +399,83 @@ describe('validateYearEndReadiness', () => {
+ })
+ 
+ describe('previewYearEndClosing', () => {
++  it('includes staged adjustments without posting them', async () => {
++    results = [
++      { data: { entity_type: 'aktiebolag' }, error: null },
++      {
++        data: [{
++          id: 'adjustment-1',
++          adjustment_group: 'accrual',
++          adjustment_kind: 'expense_accrual',
++          stable_key: 'accrual:invoice-1',
++          description: 'Upplupen kostnad',
++          entry_date: '2024-12-31',
++          reversal_date: '2025-01-01',
++          journal_lines: [
++            {
++              account_number: '6990',
++              debit_amount: 10000,
++              credit_amount: 0,
++              line_description: 'Upplupen kostnad',
++            },
++            {
++              account_number: '2990',
++              debit_amount: 0,
++              credit_amount: 10000,
++              line_description: 'Upplupen kostnad',
++            },
++          ],
++          ruleset_version: 'se-year-end-2024-v1',
++          status: 'approved',
++          version: 1,
++        }],
++        error: null,
++      },
++      { data: { period_end: '2024-12-31' }, error: null },
++    ]
++
++    vi.mocked(generateIncomeStatement).mockResolvedValue({ net_result: 50000 } as never)
++    vi.mocked(generateTrialBalance).mockResolvedValue({
++      rows: [
++        {
++          account_number: '3001',
++          account_name: 'Intäkter',
++          account_class: 3,
++          closing_debit: 0,
++          closing_credit: 50000,
++        },
++      ],
++      isBalanced: true,
++      totalDebit: 0,
++      totalCredit: 50000,
++    } as never)
++
++    const supabase = makeClient()
++    const preview = await previewYearEndClosing(
++      supabase as never,
++      'company-1',
++      'user-1',
++      'fp-1',
++    )
++
++    expect(preview.netResult).toBe(40000)
++    expect(preview.stagedEntries).toEqual([
++      expect.objectContaining({
++        id: 'adjustment-1',
++        group: 'accrual',
++        reversalDate: '2025-01-01',
++      }),
++    ])
++    expect(supabase.rpc).not.toHaveBeenCalledWith('create_journal_entry', expect.anything())
++  })
++
+   it('calculates net result from class 3-8 accounts', async () => {
+     results = [
+       // 0: fetch company_settings (.single)
+       { data: { entity_type: 'aktiebolag' }, error: null },
+-      // 1: fetch fiscal period for closing date (.single)
++      // 1: staged adjustments included in the preview
++      { data: [], error: null },
++      // 2: fetch fiscal period for closing date (.single)
+       { data: { period_end: '2024-12-31' }, error: null },
+     ]
+ 
+@@ -435,6 +507,7 @@ describe('previewYearEndClosing', () => {
+   it('uses 2010 for EF entity type', async () => {
+     results = [
+       { data: { entity_type: 'enskild_firma' }, error: null },
++      { data: [], error: null },
+       // fetch fiscal period for closing date (.single)
+       { data: { period_end: '2024-12-31' }, error: null },
+     ]
+diff --git a/lib/core/bookkeeping/year-end-service.ts b/lib/core/bookkeeping/year-end-service.ts
+index 29c7b4c..205a24f 100644
+--- a/lib/core/bookkeeping/year-end-service.ts
++++ b/lib/core/bookkeeping/year-end-service.ts
+@@ -1,5 +1,4 @@
+ import type { SupabaseClient } from '@supabase/supabase-js'
+-import { eventBus } from '@/lib/events'
+ import { createJournalEntry } from '@/lib/bookkeeping/engine'
+ import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
+ import { generateTrialBalance } from '@/lib/reports/trial-balance'
+@@ -13,6 +12,7 @@ import {
+ } from '@/lib/bookkeeping/currency-revaluation'
+ import { getCompanyEntityType } from '@/lib/company/entity-type'
+ import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
++import { listStagedYearEndAdjustments } from './year-end-staging'
+ import type {
+   YearEndValidation,
+   YearEndPreview,
+@@ -325,25 +325,62 @@ export async function previewYearEndClosing(
+ 
+   // Get income statement for net result
+   const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
+-  const netResult = incomeStatement.net_result
++  const stagedAdjustments = await listStagedYearEndAdjustments(
++    supabase,
++    companyId,
++    fiscalPeriodId,
++  )
++  const stagedResultEffect = stagedAdjustments.reduce(
++    (total, adjustment) =>
++      total +
++      adjustment.journal_lines.reduce((lineTotal, line) => {
++        const accountClass = Number(line.account_number.slice(0, 1))
++        if (accountClass < 3 || accountClass > 8) return lineTotal
++        return lineTotal + line.credit_amount - line.debit_amount
++      }, 0),
++    0,
++  )
++  const netResult = roundOre(incomeStatement.net_result + stagedResultEffect)
+ 
+   // Get trial balance for individual account balances in class 3-8
+   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+   const resultAccounts = rows.filter(
+     (r) => r.account_class >= 3 && r.account_class <= 8
+   )
++  const resultBalances = new Map(
++    resultAccounts.map((account) => [
++      account.account_number,
++      {
++        account_name: account.account_name,
++        net: account.closing_debit - account.closing_credit,
++      },
++    ]),
++  )
++  for (const adjustment of stagedAdjustments) {
++    for (const line of adjustment.journal_lines) {
++      const accountClass = Number(line.account_number.slice(0, 1))
++      if (accountClass < 3 || accountClass > 8) continue
++      const current = resultBalances.get(line.account_number)
++      resultBalances.set(line.account_number, {
++        account_name: current?.account_name ?? 'Bokslutsjustering',
++        net: (current?.net ?? 0) + line.debit_amount - line.credit_amount,
++      })
++    }
++  }
+ 
+   // Build closing lines: zero each result account
+   const closingLines: CreateJournalEntryLineInput[] = []
+   const resultAccountSummary: { account_number: string; account_name: string; amount: number }[] = []
+ 
+-  for (const account of resultAccounts) {
+-    const netBalance = account.closing_debit - account.closing_credit
++  for (const [accountNumber, account] of [...resultBalances.entries()].sort(([a], [b]) =>
++    a.localeCompare(b),
++  )) {
++    const netBalance = account.net
+ 
+     if (Math.abs(netBalance) < ORE_TOLERANCE) continue
+ 
+     resultAccountSummary.push({
+-      account_number: account.account_number,
++      account_number: accountNumber,
+       account_name: account.account_name,
+       amount: netBalance,
+     })
+@@ -352,7 +389,7 @@ export async function previewYearEndClosing(
+     if (netBalance > 0) {
+       // Account has debit balance → credit it to zero
+       closingLines.push({
+-        account_number: account.account_number,
++        account_number: accountNumber,
+         debit_amount: 0,
+         credit_amount: roundOre(netBalance),
+         line_description: `Closing: ${account.account_name}`,
+@@ -360,7 +397,7 @@ export async function previewYearEndClosing(
+     } else {
+       // Account has credit balance → debit it to zero
+       closingLines.push({
+-        account_number: account.account_number,
++        account_number: accountNumber,
+         debit_amount: roundOre(Math.abs(netBalance)),
+         credit_amount: 0,
+         line_description: `Closing: ${account.account_name}`,
+@@ -423,6 +460,15 @@ export async function previewYearEndClosing(
+     closingLines,
+     resultAccountSummary,
+     currencyRevaluation,
++    stagedEntries: stagedAdjustments.map((adjustment) => ({
++      id: adjustment.id,
++      group: adjustment.adjustment_group,
++      kind: adjustment.adjustment_kind,
++      description: adjustment.description,
++      entryDate: adjustment.entry_date,
++      reversalDate: adjustment.reversal_date,
++      lines: adjustment.journal_lines,
++    })),
+   }
+ }
+ 
+@@ -446,7 +492,7 @@ export async function executeYearEndClosing(
+   companyId: string,
+   userId: string,
+   fiscalPeriodId: string,
+-  options?: { idempotencyKey?: string; correlationId?: string }
++  options: { previewId: string; idempotencyKey?: string; correlationId?: string }
+ ): Promise<YearEndResult> {
+   const idempotencyKey = options?.idempotencyKey ?? `close:${fiscalPeriodId}`
+ 
+@@ -500,6 +546,7 @@ export async function executeYearEndClosing(
+     p_user_id: userId,
+     p_idempotency_key: idempotencyKey,
+     p_revaluation: revaluationPayload,
++    p_preview_id: options.previewId,
+   })
+ 
+   if (rpcError) {
+@@ -546,6 +593,11 @@ export async function executeYearEndClosing(
+     next_period_id: string
+     revaluation_entry_id: string | null
+     revaluation_reversal_entry_id: string | null
++    preview_id: string
++    ledger_hash: string
++    readiness_hash: string
++    adjustment_hash: string
++    ruleset_version: string
+     idempotent: boolean
+   }
+ 
+@@ -597,22 +649,13 @@ export async function executeYearEndClosing(
+     result.next_period_id
+   )
+ 
+-  // Fetch the now-closed period for the event payload
+-  const { data: closedPeriod } = await supabase
+-    .from('fiscal_periods')
+-    .select('*')
+-    .eq('id', fiscalPeriodId)
+-    .eq('company_id', companyId)
+-    .single()
+-
+-  if (closedPeriod && !result.idempotent) {
+-    await eventBus.emit({
+-      type: 'period.year_closed',
+-      payload: { period: closedPeriod as FiscalPeriod, companyId, userId },
+-    })
+-  }
+-
+   return {
++    runId: result.run_id,
++    previewId: result.preview_id,
++    ledgerHash: result.ledger_hash,
++    readinessHash: result.readiness_hash,
++    adjustmentHash: result.adjustment_hash,
++    rulesetVersion: result.ruleset_version,
+     closingEntry: closingEntryRes.data as JournalEntry,
+     nextPeriod: nextPeriodRes.data as FiscalPeriod,
+     openingBalanceEntry: obEntryRes.data as JournalEntry,
+@@ -722,4 +765,3 @@ export async function generateOpeningBalances(
+ 
+   return openingEntry
+ }
+-
+diff --git a/lib/core/bookkeeping/year-end-staging.ts b/lib/core/bookkeeping/year-end-staging.ts
+new file mode 100644
+index 0000000..2655515
+--- /dev/null
++++ b/lib/core/bookkeeping/year-end-staging.ts
+@@ -0,0 +1,142 @@
++import type { SupabaseClient } from '@supabase/supabase-js'
++import type { CreateJournalEntryLineInput, YearEndPreview } from '@/types'
++
++export type YearEndAdjustmentGroup =
++  | 'accrual'
++  | 'disposition'
++  | 'depreciation'
++  | 'tax'
++  | 'other'
++
++export interface StageYearEndAdjustmentInput {
++  stable_key: string
++  adjustment_kind: string
++  description: string
++  entry_date?: string
++  reversal_date?: string | null
++  journal_lines: CreateJournalEntryLineInput[]
++  calculation_payload?: Record<string, unknown>
++  ruleset_version?: string | null
++  idempotency_key?: string
++}
++
++export interface StagedYearEndAdjustment {
++  id: string
++  adjustment_group: YearEndAdjustmentGroup
++  adjustment_kind: string
++  stable_key: string
++  description: string
++  entry_date: string
++  reversal_date: string | null
++  journal_lines: CreateJournalEntryLineInput[]
++  ruleset_version: string | null
++  status: 'approved' | 'included_in_preview'
++  version: number
++}
++
++export interface YearEndRuleset {
++  tax_year: number
++  version: string
++  corporate_tax_rate: number
++  slp_rate: number
++  periodiseringsfond_rate: number
++  schablonintakt_rate: number
++}
++
++export async function getYearEndRuleset(
++  supabase: SupabaseClient,
++  taxYear: number,
++): Promise<YearEndRuleset> {
++  const { data, error } = await supabase
++    .from('year_end_rulesets')
++    .select(
++      'tax_year, version, corporate_tax_rate, slp_rate, periodiseringsfond_rate, schablonintakt_rate',
++    )
++    .eq('tax_year', taxYear)
++    .single()
++  if (error || !data) {
++    throw new Error(`YE_RULESET_MISSING: no year-end ruleset for tax year ${taxYear}`)
++  }
++  return {
++    tax_year: Number(data.tax_year),
++    version: String(data.version),
++    corporate_tax_rate: Number(data.corporate_tax_rate),
++    slp_rate: Number(data.slp_rate),
++    periodiseringsfond_rate: Number(data.periodiseringsfond_rate),
++    schablonintakt_rate: Number(data.schablonintakt_rate),
++  }
++}
++
++export async function stageYearEndAdjustments(
++  supabase: SupabaseClient,
++  companyId: string,
++  fiscalPeriodId: string,
++  userId: string,
++  group: YearEndAdjustmentGroup,
++  items: StageYearEndAdjustmentInput[],
++): Promise<{ staged_ids: string[]; count: number; adjustment_hash: string }> {
++  const { data, error } = await supabase.rpc('stage_year_end_adjustments', {
++    p_company_id: companyId,
++    p_fiscal_period_id: fiscalPeriodId,
++    p_user_id: userId,
++    p_adjustment_group: group,
++    p_items: items,
++  })
++  if (error) throw new Error(`YE_ADJUSTMENT_INVALID: ${error.message}`)
++  return data as { staged_ids: string[]; count: number; adjustment_hash: string }
++}
++
++export async function listStagedYearEndAdjustments(
++  supabase: SupabaseClient,
++  companyId: string,
++  fiscalPeriodId: string,
++): Promise<StagedYearEndAdjustment[]> {
++  const { data, error } = await supabase
++    .from('year_end_staged_adjustments')
++    .select(
++      'id, adjustment_group, adjustment_kind, stable_key, description, entry_date, reversal_date, journal_lines, ruleset_version, status, version',
++    )
++    .eq('company_id', companyId)
++    .eq('fiscal_period_id', fiscalPeriodId)
++    .in('status', ['approved', 'included_in_preview'])
++    .order('adjustment_group')
++    .order('stable_key')
++  if (error) throw new Error(`YE_ADJUSTMENT_INVALID: ${error.message}`)
++  return (data ?? []) as StagedYearEndAdjustment[]
++}
++
++export async function persistYearEndPreview(
++  supabase: SupabaseClient,
++  companyId: string,
++  fiscalPeriodId: string,
++  userId: string,
++  preview: YearEndPreview,
++): Promise<YearEndPreview> {
++  const { data, error } = await supabase.rpc('create_year_end_preview', {
++    p_company_id: companyId,
++    p_fiscal_period_id: fiscalPeriodId,
++    p_user_id: userId,
++    p_payload: preview,
++  })
++  if (error) throw new Error(error.message)
++  const persisted = data as {
++    preview_id: string
++    ledger_hash: string
++    readiness_hash: string
++    adjustment_hash: string
++    ruleset_version: string
++    generated_at: string
++    expires_at: string
++    payload: YearEndPreview
++  }
++  return {
++    ...persisted.payload,
++    previewId: persisted.preview_id,
++    ledgerHash: persisted.ledger_hash,
++    readinessHash: persisted.readiness_hash,
++    adjustmentHash: persisted.adjustment_hash,
++    rulesetVersion: persisted.ruleset_version,
++    generatedAt: persisted.generated_at,
++    expiresAt: persisted.expires_at,
++  }
++}
+diff --git a/lib/errors/structured-errors.ts b/lib/errors/structured-errors.ts
+index f1ee081..2e4852e 100644
+--- a/lib/errors/structured-errors.ts
++++ b/lib/errors/structured-errors.ts
+@@ -964,6 +964,16 @@ const ACCRUALS: Record<string, StructuredErrorEntry> = {
+ }
+ 
+ const YEAR_END: Record<string, StructuredErrorEntry> = {
++  YEAR_END_READINESS_BLOCKED: {
++    httpStatus: 409,
++    message_sv: 'Bokslutet har blockerande kontroller som måste åtgärdas före förhandsgranskning.',
++    message_en: 'Year-end has blocking checks that must be resolved before preview.',
++  },
++  YEAR_END_PREVIEW_STALE: {
++    httpStatus: 409,
++    message_sv: 'Förhandsgranskningen är inaktuell. Skapa en ny förhandsgranskning innan du verkställer.',
++    message_en: 'The year-end preview is stale. Generate a new preview before execution.',
++  },
+   YEAR_END_PREVIEW_FAILED: {
+     httpStatus: 400,
+     message_sv: 'Bokslutsförhandsgranskningen misslyckades.',
+diff --git a/lib/pending-operations/commit.ts b/lib/pending-operations/commit.ts
+index f98b6e3..429e863 100644
+--- a/lib/pending-operations/commit.ts
++++ b/lib/pending-operations/commit.ts
+@@ -1660,9 +1660,18 @@ async function commitRunYearEnd(
+ ): Promise<ExecutorResult> {
+   const id = params.fiscal_period_id as string
+   if (!id) return { error: 'fiscal_period_id is required', status: 400 }
++  const previewId = params.preview_id as string
++  if (!previewId) {
++    return {
++      error: 'YE_PREVIEW_REQUIRED: create and approve a canonical year-end preview first',
++      status: 409,
++    }
++  }
+ 
+   try {
+-    const result = await executeYearEndClosing(supabase, companyId, userId, id)
++    const result = await executeYearEndClosing(supabase, companyId, userId, id, {
++      previewId,
++    })
+     return {
+       data: {
+         closing_entry_id: result.closingEntry?.id ?? null,
+@@ -3658,4 +3667,3 @@ async function commitPendingOperationInner(
+     data: result.data,
+   }
+ }
+-
+diff --git a/supabase/migrations/20260730170000_canonical_year_end_staging_preview_execute.sql b/supabase/migrations/20260730170000_canonical_year_end_staging_preview_execute.sql
+new file mode 100644
+index 0000000..46fb2f9
+--- /dev/null
++++ b/supabase/migrations/20260730170000_canonical_year_end_staging_preview_execute.sql
+@@ -0,0 +1,855 @@
++-- Canonical staging -> persisted preview -> atomic execute chain for year-end.
++--
++-- This migration is deliberately forward-only. It does not alter any
++-- previously deployed migration. Historical support ledgers remain
++-- documentary; only approved staged adjustments are posted, and only inside
++-- the same transaction that closes the fiscal period.
++
++CREATE TABLE public.year_end_rulesets (
++  tax_year                  integer PRIMARY KEY,
++  version                   text NOT NULL UNIQUE,
++  corporate_tax_rate       numeric(9,6) NOT NULL CHECK (corporate_tax_rate BETWEEN 0 AND 1),
++  slp_rate                  numeric(9,6) NOT NULL CHECK (slp_rate BETWEEN 0 AND 1),
++  periodiseringsfond_rate   numeric(9,6) NOT NULL CHECK (periodiseringsfond_rate BETWEEN 0 AND 1),
++  schablonintakt_rate       numeric(9,6) NOT NULL CHECK (schablonintakt_rate >= 0),
++  effective_from            date NOT NULL,
++  effective_to              date,
++  created_at                timestamptz NOT NULL DEFAULT now(),
++  CHECK (effective_to IS NULL OR effective_to >= effective_from)
++);
++
++INSERT INTO public.year_end_rulesets (
++  tax_year, version, corporate_tax_rate, slp_rate,
++  periodiseringsfond_rate, schablonintakt_rate, effective_from, effective_to
++) VALUES
++  (2025, 'se-ab-2025.1', 0.206, 0.2426, 0.25, 0.0296, '2025-01-01', '2025-12-31'),
++  (2026, 'se-ab-2026.1', 0.206, 0.2426, 0.25, 0.0355, '2026-01-01', '2026-12-31')
++ON CONFLICT (tax_year) DO UPDATE SET
++  version = EXCLUDED.version,
++  corporate_tax_rate = EXCLUDED.corporate_tax_rate,
++  slp_rate = EXCLUDED.slp_rate,
++  periodiseringsfond_rate = EXCLUDED.periodiseringsfond_rate,
++  schablonintakt_rate = EXCLUDED.schablonintakt_rate,
++  effective_from = EXCLUDED.effective_from,
++  effective_to = EXCLUDED.effective_to;
++
++ALTER TABLE public.year_end_rulesets ENABLE ROW LEVEL SECURITY;
++CREATE POLICY year_end_rulesets_select
++  ON public.year_end_rulesets FOR SELECT TO authenticated USING (true);
++
++CREATE TABLE public.year_end_staged_adjustments (
++  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
++  company_id            uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
++  fiscal_period_id      uuid NOT NULL REFERENCES public.fiscal_periods(id) ON DELETE RESTRICT,
++  adjustment_group      text NOT NULL CHECK (adjustment_group IN (
++    'accrual', 'disposition', 'depreciation', 'tax', 'other'
++  )),
++  adjustment_kind       text NOT NULL,
++  stable_key            text NOT NULL,
++  description           text NOT NULL CHECK (length(btrim(description)) > 0),
++  entry_date             date NOT NULL,
++  reversal_date          date,
++  journal_lines          jsonb NOT NULL CHECK (
++    jsonb_typeof(journal_lines) = 'array' AND jsonb_array_length(journal_lines) >= 2
++  ),
++  calculation_payload   jsonb NOT NULL DEFAULT '{}'::jsonb,
++  ruleset_version       text,
++  status                text NOT NULL DEFAULT 'approved' CHECK (status IN (
++    'draft', 'approved', 'included_in_preview', 'posted', 'reversed', 'cancelled'
++  )),
++  version               integer NOT NULL DEFAULT 1 CHECK (version > 0),
++  idempotency_key       text NOT NULL,
++  posted_entry_id       uuid REFERENCES public.journal_entries(id) ON DELETE RESTRICT,
++  created_by            uuid REFERENCES auth.users(id) ON DELETE RESTRICT,
++  updated_by            uuid REFERENCES auth.users(id) ON DELETE RESTRICT,
++  created_at            timestamptz NOT NULL DEFAULT now(),
++  updated_at            timestamptz NOT NULL DEFAULT now(),
++  UNIQUE (company_id, fiscal_period_id, idempotency_key)
++);
++
++CREATE UNIQUE INDEX year_end_staged_adjustments_active_key
++  ON public.year_end_staged_adjustments (
++    company_id, fiscal_period_id, adjustment_group, stable_key
++  )
++  WHERE status IN ('draft', 'approved', 'included_in_preview');
++CREATE INDEX year_end_staged_adjustments_period
++  ON public.year_end_staged_adjustments (company_id, fiscal_period_id, status);
++
++ALTER TABLE public.year_end_staged_adjustments ENABLE ROW LEVEL SECURITY;
++CREATE POLICY year_end_staged_adjustments_select
++  ON public.year_end_staged_adjustments FOR SELECT
++  USING (company_id IN (SELECT public.user_company_ids()));
++
++CREATE TABLE public.year_end_previews (
++  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
++  company_id            uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
++  fiscal_period_id      uuid NOT NULL REFERENCES public.fiscal_periods(id) ON DELETE RESTRICT,
++  status                text NOT NULL DEFAULT 'active' CHECK (status IN (
++    'active', 'stale', 'executed', 'expired', 'superseded'
++  )),
++  ledger_hash           text NOT NULL,
++  readiness_hash        text NOT NULL,
++  adjustment_hash       text NOT NULL,
++  ruleset_version       text NOT NULL,
++  payload               jsonb NOT NULL,
++  generated_by          uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
++  generated_at          timestamptz NOT NULL DEFAULT now(),
++  expires_at            timestamptz NOT NULL,
++  executed_at           timestamptz,
++  CHECK (expires_at > generated_at)
++);
++
++CREATE UNIQUE INDEX year_end_previews_one_active
++  ON public.year_end_previews (company_id, fiscal_period_id)
++  WHERE status = 'active';
++CREATE INDEX year_end_previews_period
++  ON public.year_end_previews (company_id, fiscal_period_id, generated_at DESC);
++
++ALTER TABLE public.year_end_previews ENABLE ROW LEVEL SECURITY;
++CREATE POLICY year_end_previews_select
++  ON public.year_end_previews FOR SELECT
++  USING (company_id IN (SELECT public.user_company_ids()));
++
++CREATE TABLE public.year_end_scheduled_reversals (
++  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
++  company_id            uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
++  fiscal_period_id      uuid NOT NULL REFERENCES public.fiscal_periods(id) ON DELETE RESTRICT,
++  adjustment_id         uuid NOT NULL REFERENCES public.year_end_staged_adjustments(id) ON DELETE RESTRICT,
++  source_entry_id       uuid NOT NULL REFERENCES public.journal_entries(id) ON DELETE RESTRICT,
++  reversal_date         date NOT NULL,
++  reversal_lines        jsonb NOT NULL CHECK (
++    jsonb_typeof(reversal_lines) = 'array' AND jsonb_array_length(reversal_lines) >= 2
++  ),
++  status                text NOT NULL DEFAULT 'scheduled' CHECK (status IN (
++    'scheduled', 'posted', 'cancelled', 'failed'
++  )),
++  reversal_entry_id     uuid REFERENCES public.journal_entries(id) ON DELETE RESTRICT,
++  created_by            uuid REFERENCES auth.users(id) ON DELETE RESTRICT,
++  created_at            timestamptz NOT NULL DEFAULT now(),
++  UNIQUE (adjustment_id)
++);
++
++ALTER TABLE public.year_end_scheduled_reversals ENABLE ROW LEVEL SECURITY;
++CREATE POLICY year_end_scheduled_reversals_select
++  ON public.year_end_scheduled_reversals FOR SELECT
++  USING (company_id IN (SELECT public.user_company_ids()));
++
++CREATE TABLE public.year_end_run_acknowledgements (
++  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
++  company_id            uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
++  fiscal_period_id      uuid NOT NULL REFERENCES public.fiscal_periods(id) ON DELETE RESTRICT,
++  year_end_run_id       uuid NOT NULL REFERENCES public.year_end_runs(id) ON DELETE RESTRICT,
++  statement_version     text NOT NULL,
++  statement_text        text NOT NULL,
++  continuity_snapshot   jsonb NOT NULL,
++  acknowledged_by       uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
++  acknowledged_at       timestamptz NOT NULL DEFAULT now(),
++  UNIQUE (year_end_run_id, acknowledged_by, statement_version)
++);
++
++ALTER TABLE public.year_end_run_acknowledgements ENABLE ROW LEVEL SECURITY;
++CREATE POLICY year_end_run_acknowledgements_select
++  ON public.year_end_run_acknowledgements FOR SELECT
++  USING (company_id IN (SELECT public.user_company_ids()));
++
++CREATE TABLE public.year_end_outbox (
++  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
++  company_id            uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
++  fiscal_period_id      uuid NOT NULL REFERENCES public.fiscal_periods(id) ON DELETE RESTRICT,
++  year_end_run_id       uuid NOT NULL REFERENCES public.year_end_runs(id) ON DELETE RESTRICT,
++  event_type            text NOT NULL,
++  payload               jsonb NOT NULL,
++  status                text NOT NULL DEFAULT 'pending' CHECK (status IN (
++    'pending', 'processing', 'delivered', 'failed'
++  )),
++  attempt_count         integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
++  available_at          timestamptz NOT NULL DEFAULT now(),
++  last_error            text,
++  created_at            timestamptz NOT NULL DEFAULT now(),
++  delivered_at          timestamptz,
++  UNIQUE (year_end_run_id, event_type)
++);
++
++ALTER TABLE public.year_end_outbox ENABLE ROW LEVEL SECURITY;
++CREATE POLICY year_end_outbox_select
++  ON public.year_end_outbox FOR SELECT
++  USING (company_id IN (SELECT public.user_company_ids()));
++
++ALTER TABLE public.year_end_runs
++  ADD COLUMN IF NOT EXISTS preview_id uuid REFERENCES public.year_end_previews(id) ON DELETE RESTRICT,
++  ADD COLUMN IF NOT EXISTS ledger_hash text,
++  ADD COLUMN IF NOT EXISTS readiness_hash text,
++  ADD COLUMN IF NOT EXISTS adjustment_hash text,
++  ADD COLUMN IF NOT EXISTS ruleset_version text,
++  ADD COLUMN IF NOT EXISTS committed_at timestamptz,
++  ADD COLUMN IF NOT EXISTS result_payload jsonb;
++
++CREATE OR REPLACE FUNCTION public.__year_end_assert_actor(
++  p_company_id uuid,
++  p_user_id uuid
++) RETURNS uuid
++LANGUAGE plpgsql
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++DECLARE
++  v_actor uuid := auth.uid();
++  v_role text := coalesce(auth.role(), current_user::text);
++BEGIN
++  IF v_actor IS NOT NULL THEN
++    IF NOT public.user_can_write_company(p_company_id) THEN
++      RAISE EXCEPTION 'YE_FORBIDDEN' USING ERRCODE = '42501';
++    END IF;
++    RETURN v_actor;
++  END IF;
++  IF v_role NOT IN ('service_role', 'postgres')
++     AND current_user NOT IN ('postgres', 'supabase_admin') THEN
++    RAISE EXCEPTION 'YE_FORBIDDEN' USING ERRCODE = '42501';
++  END IF;
++  IF p_user_id IS NULL THEN
++    RAISE EXCEPTION 'YE_ACTOR_REQUIRED' USING ERRCODE = '22023';
++  END IF;
++  RETURN p_user_id;
++END;
++$$;
++
++CREATE OR REPLACE FUNCTION public.__year_end_ledger_hash(
++  p_company_id uuid,
++  p_fiscal_period_id uuid
++) RETURNS text
++LANGUAGE sql
++STABLE
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++  SELECT md5(concat_ws('|',
++    p_company_id::text,
++    p_fiscal_period_id::text,
++    coalesce(string_agg(
++      concat_ws(':', je.id::text, je.status, je.entry_date::text,
++        je.voucher_series, je.voucher_number::text, jel.account_number,
++        jel.debit_amount::text, jel.credit_amount::text),
++      '|' ORDER BY je.id, jel.sort_order, jel.id
++    ), 'empty')
++  ))
++  FROM public.journal_entries je
++  LEFT JOIN public.journal_entry_lines jel ON jel.journal_entry_id = je.id
++  WHERE je.company_id = p_company_id
++    AND je.fiscal_period_id = p_fiscal_period_id
++    AND je.status IN ('posted', 'reversed', 'draft');
++$$;
++
++CREATE OR REPLACE FUNCTION public.__year_end_readiness_hash(
++  p_company_id uuid,
++  p_fiscal_period_id uuid
++) RETURNS text
++LANGUAGE sql
++STABLE
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++  SELECT md5(coalesce(string_agg(
++    concat_ws(':', b.code, b.detail_count::text, b.message),
++    '|' ORDER BY b.code, b.message
++  ), 'ready'))
++  FROM public.year_end_db_blockers(p_company_id, p_fiscal_period_id) b;
++$$;
++
++CREATE OR REPLACE FUNCTION public.__year_end_adjustment_hash(
++  p_company_id uuid,
++  p_fiscal_period_id uuid
++) RETURNS text
++LANGUAGE sql
++STABLE
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++  SELECT md5(coalesce(string_agg(
++    -- approved and included_in_preview describe the same immutable adjustment
++    -- lifecycle for snapshot purposes. Excluding status keeps the preview hash
++    -- stable when create_year_end_preview marks its rows as included.
++    concat_ws(':', a.id::text, a.version::text, a.stable_key,
++      a.entry_date::text, coalesce(a.reversal_date::text, ''),
++      a.journal_lines::text, a.ruleset_version),
++    '|' ORDER BY a.adjustment_group, a.stable_key, a.id
++  ), 'empty'))
++  FROM public.year_end_staged_adjustments a
++  WHERE a.company_id = p_company_id
++    AND a.fiscal_period_id = p_fiscal_period_id
++    AND a.status IN ('approved', 'included_in_preview');
++$$;
++
++CREATE OR REPLACE FUNCTION public.stage_year_end_adjustments(
++  p_company_id uuid,
++  p_fiscal_period_id uuid,
++  p_user_id uuid,
++  p_adjustment_group text,
++  p_items jsonb
++) RETURNS jsonb
++LANGUAGE plpgsql
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++DECLARE
++  v_actor uuid;
++  v_period public.fiscal_periods%ROWTYPE;
++  v_item jsonb;
++  v_line jsonb;
++  v_debit numeric;
++  v_credit numeric;
++  v_id uuid;
++  v_ids uuid[] := '{}';
++BEGIN
++  v_actor := public.__year_end_assert_actor(p_company_id, p_user_id);
++  IF p_adjustment_group NOT IN ('accrual', 'disposition', 'depreciation', 'tax', 'other') THEN
++    RAISE EXCEPTION 'YE_ADJUSTMENT_INVALID: invalid group' USING ERRCODE = '22023';
++  END IF;
++  IF jsonb_typeof(p_items) <> 'array' THEN
++    RAISE EXCEPTION 'YE_ADJUSTMENT_INVALID: items must be an array' USING ERRCODE = '22023';
++  END IF;
++
++  PERFORM pg_advisory_xact_lock(hashtextextended(
++    concat_ws(':', 'year-end-stage', p_company_id, p_fiscal_period_id, p_adjustment_group), 0
++  ));
++  SELECT fp.* INTO v_period
++  FROM public.fiscal_periods fp
++  WHERE fp.id = p_fiscal_period_id AND fp.company_id = p_company_id
++  FOR UPDATE;
++  IF NOT FOUND THEN
++    RAISE EXCEPTION 'YE_PERIOD_NOT_FOUND' USING ERRCODE = '22023';
++  END IF;
++  IF v_period.is_closed OR v_period.locked_at IS NOT NULL OR v_period.closing_entry_id IS NOT NULL THEN
++    RAISE EXCEPTION 'YE_PERIOD_ALREADY_CLOSED' USING ERRCODE = '55000';
++  END IF;
++
++  UPDATE public.year_end_staged_adjustments
++  SET status = 'cancelled', updated_by = v_actor, updated_at = now(), version = version + 1
++  WHERE company_id = p_company_id
++    AND fiscal_period_id = p_fiscal_period_id
++    AND adjustment_group = p_adjustment_group
++    AND status IN ('draft', 'approved', 'included_in_preview');
++
++  FOR v_item IN SELECT value FROM jsonb_array_elements(p_items)
++  LOOP
++    IF coalesce(v_item->>'stable_key', '') = ''
++       OR coalesce(v_item->>'adjustment_kind', '') = ''
++       OR coalesce(v_item->>'description', '') = ''
++       OR jsonb_typeof(v_item->'journal_lines') <> 'array'
++       OR jsonb_array_length(v_item->'journal_lines') < 2 THEN
++      RAISE EXCEPTION 'YE_ADJUSTMENT_INVALID: incomplete item' USING ERRCODE = '22023';
++    END IF;
++
++    v_debit := 0;
++    v_credit := 0;
++    FOR v_line IN SELECT value FROM jsonb_array_elements(v_item->'journal_lines')
++    LOOP
++      IF coalesce(v_line->>'account_number', '') !~ '^[0-9]{4}$'
++         OR coalesce((v_line->>'debit_amount')::numeric, 0) < 0
++         OR coalesce((v_line->>'credit_amount')::numeric, 0) < 0
++         OR (
++           coalesce((v_line->>'debit_amount')::numeric, 0) > 0
++           AND coalesce((v_line->>'credit_amount')::numeric, 0) > 0
++         ) THEN
++        RAISE EXCEPTION 'YE_ADJUSTMENT_INVALID: invalid journal line' USING ERRCODE = '22023';
++      END IF;
++      v_debit := v_debit + coalesce((v_line->>'debit_amount')::numeric, 0);
++      v_credit := v_credit + coalesce((v_line->>'credit_amount')::numeric, 0);
++    END LOOP;
++    IF abs(round(v_debit - v_credit, 2)) >= 0.005 OR round(v_debit, 2) <= 0 THEN
++      RAISE EXCEPTION 'YE_ADJUSTMENT_INVALID: unbalanced or empty item' USING ERRCODE = '22023';
++    END IF;
++
++    INSERT INTO public.year_end_staged_adjustments (
++      company_id, fiscal_period_id, adjustment_group, adjustment_kind,
++      stable_key, description, entry_date, reversal_date, journal_lines,
++      calculation_payload, ruleset_version, status, idempotency_key,
++      created_by, updated_by
++    ) VALUES (
++      p_company_id, p_fiscal_period_id, p_adjustment_group,
++      v_item->>'adjustment_kind', v_item->>'stable_key',
++      v_item->>'description',
++      coalesce(nullif(v_item->>'entry_date', '')::date, v_period.period_end),
++      nullif(v_item->>'reversal_date', '')::date,
++      v_item->'journal_lines',
++      coalesce(v_item->'calculation_payload', '{}'::jsonb),
++      nullif(v_item->>'ruleset_version', ''),
++      'approved',
++      coalesce(nullif(v_item->>'idempotency_key', ''),
++        md5(concat_ws('|', p_company_id::text, p_fiscal_period_id::text,
++          p_adjustment_group, v_item->>'stable_key', v_item::text))),
++      v_actor, v_actor
++    )
++    RETURNING id INTO v_id;
++    v_ids := array_append(v_ids, v_id);
++  END LOOP;
++
++  UPDATE public.year_end_previews
++  SET status = 'stale'
++  WHERE company_id = p_company_id
++    AND fiscal_period_id = p_fiscal_period_id
++    AND status = 'active';
++
++  RETURN jsonb_build_object(
++    'staged_ids', to_jsonb(v_ids),
++    'count', cardinality(v_ids),
++    'adjustment_hash', public.__year_end_adjustment_hash(p_company_id, p_fiscal_period_id)
++  );
++END;
++$$;
++
++CREATE OR REPLACE FUNCTION public.create_year_end_preview(
++  p_company_id uuid,
++  p_fiscal_period_id uuid,
++  p_user_id uuid,
++  p_payload jsonb
++) RETURNS jsonb
++LANGUAGE plpgsql
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++DECLARE
++  v_actor uuid;
++  v_period public.fiscal_periods%ROWTYPE;
++  v_preview public.year_end_previews%ROWTYPE;
++  v_ruleset text;
++  v_blocker record;
++BEGIN
++  v_actor := public.__year_end_assert_actor(p_company_id, p_user_id);
++  PERFORM pg_advisory_xact_lock(hashtextextended(
++    concat_ws(':', 'year-end-preview', p_company_id, p_fiscal_period_id), 0
++  ));
++  SELECT fp.* INTO v_period
++  FROM public.fiscal_periods fp
++  WHERE fp.id = p_fiscal_period_id AND fp.company_id = p_company_id
++  FOR UPDATE;
++  IF NOT FOUND THEN
++    RAISE EXCEPTION 'YE_PERIOD_NOT_FOUND' USING ERRCODE = '22023';
++  END IF;
++  IF v_period.is_closed OR v_period.locked_at IS NOT NULL OR v_period.closing_entry_id IS NOT NULL THEN
++    RAISE EXCEPTION 'YE_PERIOD_ALREADY_CLOSED' USING ERRCODE = '55000';
++  END IF;
++  FOR v_blocker IN
++    SELECT * FROM public.year_end_db_blockers(p_company_id, p_fiscal_period_id)
++  LOOP
++    RAISE EXCEPTION 'YE_READINESS_BLOCKED: %', v_blocker.code USING ERRCODE = '55000';
++  END LOOP;
++
++  SELECT yr.version INTO v_ruleset
++  FROM public.year_end_rulesets yr
++  WHERE yr.tax_year = extract(year FROM v_period.period_end)::integer;
++  IF v_ruleset IS NULL THEN
++    RAISE EXCEPTION 'YE_RULESET_MISSING' USING ERRCODE = '55000';
++  END IF;
++
++  UPDATE public.year_end_previews
++  SET status = 'superseded'
++  WHERE company_id = p_company_id
++    AND fiscal_period_id = p_fiscal_period_id
++    AND status = 'active';
++
++  INSERT INTO public.year_end_previews (
++    company_id, fiscal_period_id, ledger_hash, readiness_hash,
++    adjustment_hash, ruleset_version, payload, generated_by, expires_at
++  ) VALUES (
++    p_company_id, p_fiscal_period_id,
++    public.__year_end_ledger_hash(p_company_id, p_fiscal_period_id),
++    public.__year_end_readiness_hash(p_company_id, p_fiscal_period_id),
++    public.__year_end_adjustment_hash(p_company_id, p_fiscal_period_id),
++    v_ruleset, p_payload, v_actor, now() + interval '30 minutes'
++  )
++  RETURNING * INTO v_preview;
++
++  UPDATE public.year_end_staged_adjustments
++  SET status = 'included_in_preview', updated_by = v_actor, updated_at = now()
++  WHERE company_id = p_company_id
++    AND fiscal_period_id = p_fiscal_period_id
++    AND status = 'approved';
++
++  RETURN jsonb_build_object(
++    'preview_id', v_preview.id,
++    'ledger_hash', v_preview.ledger_hash,
++    'readiness_hash', v_preview.readiness_hash,
++    'adjustment_hash', v_preview.adjustment_hash,
++    'ruleset_version', v_preview.ruleset_version,
++    'generated_at', v_preview.generated_at,
++    'expires_at', v_preview.expires_at,
++    'payload', v_preview.payload
++  );
++END;
++$$;
++
++DO $$
++BEGIN
++  IF to_regprocedure(
++    'public.__execute_year_end_closing_preview_core_20260730(uuid,uuid,uuid,text,jsonb)'
++  ) IS NULL THEN
++    ALTER FUNCTION public.execute_year_end_closing(uuid, uuid, uuid, text, jsonb)
++      RENAME TO __execute_year_end_closing_preview_core_20260730;
++  END IF;
++END
++$$;
++
++REVOKE ALL ON FUNCTION public.__execute_year_end_closing_preview_core_20260730(
++  uuid, uuid, uuid, text, jsonb
++) FROM PUBLIC, anon, authenticated;
++GRANT EXECUTE ON FUNCTION public.__execute_year_end_closing_preview_core_20260730(
++  uuid, uuid, uuid, text, jsonb
++) TO service_role;
++
++CREATE OR REPLACE FUNCTION public.execute_year_end_closing(
++  p_company_id uuid,
++  p_fiscal_period_id uuid,
++  p_user_id uuid,
++  p_idempotency_key text,
++  p_revaluation jsonb,
++  p_preview_id uuid
++) RETURNS jsonb
++LANGUAGE plpgsql
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++DECLARE
++  v_actor uuid;
++  v_preview public.year_end_previews%ROWTYPE;
++  v_adjustment public.year_end_staged_adjustments%ROWTYPE;
++  v_entry_id uuid;
++  v_reversal_lines jsonb;
++  v_result jsonb;
++  v_run_id uuid;
++BEGIN
++  v_actor := public.__year_end_assert_actor(p_company_id, p_user_id);
++  IF p_preview_id IS NULL THEN
++    RAISE EXCEPTION 'YE_PREVIEW_REQUIRED' USING ERRCODE = '22023';
++  END IF;
++  PERFORM pg_advisory_xact_lock(hashtextextended(
++    concat_ws(':', 'year-end-execute', p_company_id, p_fiscal_period_id), 0
++  ));
++
++  SELECT yp.* INTO v_preview
++  FROM public.year_end_previews yp
++  WHERE yp.id = p_preview_id
++    AND yp.company_id = p_company_id
++    AND yp.fiscal_period_id = p_fiscal_period_id
++  FOR UPDATE;
++  IF NOT FOUND OR v_preview.status <> 'active' OR v_preview.expires_at <= now() THEN
++    RAISE EXCEPTION 'YE_PREVIEW_STALE' USING ERRCODE = '55000';
++  END IF;
++  IF v_preview.ledger_hash <> public.__year_end_ledger_hash(p_company_id, p_fiscal_period_id)
++     OR v_preview.readiness_hash <> public.__year_end_readiness_hash(p_company_id, p_fiscal_period_id)
++     OR v_preview.adjustment_hash <> public.__year_end_adjustment_hash(p_company_id, p_fiscal_period_id) THEN
++    UPDATE public.year_end_previews SET status = 'stale' WHERE id = p_preview_id;
++    RAISE EXCEPTION 'YE_PREVIEW_STALE' USING ERRCODE = '55000';
++  END IF;
++
++  FOR v_adjustment IN
++    SELECT *
++    FROM public.year_end_staged_adjustments
++    WHERE company_id = p_company_id
++      AND fiscal_period_id = p_fiscal_period_id
++      AND status = 'included_in_preview'
++    ORDER BY CASE adjustment_group
++      WHEN 'accrual' THEN 10
++      WHEN 'depreciation' THEN 20
++      WHEN 'disposition' THEN 30
++      WHEN 'tax' THEN 40
++      ELSE 50
++    END, stable_key, id
++    FOR UPDATE
++  LOOP
++    v_entry_id := public.__ye_post_entry(
++      p_company_id,
++      v_actor,
++      p_fiscal_period_id,
++      v_adjustment.entry_date,
++      v_adjustment.description,
++      CASE WHEN v_adjustment.adjustment_group = 'accrual' THEN 'accrual' ELSE 'year_end' END,
++      'A',
++      v_adjustment.journal_lines
++    );
++
++    UPDATE public.year_end_staged_adjustments
++    SET status = 'posted', posted_entry_id = v_entry_id,
++        updated_by = v_actor, updated_at = now()
++    WHERE id = v_adjustment.id;
++
++    IF v_adjustment.adjustment_group = 'depreciation'
++       AND v_adjustment.adjustment_kind = 'planned_depreciation' THEN
++      INSERT INTO public.depreciation_schedules (
++        user_id, company_id, asset_id, fiscal_period_id,
++        planned_depreciation, journal_entry_id, posted_at
++      ) VALUES (
++        v_actor,
++        p_company_id,
++        (v_adjustment.calculation_payload->>'asset_id')::uuid,
++        p_fiscal_period_id,
++        (v_adjustment.calculation_payload->>'planned_depreciation')::numeric,
++        v_entry_id,
++        now()
++      )
++      ON CONFLICT (asset_id, fiscal_period_id) DO UPDATE SET
++        planned_depreciation = EXCLUDED.planned_depreciation,
++        journal_entry_id = EXCLUDED.journal_entry_id,
++        posted_at = EXCLUDED.posted_at;
++    END IF;
++
++    IF v_adjustment.reversal_date IS NOT NULL THEN
++      SELECT jsonb_agg(jsonb_build_object(
++        'account_number', line->>'account_number',
++        'debit_amount', coalesce((line->>'credit_amount')::numeric, 0),
++        'credit_amount', coalesce((line->>'debit_amount')::numeric, 0),
++        'line_description', 'Återföring: ' || coalesce(line->>'line_description', v_adjustment.description)
++      ))
++      INTO v_reversal_lines
++      FROM jsonb_array_elements(v_adjustment.journal_lines) line;
++
++      INSERT INTO public.year_end_scheduled_reversals (
++        company_id, fiscal_period_id, adjustment_id, source_entry_id,
++        reversal_date, reversal_lines, created_by
++      ) VALUES (
++        p_company_id, p_fiscal_period_id, v_adjustment.id, v_entry_id,
++        v_adjustment.reversal_date, v_reversal_lines, v_actor
++      );
++    END IF;
++  END LOOP;
++
++  v_result := public.__execute_year_end_closing_preview_core_20260730(
++    p_company_id, p_fiscal_period_id, v_actor, p_idempotency_key, p_revaluation
++  );
++  v_run_id := (v_result->>'run_id')::uuid;
++
++  UPDATE public.year_end_previews
++  SET status = 'executed', executed_at = now()
++  WHERE id = p_preview_id;
++
++  UPDATE public.year_end_runs
++  SET preview_id = p_preview_id,
++      ledger_hash = v_preview.ledger_hash,
++      readiness_hash = v_preview.readiness_hash,
++      adjustment_hash = v_preview.adjustment_hash,
++      ruleset_version = v_preview.ruleset_version,
++      committed_at = coalesce(committed_at, now()),
++      result_payload = v_result
++  WHERE id = v_run_id
++    AND company_id = p_company_id
++    AND fiscal_period_id = p_fiscal_period_id;
++
++  INSERT INTO public.year_end_outbox (
++    company_id, fiscal_period_id, year_end_run_id, event_type, payload
++  ) VALUES (
++    p_company_id, p_fiscal_period_id, v_run_id, 'period.year_closed',
++    v_result || jsonb_build_object('preview_id', p_preview_id)
++  )
++  ON CONFLICT (year_end_run_id, event_type) DO NOTHING;
++
++  RETURN v_result || jsonb_build_object(
++    'preview_id', p_preview_id,
++    'ledger_hash', v_preview.ledger_hash,
++    'readiness_hash', v_preview.readiness_hash,
++    'adjustment_hash', v_preview.adjustment_hash,
++    'ruleset_version', v_preview.ruleset_version
++  );
++END;
++$$;
++
++REVOKE ALL ON FUNCTION public.execute_year_end_closing(
++  uuid, uuid, uuid, text, jsonb, uuid
++) FROM PUBLIC;
++GRANT EXECUTE ON FUNCTION public.execute_year_end_closing(
++  uuid, uuid, uuid, text, jsonb, uuid
++) TO authenticated, service_role;
++
++CREATE OR REPLACE FUNCTION public.acknowledge_year_end_run(
++  p_company_id uuid,
++  p_fiscal_period_id uuid,
++  p_year_end_run_id uuid,
++  p_user_id uuid,
++  p_statement_version text,
++  p_statement_text text,
++  p_continuity_snapshot jsonb
++) RETURNS uuid
++LANGUAGE plpgsql
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++DECLARE
++  v_actor uuid;
++  v_id uuid;
++BEGIN
++  v_actor := public.__year_end_assert_actor(p_company_id, p_user_id);
++  IF NOT EXISTS (
++    SELECT 1 FROM public.year_end_runs r
++    WHERE r.id = p_year_end_run_id
++      AND r.company_id = p_company_id
++      AND r.fiscal_period_id = p_fiscal_period_id
++      AND r.status = 'closed'
++  ) THEN
++    RAISE EXCEPTION 'YE_RUN_NOT_COMMITTED' USING ERRCODE = '55000';
++  END IF;
++  INSERT INTO public.year_end_run_acknowledgements (
++    company_id, fiscal_period_id, year_end_run_id, statement_version,
++    statement_text, continuity_snapshot, acknowledged_by
++  ) VALUES (
++    p_company_id, p_fiscal_period_id, p_year_end_run_id, p_statement_version,
++    p_statement_text, p_continuity_snapshot, v_actor
++  )
++  ON CONFLICT (year_end_run_id, acknowledged_by, statement_version)
++  DO UPDATE SET
++    statement_text = EXCLUDED.statement_text,
++    continuity_snapshot = EXCLUDED.continuity_snapshot,
++    acknowledged_at = now()
++  RETURNING id INTO v_id;
++  RETURN v_id;
++END;
++$$;
++
++REVOKE ALL ON FUNCTION public.acknowledge_year_end_run(
++  uuid, uuid, uuid, uuid, text, text, jsonb
++) FROM PUBLIC;
++GRANT EXECUTE ON FUNCTION public.acknowledge_year_end_run(
++  uuid, uuid, uuid, uuid, text, text, jsonb
++) TO authenticated, service_role;
++
++-- Exact SIE precedence: a historical workpaper may suppress the legacy AR/AP
++-- mismatch only when its import and ledger snapshot exactly match this period.
++CREATE OR REPLACE FUNCTION public.year_end_db_blockers(
++  p_company_id uuid,
++  p_fiscal_period_id uuid
++) RETURNS TABLE (code text, message text, detail_count integer)
++LANGUAGE plpgsql
++STABLE
++SECURITY DEFINER
++SET search_path = public, pg_temp
++AS $$
++DECLARE
++  v_period public.fiscal_periods%ROWTYPE;
++  v_count integer;
++  v_control record;
++BEGIN
++  SELECT fp.* INTO v_period
++  FROM public.fiscal_periods fp
++  WHERE fp.id = p_fiscal_period_id AND fp.company_id = p_company_id;
++  IF NOT FOUND THEN
++    RAISE EXCEPTION 'YE_PERIOD_NOT_FOUND';
++  END IF;
++
++  RETURN QUERY
++  SELECT core.code, core.message, core.detail_count
++  FROM public.__year_end_db_blockers_historical_core_20260729(
++    p_company_id, p_fiscal_period_id
++  ) core
++  WHERE core.code <> 'unfinished_sie_imports'
++    AND NOT (
++      core.code IN ('accounts_receivable_mismatch', 'accounts_payable_mismatch')
++      AND EXISTS (
++        SELECT 1
++        FROM public.year_end_historical_workpapers wp
++        JOIN public.sie_imports si
++          ON si.id = wp.source_sie_import_id
++         AND si.company_id = wp.company_id
++         AND si.status = 'completed'
++        CROSS JOIN LATERAL public.__year_end_workpaper_category_snapshot(
++          p_company_id,
++          p_fiscal_period_id,
++          CASE core.code
++            WHEN 'accounts_receivable_mismatch' THEN 'customer_receivables'
++            ELSE 'supplier_payables'
++          END
++        ) snapshot
++        WHERE wp.company_id = p_company_id
++          AND wp.fiscal_period_id = p_fiscal_period_id
++          AND wp.category = CASE core.code
++            WHEN 'accounts_receivable_mismatch' THEN 'customer_receivables'
++            ELSE 'supplier_payables'
++          END
++          AND wp.status IN (
++            'automatically_reconciled', 'sie_balance_accepted',
++            'external_evidence_verified', 'manually_adjusted'
++          )
++          AND wp.pending_sie_import_id IS NULL
++          AND wp.ledger_snapshot_fingerprint = snapshot.snapshot_fingerprint
++          AND abs(coalesce(wp.current_amount, 0) - snapshot.ledger_amount) < 0.01
++          AND (
++            si.fiscal_period_id = p_fiscal_period_id
++            OR (
++              si.fiscal_year_start = v_period.period_start
++              AND si.fiscal_year_end = v_period.period_end
++            )
++          )
++      )
++    );
++
++  SELECT count(*)::integer INTO v_count
++  FROM public.sie_imports si
++  WHERE si.company_id = p_company_id
++    AND si.status IN (
++      'pending', 'validating', 'staged', 'importing',
++      'partial', 'mapped', 'failed'
++    )
++    AND (
++      si.fiscal_period_id = p_fiscal_period_id
++      OR (
++        si.fiscal_year_start IS NOT NULL
++        AND si.fiscal_year_end IS NOT NULL
++        AND daterange(si.fiscal_year_start, si.fiscal_year_end, '[]')
++          && daterange(v_period.period_start, v_period.period_end, '[]')
++      )
++    );
++  IF v_count > 0 THEN
++    RETURN QUERY SELECT
++      'unfinished_sie_imports'::text,
++      format('%s SIE-import(er) är inte slutförda.', v_count),
++      v_count;
++  END IF;
++
++  FOR v_control IN
++    SELECT * FROM public.year_end_control_status(p_company_id, p_fiscal_period_id)
++    WHERE is_blocking
++  LOOP
++    RETURN QUERY SELECT
++      v_control.control_code, v_control.message,
++      greatest(v_control.evidence_count, 1);
++  END LOOP;
++END;
++$$;
++
++REVOKE ALL ON FUNCTION public.year_end_db_blockers(uuid, uuid) FROM PUBLIC;
++GRANT EXECUTE ON FUNCTION public.year_end_db_blockers(uuid, uuid)
++  TO authenticated, service_role;
++
++CREATE OR REPLACE FUNCTION public.year_end_immutable_after_commit()
++RETURNS trigger
++LANGUAGE plpgsql
++SET search_path = public, pg_temp
++AS $$
++BEGIN
++  IF TG_TABLE_NAME = 'year_end_staged_adjustments'
++     AND OLD.status IN ('posted', 'reversed') THEN
++    RAISE EXCEPTION 'YE_COMMITTED_ADJUSTMENT_IMMUTABLE' USING ERRCODE = '55000';
++  END IF;
++  IF TG_TABLE_NAME = 'year_end_previews'
++     AND OLD.status = 'executed'
++     AND NEW IS DISTINCT FROM OLD THEN
++    RAISE EXCEPTION 'YE_EXECUTED_PREVIEW_IMMUTABLE' USING ERRCODE = '55000';
++  END IF;
++  RETURN NEW;
++END;
++$$;
++
++CREATE TRIGGER year_end_staged_adjustments_immutable
++  BEFORE UPDATE OR DELETE ON public.year_end_staged_adjustments
++  FOR EACH ROW EXECUTE FUNCTION public.year_end_immutable_after_commit();
++CREATE TRIGGER year_end_previews_immutable
++  BEFORE UPDATE OR DELETE ON public.year_end_previews
++  FOR EACH ROW EXECUTE FUNCTION public.year_end_immutable_after_commit();
++
++CREATE TRIGGER audit_year_end_staged_adjustments
++  AFTER INSERT OR UPDATE OR DELETE ON public.year_end_staged_adjustments
++  FOR EACH ROW EXECUTE FUNCTION public.write_audit_log();
++CREATE TRIGGER audit_year_end_previews
++  AFTER INSERT OR UPDATE OR DELETE ON public.year_end_previews
++  FOR EACH ROW EXECUTE FUNCTION public.write_audit_log();
++CREATE TRIGGER audit_year_end_run_acknowledgements
++  AFTER INSERT OR UPDATE OR DELETE ON public.year_end_run_acknowledgements
++  FOR EACH ROW EXECUTE FUNCTION public.write_audit_log();
++
++NOTIFY pgrst, 'reload schema';
+diff --git a/types/index.ts b/types/index.ts
+index 3105914..f00d351 100644
+--- a/types/index.ts
++++ b/types/index.ts
+@@ -2873,15 +2873,37 @@ export interface YearEndValidation {
+ }
+ 
+ export interface YearEndPreview {
++  previewId?: string
++  ledgerHash?: string
++  readinessHash?: string
++  adjustmentHash?: string
++  rulesetVersion?: string
++  generatedAt?: string
++  expiresAt?: string
+   netResult: number
+   closingAccount: string
+   closingAccountName: string
+   closingLines: CreateJournalEntryLineInput[]
+   resultAccountSummary: { account_number: string; account_name: string; amount: number }[]
+   currencyRevaluation: CurrencyRevaluationPreview | null
++  stagedEntries: {
++    id: string
++    group: string
++    kind: string
++    description: string
++    entryDate: string
++    reversalDate: string | null
++    lines: CreateJournalEntryLineInput[]
++  }[]
+ }
+ 
+ export interface YearEndResult {
++  runId: string
++  previewId: string
++  ledgerHash: string
++  readinessHash: string
++  adjustmentHash: string
++  rulesetVersion: string
+   closingEntry: JournalEntry
+   nextPeriod: FiscalPeriod
+   openingBalanceEntry: JournalEntry

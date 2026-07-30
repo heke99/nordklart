@@ -3,6 +3,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { createServiceClient } from '@/lib/supabase/server'
+import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
+import type { FiscalPeriod, JournalEntry, YearEndResult } from '@/types'
 
 /**
  * GET: list year-end runs for a fiscal period (revision item B10).
@@ -30,7 +32,7 @@ export const GET = withRouteContext(
     const { data, error } = await serviceDb
       .from('year_end_runs')
       .select(
-        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, idempotency_key, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, started_at, finished_at, created_at',
+        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, idempotency_key, preview_id, ledger_hash, readiness_hash, adjustment_hash, ruleset_version, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, committed_at, started_at, finished_at, created_at',
       )
       .eq('company_id', companyId!)
       .eq('fiscal_period_id', id)
@@ -42,7 +44,61 @@ export const GET = withRouteContext(
       return errorResponseFromCode('INTERNAL_ERROR', opLog, { requestId })
     }
 
-    return NextResponse.json({ data: data ?? [] })
+    const closedRun = (data ?? []).find((run) => run.status === 'closed')
+    let committedResult: YearEndResult | null = null
+    if (
+      closedRun?.closing_entry_id &&
+      closedRun.opening_balance_entry_id &&
+      closedRun.next_period_id &&
+      closedRun.preview_id
+    ) {
+      const [closing, opening, nextPeriod, revaluation, continuity] = await Promise.all([
+        serviceDb
+          .from('journal_entries')
+          .select('*')
+          .eq('company_id', companyId!)
+          .eq('id', closedRun.closing_entry_id)
+          .single(),
+        serviceDb
+          .from('journal_entries')
+          .select('*')
+          .eq('company_id', companyId!)
+          .eq('id', closedRun.opening_balance_entry_id)
+          .single(),
+        serviceDb
+          .from('fiscal_periods')
+          .select('*')
+          .eq('company_id', companyId!)
+          .eq('id', closedRun.next_period_id)
+          .single(),
+        closedRun.revaluation_entry_id
+          ? serviceDb
+              .from('journal_entries')
+              .select('*')
+              .eq('company_id', companyId!)
+              .eq('id', closedRun.revaluation_entry_id)
+              .single()
+          : Promise.resolve({ data: null, error: null }),
+        validateBalanceContinuity(serviceDb, companyId!, closedRun.next_period_id),
+      ])
+      if (!closing.error && !opening.error && !nextPeriod.error) {
+        committedResult = {
+          runId: closedRun.id,
+          previewId: closedRun.preview_id,
+          ledgerHash: closedRun.ledger_hash ?? '',
+          readinessHash: closedRun.readiness_hash ?? '',
+          adjustmentHash: closedRun.adjustment_hash ?? '',
+          rulesetVersion: closedRun.ruleset_version ?? '',
+          closingEntry: closing.data as JournalEntry,
+          openingBalanceEntry: opening.data as JournalEntry,
+          nextPeriod: nextPeriod.data as FiscalPeriod,
+          revaluationEntry: (revaluation.data as JournalEntry | null) ?? null,
+          continuity,
+        }
+      }
+    }
+
+    return NextResponse.json({ data: data ?? [], committedResult })
   },
   { allowRequestedCompany: true },
 )

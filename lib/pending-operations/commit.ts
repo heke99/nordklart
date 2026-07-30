@@ -1660,9 +1660,18 @@ async function commitRunYearEnd(
 ): Promise<ExecutorResult> {
   const id = params.fiscal_period_id as string
   if (!id) return { error: 'fiscal_period_id is required', status: 400 }
+  const previewId = params.preview_id as string
+  if (!previewId) {
+    return {
+      error: 'YE_PREVIEW_REQUIRED: create and approve a canonical year-end preview first',
+      status: 409,
+    }
+  }
 
   try {
-    const result = await executeYearEndClosing(supabase, companyId, userId, id)
+    const result = await executeYearEndClosing(supabase, companyId, userId, id, {
+      previewId,
+    })
     return {
       data: {
         closing_entry_id: result.closingEntry?.id ?? null,
@@ -3658,4 +3667,3 @@ async function commitPendingOperationInner(
     data: result.data,
   }
 }
-

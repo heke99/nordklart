@@ -17,7 +17,7 @@ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-en
  */
 export const GET = withRouteContext(
   'period.arsredovisning_ixbrl_validate',
-  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
     const { user, supabase, companyId, log, requestId } = ctx
     try {
@@ -28,13 +28,7 @@ export const GET = withRouteContext(
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.ixbrl', access.reason)
 
-      const url = new URL(request.url)
-      const utdelningRaw = url.searchParams.get('utdelning')
-      const proposedDividend = utdelningRaw ? Number(utdelningRaw) : 0
-
-      const input = await buildIxbrlInput(supabase, companyId, id, {
-        proposedDividend: Number.isFinite(proposedDividend) ? proposedDividend : 0,
-      })
+      const input = await buildIxbrlInput(supabase, companyId, id)
       const result = runPreflightChecks(input)
 
       // Generation dry-run: a document that cannot even be generated must

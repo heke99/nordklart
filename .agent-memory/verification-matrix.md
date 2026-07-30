@@ -19,3 +19,18 @@
 | Routing | Next route-manifest + readiness unit-test | PASS, sida/API och period/company/focus finns |
 
 Ej körda kontroller räknas inte som godkända.
+
+## Kanonisk bokslutskedja 2026-07-30
+
+| Kontroll | Kommando/metod | Utfall |
+|---|---|---|
+| Typkontroll | `NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck` | PASS, 0 fel |
+| Riktade bokslutstester | 4 filer | PASS, 47/47 |
+| Full unit-svit | `npm test` | PASS, 6 114 pass / 2 skip |
+| Lintbaseline | `npm run check:lint` | PASS, 0 nya fel |
+| Guards | `npm run check:guards` | PASS |
+| PostgreSQL-syntax | `libpg-query` | PASS, 49 statements |
+| Produktionsbygge | `NODE_OPTIONS=--max-old-space-size=4096 npx next build` | PASS, 355 sidor |
+| Git whitespace | `git diff --check` | PASS |
+| Live migration | `npm run db:migrate` | NOT RUN, DB-URL saknas |
+| pg-real/RLS/transaktion | `npm run test:pg` | NOT RUN, PostgreSQL saknas |

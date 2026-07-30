@@ -198,7 +198,6 @@ const SubmitSchema = z.object({
     epost: z.string().email(),
   }),
   kvittens_epost: z.array(z.string().email()).max(5).optional(),
-  utdelning: z.number().min(0).optional(),
   accepted_avtalstext_andrad: z.string().optional(),
   ignore_warnings: z.boolean().optional(),
 })
@@ -330,7 +329,6 @@ export const bolagsverketExtension: Extension = {
               avsandarePnr: parsed.avsandare_pnr,
               undertecknare: parsed.undertecknare,
               kvittensEpost: parsed.kvittens_epost,
-              proposedDividend: parsed.utdelning,
               acceptedAvtalstextAndrad: parsed.accepted_avtalstext_andrad,
               ignoreWarnings: parsed.ignore_warnings,
             },

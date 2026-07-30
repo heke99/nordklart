@@ -33,3 +33,12 @@
   PostgreSQL-parser, migrationslista och produktionsbygge.
 - Försökte köra pg-real; dokumenterade `ECONNREFUSED :5432` som
   miljöblockering.
+- Återställde mottagen projektbaslinje och etablerade exakt lokal Git-diff.
+- Kartlade direktbokning, delbatch, flyktig preview, klientstyrd utdelning och
+  det breda SIE-undantaget som konkreta P0-avvikelser.
+- Byggde staging → beständig preview → atomisk execute med versionsbundna
+  snapshots, reverseringsschema, run-resultat och outbox.
+- Samordnade API, wizard, iXBRL och Bolagsverket med den kanoniska kedjan.
+- Lade serverbaserad resultatbekräftelse och återläsning av stängd körning.
+- Körde typecheck, lintbaseline, guards, 6 114 unit-tester,
+  PostgreSQL-parser och produktionsbygge med godkänt resultat.

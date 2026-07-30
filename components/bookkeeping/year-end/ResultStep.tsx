@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { CheckCircle2, AlertTriangle } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 import type { YearEndResult, ContinuityDiscrepancy } from '@/types'
 import { formatCurrency } from '@/lib/utils'
@@ -25,12 +25,51 @@ interface ResultStepProps {
 }
 
 const ORE_TOLERANCE = 0.005
+const ACKNOWLEDGEMENT_TEXT =
+  'Jag har granskat bokslutet och IB/UB-kontinuiteten ovan, och bekräftar att alla balanskonton stämmer mot föregående periods utgående balans.'
 
 export function ResultStep({ result, companyId }: ResultStepProps) {
   const [acknowledged, setAcknowledged] = useState(false)
+  const [savingAcknowledgement, setSavingAcknowledgement] = useState(false)
+  const [acknowledgementError, setAcknowledgementError] = useState<string | null>(null)
 
   const continuity = result.continuity
   const discrepancies = continuity?.discrepancies ?? []
+  const acknowledge = useCallback(async () => {
+    if (acknowledged || savingAcknowledgement) return
+    setSavingAcknowledgement(true)
+    setAcknowledgementError(null)
+    try {
+      const companySuffix = companyId
+        ? `?company_id=${encodeURIComponent(companyId)}`
+        : ''
+      const res = await fetch(
+        `/api/bookkeeping/fiscal-periods/${result.closingEntry.fiscal_period_id}/year-end/runs/${result.runId}/acknowledge${companySuffix}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            statement_version: 'ib-ub-review-v1',
+            statement_text: ACKNOWLEDGEMENT_TEXT,
+            continuity_snapshot: continuity ?? {
+              checked_accounts: 0,
+              discrepancies: [],
+            },
+          }),
+        },
+      )
+      const body = await res.json()
+      if (!res.ok) {
+        setAcknowledgementError(body?.error?.message ?? 'Bekräftelsen kunde inte sparas.')
+        return
+      }
+      setAcknowledged(true)
+    } catch {
+      setAcknowledgementError('Bekräftelsen kunde inte sparas.')
+    } finally {
+      setSavingAcknowledgement(false)
+    }
+  }, [acknowledged, savingAcknowledgement, companyId, result, continuity])
 
   // If the wizard reached ResultStep, executeYearEndClosing already enforced
   // that no per-account diff exceeded ORE_TOLERANCE — but surface a panel
@@ -72,6 +111,8 @@ export function ResultStep({ result, companyId }: ResultStepProps) {
             href={withCompany(`/bookkeeping/${result.openingBalanceEntry.id}`, companyId)}
           />
           <ResultRow label="Ny räkenskapsperiod" value={result.nextPeriod.name} />
+          <ResultRow label="Boksluts-run" value={result.runId} />
+          <ResultRow label="Regelversion" value={result.rulesetVersion} />
         </CardContent>
       </Card>
 
@@ -87,16 +128,25 @@ export function ResultStep({ result, companyId }: ResultStepProps) {
           <label className="flex items-start gap-3 cursor-pointer">
             <Checkbox
               checked={acknowledged}
-              onCheckedChange={(v) => setAcknowledged(v === true)}
+              disabled={savingAcknowledgement}
+              onCheckedChange={(v) => {
+                if (v === true) void acknowledge()
+              }}
               className="mt-0.5"
               aria-label="Bekräfta bokslut"
             />
             <span className="text-sm leading-relaxed">
-              Jag har granskat bokslutet och IB/UB-kontinuiteten ovan, och
-              bekräftar att alla balanskonton stämmer mot föregående periods
-              utgående balans.
+              {ACKNOWLEDGEMENT_TEXT}
             </span>
           </label>
+          {savingAcknowledgement && (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Sparar bekräftelsen…
+            </p>
+          )}
+          {acknowledgementError && (
+            <p className="text-sm text-destructive">{acknowledgementError}</p>
+          )}
 
           <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
             <Button variant="outline" asChild disabled={!acknowledged}>

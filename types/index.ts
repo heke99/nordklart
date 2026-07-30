@@ -2873,15 +2873,37 @@ export interface YearEndValidation {
 }
 
 export interface YearEndPreview {
+  previewId?: string
+  ledgerHash?: string
+  readinessHash?: string
+  adjustmentHash?: string
+  rulesetVersion?: string
+  generatedAt?: string
+  expiresAt?: string
   netResult: number
   closingAccount: string
   closingAccountName: string
   closingLines: CreateJournalEntryLineInput[]
   resultAccountSummary: { account_number: string; account_name: string; amount: number }[]
   currencyRevaluation: CurrencyRevaluationPreview | null
+  stagedEntries: {
+    id: string
+    group: string
+    kind: string
+    description: string
+    entryDate: string
+    reversalDate: string | null
+    lines: CreateJournalEntryLineInput[]
+  }[]
 }
 
 export interface YearEndResult {
+  runId: string
+  previewId: string
+  ledgerHash: string
+  readinessHash: string
+  adjustmentHash: string
+  rulesetVersion: string
   closingEntry: JournalEntry
   nextPeriod: FiscalPeriod
   openingBalanceEntry: JournalEntry

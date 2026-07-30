@@ -46,3 +46,18 @@
 
 - Införde manuell serververifierad likvidkontoavstämning med dokument,
   invalidation och samma bokslutsblockerare.
+
+## 2026-07-30 — staging, beständig preview och atomisk execute
+
+- Ersatte direktbokning från periodisering, avskrivning och disposition med
+  tenant- och periodbunden staging.
+- Införde versionsstyrda skatteregler, beständig preview och fyra snapshots.
+- Band execute till preview-ID och lade justeringsbokning, stängning, IB,
+  reverseringsschema, run-resultat och outbox i en transaktion.
+- Gjorde dispositionsbatchen odelbar och tog bort klientstyrda skattesatser.
+- Rättade det breda SIE-undantaget till exakt workpaper-/import-/ledger-match.
+- Tog bort query- och UI-styrd utdelning från iXBRL/Bolagsverket.
+- Lade återöppningsbart slutresultat och beständig granskningsbekräftelse.
+- Lade regressionstest för staged preview utan journalföring.
+- Verifierade typecheck, 6 114 unit-tester, lint, guards, PostgreSQL-parser och
+  Next-produktionsbygge.

@@ -85,7 +85,6 @@ export interface SubmitParams {
     epost: string
   }
   kvittensEpost?: string[]
-  proposedDividend?: number
   /** User accepted the current avtalstext (avtalstextAndrad value). */
   acceptedAvtalstextAndrad?: string
   /** Upload even when kontrollera returns warn-level utfall (GUIDE §4.2.2). */
@@ -205,7 +204,6 @@ export async function submitArsredovisning(
   // 3. Generate the iXBRL + local pre-flight (layer 1) — cheaper than a
   //    kontrollera round-trip and catches data problems with better messages.
   const input = await buildIxbrlInput(supabase, params.companyId, params.fiscalPeriodId, {
-    proposedDividend: params.proposedDividend,
     undertecknare: {
       firstName: params.undertecknare.fornamn,
       lastName: params.undertecknare.efternamn,

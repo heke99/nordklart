@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { eventBus } from '@/lib/events'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -13,6 +12,7 @@ import {
 } from '@/lib/bookkeeping/currency-revaluation'
 import { getCompanyEntityType } from '@/lib/company/entity-type'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
+import { listStagedYearEndAdjustments } from './year-end-staging'
 import type {
   YearEndValidation,
   YearEndPreview,
@@ -325,25 +325,62 @@ export async function previewYearEndClosing(
 
   // Get income statement for net result
   const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
-  const netResult = incomeStatement.net_result
+  const stagedAdjustments = await listStagedYearEndAdjustments(
+    supabase,
+    companyId,
+    fiscalPeriodId,
+  )
+  const stagedResultEffect = stagedAdjustments.reduce(
+    (total, adjustment) =>
+      total +
+      adjustment.journal_lines.reduce((lineTotal, line) => {
+        const accountClass = Number(line.account_number.slice(0, 1))
+        if (accountClass < 3 || accountClass > 8) return lineTotal
+        return lineTotal + line.credit_amount - line.debit_amount
+      }, 0),
+    0,
+  )
+  const netResult = roundOre(incomeStatement.net_result + stagedResultEffect)
 
   // Get trial balance for individual account balances in class 3-8
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
   const resultAccounts = rows.filter(
     (r) => r.account_class >= 3 && r.account_class <= 8
   )
+  const resultBalances = new Map(
+    resultAccounts.map((account) => [
+      account.account_number,
+      {
+        account_name: account.account_name,
+        net: account.closing_debit - account.closing_credit,
+      },
+    ]),
+  )
+  for (const adjustment of stagedAdjustments) {
+    for (const line of adjustment.journal_lines) {
+      const accountClass = Number(line.account_number.slice(0, 1))
+      if (accountClass < 3 || accountClass > 8) continue
+      const current = resultBalances.get(line.account_number)
+      resultBalances.set(line.account_number, {
+        account_name: current?.account_name ?? 'Bokslutsjustering',
+        net: (current?.net ?? 0) + line.debit_amount - line.credit_amount,
+      })
+    }
+  }
 
   // Build closing lines: zero each result account
   const closingLines: CreateJournalEntryLineInput[] = []
   const resultAccountSummary: { account_number: string; account_name: string; amount: number }[] = []
 
-  for (const account of resultAccounts) {
-    const netBalance = account.closing_debit - account.closing_credit
+  for (const [accountNumber, account] of [...resultBalances.entries()].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    const netBalance = account.net
 
     if (Math.abs(netBalance) < ORE_TOLERANCE) continue
 
     resultAccountSummary.push({
-      account_number: account.account_number,
+      account_number: accountNumber,
       account_name: account.account_name,
       amount: netBalance,
     })
@@ -352,7 +389,7 @@ export async function previewYearEndClosing(
     if (netBalance > 0) {
       // Account has debit balance → credit it to zero
       closingLines.push({
-        account_number: account.account_number,
+        account_number: accountNumber,
         debit_amount: 0,
         credit_amount: roundOre(netBalance),
         line_description: `Closing: ${account.account_name}`,
@@ -360,7 +397,7 @@ export async function previewYearEndClosing(
     } else {
       // Account has credit balance → debit it to zero
       closingLines.push({
-        account_number: account.account_number,
+        account_number: accountNumber,
         debit_amount: roundOre(Math.abs(netBalance)),
         credit_amount: 0,
         line_description: `Closing: ${account.account_name}`,
@@ -423,6 +460,15 @@ export async function previewYearEndClosing(
     closingLines,
     resultAccountSummary,
     currencyRevaluation,
+    stagedEntries: stagedAdjustments.map((adjustment) => ({
+      id: adjustment.id,
+      group: adjustment.adjustment_group,
+      kind: adjustment.adjustment_kind,
+      description: adjustment.description,
+      entryDate: adjustment.entry_date,
+      reversalDate: adjustment.reversal_date,
+      lines: adjustment.journal_lines,
+    })),
   }
 }
 
@@ -446,7 +492,7 @@ export async function executeYearEndClosing(
   companyId: string,
   userId: string,
   fiscalPeriodId: string,
-  options?: { idempotencyKey?: string; correlationId?: string }
+  options: { previewId: string; idempotencyKey?: string; correlationId?: string }
 ): Promise<YearEndResult> {
   const idempotencyKey = options?.idempotencyKey ?? `close:${fiscalPeriodId}`
 
@@ -500,6 +546,7 @@ export async function executeYearEndClosing(
     p_user_id: userId,
     p_idempotency_key: idempotencyKey,
     p_revaluation: revaluationPayload,
+    p_preview_id: options.previewId,
   })
 
   if (rpcError) {
@@ -546,6 +593,11 @@ export async function executeYearEndClosing(
     next_period_id: string
     revaluation_entry_id: string | null
     revaluation_reversal_entry_id: string | null
+    preview_id: string
+    ledger_hash: string
+    readiness_hash: string
+    adjustment_hash: string
+    ruleset_version: string
     idempotent: boolean
   }
 
@@ -597,22 +649,13 @@ export async function executeYearEndClosing(
     result.next_period_id
   )
 
-  // Fetch the now-closed period for the event payload
-  const { data: closedPeriod } = await supabase
-    .from('fiscal_periods')
-    .select('*')
-    .eq('id', fiscalPeriodId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (closedPeriod && !result.idempotent) {
-    await eventBus.emit({
-      type: 'period.year_closed',
-      payload: { period: closedPeriod as FiscalPeriod, companyId, userId },
-    })
-  }
-
   return {
+    runId: result.run_id,
+    previewId: result.preview_id,
+    ledgerHash: result.ledger_hash,
+    readinessHash: result.readiness_hash,
+    adjustmentHash: result.adjustment_hash,
+    rulesetVersion: result.ruleset_version,
     closingEntry: closingEntryRes.data as JournalEntry,
     nextPeriod: nextPeriodRes.data as FiscalPeriod,
     openingBalanceEntry: obEntryRes.data as JournalEntry,
@@ -722,4 +765,3 @@ export async function generateOpeningBalances(
 
   return openingEntry
 }
-

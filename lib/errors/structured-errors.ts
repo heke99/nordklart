@@ -964,6 +964,16 @@ const ACCRUALS: Record<string, StructuredErrorEntry> = {
 }
 
 const YEAR_END: Record<string, StructuredErrorEntry> = {
+  YEAR_END_READINESS_BLOCKED: {
+    httpStatus: 409,
+    message_sv: 'Bokslutet har blockerande kontroller som måste åtgärdas före förhandsgranskning.',
+    message_en: 'Year-end has blocking checks that must be resolved before preview.',
+  },
+  YEAR_END_PREVIEW_STALE: {
+    httpStatus: 409,
+    message_sv: 'Förhandsgranskningen är inaktuell. Skapa en ny förhandsgranskning innan du verkställer.',
+    message_en: 'The year-end preview is stale. Generate a new preview before execution.',
+  },
   YEAR_END_PREVIEW_FAILED: {
     httpStatus: 400,
     message_sv: 'Bokslutsförhandsgranskningen misslyckades.',

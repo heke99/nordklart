@@ -3,7 +3,6 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { calculateBolagsskatt } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
 import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
 import {
@@ -18,22 +17,13 @@ import {
   buildLatentTaxProposal,
 } from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
-import type { JournalEntry } from '@/types'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
-
-/**
- * Default schablonintäkt rate on periodiseringsfond (IL 30 kap 6a §).
- * Statslåneräntan 30 november föregående år + 1 procentenhet, lägst 0.5 %.
- *
- *   - inkomstår 2025: SLR 2024-11-30 = 1.96 % → 2.96 % (rounded to 3 %)
- *   - inkomstår 2026: SLR 2025-11-30 = 2.55 % → 3.55 %
- *
- * The default below is the FY2026 rate since that is the year customers are
- * currently closing. Caller can override per request via `schablonintaktRate`
- * in the POST body; a future Riksbanken integration will fetch the rate by
- * the fiscal year automatically.
- */
-const DEFAULT_SCHABLONINTAKT_RATE = 0.0355
+import {
+  getYearEndRuleset,
+  stageYearEndAdjustments,
+  type StageYearEndAdjustmentInput,
+  type YearEndRuleset,
+} from '@/lib/core/bookkeeping/year-end-staging'
 
 /**
  * Canonical bokslut order. Each calculator re-reads the trial balance to
@@ -106,16 +96,11 @@ const ItemSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('periodiseringsfond_avsattning'),
-    /** Optional override for the SLR-based schablonintäkt rate; defaults to
-     *  the server-side constant. Used both to compute the cap base and to
-     *  feed back into bolagsskatt's adjustment if present in the same batch. */
-    schablonintaktRate: z.number().optional(),
     desiredAmount: z.number().optional(),
   }),
   z.object({
     kind: z.literal('periodiseringsfond_ateforing'),
     returns: z.record(z.string(), z.number()).default({}),
-    schablonintaktRate: z.number().default(DEFAULT_SCHABLONINTAKT_RATE),
   }),
   z.object({
     kind: z.literal('overavskrivningar'),
@@ -135,6 +120,18 @@ const ItemSchema = z.discriminatedUnion('kind', [
 
 const PostBodySchema = z.object({
   items: z.array(ItemSchema).min(1),
+}).superRefine(({ items }, ctx) => {
+  const kinds = new Set<string>()
+  for (const [index, item] of items.entries()) {
+    if (kinds.has(item.kind)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['items', index, 'kind'],
+        message: `Dispositionstypen ${item.kind} får bara förekomma en gång i batchen.`,
+      })
+    }
+    kinds.add(item.kind)
+  }
 })
 
 export const POST = withRouteContext(
@@ -169,7 +166,7 @@ export const POST = withRouteContext(
       }
 
       const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
-      const created: { kind: string; entry: JournalEntry }[] = []
+      const ruleset = await getYearEndRuleset(supabase, fiscalYear)
 
       // Process items in canonical bokslut order regardless of client array
       // ordering — each computation pulls the current income statement, so
@@ -179,29 +176,38 @@ export const POST = withRouteContext(
         (a, b) => DISPOSITION_ORDER[a.kind] - DISPOSITION_ORDER[b.kind],
       )
 
-      // KNOWN LIMITATION (SOC 2 PI1.3): the loop is not wrapped in a database
-      // transaction — each item posts its own journal entry via the engine.
-      // A failure midway leaves earlier items committed and later ones not.
-      // Recovery: the UI can re-POST omitting already-committed kinds; each
-      // calculator re-derives from the current trial balance so the next run
-      // produces correct amounts on top of what's already there. A future
-      // RPC-level wrapper (Phase 5+) will make this atomic.
+      const stagedItems: StageYearEndAdjustmentInput[] = []
       for (const item of sortedItems) {
-        const proposal = await computeProposal(item, supabase, companyId, id, fiscalYear)
+        const proposal = await computeProposal(
+          item,
+          supabase,
+          companyId,
+          id,
+          fiscalYear,
+          ruleset,
+        )
         if (!proposal) continue
 
-        const entry = await createJournalEntry(supabase, companyId, user.id, {
-          fiscal_period_id: id,
-          entry_date: period.period_end,
+        stagedItems.push({
+          stable_key: proposal.kind,
+          adjustment_kind: proposal.kind,
           description: `Bokslutsdisposition: ${proposal.label}`,
-          source_type: 'year_end',
-          voucher_series: 'A',
-          lines: proposal.lines,
+          entry_date: period.period_end,
+          journal_lines: proposal.lines,
+          calculation_payload: { request: item, proposal, tax_year: fiscalYear },
+          ruleset_version: ruleset.version,
         })
-        created.push({ kind: item.kind, entry })
       }
 
-      return NextResponse.json({ data: { created } })
+      const staged = await stageYearEndAdjustments(
+        supabase,
+        companyId,
+        id,
+        user.id,
+        'disposition',
+        stagedItems,
+      )
+      return NextResponse.json({ data: { staged, ruleset } })
     } catch (err) {
       opLog.error('bokslutsdispositioner post failed', err as Error)
       return errorResponse(err, opLog, { requestId })
@@ -218,6 +224,7 @@ async function computeProposal(
   companyId: string,
   fiscalPeriodId: string,
   fiscalYear: number,
+  ruleset: YearEndRuleset,
 ): Promise<ProposedDisposition | null> {
   switch (item.kind) {
     case 'bolagsskatt':
@@ -244,7 +251,7 @@ async function computeProposal(
         .single()
       const periodEnd = periodRow?.period_end ?? `${fiscalYear}-12-31`
       const existing = await listExistingPeriodiseringsfonder(supabase, companyId, periodEnd)
-      const schablonintaktRate = item.schablonintaktRate ?? DEFAULT_SCHABLONINTAKT_RATE
+      const schablonintaktRate = ruleset.schablonintakt_rate
       const schablonintakt = existing.reduce(
         (sum, f) => sum + f.balance * schablonintaktRate,
         0,
@@ -273,7 +280,7 @@ async function computeProposal(
       )
       const result = proposeAteforing(existing, {
         returns: item.returns,
-        schablonintaktRate: item.schablonintaktRate,
+        schablonintaktRate: ruleset.schablonintakt_rate,
       })
       // Combine multiple cohort reversals into a single voucher with multiple
       // lines so we don't blow up voucher numbering — but each fond is its own

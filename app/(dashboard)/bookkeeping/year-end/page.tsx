@@ -45,6 +45,7 @@ interface PeriodOption {
   name: string
   period_start: string
   period_end: string
+  is_closed: boolean
 }
 
 export default function YearEndPage() {
@@ -94,9 +95,7 @@ export default function YearEndPage() {
         const data = (body.periods ?? body.data ?? []) as FiscalPeriod[]
         if (!cancelled) setCanCreateFiscalYear(Boolean(body.canCreateFiscalYear))
         const today = new Date().toISOString().split('T')[0]
-        const eligible = data.filter(
-          (p) => !p.is_closed && p.period_end <= today,
-        )
+        const eligible = data.filter((p) => p.period_end <= today)
         // Oldest first — accountants close in order.
         eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
         if (cancelled) return
@@ -149,6 +148,10 @@ export default function YearEndPage() {
             started_at: string
           }[]
           setFailedRuns(runs.filter((r) => r.status === 'failed'))
+          if (body.committedResult) {
+            setResult(body.committedResult as YearEndResult)
+            setStep('result')
+          }
         })
         .catch(() => {
           // Non-blocking enrichment.
@@ -163,10 +166,17 @@ export default function YearEndPage() {
   // ---- Fetch readiness report whenever selected period changes ----
   useEffect(() => {
     if (!selectedPeriodId) return
+    const selectedPeriod = periods?.find((period) => period.id === selectedPeriodId)
     let cancelled = false
     // Defer to the next macrotask so the synchronous setState calls do not
     // run directly within the effect body.
     const timer = setTimeout(() => {
+      if (selectedPeriod?.is_closed) {
+        setReport(null)
+        setReportError(null)
+        setReportLoading(false)
+        return
+      }
       setReportLoading(true)
       setReportError(null)
       setReport(null)
@@ -191,7 +201,7 @@ export default function YearEndPage() {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [selectedPeriodId, companySuffix])
+  }, [selectedPeriodId, companySuffix, periods])
 
   // ---- Step navigation ----
   const goToPreview = useCallback(async () => {
@@ -216,12 +226,18 @@ export default function YearEndPage() {
 
   const reportPeriodName = report?.period.name
   const executeYearEnd = useCallback(async () => {
-    if (!selectedPeriodId) return
+    if (!selectedPeriodId || !preview?.previewId) {
+      setExecuteError('Förhandsgranskningen saknar ett giltigt preview-ID. Skapa om förhandsgranskningen.')
+      setStep('preview')
+      return
+    }
     setExecuting(true)
     setExecuteError(null)
     try {
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end${companySuffix}`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preview_id: preview.previewId }),
       })
       const body = await res.json()
       if (!res.ok) {
@@ -229,6 +245,12 @@ export default function YearEndPage() {
         // the structured-error registry. Do NOT interpolate raw details
         // here — they can contain DB-sourced strings (V2.3 finding).
         setExecuteError(body?.error?.message ?? 'Bokslutet kunde inte verkställas')
+        if (body?.error?.code === 'YEAR_END_PREVIEW_STALE') {
+          setPreview(null)
+          // Return to the final editable step. Moving to preview with a cleared
+          // payload rendered an empty screen and could not generate a fresh ID.
+          setStep('dispositions')
+        }
         return
       }
       setResult(body.data as YearEndResult)
@@ -242,7 +264,7 @@ export default function YearEndPage() {
     } finally {
       setExecuting(false)
     }
-  }, [selectedPeriodId, reportPeriodName, toast, companySuffix])
+  }, [selectedPeriodId, preview, reportPeriodName, toast, companySuffix])
 
   const createFiscalYear = useCallback(async () => {
     setCreatingPeriod(true)
@@ -352,7 +374,7 @@ export default function YearEndPage() {
               <SelectContent>
                 {periods.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {p.name} ({p.period_start} – {p.period_end})
+                    {p.name} ({p.period_start} – {p.period_end}){p.is_closed ? ' · stängd' : ''}
                   </SelectItem>
                 ))}
               </SelectContent>

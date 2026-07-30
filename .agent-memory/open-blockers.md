@@ -21,3 +21,11 @@
 
 Punkt 1–3 och 7 är miljö-/baslinjeförhållanden. Punkt 4–6 är uttryckligt kvarvarande
 produktarbete och ska inte betraktas som färdigverifierat.
+
+## Tillägg 2026-07-30
+
+8. Migration `20260730170000_canonical_year_end_staging_preview_execute.sql`
+   är parser- och build-verifierad men inte applicerad mot en riktig databas i
+   arbetsmiljön; `SUPABASE_DB_URL`/`DATABASE_URL` saknas.
+9. De nya pg-real-scenarierna för preview-staleness, rollback och samtidighet
+   behöver köras mot den migrerade testdatabasen innan produktionsaktivering.
