@@ -306,6 +306,14 @@ describe('historical support ledgers', () => {
       supporting_register_amount: null,
       difference: null,
     })
+
+    const { rows: blockers } = await getPool().query<{ code: string }>(
+      `SELECT code FROM public.year_end_db_blockers($1::uuid, $2::uuid)`,
+      [seeded.companyId, seeded.fiscalPeriodId],
+    )
+    const blockerCodes = blockers.map((row) => row.code)
+    expect(blockerCodes).not.toContain('accounts_receivable_mismatch')
+    expect(blockerCodes).toContain('customer_receivables_reconciliation')
   })
 
   it('accepts an imported SIE balance without creating a journal entry', async () => {
@@ -381,5 +389,13 @@ describe('historical support ledgers', () => {
       status: 'sie_balance_accepted',
       is_blocking: false,
     })
+
+    const { rows: blockers } = await getPool().query<{ code: string }>(
+      `SELECT code FROM public.year_end_db_blockers($1::uuid, $2::uuid)`,
+      [seeded.companyId, seeded.fiscalPeriodId],
+    )
+    const blockerCodes = blockers.map((row) => row.code)
+    expect(blockerCodes).not.toContain('accounts_receivable_mismatch')
+    expect(blockerCodes).not.toContain('customer_receivables_reconciliation')
   })
 })
