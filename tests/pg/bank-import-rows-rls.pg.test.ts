@@ -143,10 +143,12 @@ describe('viewer write-hardening on bank tables (K08)', () => {
     await withUserContext(viewerId, async (client) => {
       await expect(
         client.query(
-          `SELECT public.execute_year_end_closing($1::uuid, $2::uuid, $3::uuid, 'k', NULL)`,
-          [companyId, randomUUID(), viewerId],
+          `SELECT public.execute_year_end_closing(
+             $1::uuid, $2::uuid, $3::uuid, 'k', NULL, $4::uuid, 'req-test'
+           )`,
+          [companyId, randomUUID(), viewerId, randomUUID()],
         ),
-      ).rejects.toThrow(/FORBIDDEN/)
+      ).rejects.toThrow(/permission denied/i)
     })
   })
 })

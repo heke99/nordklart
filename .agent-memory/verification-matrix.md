@@ -49,3 +49,21 @@ Ej körda kontroller räknas inte som godkända.
 | Produktionsbygge | generatorer + `next build` | PASS, 356 routes/sidor |
 | Live migration | `npm run db:migrate` | NOT RUN, DB-URL saknas |
 | pg-real/processorer | `npm run test:pg` | NOT RUN, PostgreSQL saknas |
+
+## Exekveringskontrakt 2026-07-31
+
+| Kontroll | Kommando/metod | Utfall |
+|---|---|---|
+| Installation | `npm ci --cache /tmp/nordklart-npm-cache` | PASS, 1 120 paket |
+| Typkontroll | `NODE_OPTIONS=--max-old-space-size=6144 npm run typecheck` | PASS, 0 fel |
+| Full unit-svit | `npm test -- --run` | PASS, 490 filer / 6 128 tester; 1 fil och 2 tester skip |
+| Ändrade filer ESLint | `npx eslint <ändrade ts/tsx>` | PASS, 0 fel/varningar |
+| Full lint | `npm run lint` | PASS, 0 fel; 226 befintliga varningar |
+| Guards | `npm run check:guards` | PASS, naiv öresavrundning −15 |
+| Feature-policy | `node --import tsx scripts/check-feature-policy-coverage.ts` | PASS, 465 routes / 296 operationer |
+| PostgreSQL-syntax | `pgsql-parser` | PASS, 42 statements |
+| Produktionsbygge | generatorer via `node --import tsx` + `next build` | PASS, 356 routes/sidor |
+| Migrationsstatus | `npm run db:migrate:status` | BLOCKED, DB-URL saknas |
+| pg-real | `npm run test:pg` | BLOCKED, `ECONNREFUSED localhost:5432`; 75 filer ej körda |
+
+Blockerade kontroller räknas inte som godkända.

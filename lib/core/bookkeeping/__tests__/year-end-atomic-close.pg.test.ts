@@ -60,7 +60,7 @@ async function seedCompany(overrides: { isClosed?: boolean } = {}): Promise<{
 //     opening balance (advisory lock).
 //   - Fail-closed readiness inside the transaction (draft entry blocks).
 //   - Atomicity: a failing close leaves the period completely untouched.
-//   - Unique partial indexes block a second posted year_end / opening_balance
+//   - Unique partial indexes block a second posted year_end_closing / opening_balance
 //     per period even when the RPC is bypassed.
 //   - post_currency_revaluation: snapshot-key idempotency + controlled replace.
 
@@ -134,7 +134,93 @@ async function createCanonicalPreview(
   return rows[0].result.preview_id
 }
 
+async function stageAdjustmentGroup(
+  companyId: string,
+  fiscalPeriodId: string,
+  userId: string,
+  group: 'accrual' | 'disposition' | 'tax',
+  items: unknown[],
+): Promise<void> {
+  await getPool().query(
+    `SELECT public.stage_year_end_adjustments(
+       $1::uuid, $2::uuid, $3::uuid, $4::text, $5::jsonb
+     )`,
+    [companyId, fiscalPeriodId, userId, group, JSON.stringify(items)],
+  )
+}
+
 describe('execute_year_end_closing (atomic close)', () => {
+  it('posts disposition, tax and accrual separately before one canonical closing entry', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    await postSimpleActivity({ userId, companyId, fiscalPeriodId })
+
+    await stageAdjustmentGroup(companyId, fiscalPeriodId, userId, 'disposition', [
+      {
+        stable_key: 'pg-disposition-1',
+        adjustment_kind: 'periodiseringsfond',
+        description: 'Avsättning till periodiseringsfond',
+        journal_lines: [
+          { account_number: '8811', debit_amount: 100, credit_amount: 0 },
+          { account_number: '2120', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+      {
+        stable_key: 'pg-disposition-2',
+        adjustment_kind: 'overavskrivning',
+        description: 'Förändring överavskrivning',
+        journal_lines: [
+          { account_number: '8850', debit_amount: 40, credit_amount: 0 },
+          { account_number: '2150', debit_amount: 0, credit_amount: 40 },
+        ],
+      },
+    ])
+    await stageAdjustmentGroup(companyId, fiscalPeriodId, userId, 'tax', [{
+      stable_key: 'pg-tax-1',
+      adjustment_kind: 'bolagsskatt',
+      description: 'Beräknad bolagsskatt',
+      journal_lines: [
+        { account_number: '8910', debit_amount: 50, credit_amount: 0 },
+        { account_number: '2510', debit_amount: 0, credit_amount: 50 },
+      ],
+    }])
+    await stageAdjustmentGroup(companyId, fiscalPeriodId, userId, 'accrual', [{
+      stable_key: 'pg-accrual-1',
+      adjustment_kind: 'manual_accrual',
+      description: 'Upplupen kostnad',
+      reversal_date: '2026-01-01',
+      journal_lines: [
+        { account_number: '6990', debit_amount: 25, credit_amount: 0 },
+        { account_number: '2990', debit_amount: 0, credit_amount: 25 },
+      ],
+    }])
+
+    const result = await closePeriodViaRpc(
+      companyId,
+      fiscalPeriodId,
+      userId,
+      'adjustments-combined',
+    )
+    expect(result.status).toBe('closed')
+
+    const { rows } = await getPool().query<{ source_type: string; count: string }>(
+      `SELECT source_type, count(*)::text AS count
+       FROM public.journal_entries
+       WHERE company_id = $1 AND fiscal_period_id = $2 AND status = 'posted'
+         AND source_type IN (
+           'year_end_accrual', 'year_end_disposition',
+           'year_end_tax_adjustment', 'year_end_closing'
+         )
+       GROUP BY source_type`,
+      [companyId, fiscalPeriodId],
+    )
+    expect(Object.fromEntries(rows.map((row) => [row.source_type, Number(row.count)]))).toEqual({
+      year_end_accrual: 1,
+      year_end_closing: 1,
+      year_end_disposition: 2,
+      year_end_tax_adjustment: 1,
+    })
+  })
+
   it('closes the period atomically: closing entry, lock, close, next period, IB, continuity', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await postSimpleActivity({ userId, companyId, fiscalPeriodId })
@@ -213,7 +299,7 @@ describe('execute_year_end_closing (atomic close)', () => {
     // Still exactly one closing entry + one IB.
     const { rows } = await getPool().query(
       `SELECT count(*)::int AS n FROM public.journal_entries
-       WHERE company_id = $1 AND source_type = 'year_end' AND status = 'posted'`,
+       WHERE company_id = $1 AND source_type = 'year_end_closing' AND status = 'posted'`,
       [companyId],
     )
     expect(rows[0].n).toBe(1)
@@ -237,7 +323,7 @@ describe('execute_year_end_closing (atomic close)', () => {
     const pool = getPool()
     const { rows: closing } = await pool.query(
       `SELECT count(*)::int AS n FROM public.journal_entries
-       WHERE company_id = $1 AND source_type = 'year_end' AND status = 'posted'`,
+       WHERE company_id = $1 AND source_type = 'year_end_closing' AND status = 'posted'`,
       [companyId],
     )
     expect(closing[0].n).toBe(1)
@@ -277,7 +363,7 @@ describe('execute_year_end_closing (atomic close)', () => {
     expect(periodRows[0].closing_entry_id).toBeNull()
     const { rows: entries } = await pool.query(
       `SELECT count(*)::int AS n FROM public.journal_entries
-       WHERE company_id = $1 AND source_type IN ('year_end','opening_balance')`,
+       WHERE company_id = $1 AND source_type IN ('year_end_closing','opening_balance')`,
       [companyId],
     )
     expect(entries[0].n).toBe(0)
@@ -321,7 +407,7 @@ describe('execute_year_end_closing (atomic close)', () => {
 
     await expect(
       closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'fail-key'),
-    ).rejects.toThrow(/YE_NOT_READY|YE_NEXT_PERIOD_HAS_OB/)
+    ).rejects.toThrow(/YE_NOT_READY|YE_NEXT_PERIOD_HAS_CONFLICTING_OB/)
 
     // Fully open — the closing entry that may have been created inside the
     // transaction was rolled back with it.
@@ -335,16 +421,111 @@ describe('execute_year_end_closing (atomic close)', () => {
     expect(periodRows[0].closing_entry_id).toBeNull()
     const { rows: yeEntries } = await pool.query(
       `SELECT count(*)::int AS n FROM public.journal_entries
-       WHERE company_id = $1 AND source_type = 'year_end'`,
+       WHERE company_id = $1 AND source_type = 'year_end_closing'`,
       [companyId],
     )
     expect(yeEntries[0].n).toBe(0)
   })
 
-  it('DB unique index blocks a second posted year_end entry per period even when the RPC is bypassed', async () => {
+  it('reuses an existing exact opening balance and repairs the missing period link', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    await postSimpleActivity({ userId, companyId, fiscalPeriodId })
+    const nextPeriodId = await insertFiscalPeriod({
+      userId,
+      companyId,
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      name: '2026',
+    })
+    const existingObId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, 0, 'A', '2026-01-01', 'Existing exact IB',
+         'opening_balance', 'draft')`,
+      [existingObId, userId, companyId, nextPeriodId],
+    )
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, '1930', 1000, 0), ($1, '2099', 0, 1000)`,
+      [existingObId],
+    )
+    await getPool().query(
+      `SELECT * FROM public.commit_journal_entry($1::uuid, $2::uuid)`,
+      [companyId, existingObId],
+    )
+
+    const result = await closePeriodViaRpc(
+      companyId,
+      fiscalPeriodId,
+      userId,
+      'reuse-ob-key',
+    )
+    expect(result.opening_balance_entry_id).toBe(existingObId)
+    expect(result.opening_balance_created).toBe(false)
+    expect(result.next_period_created).toBe(false)
+
+    const { rows } = await getPool().query(
+      `SELECT opening_balance_entry_id, continuity_verified
+       FROM public.fiscal_periods WHERE id = $1`,
+      [nextPeriodId],
+    )
+    expect(rows[0].opening_balance_entry_id).toBe(existingObId)
+    expect(rows[0].continuity_verified).toBe(true)
+  })
+
+  it('rejects a future period separated by a date gap and rolls back the close', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    await postSimpleActivity({ userId, companyId, fiscalPeriodId })
+    await insertFiscalPeriod({
+      userId,
+      companyId,
+      periodStart: '2026-02-01',
+      periodEnd: '2027-01-31',
+      name: 'Gap year',
+    })
+
+    await expect(
+      closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'gap-key'),
+    ).rejects.toThrow(/YE_NEXT_PERIOD_NOT_CONTIGUOUS/)
+
+    const { rows } = await getPool().query(
+      `SELECT is_closed, closing_entry_id FROM public.fiscal_periods WHERE id = $1`,
+      [fiscalPeriodId],
+    )
+    expect(rows[0]).toMatchObject({ is_closed: false, closing_entry_id: null })
+  })
+
+  it('exposes execute only to service_role and uses the seven-argument signature', async () => {
+    const { rows } = await getPool().query(
+      `SELECT
+         to_regprocedure(
+           'public.execute_year_end_closing(uuid,uuid,uuid,text,jsonb,uuid,text)'
+         ) IS NOT NULL AS signature_exists,
+         has_function_privilege(
+           'authenticated',
+           'public.execute_year_end_closing(uuid,uuid,uuid,text,jsonb,uuid,text)',
+           'EXECUTE'
+         ) AS authenticated_can_execute,
+         has_function_privilege(
+           'service_role',
+           'public.execute_year_end_closing(uuid,uuid,uuid,text,jsonb,uuid,text)',
+           'EXECUTE'
+         ) AS service_role_can_execute`,
+    )
+    expect(rows[0]).toEqual({
+      signature_exists: true,
+      authenticated_can_execute: false,
+      service_role_can_execute: true,
+    })
+  })
+
+  it('DB unique index blocks a second posted year_end_closing entry per period', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
-    // Insert one posted year_end entry directly into the OPEN period (with
+    // Insert one posted year_end_closing entry directly into the OPEN period (with
     // balanced lines in the same transaction so the deferred balance guard
     // passes), then attempt a second — the partial unique index must reject.
     const client = await getPool().connect()
@@ -356,7 +537,7 @@ describe('execute_year_end_closing (atomic close)', () => {
           `INSERT INTO public.journal_entries
              (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
               entry_date, description, source_type, status, committed_at)
-           VALUES ($1, $2, $3, $4, $5, 'A', '2025-12-31', 'Close', 'year_end', 'posted', now())`,
+           VALUES ($1, $2, $3, $4, $5, 'A', '2025-12-31', 'Close', 'year_end_closing', 'posted', now())`,
           [id, userId, companyId, fiscalPeriodId, voucherNumber],
         )
         await client.query(

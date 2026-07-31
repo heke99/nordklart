@@ -964,6 +964,133 @@ const ACCRUALS: Record<string, StructuredErrorEntry> = {
 }
 
 const YEAR_END: Record<string, StructuredErrorEntry> = {
+  YE_PREVIEW_NOT_FOUND: {
+    httpStatus: 409,
+    message_sv: 'Förhandsgranskningen kunde inte hittas. Skapa en ny förhandsgranskning.',
+    message_en: 'The year-end preview was not found. Generate a new preview.',
+  },
+  YE_PREVIEW_STALE: {
+    httpStatus: 409,
+    message_sv: 'Bokföringen eller bokslutsunderlaget har ändrats. Skapa en ny förhandsgranskning.',
+    message_en: 'The ledger or year-end basis changed. Generate a new preview.',
+  },
+  YE_PREVIEW_ALREADY_EXECUTED: {
+    httpStatus: 409,
+    message_sv: 'Förhandsgranskningen har redan verkställts. Det befintliga resultatet ska återanvändas.',
+    message_en: 'The preview has already been executed. Reuse the committed result.',
+  },
+  YE_NOT_READY: {
+    httpStatus: 422,
+    message_sv: 'Bokslutet har blockerande kontroller som måste åtgärdas.',
+    message_en: 'Year-end readiness checks contain blockers.',
+  },
+  YE_NO_ACTIVITY: {
+    httpStatus: 422,
+    message_sv: 'Räkenskapsåret saknar bokförd aktivitet som kan avslutas.',
+    message_en: 'The fiscal year has no posted activity to close.',
+  },
+  YE_NO_BALANCE_SHEET: {
+    httpStatus: 422,
+    message_sv: 'Räkenskapsåret saknar balanskonton som kan föras över.',
+    message_en: 'The fiscal year has no balance-sheet amounts to carry forward.',
+  },
+  YE_ENTITY_TYPE_MISSING: {
+    httpStatus: 422,
+    message_sv: 'Företagets juridiska form saknas.',
+    message_en: 'The company legal form is missing.',
+  },
+  YE_ALREADY_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret är redan stängt. Ingen ny körning genomfördes.',
+    message_en: 'The fiscal year is already closed. No new run was executed.',
+  },
+  YE_EXECUTION_IN_PROGRESS: {
+    httpStatus: 409,
+    message_sv: 'Ett bokslut håller redan på att verkställas för perioden.',
+    message_en: 'A year-end execution is already in progress for this period.',
+    retryable: true,
+  },
+  YE_NEXT_PERIOD_NOT_CONTIGUOUS: {
+    httpStatus: 409,
+    message_sv: 'Nästa räkenskapsår börjar inte direkt efter det aktuella året.',
+    message_en: 'The next fiscal year is not contiguous with the current year.',
+  },
+  YE_NEXT_PERIOD_HAS_OB: {
+    httpStatus: 409,
+    message_sv: 'Nästa räkenskapsår innehåller redan en ingående balans som måste verifieras.',
+    message_en: 'The next fiscal year already has an opening balance that must be verified.',
+  },
+  YE_NEXT_PERIOD_HAS_CONFLICTING_OB: {
+    httpStatus: 409,
+    message_sv: 'Nästa räkenskapsårs ingående balans stämmer inte med årets utgående balans.',
+    message_en: 'The next fiscal year opening balance conflicts with the closing balance.',
+  },
+  YE_CLOSING_INVARIANT: {
+    httpStatus: 422,
+    message_sv: 'Resultatkontona kunde inte nollställas korrekt.',
+    message_en: 'The profit-and-loss accounts could not be reduced to zero.',
+  },
+  YE_CONTINUITY_FAILED: {
+    httpStatus: 422,
+    message_sv: 'Utgående och ingående balanser stämmer inte överens.',
+    message_en: 'Closing and opening balances do not reconcile.',
+  },
+  YE_LEDGER_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Bokföringen har ändrats sedan förhandsgranskningen.',
+    message_en: 'The ledger changed after preview generation.',
+  },
+  YE_READINESS_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Bokslutskontrollerna har ändrats sedan förhandsgranskningen.',
+    message_en: 'Year-end readiness changed after preview generation.',
+  },
+  YE_ADJUSTMENTS_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Bokslutsjusteringarna har ändrats sedan förhandsgranskningen.',
+    message_en: 'Year-end adjustments changed after preview generation.',
+  },
+  YE_UNBALANCED_ADJUSTMENT: {
+    httpStatus: 422,
+    message_sv: 'En bokslutsjustering balanserar inte.',
+    message_en: 'A year-end adjustment is unbalanced.',
+  },
+  YE_DUPLICATE_CLOSING_ENTRY: {
+    httpStatus: 409,
+    message_sv: 'Det finns redan ett slutverifikat för räkenskapsåret.',
+    message_en: 'A final closing entry already exists for the fiscal year.',
+  },
+  YE_PERMISSION_DENIED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att verkställa bokslutet.',
+    message_en: 'You are not authorized to execute this year-end close.',
+  },
+  YE_DATABASE_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Databasen kunde inte nås. Ingen ny bokslutskörning startades.',
+    message_en: 'The database is unavailable. No new year-end run was started.',
+    retryable: true,
+  },
+  YE_RESULT_INVALID: {
+    httpStatus: 500,
+    message_sv: 'Bokslutsresultatet kunde inte verifieras. Kontrollera körningen med request-ID:t.',
+    message_en: 'The committed year-end result could not be verified.',
+  },
+  YE_RUN_NOT_COMMITTED: {
+    httpStatus: 409,
+    message_sv: 'Bokslutskörningen är inte slutförd och kan ännu inte bekräftas.',
+    message_en: 'The year-end run is not committed and cannot be acknowledged yet.',
+  },
+  YE_PERIOD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret kunde inte hittas för det valda företaget.',
+    message_en: 'The fiscal year was not found for the selected company.',
+  },
+  YE_UNKNOWN: {
+    httpStatus: 500,
+    message_sv: 'Bokslutet kunde inte verkställas. Ingen ofullständig stängning har godkänts.',
+    message_en: 'The year-end close failed. No partial close was accepted.',
+  },
   YEAR_END_READINESS_BLOCKED: {
     httpStatus: 409,
     message_sv: 'Bokslutet har blockerande kontroller som måste åtgärdas före förhandsgranskning.',

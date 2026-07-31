@@ -32,7 +32,7 @@ export const GET = withRouteContext(
     const { data, error } = await serviceDb
       .from('year_end_runs')
       .select(
-        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, idempotency_key, preview_id, ledger_hash, readiness_hash, adjustment_hash, ruleset_version, closing_entry_id, opening_balance_entry_id, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, next_period_created, committed_at, started_at, finished_at, created_at',
+        'id, status, current_step, error_code, error_message, user_message, correlation_id, retry_count, retryable, recovery_required, idempotency_key, preview_id, ledger_hash, readiness_hash, adjustment_hash, ruleset_version, closing_entry_id, opening_balance_entry_id, opening_balance_created, revaluation_entry_id, revaluation_reversal_entry_id, next_period_id, next_period_created, committed_at, started_at, finished_at, created_at, updated_at',
       )
       .eq('company_id', companyId!)
       .eq('fiscal_period_id', id)
@@ -108,7 +108,9 @@ export const GET = withRouteContext(
             (closedRun as { next_period_created?: boolean | null }).next_period_created,
           ),
           nextPeriodId: closedRun.next_period_id,
-          openingBalancesCreated: true,
+          openingBalancesCreated: Boolean(
+            (closedRun as { opening_balance_created?: boolean | null }).opening_balance_created,
+          ),
           closingEntryId: closedRun.closing_entry_id,
           executionId: closedRun.id,
           acknowledgedAt: acknowledgement.data?.acknowledged_at ?? null,

@@ -183,6 +183,13 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'salary_payment',
   'opening_balance',
   'year_end',
+  'year_end_accrual',
+  'year_end_depreciation',
+  'year_end_fx_revaluation',
+  'year_end_tax_adjustment',
+  'year_end_disposition',
+  'year_end_deferred_tax',
+  'year_end_closing',
   'storno',
   'correction',
   'import',
@@ -194,6 +201,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'supplier_invoice_privately_paid',
   'supplier_credit_note',
   'currency_revaluation',
+  'currency_revaluation_reversal',
   'reminder_fee',
   'accrual',
   'result_appropriation',
@@ -1995,4 +2003,3 @@ export const SalaryEmployeeOverrideSchema = z
       path: ['reason'],
     },
   )
-

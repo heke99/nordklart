@@ -75,3 +75,21 @@
 - Rättade periodbunden rapportåtkomst, rollåtkomst och hårdkodade skatteregler.
 - Verifierade 6 120 unit-tester, typecheck, lint, guards, feature-policy,
   PostgreSQL-syntax och Next-produktionsbygge.
+
+## 2026-07-31 — bokslutets exekveringskontrakt
+
+- Rättade kollisionen mellan generisk `year_end` och det enda kanoniska
+  `year_end_closing`-verifikatet med forward-only migration och legacy-guard.
+- Synkroniserade source types mellan DB, Zod, TypeScript, etiketter och SIE.
+- Införde typade fel utan message-regex, svenska säkra meddelanden, riktiga
+  HTTP-statusar och beständig correlation/retry/recovery-data.
+- Låste staging, preview, execute och acknowledgement till `service_role` och
+  flyttade alla tre staging-routes till verifierade serveranrop.
+- Införde stabil klientnyckel, scope-hashad idempotens, advisory lock,
+  återläsning efter osäkert svar och strikt Zod-validering av RPC-resultatet.
+- Rättade exakt nästa period, återanvändning av korrekt IB, konfliktfall,
+  resultatnollställning, UB–IB-kontinuitet, statusövergångar, audit och outbox.
+- Lade pg-real-scenario med disposition, skatt och periodisering tillsammans,
+  IB-återanvändning, datumglapp och RPC-rättigheter samt nya unit-tester.
+- Verifierade lokalt typecheck, 6 128 unit-tester, lint, guards,
+  feature-policy, PostgreSQL-syntax och produktionsbygge.

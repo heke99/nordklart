@@ -17,6 +17,7 @@ import {
 } from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
+import { createServiceClient } from '@/lib/supabase/server'
 import {
   getYearEndRuleset,
   listStagedYearEndAdjustments,
@@ -64,7 +65,6 @@ export const GET = withRouteContext(
         requestId,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
-
       const [data, stagedAdjustments, history] = await Promise.all([
         buildDispositionsProposal(supabase, companyId, id),
         listStagedYearEndAdjustments(supabase, companyId, id),
@@ -173,6 +173,7 @@ export const POST = withRouteContext(
         requireWrite: true,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
+      const serviceDb = createServiceClient()
 
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
@@ -228,7 +229,7 @@ export const POST = withRouteContext(
       }
 
       const staged = await stageYearEndAdjustments(
-        supabase,
+        serviceDb,
         companyId,
         id,
         user.id,

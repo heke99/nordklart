@@ -3114,6 +3114,13 @@
     "source_label_salary_payment": "Lön",
     "source_label_opening_balance": "Ingående balans",
     "source_label_year_end": "Årsbokslut",
+    "source_label_year_end_accrual": "Bokslutsperiodisering",
+    "source_label_year_end_depreciation": "Bokslutsavskrivning",
+    "source_label_year_end_fx_revaluation": "Bokslutsomvärdering",
+    "source_label_year_end_tax_adjustment": "Bokslutsskatt",
+    "source_label_year_end_disposition": "Resultatdisposition",
+    "source_label_year_end_deferred_tax": "Uppskjuten skatt",
+    "source_label_year_end_closing": "Slutverifikat",
     "source_label_storno": "Storno",
     "source_label_correction": "Rättelse",
     "source_label_import": "Import",
@@ -3122,6 +3129,7 @@
     "source_label_supplier_invoice_paid": "Leverantörsbetalning",
     "source_label_supplier_invoice_cash_payment": "Kontantbetalning",
     "source_label_currency_revaluation": "Valutaomvärdering",
+    "source_label_currency_revaluation_reversal": "Återförd valutaomvärdering",
     "source_label_reminder_fee": "Påminnelseavgift"
   },
   "journal_correction": {

@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
+import { getOrCreateYearEndExecutionKey } from '@/lib/year-end/idempotency'
 import type {
   FiscalPeriod,
   YearEndCommittedWarning,
@@ -159,13 +160,13 @@ export default function YearEndPage() {
   // see what happened and retry through the wizard (the close is atomic and
   // idempotent, so a retry is always safe). ----
   const [failedRuns, setFailedRuns] = useState<
-    { id: string; status: string; error_code?: string | null; current_step?: string | null; user_message?: string | null; retry_count?: number; retryable?: boolean; error_message: string | null; started_at: string }[]
+    { id: string; status: string; error_code?: string | null; current_step?: string | null; user_message?: string | null; correlation_id?: string | null; retry_count?: number; retryable?: boolean; error_message: string | null; started_at: string }[]
   >([])
   useEffect(() => {
     if (!selectedPeriodId) return
     let cancelled = false
-    const timer = setTimeout(() => {
-      fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end/runs${companySuffix}`)
+    const loadRuns = () => {
+      void fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end/runs${companySuffix}`)
         .then(async (res) => {
           if (cancelled || !res.ok) return
           const body = await res.json()
@@ -175,13 +176,27 @@ export default function YearEndPage() {
             error_code?: string | null
             current_step?: string | null
             user_message?: string | null
+            correlation_id?: string | null
             retry_count?: number
             retryable?: boolean
             error_message: string | null
             started_at: string
           }[]
-          setFailedRuns(runs.filter((r) => r.status === 'failed'))
+          setFailedRuns(runs.filter((r) => r.status === 'failed' || r.status === 'recovery_required'))
+          const inProgress = runs.some((r) => [
+            'created', 'validating', 'locking', 'posting_adjustments',
+            'posting_closing_entry', 'creating_next_period',
+            'creating_opening_balance', 'verifying_continuity',
+            'closing_period', 'committing', 'closing',
+          ].includes(r.status))
+          if (inProgress) {
+            setExecuting(true)
+            setStep('execute')
+          } else {
+            setExecuting(false)
+          }
           if (body.committedResult) {
+            setExecuting(false)
             setResult(body.committedResult as YearEndResult)
             setCommittedWarning(null)
             setStep('result')
@@ -190,10 +205,13 @@ export default function YearEndPage() {
         .catch(() => {
           // Non-blocking enrichment.
         })
-    }, 0)
+    }
+    const timer = setTimeout(loadRuns, 0)
+    const poller = setInterval(loadRuns, 2_000)
     return () => {
       cancelled = true
       clearTimeout(timer)
+      clearInterval(poller)
     }
   }, [selectedPeriodId, companySuffix])
 
@@ -304,9 +322,18 @@ export default function YearEndPage() {
     setExecuting(true)
     setExecuteError(null)
     try {
+      const idempotencyKey = getOrCreateYearEndExecutionKey(
+        window.sessionStorage,
+        companyId,
+        selectedPeriodId,
+        preview.previewId,
+      )
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end${companySuffix}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify({ preview_id: preview.previewId }),
       })
       const body = await res.json()
@@ -319,7 +346,14 @@ export default function YearEndPage() {
           'Bokslutet kunde inte verkställas',
           res.status,
         ))
-        if (body?.error?.code === 'YEAR_END_PREVIEW_STALE') {
+        if ([
+          'YE_PREVIEW_NOT_FOUND',
+          'YE_PREVIEW_STALE',
+          'YE_PREVIEW_ALREADY_EXECUTED',
+          'YE_LEDGER_CHANGED',
+          'YE_READINESS_CHANGED',
+          'YE_ADJUSTMENTS_CHANGED',
+        ].includes(body?.error?.code)) {
           setPreview(null)
           // Return to the final editable step. Moving to preview with a cleared
           // payload rendered an empty screen and could not generate a fresh ID.
@@ -356,6 +390,7 @@ export default function YearEndPage() {
     reportPeriodName,
     toast,
     companySuffix,
+    companyId,
     loadCommittedResult,
   ])
 
@@ -520,6 +555,7 @@ export default function YearEndPage() {
                 <li key={run.id}>
                   {new Date(run.started_at).toLocaleString('sv-SE')}:{' '}
                   {run.user_message ?? run.error_message ?? 'Okänt fel'} {run.error_code ? `(${run.error_code})` : ''}
+                  {run.correlation_id ? ` · request-ID ${run.correlation_id}` : ''}
                 </li>
               ))}
             </ul>

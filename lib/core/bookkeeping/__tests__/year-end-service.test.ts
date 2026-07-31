@@ -374,7 +374,7 @@ describe('validateYearEndReadiness', () => {
     expect(result.warnings.some((w: string) => w.includes('Next fiscal period already exists'))).toBe(true)
   })
 
-  it('blocks when next period already has opening balances posted', async () => {
+  it('defers an existing opening balance to the atomic database verification', async () => {
     const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
     results = noGapResults(period)
 
@@ -393,8 +393,8 @@ describe('validateYearEndReadiness', () => {
 
     const supabase = makeClient()
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
-    expect(result.ready).toBe(false)
-    expect(result.errors.some((e: string) => e.includes('already has opening balances'))).toBe(true)
+    expect(result.ready).toBe(true)
+    expect(result.warnings.some((warning: string) => warning.includes('verified and reused'))).toBe(true)
   })
 })
 

@@ -40,7 +40,6 @@ export const GET = withRouteContext(
         },
       )
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
-
       // Run the two independent scans in parallel so the wizard's first
       // paint isn't gated on the slower auto-detect query.
       const [proposal, autoDetected, stagedAdjustments, history] = await Promise.all([
@@ -164,6 +163,7 @@ export const POST = withRouteContext(
         },
       )
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
+      const serviceDb = createServiceClient()
 
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
@@ -264,7 +264,7 @@ export const POST = withRouteContext(
       }
 
       const staged = await stageYearEndAdjustments(
-        supabase,
+        serviceDb,
         companyId,
         id,
         user.id,

@@ -3114,6 +3114,13 @@
     "source_label_salary_payment": "Salary",
     "source_label_opening_balance": "Opening balance",
     "source_label_year_end": "Year-end close",
+    "source_label_year_end_accrual": "Year-end accrual",
+    "source_label_year_end_depreciation": "Year-end depreciation",
+    "source_label_year_end_fx_revaluation": "Year-end FX revaluation",
+    "source_label_year_end_tax_adjustment": "Year-end tax adjustment",
+    "source_label_year_end_disposition": "Profit appropriation",
+    "source_label_year_end_deferred_tax": "Deferred tax",
+    "source_label_year_end_closing": "Final closing entry",
     "source_label_storno": "Storno",
     "source_label_correction": "Correction",
     "source_label_import": "Import",
@@ -3122,6 +3129,7 @@
     "source_label_supplier_invoice_paid": "Supplier payment",
     "source_label_supplier_invoice_cash_payment": "Cash payment",
     "source_label_currency_revaluation": "Currency revaluation",
+    "source_label_currency_revaluation_reversal": "FX revaluation reversal",
     "source_label_reminder_fee": "Reminder fee"
   },
   "journal_correction": {

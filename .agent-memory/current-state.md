@@ -107,3 +107,26 @@ Slutverifierat 2026-07-30:
   `20260730213000_canonical_year_end_completion_repair.sql` har 35 giltiga
   statements och ligger sist som migration 423.
 - Produktionsbygge: passerar med 356 genererade routes/sidor.
+
+## Exekveringskontrakt för bokslut 2026-07-31
+
+- Slutverifikatet använder endast `year_end_closing`; partiellt unikt index
+  omfattar inte längre staged dispositioner eller andra bokslutsjusteringar.
+- Execute är en serverlåst, atomisk och advisory-lock-serialiserad transaktion
+  med strikt preview/hash-kontroll, faktisk nästa-period/IB-status och exakt
+  UB–IB-verifiering i PostgreSQL `numeric`.
+- Ett befintligt korrekt IB återanvänds och länken repareras; datumglapp,
+  motstridigt/flerdubbelt IB och inkonsekventa periodtillstånd stoppas med
+  stabila domänfel och recovery-status där det krävs.
+- `year_end_runs`, API, felregister och wizard använder samma status-,
+  retry-, recovery-, correlation- och idempotenskontrakt.
+- Ekonomiskt förändrande boksluts-RPC:er är `service_role`-låsta, medan varje
+  serveranrop fortfarande verifierar den namngivna aktörens bolagsskrivåtkomst.
+- Audit och outbox skapas i samma transaktion som den fullständiga stängningen.
+
+Lokalt verifierat 2026-07-31: typecheck 0 fel, 6 128 unit-tester passerar,
+ändrad-fil-lint 0 fel, full lint 0 fel/226 befintliga varningar, guards och
+feature-policy passerar, migrationen parsas som 42 PostgreSQL-statements och
+Next-produktionsbygget passerar med 356 routes/sidor. Live-migration och
+pg-real är fortfarande blockerade av saknad PostgreSQL på `localhost:5432`
+och saknad `SUPABASE_DB_URL`/`DATABASE_URL`.

@@ -52,3 +52,21 @@
   feature-policy, 35 PostgreSQL-statements, migrationsordning och ett komplett
   produktionsbygge med 356 routes/sidor.
 - Dokumenterade live-DB och pg-real som ej körda eftersom databas-URL saknas.
+
+## 2026-07-31
+
+- Kartlade execute-kedjan från wizard via route/service till preview, staged
+  adjustments, run-tabell, final close, nästa period och IB.
+- Identifierade felaktigt partiellt index, för breda RPC-grants, saknad
+  `retryable`, textbaserad felklassificering, gissade RPC-resultat, första
+  framtida period och blockerad återanvändning av korrekt IB.
+- Implementerade migration 424, typade fel/resultat, scope-idempotens,
+  statusmaskin, recovery, full audit/outbox och UI-återläsning.
+- Upptäckte i andra granskningsvarvet att serverlåsta staging-RPC:er fortfarande
+  anropades med användarklient i tre routes och rättade samtliga.
+- Lade kombinerat pg-real-scenario för två dispositioner, skatt och
+  periodisering samt regressioner för IB, datumglapp och grants.
+- Körde och godkände typecheck, 6 128 unit-tester, ändrad-fil-lint, full lint,
+  guards, feature-policy, PostgreSQL-parser och produktionsbygge.
+- Försökte migrationsstatus och pg-real; dokumenterade saknad DB-URL och
+  `ECONNREFUSED localhost:5432` utan att räkna dem som godkända.

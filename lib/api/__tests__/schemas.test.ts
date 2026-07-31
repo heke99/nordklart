@@ -191,9 +191,13 @@ describe('Enum schemas', () => {
     const sources = [
       'manual', 'bank_transaction', 'invoice_created', 'invoice_paid',
       'invoice_cash_payment', 'credit_note', 'salary_payment',
-      'opening_balance', 'year_end', 'storno', 'correction',
+      'opening_balance', 'year_end', 'year_end_accrual',
+      'year_end_depreciation', 'year_end_fx_revaluation',
+      'year_end_tax_adjustment', 'year_end_disposition',
+      'year_end_deferred_tax', 'year_end_closing', 'storno', 'correction',
       'import', 'system', 'supplier_invoice_registered',
       'supplier_invoice_paid', 'supplier_invoice_cash_payment', 'supplier_credit_note',
+      'currency_revaluation_reversal',
     ]
     for (const s of sources) {
       expect(JournalEntrySourceTypeSchema.safeParse(s).success).toBe(true)

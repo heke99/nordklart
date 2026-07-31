@@ -38,3 +38,17 @@ produktarbete och ska inte betraktas som färdigverifierat.
 11. Processorerna för återföring och outbox behöver köras i pg-real mot
     migration 423 före produktionsaktivering för att verifiera låsning,
     samtidighet, backoff och dead-letter i den faktiska PostgreSQL-versionen.
+
+## Exekveringskontrakt 2026-07-31
+
+12. `npm run db:migrate:status` stoppas eftersom varken `SUPABASE_DB_URL` eller
+    `DATABASE_URL` finns i arbetsmiljön. Migration 424 är därför inte applicerad
+    mot vare sig ren eller befintlig databas här.
+13. `npm run test:pg` försöktes och stoppades av
+    `ECONNREFUSED 127.0.0.1:5432`/`::1:5432`; de 75 pg-real-filerna, inklusive
+    det utökade bokslutstestet, är inte godkända i detta pass.
+14. `npm run build` och `npm run check:feature-policy` kan inte starta `tsx` i
+    sandlådan (`listen EPERM /tmp/tsx-0/*.pipe`). Samma generatorer/kontroll
+    kördes med `node --import tsx`; därefter passerade både feature-policy och
+    det fullständiga Next-bygget. Detta är en runnerbegränsning, inte ett
+    identifierat källkodsfel.

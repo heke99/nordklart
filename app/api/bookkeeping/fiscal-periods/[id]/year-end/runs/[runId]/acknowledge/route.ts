@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { createServiceClient } from '@/lib/supabase/server'
+import { mapYearEndDatabaseError } from '@/lib/year-end/execution-error'
 
 const BodySchema = z.object({
   statement_version: z.literal('ib-ub-review-v1'),
@@ -44,7 +45,7 @@ export const POST = withRouteContext(
         p_statement_text: validation.data.statement_text,
         p_continuity_snapshot: validation.data.continuity_snapshot,
       })
-      if (error) throw new Error(error.message)
+      if (error) throw mapYearEndDatabaseError(error, requestId)
       return NextResponse.json({
         data: {
           acknowledgement_id: data,
@@ -54,8 +55,12 @@ export const POST = withRouteContext(
         },
       })
     } catch (error) {
-      if (/YE_RUN_NOT_COMMITTED/i.test(error instanceof Error ? error.message : '')) {
-        return errorResponseFromCode('YEAR_END_FAILED', log, { requestId })
+      const mapped = mapYearEndDatabaseError(error, requestId)
+      if (mapped.code === 'YE_RUN_NOT_COMMITTED') {
+        return errorResponseFromCode(mapped.code, log, {
+          requestId: mapped.correlationId,
+          messageSv: mapped.userMessage,
+        })
       }
       return errorResponse(error, log, { requestId })
     }

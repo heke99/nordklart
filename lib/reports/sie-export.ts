@@ -81,6 +81,7 @@ export async function generateSIEExport(
 
     if (options.exclude_year_end_closing) {
       entriesQuery = entriesQuery.neq('source_type', 'year_end')
+      entriesQuery = entriesQuery.neq('source_type', 'year_end_closing')
     }
 
     return entriesQuery.range(from, to)
@@ -312,6 +313,7 @@ export async function generateSIEExport(
           .eq('fiscal_period_id', (prevPeriod as { id: string }).id)
           .in('status', ['posted', 'reversed'])
           .neq('source_type', 'year_end')
+          .neq('source_type', 'year_end_closing')
           .order('id', { ascending: true })
           .range(from, to) as unknown as PromiseLike<{
           data: JournalEntry[] | null

@@ -168,6 +168,7 @@ export interface ErrorEnvelope {
     message: string
     message_en?: string
     remediation?: StructuredErrorRemediation
+    retryable?: boolean
     requestId?: string
     details?: unknown
   }
@@ -386,6 +387,7 @@ function buildResponse(
       message: entry.message_sv,
       message_en: entry.message_en,
       ...(entry.remediation ? { remediation: entry.remediation } : {}),
+      ...(entry.retryable ? { retryable: true } : {}),
       ...(requestId ? { requestId } : {}),
       ...(details !== undefined ? { details } : {}),
     },

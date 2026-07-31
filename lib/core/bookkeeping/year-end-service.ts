@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createHash, randomUUID } from 'node:crypto'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -13,6 +14,12 @@ import {
 import { getCompanyEntityType } from '@/lib/company/entity-type'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 import { listStagedYearEndAdjustments } from './year-end-staging'
+import {
+  YearEndExecutionError,
+  YearEndRpcResultSchema,
+  mapYearEndDatabaseError,
+  type YearEndRpcResult,
+} from '@/lib/year-end/execution-error'
 import type {
   YearEndValidation,
   YearEndPreview,
@@ -287,7 +294,7 @@ export async function validateYearEndReadiness(
   const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
   if (nextPeriod) {
     if (nextPeriod.opening_balance_entry_id) {
-      errors.push('Next fiscal period already has opening balances posted')
+      warnings.push('Next fiscal period already has opening balances — they will be verified and reused if they match')
     } else {
       warnings.push('Next fiscal period already exists — opening balances will be booked into it')
     }
@@ -483,10 +490,10 @@ export async function previewYearEndClosing(
  * serialized by an advisory lock. The close ends in exactly one of two
  * states: fully open (rolled back) or fully closed.
  *
- * Idempotency (B09): the default idempotency key is deterministic per
- * period, so a retry after a timeout replays the completed run instead of
- * creating duplicates. Failed attempts are recorded in year_end_runs so the
- * UI can show and recover from them (B10).
+ * Idempotency (B09): the key is scoped to company, period, preview, actor and
+ * the client's stable retry token. A retry after a timeout therefore replays
+ * the committed run instead of creating duplicates. Failed attempts are
+ * recorded in year_end_runs so the UI can show and recover from them (B10).
  */
 export async function executeYearEndClosing(
   supabase: SupabaseClient,
@@ -495,217 +502,251 @@ export async function executeYearEndClosing(
   fiscalPeriodId: string,
   options: { previewId: string; idempotencyKey?: string; correlationId?: string }
 ): Promise<YearEndResult | YearEndCommittedWarning> {
-  const idempotencyKey = options?.idempotencyKey ?? `close:${fiscalPeriodId}`
+  const correlationId = options.correlationId ?? `req_${randomUUID()}`
+  const clientKey = options.idempotencyKey?.trim() || 'default'
+  const idempotencyKey = `ye_${createHash('sha256')
+    .update([companyId, fiscalPeriodId, options.previewId, userId, clientKey].join(':'))
+    .digest('hex')}`
+  let periodResolved = false
 
-  // Fetch the period for the balance date. The RPC re-validates everything
-  // inside its locked transaction (B03) — this fetch only feeds the FX
-  // preview computation.
-  const { data: period, error: periodError } = await supabase
-    .from('fiscal_periods')
-    .select('*')
-    .eq('id', fiscalPeriodId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (periodError || !period) {
-    throw new Error('Fiscal period not found')
-  }
-  const existingNextPeriod = await findNextPeriod(
-    supabase,
-    companyId,
-    fiscalPeriodId,
-  )
-
-  // Compute the currency revaluation underlag (historical open items as of
-  // the balance date, B06/B07) and its deterministic snapshot key (B05).
-  // Rates come from Riksbanken; the RPC persists the snapshot and posts the
-  // entry inside the same transaction as the close (B01).
-  const revalPreview = await previewCurrencyRevaluation(
-    supabase,
-    companyId,
-    period.period_end
-  )
-  if (revalPreview.items.length > 0) {
-    await registerYearEndFxRateSnapshots(
-      supabase,
-      companyId,
-      fiscalPeriodId,
-      period.period_end,
-      userId,
-      revalPreview,
-    )
+  const readCommittedResult = async (): Promise<YearEndRpcResult | null> => {
+    const { data, error } = await supabase
+      .from('year_end_runs')
+      .select('result_payload')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .eq('idempotency_key', idempotencyKey)
+      .eq('status', 'closed')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error || !data?.result_payload) return null
+    const parsed = YearEndRpcResultSchema.safeParse(data.result_payload)
+    return parsed.success ? parsed.data : null
   }
 
-  const revaluationPayload =
-    revalPreview.items.length > 0
-      ? buildRevaluationRpcPayload(companyId, period.period_end, revalPreview)
-      : {
-          balance_date: period.period_end,
-          snapshot_key: computeRevaluationSnapshotKey(companyId, period.period_end, []),
-          lines: [],
-          items: [],
-        }
-
-  const { data: rpcResult, error: rpcError } = await supabase.rpc('execute_year_end_closing', {
-    p_company_id: companyId,
-    p_fiscal_period_id: fiscalPeriodId,
-    p_user_id: userId,
-    p_idempotency_key: idempotencyKey,
-    p_revaluation: revaluationPayload,
-    p_preview_id: options.previewId,
-  })
-
-  if (rpcError) {
-    const technicalMessage = rpcError.message || 'Unknown database error'
-    const extractedCode = technicalMessage.match(/\b(YE_[A-Z0-9_]+|FX_[A-Z0-9_]+)\b/)?.[1]
-      ?? 'YEAR_END_FAILED'
-    const recoveryRequired = /timeout|connection|network|statement timeout|canceling statement/i.test(
-      technicalMessage,
-    )
-    const userMessage = recoveryRequired
-      ? 'Bokslutskörningen avbröts utan säker slutstatus och behöver kontrolleras innan återkörning.'
-      : 'Bokslutet kunde inte genomföras. Ingen ofullständig stängning har godkänts.'
-
-    // Failure persistence is part of the contract, not best-effort. The
-    // database operation above is atomic and has rolled back; this separate
-    // service-only RPC creates the durable run/audit record.
+  const recordFailure = async (error: YearEndExecutionError): Promise<void> => {
+    if (!periodResolved) return
+    const existingOpeningBalanceCount = Number(error.details?.opening_balance_count ?? 0)
+    const recoveryRequired = error.code === 'YE_RESULT_INVALID'
+      || error.code === 'YE_DUPLICATE_CLOSING_ENTRY'
+      || (error.code === 'YE_NEXT_PERIOD_HAS_CONFLICTING_OB'
+        && existingOpeningBalanceCount > 1)
     const { error: recordError } = await supabase.rpc('record_year_end_failure', {
       p_company_id: companyId,
       p_fiscal_period_id: fiscalPeriodId,
       p_actor_user_id: userId,
       p_idempotency_key: idempotencyKey,
-      p_current_step: 'closing',
-      p_error_code: extractedCode,
-      p_technical_error: technicalMessage,
-      p_user_message: userMessage,
-      p_correlation_id: options?.correlationId ?? null,
+      p_current_step: 'executing',
+      p_error_code: error.code,
+      p_technical_error: error.message,
+      p_user_message: error.userMessage,
+      p_correlation_id: correlationId,
       p_recovery_required: recoveryRequired,
+      p_retryable: error.retryable,
     })
-
     if (recordError) {
-      throw new Error(
-        `Year-end closing failed and the mandatory failure record could not be persisted: `
-        + `${technicalMessage}; failure-record error: ${recordError.message}`,
+      throw new YearEndExecutionError({
+        code: 'YE_UNKNOWN',
+        correlationId,
+        technicalMessage:
+          `Year-end failure persistence failed: ${recordError.message}; original: ${error.message}`,
+        details: { failurePersistence: 'failed', originalCode: error.code },
+        cause: recordError,
+      })
+    }
+  }
+
+  try {
+    // This read only supplies the balance date. The RPC locks and revalidates
+    // the period, preview and all hashes in its own transaction.
+    const { data: period, error: periodError } = await supabase
+      .from('fiscal_periods')
+      .select('*')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .single()
+
+    if (periodError || !period) {
+      throw new YearEndExecutionError({
+        code: 'YE_PERIOD_NOT_FOUND',
+        correlationId,
+        technicalMessage: periodError?.message ?? 'Fiscal period not found',
+        pgCode: periodError?.code,
+        cause: periodError,
+      })
+    }
+    periodResolved = true
+
+    const revalPreview = await previewCurrencyRevaluation(
+      supabase,
+      companyId,
+      period.period_end,
+    )
+    if (revalPreview.items.length > 0) {
+      await registerYearEndFxRateSnapshots(
+        supabase,
+        companyId,
+        fiscalPeriodId,
+        period.period_end,
+        userId,
+        revalPreview,
       )
     }
 
-    throw new Error(`Year-end closing failed [${extractedCode}]: ${technicalMessage}`)
-  }
+    const revaluationPayload =
+      revalPreview.items.length > 0
+        ? buildRevaluationRpcPayload(companyId, period.period_end, revalPreview)
+        : {
+            balance_date: period.period_end,
+            snapshot_key: computeRevaluationSnapshotKey(companyId, period.period_end, []),
+            lines: [],
+            items: [],
+          }
 
-  const result = rpcResult as {
-    run_id: string
-    closing_entry_id: string
-    opening_balance_entry_id: string
-    next_period_id: string
-    revaluation_entry_id: string | null
-    revaluation_reversal_entry_id: string | null
-    preview_id: string
-    ledger_hash: string
-    readiness_hash: string
-    adjustment_hash: string
-    ruleset_version: string
-    idempotent: boolean
-  }
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('execute_year_end_closing', {
+      p_company_id: companyId,
+      p_fiscal_period_id: fiscalPeriodId,
+      p_user_id: userId,
+      p_idempotency_key: idempotencyKey,
+      p_revaluation: revaluationPayload,
+      p_preview_id: options.previewId,
+      p_correlation_id: correlationId,
+    })
 
-  // Assemble the YearEndResult from the committed state.
-  const [closingEntryRes, obEntryRes, nextPeriodRes, revalEntryRes] = await Promise.all([
-    supabase
-      .from('journal_entries')
-      .select('*')
-      .eq('id', result.closing_entry_id)
-      .eq('company_id', companyId)
-      .single(),
-    supabase
-      .from('journal_entries')
-      .select('*')
-      .eq('id', result.opening_balance_entry_id)
-      .eq('company_id', companyId)
-      .single(),
-    supabase
-      .from('fiscal_periods')
-      .select('*')
-      .eq('id', result.next_period_id)
-      .eq('company_id', companyId)
-      .single(),
-    result.revaluation_entry_id
-      ? supabase
-          .from('journal_entries')
-          .select('*')
-          .eq('id', result.revaluation_entry_id)
-          .eq('company_id', companyId)
-          .single()
-      : Promise.resolve({ data: null, error: null }),
-  ])
-
-  if (
-    closingEntryRes.error
-    || !closingEntryRes.data
-    || obEntryRes.error
-    || !obEntryRes.data
-    || nextPeriodRes.error
-    || !nextPeriodRes.data
-    || revalEntryRes.error
-  ) {
-    return {
-      status: 'executed',
-      resultViewComplete: false,
-      runId: result.run_id,
-      executionId: result.run_id,
-      previewId: result.preview_id,
-      closingEntryId: result.closing_entry_id,
-      nextPeriodId: result.next_period_id,
-      openingBalancesCreated: Boolean(result.opening_balance_entry_id),
-      warning: {
-        code: 'YEAR_END_RESULT_REFRESH_FAILED',
-        message: 'Bokslutet är genomfört men resultatvyn kunde inte laddas fullständigt.',
-      },
+    let result: YearEndRpcResult
+    if (rpcError) {
+      const mapped = mapYearEndDatabaseError(rpcError, correlationId)
+      if (mapped.retryable) {
+        const committed = await readCommittedResult()
+        if (committed) {
+          result = committed
+        } else {
+          throw mapped
+        }
+      } else {
+        throw mapped
+      }
+    } else {
+      const parsed = YearEndRpcResultSchema.safeParse(rpcResult)
+      if (parsed.success) {
+        result = parsed.data
+      } else {
+        const committed = await readCommittedResult()
+        if (!committed) {
+          throw new YearEndExecutionError({
+            code: 'YE_RESULT_INVALID',
+            correlationId,
+            technicalMessage: parsed.error.message,
+            details: { resultValidation: 'failed' },
+            cause: parsed.error,
+          })
+        }
+        result = committed
+      }
     }
-  }
 
-  // Independent continuity verification for the result payload. The RPC
-  // already enforced exactness inside the transaction.
-  let continuity
-  try {
-    continuity = await validateBalanceContinuity(
-      supabase,
-      companyId,
-      result.next_period_id,
-    )
-  } catch {
-    return {
-      status: 'executed',
-      resultViewComplete: false,
-      runId: result.run_id,
-      executionId: result.run_id,
-      previewId: result.preview_id,
-      closingEntryId: result.closing_entry_id,
-      nextPeriodId: result.next_period_id,
-      openingBalancesCreated: true,
-      warning: {
-        code: 'YEAR_END_RESULT_REFRESH_FAILED',
-        message: 'Bokslutet är genomfört men resultatvyn kunde inte laddas fullständigt.',
-      },
+    const [closingEntryRes, obEntryRes, nextPeriodRes, revalEntryRes] = await Promise.all([
+      supabase
+        .from('journal_entries')
+        .select('*')
+        .eq('id', result.closing_entry_id)
+        .eq('company_id', companyId)
+        .single(),
+      supabase
+        .from('journal_entries')
+        .select('*')
+        .eq('id', result.opening_balance_entry_id)
+        .eq('company_id', companyId)
+        .single(),
+      supabase
+        .from('fiscal_periods')
+        .select('*')
+        .eq('id', result.next_period_id)
+        .eq('company_id', companyId)
+        .single(),
+      result.revaluation_entry_id
+        ? supabase
+            .from('journal_entries')
+            .select('*')
+            .eq('id', result.revaluation_entry_id)
+            .eq('company_id', companyId)
+            .single()
+        : Promise.resolve({ data: null, error: null }),
+    ])
+
+    if (
+      closingEntryRes.error
+      || !closingEntryRes.data
+      || obEntryRes.error
+      || !obEntryRes.data
+      || nextPeriodRes.error
+      || !nextPeriodRes.data
+      || revalEntryRes.error
+    ) {
+      return {
+        status: 'executed',
+        resultViewComplete: false,
+        runId: result.run_id,
+        executionId: result.run_id,
+        previewId: result.preview_id,
+        closingEntryId: result.closing_entry_id,
+        nextPeriodId: result.next_period_id,
+        openingBalancesCreated: result.opening_balance_created,
+        warning: {
+          code: 'YEAR_END_RESULT_REFRESH_FAILED',
+          message: 'Bokslutet är genomfört men resultatvyn kunde inte laddas fullständigt.',
+        },
+      }
     }
-  }
 
-  return {
-    runId: result.run_id,
-    previewId: result.preview_id,
-    ledgerHash: result.ledger_hash,
-    readinessHash: result.readiness_hash,
-    adjustmentHash: result.adjustment_hash,
-    rulesetVersion: result.ruleset_version,
-    closingEntry: closingEntryRes.data as JournalEntry,
-    nextPeriod: nextPeriodRes.data as FiscalPeriod,
-    openingBalanceEntry: obEntryRes.data as JournalEntry,
-    revaluationEntry: (revalEntryRes.data as JournalEntry | null) ?? null,
-    resultViewComplete: true,
-    nextPeriodCreated: !existingNextPeriod,
-    nextPeriodId: result.next_period_id,
-    openingBalancesCreated: true,
-    closingEntryId: result.closing_entry_id,
-    executionId: result.run_id,
-    continuity,
+    let continuity
+    try {
+      continuity = await validateBalanceContinuity(
+        supabase,
+        companyId,
+        result.next_period_id,
+      )
+    } catch {
+      return {
+        status: 'executed',
+        resultViewComplete: false,
+        runId: result.run_id,
+        executionId: result.run_id,
+        previewId: result.preview_id,
+        closingEntryId: result.closing_entry_id,
+        nextPeriodId: result.next_period_id,
+        openingBalancesCreated: result.opening_balance_created,
+        warning: {
+          code: 'YEAR_END_RESULT_REFRESH_FAILED',
+          message: 'Bokslutet är genomfört men resultatvyn kunde inte laddas fullständigt.',
+        },
+      }
+    }
+
+    return {
+      runId: result.run_id,
+      previewId: result.preview_id,
+      ledgerHash: result.ledger_hash,
+      readinessHash: result.readiness_hash,
+      adjustmentHash: result.adjustment_hash,
+      rulesetVersion: result.ruleset_version,
+      closingEntry: closingEntryRes.data as JournalEntry,
+      nextPeriod: nextPeriodRes.data as FiscalPeriod,
+      openingBalanceEntry: obEntryRes.data as JournalEntry,
+      revaluationEntry: (revalEntryRes.data as JournalEntry | null) ?? null,
+      resultViewComplete: true,
+      nextPeriodCreated: result.next_period_created,
+      nextPeriodId: result.next_period_id,
+      openingBalancesCreated: result.opening_balance_created,
+      closingEntryId: result.closing_entry_id,
+      executionId: result.run_id,
+      continuity,
+    }
+  } catch (error) {
+    const mapped = mapYearEndDatabaseError(error, correlationId)
+    await recordFailure(mapped)
+    throw mapped
   }
 }
 

@@ -26,3 +26,13 @@
     återföringsarbetare, outbox-retry och dead-letter.
 14. Aktivera cron-anropet till `/api/bookkeeping/year-end/process/cron` först
     efter att migration 423 och pg-real-kontrollerna har passerat.
+15. Applicera sist
+    `20260731120000_year_end_execution_contract_repair.sql` i staging efter
+    backup och verifiera index, sjuarguments-RPC, grants och samtliga
+    `year_end_runs`-kolumner enligt `MIGRATION_ORDER.md`.
+16. Kör `npm run test:pg` mot den migrerade stagingdatabasen och kräv grönt för
+    kombinerade dispositioner/skatt/periodisering, simultan execute,
+    idempotens, exakt IB-återanvändning, datumglapp och RLS/grants.
+17. Smoke-testa i UI: Dispositioner → Förhandsgranska → Verkställ → Klart,
+    omladdning efter commit och nytt klick med samma idempotensnyckel.
+18. Aktivera inte migration 424 i produktion förrän steg 15–17 är godkända.

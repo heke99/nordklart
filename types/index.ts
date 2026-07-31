@@ -1413,6 +1413,7 @@ export type JournalEntrySourceType =
   | 'supplier_invoice_privately_paid'
   | 'supplier_credit_note'
   | 'currency_revaluation'
+  | 'currency_revaluation_reversal'
   | 'reminder_fee'
   | 'accrual'
   | 'result_appropriation'
