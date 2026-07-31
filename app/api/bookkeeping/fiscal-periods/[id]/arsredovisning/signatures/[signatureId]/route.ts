@@ -15,9 +15,18 @@ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-en
 //     /periods/A/signatures/SIG_FROM_B can't bypass the path scope
 //   - .eq('status', 'pending') — state-machine guard so a signed or declined
 //     row can't be flipped back
-const PatchSchema = z.object({
-  status: z.enum(['signed', 'declined']),
-})
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const date = new Date(`${value}T12:00:00.000Z`)
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+  })
+
+const PatchSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('signed'), signed_at: isoDate }),
+  z.object({ status: z.literal('declined') }),
+])
 
 export const PATCH = withRouteContext(
   'period.arsredovisning_signature_patch',
@@ -33,7 +42,10 @@ export const PATCH = withRouteContext(
 
     const update =
       validation.data.status === 'signed'
-        ? { status: 'signed' as const, signed_at: new Date().toISOString() }
+        ? {
+            status: 'signed' as const,
+            signed_at: `${validation.data.signed_at}T12:00:00.000Z`,
+          }
         : { status: 'declined' as const }
 
     try {
@@ -43,6 +55,24 @@ export const PATCH = withRouteContext(
         requireWrite: true,
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
+
+      const { data: project } = await supabase
+        .from('annual_report_projects')
+        .select('annual_report_locked')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .maybeSingle()
+      if (project?.annual_report_locked) {
+        return NextResponse.json(
+          {
+            error: {
+              code: 'ANNUAL_REPORT_LOCKED',
+              message: 'Slutversionen är låst. Skapa en ny version innan underskrifter ändras.',
+            },
+          },
+          { status: 409 },
+        )
+      }
 
       const { data, error } = await supabase
         .from('arsredovisning_signature_requests')

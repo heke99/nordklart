@@ -122,14 +122,14 @@ export class FactWriter {
     let markup = el('ix:nonFraction', attrs, formatSekAbs(rounded))
     if (opts.spanClass) markup = el('span', { class: opts.spanClass }, markup)
     // Presentational minus is an XOR: a cost row (displayMinus) with its
-    // natural sign shows "−X", but a DEVIATING cost (negative fact value,
+    // natural sign shows "-X", but a DEVIATING cost (negative fact value,
     // sign="-" — i.e. net income on a cost line) displays positive per the
-    // RR convention; conversely a deviating income row displays "−X".
-    if ((opts.displayMinus ?? false) !== rounded < 0) markup = `−${markup}`
+    // RR convention; conversely a deviating income row displays "-X".
+    if ((opts.displayMinus ?? false) !== rounded < 0) markup = `-${markup}`
     return markup
   }
 
-  /** Percent fact (xbrli:pure) per TA §2.12 — text "35,5", scale −2. */
+  /** Percent fact (xbrli:pure) per TA §2.12 — text "35,5", scale -2. */
   percent(name: string, contextRef: string, valuePct: number): string {
     const concept = mustGetConcept(this.registry, name)
     if (concept.dataType !== 'xbrli:pureItemType') {
@@ -147,7 +147,7 @@ export class FactWriter {
       sign: valuePct < 0 ? '-' : null,
     }
     const markup = el('ix:nonFraction', attrs, formatPercentAbs(valuePct))
-    return valuePct < 0 ? `−${markup}` : markup
+    return valuePct < 0 ? `-${markup}` : markup
   }
 
   /** Antal-fact (medelantal anställda) per TA §2.14, one decimal. */

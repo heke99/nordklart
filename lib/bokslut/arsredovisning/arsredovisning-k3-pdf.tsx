@@ -1,5 +1,6 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData } from './types'
+import { formatAnnualReportAmount, normalizeAnnualReportText } from './format'
 
 /**
  * K3 årsredovisning PDF template (BFNAR 2012:1).
@@ -143,7 +144,11 @@ const styles = StyleSheet.create({
 })
 
 function fmt(amount: number): string {
-  return Math.round(amount).toLocaleString('sv-SE')
+  return formatAnnualReportAmount(amount, { decimals: 0 })
+}
+
+function clean(value: string | null | undefined): string {
+  return normalizeAnnualReportText(value ?? '')
 }
 
 function PageChrome({
@@ -179,12 +184,16 @@ function PageChrome({
         </Text>
         <Text>
           Årsredovisning {data.fiscal_period.name}
-          {isDraft ? ' — UTKAST' : ''}
+          {isDraft ? ' - UTKAST' : ''}
         </Text>
       </View>
-      <Text style={styles.pageFooter} fixed>
-        {pageLabel ?? ''}
-      </Text>
+      <Text
+        style={styles.pageFooter}
+        fixed
+        render={({ pageNumber, totalPages }: { pageNumber: number; totalPages: number }) =>
+          `${pageLabel ? `${clean(pageLabel)} · ` : ''}Sida ${pageNumber} av ${totalPages}`
+        }
+      />
     </>
   )
 }
@@ -199,6 +208,12 @@ export function ArsredovisningK3PDF({
   isDraft?: boolean
   draftBlockers?: string[]
 }) {
+  const latestSignatureDate = data.signatures
+    .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1) ?? null
+
   return (
     <Document>
       {/* Cover */}
@@ -207,7 +222,7 @@ export function ArsredovisningK3PDF({
         <View>
           <Text style={styles.title}>Årsredovisning</Text>
           <Text style={styles.subtitle}>
-            för räkenskapsåret {data.fiscal_period.period_start} — {data.fiscal_period.period_end}
+            för räkenskapsåret {data.fiscal_period.period_start} - {data.fiscal_period.period_end}
           </Text>
           <Text style={styles.k3Banner}>Upprättad enligt K3 (BFNAR 2012:1)</Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>
@@ -248,10 +263,10 @@ export function ArsredovisningK3PDF({
         {data.forvaltningsberattelse.flerarsoversikt.map((row) => (
           <View key={row.year} style={styles.tableRow}>
             <Text style={styles.colLabel}>{row.year}</Text>
-            <Text style={styles.colAmount}>{fmt(row.net_revenue)}</Text>
-            <Text style={styles.colAmount}>{fmt(row.result_after_financial)}</Text>
+            <Text style={styles.colAmount}>{row.data_missing ? 'Saknas' : fmt(row.net_revenue)}</Text>
+            <Text style={styles.colAmount}>{row.data_missing ? 'Saknas' : fmt(row.result_after_financial)}</Text>
             <Text style={styles.colAmount}>
-              {row.soliditet_pct === null ? '—' : row.soliditet_pct.toFixed(1)}
+              {row.data_missing ? 'Saknas' : row.soliditet_pct === null ? '—' : row.soliditet_pct.toFixed(1)}
             </Text>
           </View>
         ))}
@@ -523,9 +538,9 @@ export function ArsredovisningK3PDF({
         {data.noter.map((note) => (
           <View key={note.number} style={{ marginBottom: 16 }} wrap>
             <Text style={{ fontFamily: 'Helvetica-Bold', marginBottom: 4 }}>
-              Not {note.number} — {note.title}
+              Not {note.number} - {clean(note.title)}
             </Text>
-            <Text style={styles.noteBody}>{note.body}</Text>
+            <Text style={styles.noteBody}>{clean(note.body)}</Text>
           </View>
         ))}
       </Page>
@@ -536,7 +551,7 @@ export function ArsredovisningK3PDF({
         <Text style={styles.sectionTitle}>Underskrifter</Text>
         <Text style={styles.paragraph}>
           {data.company.city ? `${data.company.city}, ` : ''}
-          {data.fiscal_period.period_end}
+          {latestSignatureDate ?? 'underskriftsdatum saknas'}
         </Text>
         {data.signatures.length > 0 ? (
           data.signatures.map((sig, i) => (
@@ -545,10 +560,10 @@ export function ArsredovisningK3PDF({
                 <Text>{sig.name || ' '}</Text>
               </View>
               <Text style={{ width: 180 }}>
-                {sig.role}
+                {clean(sig.role)}
                 {sig.signed_at
-                  ? ` — signerad ${sig.signed_at.slice(0, 10)}`
-                  : ' — ej signerad'}
+                  ? ` - signerad ${sig.signed_at.slice(0, 10)}`
+                  : ' - ej signerad'}
               </Text>
             </View>
           ))
@@ -583,17 +598,17 @@ export function ArsredovisningK3PDF({
         </Text>
         <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
         <Text style={styles.paragraph}>
-          {data.forvaltningsberattelse.resultatdisposition}
+          {clean(data.forvaltningsberattelse.agm_result_disposition_decision) || 'Årsstämmans beslut har inte registrerats.'}
         </Text>
         <View style={styles.signatureLine}>
           <View style={styles.signatureSlot}>
-            <Text> </Text>
+            <Text>{clean(data.forvaltningsberattelse.certificate_signer_name) || ' '}</Text>
           </View>
-          <Text style={{ width: 240 }}>Styrelseledamot (närvarande vid stämman)</Text>
+          <Text style={{ width: 240 }}>{clean(data.forvaltningsberattelse.certificate_signer_role) || 'Styrelseledamot (närvarande vid stämman)'}</Text>
         </View>
         <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
           {data.company.city ? `${data.company.city}, ` : ''}
-          datum: {data.forvaltningsberattelse.agm_date ?? '____________________'}
+          datum: {data.forvaltningsberattelse.certificate_signed_at?.slice(0, 10) ?? '____________________'}
         </Text>
       </Page>
     </Document>

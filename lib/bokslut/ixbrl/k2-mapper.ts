@@ -529,7 +529,7 @@ export function mapTrialBalancesToK2(
     )
   }
 
-  let totals = computeTotals(rr, br)
+  let totals = computeK2Totals(rr, br)
 
   // ---- öre-rounding residual smoothing ------------------------------------
   // Every tagged post is independently rounded to whole SEK, so the sum of
@@ -555,7 +555,7 @@ export function mapTrialBalancesToK2(
     const brSmoothed = smoothBrResidual(br, totals, field)
     smoothedAny = smoothedAny || rrSmoothed || brSmoothed
   }
-  if (smoothedAny) totals = computeTotals(rr, br)
+  if (smoothedAny) totals = computeK2Totals(rr, br)
 
   // Internal consistency: the RR result must equal BR 2099 (årets resultat)
   // EXACTLY — if the year-end closing hasn't booked the result yet, warn
@@ -654,7 +654,7 @@ function smoothBrResidual(
   return true
 }
 
-function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult['totals'] {
+export function computeK2Totals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult['totals'] {
   // ---- RR subtotals (credit-positive orientation) ----
   const rorelseintakter = sumConcepts(rr, [
     'Nettoomsattning',

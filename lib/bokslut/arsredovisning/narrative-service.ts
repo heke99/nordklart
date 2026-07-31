@@ -3,11 +3,20 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 export interface NarrativeOverrides {
   description: string | null
   important_events: string | null
+  events_after_balance_sheet: string | null
+  report_legal_name: string | null
+  report_registered_office: string | null
+  prior_legal_name: string | null
   resultatdisposition: string | null
   /** ISO date of the AGM (årsstämma) where the årsredovisning was adopted.
    *  Populates the fastställelseintyg date blank — without it the PDF
    *  cannot be filed at Bolagsverket without manual pen-and-ink edit. */
   agm_date: string | null
+  agm_accounts_adopted: boolean | null
+  agm_result_disposition_decision: string | null
+  certificate_signer_name: string | null
+  certificate_signer_role: string | null
+  certificate_signed_at: string | null
   /** ÅRL 5:13 § — andel av långfristiga skulder som förfaller senare än
    *  fem år efter balansdagen. Null/0 → "Inga skulder förfaller efter mer
    *  än fem år." rendered in the note. */
@@ -37,8 +46,17 @@ export interface NarrativeRow {
   fiscal_period_id: string
   description: string | null
   important_events: string | null
+  events_after_balance_sheet: string | null
+  report_legal_name: string | null
+  report_registered_office: string | null
+  prior_legal_name: string | null
   resultatdisposition: string | null
   agm_date: string | null
+  agm_accounts_adopted: boolean | null
+  agm_result_disposition_decision: string | null
+  certificate_signer_name: string | null
+  certificate_signer_role: string | null
+  certificate_signed_at: string | null
   long_term_debt_over_five_years: number | null
   securities_pledged: string | null
   contingent_liabilities: string | null
@@ -54,7 +72,7 @@ const TABLE = 'arsredovisning_narratives'
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
 const NARRATIVE_API_COLUMNS =
-  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, updated_at'
+  'id, company_id, fiscal_period_id, description, important_events, events_after_balance_sheet, report_legal_name, report_registered_office, prior_legal_name, resultatdisposition, agm_date, agm_accounts_adopted, agm_result_disposition_decision, certificate_signer_name, certificate_signer_role, certificate_signed_at, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, updated_at'
 
 /**
  * Load persisted narrative overrides for a fiscal period. Returns null when
@@ -90,20 +108,80 @@ export async function upsertNarrative(
   fiscalPeriodId: string,
   input: Partial<NarrativeOverrides>,
 ): Promise<NarrativeRow> {
+  // Preserve fields omitted by partial API updates. The previous implementation
+  // converted every missing property to null, so saving one disclosure could
+  // silently clear AGM/signature data written in another editor.
+  const existing = await getNarrative(supabase, companyId, fiscalPeriodId)
   const payload = {
     user_id: userId,
     company_id: companyId,
     fiscal_period_id: fiscalPeriodId,
-    description: input.description ?? null,
-    important_events: input.important_events ?? null,
-    resultatdisposition: input.resultatdisposition ?? null,
-    agm_date: input.agm_date ?? null,
-    long_term_debt_over_five_years: input.long_term_debt_over_five_years ?? null,
-    securities_pledged: input.securities_pledged ?? null,
-    contingent_liabilities: input.contingent_liabilities ?? null,
-    parent_company_name: input.parent_company_name ?? null,
-    parent_company_org_number: input.parent_company_org_number ?? null,
-    parent_company_city: input.parent_company_city ?? null,
+    description: input.description !== undefined ? input.description : existing?.description ?? null,
+    important_events:
+      input.important_events !== undefined ? input.important_events : existing?.important_events ?? null,
+    events_after_balance_sheet:
+      input.events_after_balance_sheet !== undefined
+        ? input.events_after_balance_sheet
+        : existing?.events_after_balance_sheet ?? null,
+    report_legal_name:
+      input.report_legal_name !== undefined
+        ? input.report_legal_name
+        : existing?.report_legal_name ?? null,
+    report_registered_office:
+      input.report_registered_office !== undefined
+        ? input.report_registered_office
+        : existing?.report_registered_office ?? null,
+    prior_legal_name:
+      input.prior_legal_name !== undefined ? input.prior_legal_name : existing?.prior_legal_name ?? null,
+    resultatdisposition:
+      input.resultatdisposition !== undefined
+        ? input.resultatdisposition
+        : existing?.resultatdisposition ?? null,
+    agm_date: input.agm_date !== undefined ? input.agm_date : existing?.agm_date ?? null,
+    agm_accounts_adopted:
+      input.agm_accounts_adopted !== undefined
+        ? input.agm_accounts_adopted
+        : existing?.agm_accounts_adopted ?? null,
+    agm_result_disposition_decision:
+      input.agm_result_disposition_decision !== undefined
+        ? input.agm_result_disposition_decision
+        : existing?.agm_result_disposition_decision ?? null,
+    certificate_signer_name:
+      input.certificate_signer_name !== undefined
+        ? input.certificate_signer_name
+        : existing?.certificate_signer_name ?? null,
+    certificate_signer_role:
+      input.certificate_signer_role !== undefined
+        ? input.certificate_signer_role
+        : existing?.certificate_signer_role ?? null,
+    certificate_signed_at:
+      input.certificate_signed_at !== undefined
+        ? input.certificate_signed_at
+        : existing?.certificate_signed_at ?? null,
+    long_term_debt_over_five_years:
+      input.long_term_debt_over_five_years !== undefined
+        ? input.long_term_debt_over_five_years
+        : existing?.long_term_debt_over_five_years ?? null,
+    securities_pledged:
+      input.securities_pledged !== undefined
+        ? input.securities_pledged
+        : existing?.securities_pledged ?? null,
+    contingent_liabilities:
+      input.contingent_liabilities !== undefined
+        ? input.contingent_liabilities
+        : existing?.contingent_liabilities ?? null,
+    parent_company_name:
+      input.parent_company_name !== undefined
+        ? input.parent_company_name
+        : existing?.parent_company_name ?? null,
+    parent_company_org_number:
+      input.parent_company_org_number !== undefined
+        ? input.parent_company_org_number
+        : existing?.parent_company_org_number ?? null,
+    parent_company_city:
+      input.parent_company_city !== undefined
+        ? input.parent_company_city
+        : existing?.parent_company_city ?? null,
   }
   const { data, error } = await supabase
     .from(TABLE)
@@ -122,8 +200,21 @@ export async function upsertNarrative(
   if (input.description != null) confirmedFields.push({ field: 'description', text: input.description })
   if (input.important_events != null)
     confirmedFields.push({ field: 'important_events', text: input.important_events })
+  if (input.events_after_balance_sheet != null)
+    confirmedFields.push({ field: 'events_after_balance_sheet', text: input.events_after_balance_sheet })
+  if (input.report_legal_name != null)
+    confirmedFields.push({ field: 'report_legal_name', text: input.report_legal_name })
+  if (input.report_registered_office != null)
+    confirmedFields.push({ field: 'report_registered_office', text: input.report_registered_office })
+  if (input.prior_legal_name != null)
+    confirmedFields.push({ field: 'prior_legal_name', text: input.prior_legal_name })
   if (input.resultatdisposition != null)
     confirmedFields.push({ field: 'resultatdisposition', text: input.resultatdisposition })
+  if (input.agm_result_disposition_decision != null)
+    confirmedFields.push({
+      field: 'agm_result_disposition_decision',
+      text: input.agm_result_disposition_decision,
+    })
   for (const { field, text } of confirmedFields) {
     try {
       // text_version increments per (field, period): count existing rows.

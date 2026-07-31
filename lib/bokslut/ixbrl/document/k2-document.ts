@@ -41,6 +41,7 @@ tr.subsection th { font-style: italic; }
 .ar-cert { border: 1px solid #000; padding: 1em 1.25em; margin: 1.5em 0; }
 .ar-sign-name { margin-top: 2.2em; }
 .ar-sign-name .sig { font-style: italic; }
+.ar-draft { position: fixed; top: 42%; left: 12%; z-index: 10; transform: rotate(-30deg); font: bold 8em Arial, sans-serif; color: rgba(120,120,120,0.18); }
 @media print { .ar-page { border: none; margin: 0; } }
 `.trim()
 
@@ -101,7 +102,7 @@ function pageHeader(input: IxbrlArsredovisningInput, page: number, total: number
   return el(
     'div',
     { class: 'ar-page-hdr' },
-    el('span', {}, identity) + el('span', {}, `${page} (${total})`),
+    el('span', {}, identity) + el('span', {}, `Sida ${page} av ${total}`),
   )
 }
 
@@ -110,7 +111,10 @@ export interface GeneratedIxbrl {
   warnings: string[]
 }
 
-export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): GeneratedIxbrl {
+export function generateK2IxbrlDocument(
+  input: IxbrlArsredovisningInput,
+  options: { isDraft?: boolean } = {},
+): GeneratedIxbrl {
   const entryPoint = getEntryPoint(input.entryPointId)
   const registry = getRegistry(entryPoint.registryId)
   const writer = new FactWriter(entryPoint, registry, input.company.orgNumber)
@@ -385,7 +389,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     // Untagged residual cells: plain text, but with the same sign handling as
     // the other untagged rows (negative renders with a minus).
     const signedSek = (value: number): string =>
-      escapeText(`${value < 0 ? '−' : ''}${formatSekAbs(value)}`)
+      escapeText(`${value < 0 ? '-' : ''}${formatSekAbs(value)}`)
     const ibCells = [
       writer.money('Aktiekapital', ctx.balans1 ?? ctx.balans0, ek.aktiekapital.ib),
       ...(hasOvriga ? [signedSek(ek.ovrigaPoster.ib)] : []),
@@ -1217,7 +1221,10 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     ].join('\n'),
   )
 
-  const body = el('body', {}, [writer.renderHeader(), el('div', { id: 'wrapper' }, pages.join('\n'))].join('\n'))
+  const bodyParts = [writer.renderHeader()]
+  if (options.isDraft) bodyParts.push(el('div', { class: 'ar-draft' }, 'UTKAST'))
+  bodyParts.push(el('div', { id: 'wrapper' }, pages.join('\n')))
+  const body = el('body', {}, bodyParts.join('\n'))
 
   const xhtml =
     '<?xml version="1.0" encoding="utf-8"?>\n' +

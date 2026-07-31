@@ -54,6 +54,13 @@ function pdfBuffer(payload = 'test'): ArrayBuffer {
   return new TextEncoder().encode(`%PDF-1.4\n${payload}\n%%EOF\n`).buffer as ArrayBuffer
 }
 
+
+function xhtmlBuffer(): ArrayBuffer {
+  return new TextEncoder().encode(
+    '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><body>Årsredovisning</body></html>',
+  ).buffer as ArrayBuffer
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
@@ -95,6 +102,27 @@ describe('uploadDocument', () => {
       })
     )
   })
+
+  it('accepts and archives an XHTML iXBRL document with XML magic bytes', async () => {
+    const doc = makeDocumentAttachment({
+      id: 'doc-xhtml',
+      file_name: 'arsredovisning.xhtml',
+      mime_type: 'application/xhtml+xml',
+      sha256_hash: 'computed-hash',
+    })
+    results = [{ data: doc, error: null }]
+
+    const supabase = makeClient()
+    const result = await uploadDocument(supabase as never, 'user-1', 'company-1', {
+      name: 'arsredovisning.xhtml',
+      buffer: xhtmlBuffer(),
+      type: 'application/xhtml+xml',
+    })
+
+    expect(result.id).toBe('doc-xhtml')
+    expect(result.mime_type).toBe('application/xhtml+xml')
+  })
+
 })
 
 describe('createNewVersion', () => {

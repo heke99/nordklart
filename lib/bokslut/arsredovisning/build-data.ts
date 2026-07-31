@@ -19,11 +19,19 @@ import { buildAnlaggningstillgangarNote } from './anlaggningstillgangar-note'
 import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
 import { roundOre } from '@/lib/money'
 import {
+  applyVerifiedComparativeSnapshot,
+  applyPresentationReclassifications,
   buildK2FormalReportModel,
   formalBalanceSheetLines,
   formalIncomeStatementLines,
   type K2FormalReportModel,
 } from '@/lib/bokslut/formal-report/k2-model'
+import {
+  loadVerifiedComparativeSnapshot,
+  overviewRowFromSnapshot,
+  type VerifiedComparativeSnapshot,
+} from './comparatives'
+import { buildK2EquityRollforward } from './equity-rollforward'
 import type {
   ArsredovisningData,
   EgenKapitalRow,
@@ -114,7 +122,11 @@ export async function buildArsredovisningData(
   const companyRow = companyResult.data as
     | { entity_type?: string | null; accounting_framework?: AccountingFramework | null }
     | null
-  const companyName = lockedCompanySnapshot?.legal_name ?? settings?.company_name ?? 'Bolaget'
+  const companyName =
+    narrative?.report_legal_name
+    ?? lockedCompanySnapshot?.legal_name
+    ?? settings?.company_name
+    ?? 'Bolaget'
   const orgNumber =
     lockedCompanySnapshot?.organisation_number ?? settings?.org_number ?? ''
   // Default to 'unknown' (not 'aktiebolag') when entity_type isn't set —
@@ -133,7 +145,8 @@ export async function buildArsredovisningData(
   type AddressShape = { city?: string | null; postal_city?: string | null } | null
   const addressUnknown = (settings as { address?: AddressShape } | null)?.address ?? null
   const city =
-    lockedCompanySnapshot?.registered_office
+    narrative?.report_registered_office
+    ?? lockedCompanySnapshot?.registered_office
     ?? lockedCompanySnapshot?.city
     ?? (addressUnknown && (addressUnknown.city ?? addressUnknown.postal_city))
     ?? null
@@ -141,6 +154,8 @@ export async function buildArsredovisningData(
   // Merge precedence: caller overrides → persisted narrative → boilerplate
   const persistedDescription = narrative?.description ?? undefined
   const persistedEvents = narrative?.important_events ?? undefined
+  const persistedAfterBalance = narrative?.events_after_balance_sheet ?? undefined
+  const persistedPriorLegalName = narrative?.prior_legal_name ?? undefined
   const persistedRd = narrative?.resultatdisposition ?? undefined
   const persistedAgmDate = narrative?.agm_date ?? null
 
@@ -152,12 +167,11 @@ export async function buildArsredovisningData(
     fiscalPeriodId,
   ).catch(() => [])
 
-  // Prior-year comparison figures (R03): ÅRL 3:5 requires jämförelsetal for
-  // both RR and BR. Loaded from the same report generators as the current
-  // year so PDF and iXBRL share period definitions.
-  let priorIncomeStatement: Awaited<ReturnType<typeof generateIncomeStatement>> | null = null
-  let priorBalanceSheet: Awaited<ReturnType<typeof generateBalanceSheet>> | null = null
-  let priorPeriodMeta: { id: string; name: string } | null = null
+  // Comparison figures must come from an established/final/manual verified
+  // annual-report snapshot. A live query against the prior ledger would let a
+  // later import/reopen silently rewrite already published comparatives.
+  let verifiedComparative: VerifiedComparativeSnapshot | null = null
+  let priorPeriodMeta: ArsredovisningData['prior_period'] = null
   if (period.previous_period_id) {
     const { data: priorPeriodRow } = await supabase
       .from('fiscal_periods')
@@ -166,13 +180,28 @@ export async function buildArsredovisningData(
       .eq('company_id', companyId)
       .maybeSingle()
     if (priorPeriodRow) {
-      priorPeriodMeta = { id: priorPeriodRow.id as string, name: priorPeriodRow.name as string }
-      const [pIs, pBs] = await Promise.all([
-        generateIncomeStatement(supabase, companyId, priorPeriodRow.id as string).catch(() => null),
-        generateBalanceSheet(supabase, companyId, priorPeriodRow.id as string).catch(() => null),
-      ])
-      priorIncomeStatement = pIs
-      priorBalanceSheet = pBs
+      verifiedComparative = await loadVerifiedComparativeSnapshot(
+        supabase,
+        companyId,
+        priorPeriodRow.id as string,
+      ).catch(() => null)
+      let verifiedByName: string | null = null
+      if (verifiedComparative?.verified_by) {
+        const { data: verifierProfile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', verifiedComparative.verified_by)
+          .maybeSingle()
+        verifiedByName = verifierProfile?.full_name?.trim() || null
+      }
+      priorPeriodMeta = {
+        id: priorPeriodRow.id as string,
+        name: priorPeriodRow.name as string,
+        source_type: verifiedComparative?.source_type ?? null,
+        source_label: verifiedComparative?.source_label ?? null,
+        verified_at: verifiedComparative?.verified_at ?? null,
+        verified_by: verifiedByName,
+      }
     }
   }
 
@@ -184,7 +213,8 @@ export async function buildArsredovisningData(
     accountingFramework,
   )
 
-  const egen_kapital_changes = buildEquityChanges(balanceSheet.equity_liability_sections)
+  let egen_kapital_changes = buildEquityChanges(balanceSheet.equity_liability_sections)
+  const equityWarnings: string[] = []
 
   // K3 vs K2 split: K3 has a richer note set + a kassaflöde + a separate
   // equity-changes statement. The 18a/b warning that flagged "K3 noter not
@@ -281,56 +311,100 @@ export async function buildArsredovisningData(
       }),
     ])
 
-    let previousPair: Parameters<typeof buildK2FormalReportModel>[1] = null
-    if (priorPeriodMeta) {
-      const [previousFull, previousPreClosing] = await Promise.all([
-        generateTrialBalance(supabase, companyId, priorPeriodMeta.id),
-        generateTrialBalance(supabase, companyId, priorPeriodMeta.id, {
-          excludeYearEndClosing: true,
-        }),
-      ])
-      previousPair = {
-        full: previousFull.rows,
-        preClosing: previousPreClosing.rows,
-      }
-    }
-
     formal_report = buildK2FormalReportModel(
       { full: currentFull.rows, preClosing: currentPreClosing.rows },
-      previousPair,
+      null,
     )
+    if (verifiedComparative?.formal_report_snapshot) {
+      formal_report = applyVerifiedComparativeSnapshot(
+        formal_report,
+        verifiedComparative.formal_report_snapshot,
+      )
+    }
+    const { data: presentationRows, error: presentationError } = await supabase
+      .from('annual_report_presentation_reclassifications')
+      .select('id, account_number, source_concept, target_concept, amount, reason')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .is('revoked_at', null)
+      .order('created_at')
+    if (presentationError) {
+      throw new Error(`Presentationsomklassificeringar kunde inte hämtas: ${presentationError.message}`)
+    }
+    formal_report = applyPresentationReclassifications(
+      formal_report,
+      (presentationRows ?? []).map((row: {
+        id: unknown
+        account_number: unknown
+        source_concept: unknown
+        target_concept: unknown
+        amount: unknown
+        reason: unknown
+      }) => ({
+        id: String(row.id),
+        account_number: String(row.account_number),
+        source_concept: String(row.source_concept),
+        target_concept: String(row.target_concept),
+        amount: Number(row.amount),
+        reason: String(row.reason),
+      })),
+    )
+    const equityRollforward = await buildK2EquityRollforward(
+      supabase,
+      companyId,
+      fiscalPeriodId,
+      formal_report,
+    )
+    egen_kapital_changes = equityRollforward.rows
+    equityWarnings.push(...equityRollforward.warnings)
     resultatrakning = formalIncomeStatementLines(formal_report)
     balansrakning = formalBalanceSheetLines(formal_report)
+
+    // The current flerårsöversikt row must use the exact same classified K2
+    // model as the statements. This prevents an abnormal debtor balance on a
+    // liability account from inflating soliditet or letting the overview use
+    // result after tax instead of result after financial items.
+    const currentOverview = flerarsoversikt.find((row) => row.year === period.name)
+    if (currentOverview) {
+      const totalAssets = formal_report.totals.tillgangar.current
+      const adjustedEquity =
+        formal_report.totals.egetKapital.current
+        + formal_report.totals.obeskattadeReserver.current * (1 - LATENT_TAX_DEFAULT_RATE)
+      currentOverview.net_revenue = Math.round(
+        formal_report.rr.Nettoomsattning?.current ?? 0,
+      )
+      currentOverview.result_after_financial = Math.round(
+        formal_report.totals.resultatEfterFinansiellaPoster.current,
+      )
+      currentOverview.soliditet_pct =
+        totalAssets > 0
+          ? Math.round((adjustedEquity / totalAssets) * 1000) / 10
+          : null
+      currentOverview.data_missing = false
+    }
   } else {
     resultatrakning = flattenIncomeStatement(incomeStatement)
     balansrakning = flattenBalanceSheet(balanceSheet)
 
-    // K3 uses its separate report structure. Keep prior-year values attached
-    // to the same flattened labels; K2 comparison values come from the
-    // canonical formal model above.
-    if (priorIncomeStatement) {
-      const priorLines = flattenIncomeStatement(priorIncomeStatement)
-      const priorByLabel = new Map(priorLines.map((line) => [line.label, line.amount]))
-      for (const line of resultatrakning) {
-        line.prior_amount = priorByLabel.get(line.label) ?? 0
-      }
-    }
-    if (priorBalanceSheet) {
-      const priorBs = flattenBalanceSheet(priorBalanceSheet)
-      const priorAssetByLabel = new Map(priorBs.assets.map((line) => [line.label, line.amount]))
-      const priorEqByLabel = new Map(priorBs.equity_liabilities.map((line) => [line.label, line.amount]))
-      for (const line of balansrakning.assets) {
-        line.prior_amount = priorAssetByLabel.get(line.label) ?? 0
-      }
-      for (const line of balansrakning.equity_liabilities) {
-        line.prior_amount = priorEqByLabel.get(line.label) ?? 0
-      }
-      balansrakning.total_assets_prior = priorBs.total_assets
-      balansrakning.total_equity_liabilities_prior = priorBs.total_equity_liabilities
-    }
+    // K3 comparison figures also require a verified K3 snapshot. The current
+    // snapshot schema stores the canonical K2 formal model, so no live prior
+    // ledger fallback is allowed here. Finalization preflight reports the
+    // missing verified K3 comparatives explicitly.
   }
 
-  const warnings: string[] = [...noterWarnings]
+  const warnings: string[] = [...noterWarnings, ...equityWarnings]
+  if (priorPeriodMeta && !verifiedComparative) {
+    warnings.push(
+      `Jämförelsetal ${priorPeriodMeta.name} saknar verifierad källa. Importera föregående fastställda årsredovisning eller registrera manuellt verifierade jämförelsetal.`,
+    )
+  }
+  for (const overviewRow of flerarsoversikt) {
+    if (overviewRow.soliditet_pct !== null && overviewRow.soliditet_pct > 100) {
+      warnings.push(
+        `Soliditeten för ${overviewRow.year} överstiger 100 %. Kontrollera negativa skulder, nettning och onormala saldoriktningar.`,
+      )
+    }
+  }
   if (entityType !== 'aktiebolag' && entityType !== 'unknown') {
     warnings.push(
       'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
@@ -389,6 +463,9 @@ export async function buildArsredovisningData(
   if (overrides.important_events === undefined && persistedEvents === undefined) {
     unconfirmedDefaults.push('important_events')
   }
+  if (persistedAfterBalance === undefined) {
+    unconfirmedDefaults.push('events_after_balance_sheet')
+  }
   if (
     overrides.resultatdisposition === undefined
     && persistedRd === undefined
@@ -413,6 +490,7 @@ export async function buildArsredovisningData(
       name: companyName,
       org_number: orgNumber,
       city,
+      prior_legal_name: persistedPriorLegalName ?? null,
     },
     fiscal_period: {
       id: period.id,
@@ -426,11 +504,14 @@ export async function buildArsredovisningData(
       description:
         overrides.description ??
         persistedDescription ??
-        `${companyName} bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.`,
+        '[Verksamhetsbeskrivning saknas – beskriv vad bolaget faktiskt har gjort och hur intäkterna har uppkommit.]',
       important_events:
         overrides.important_events ??
         persistedEvents ??
-        'Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.',
+        '[Väsentliga händelser under året har inte verifierats.]',
+      events_after_balance_sheet:
+        persistedAfterBalance ??
+        '[Händelser efter balansdagen har inte verifierats.]',
       kontrollbalans_required: overrides.kontrollbalans_required ?? false,
       flerarsoversikt,
       egen_kapital_changes,
@@ -440,6 +521,12 @@ export async function buildArsredovisningData(
         structuredDisposition ??
         'Styrelsen föreslår att årets resultat balanseras i ny räkning.',
       agm_date: persistedAgmDate,
+      agm_accounts_adopted: narrative?.agm_accounts_adopted ?? null,
+      agm_result_disposition_decision:
+        narrative?.agm_result_disposition_decision ?? null,
+      certificate_signer_name: narrative?.certificate_signer_name ?? null,
+      certificate_signer_role: narrative?.certificate_signer_role ?? null,
+      certificate_signed_at: narrative?.certificate_signed_at ?? null,
     },
     resultatrakning,
     warnings,
@@ -567,66 +654,66 @@ async function buildFlerarsoversikt(
   allPeriods: PeriodRow[],
   accountingFramework: AccountingFramework,
 ): Promise<FlerarsoversiktRow[]> {
-  // Take the current period + 3 prior (oldest first).
+  // Current year is computed from the current locked ledger. Historical rows
+  // are accepted only from a verified annual-report snapshot.
   const sorted = [...allPeriods].sort((a, b) => a.period_start.localeCompare(b.period_start))
-  const currentIdx = sorted.findIndex((p) => p.id === currentPeriodId)
+  const currentIdx = sorted.findIndex((period) => period.id === currentPeriodId)
   if (currentIdx === -1) return []
   const slice = sorted.slice(Math.max(0, currentIdx - 3), currentIdx + 1)
-
   const rows: FlerarsoversiktRow[] = []
-  for (const p of slice) {
+
+  for (const period of slice) {
+    if (period.id !== currentPeriodId) {
+      const snapshot = await loadVerifiedComparativeSnapshot(
+        supabase,
+        companyId,
+        period.id,
+      ).catch(() => null)
+      const verifiedRow = snapshot ? overviewRowFromSnapshot(snapshot, period.name) : null
+      rows.push(
+        verifiedRow ?? {
+          year: period.name,
+          net_revenue: 0,
+          result_after_financial: 0,
+          soliditet_pct: null,
+          data_missing: true,
+        },
+      )
+      continue
+    }
+
     try {
-      const [is, tb] = await Promise.all([
-        generateIncomeStatement(supabase, companyId, p.id),
-        generateTrialBalance(supabase, companyId, p.id),
+      const [incomeStatement, trialBalance] = await Promise.all([
+        generateIncomeStatement(supabase, companyId, period.id),
+        generateTrialBalance(supabase, companyId, period.id),
       ])
-      // Nettoomsättning = sum of revenue sections (revenue is normally credit).
-      const netRevenue = is.total_revenue
-      const resultAfterFinancial = is.total_revenue - is.total_expenses + is.total_financial
-      const totalAssets = tb.rows
-        .filter((r) => r.account_class === 1)
-        .reduce((s, r) => s + (r.closing_debit - r.closing_credit), 0)
-      const eqLiab = tb.rows
-        .filter((r) => r.account_class === 2)
-        .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
-      // Soliditet differs by framework:
-      //   K2 (ÅRL / BFNAR 2016:10): 20xx only. 21xx (periodiseringsfonder,
-      //   överavskrivningar) are obeskattade reserver — partially deferred
-      //   tax, not equity. Including 21xx would inflate soliditet for any AB
-      //   that posts dispositions.
-      //
-      //   K3 (BFNAR 2012:1) splits 21xx into 79,4 % equity + 20,6 % latent
-      //   skatteskuld. Account 2240 holds the latent tax liability and is
-      //   already classified as a liability via class 2 / account_group 22,
-      //   so the soliditet add-on is just the equity portion of 21xx. (We
-      //   do NOT double-count 2240 here — the trial balance row for 2240
-      //   already lives in eqLiab as a liability.)
-      const baseEquity = tb.rows
-        .filter((r) => r.account_number.startsWith('20'))
-        .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
+      const totalAssets = trialBalance.rows
+        .filter((row) => row.account_class === 1)
+        .reduce((sum, row) => sum + (row.closing_debit - row.closing_credit), 0)
+      const baseEquity = trialBalance.rows
+        .filter((row) => row.account_number.startsWith('20'))
+        .reduce((sum, row) => sum + (row.closing_credit - row.closing_debit), 0)
       let equity = baseEquity
       if (accountingFramework === 'k3') {
-        const obeskattadeReserver = tb.rows
-          .filter((r) => r.account_number.startsWith('21'))
-          .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
-        equity += obeskattadeReserver * (1 - LATENT_TAX_DEFAULT_RATE)
+        const untaxedReserves = trialBalance.rows
+          .filter((row) => row.account_number.startsWith('21'))
+          .reduce((sum, row) => sum + (row.closing_credit - row.closing_debit), 0)
+        equity += untaxedReserves * (1 - LATENT_TAX_DEFAULT_RATE)
       }
-      const soliditet =
-        totalAssets > 0 ? Math.round((equity / totalAssets) * 1000) / 10 : null
-      // Avoid the unused-variable warning while leaving eqLiab computed for
-      // future "Skulder" column expansion.
-      void eqLiab
       rows.push({
-        year: p.name,
-        net_revenue: Math.round(netRevenue),
-        result_after_financial: Math.round(resultAfterFinancial),
-        soliditet_pct: soliditet,
+        year: period.name,
+        net_revenue: Math.round(incomeStatement.total_revenue),
+        result_after_financial: Math.round(
+          incomeStatement.total_revenue
+            - incomeStatement.total_expenses
+            + incomeStatement.total_financial,
+        ),
+        soliditet_pct:
+          totalAssets > 0 ? Math.round((equity / totalAssets) * 1000) / 10 : null,
       })
     } catch {
-      // R09: NEVER fabricate zeros. The row is explicitly marked as missing
-      // data; the final document is blocked while any row is unavailable.
       rows.push({
-        year: p.name,
+        year: period.name,
         net_revenue: 0,
         result_after_financial: 0,
         soliditet_pct: null,

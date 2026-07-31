@@ -11,6 +11,10 @@
  * matter we'll add a Playwright-based screenshot test later.
  */
 import { describe, it, expect } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { ArsredovisningK3PDF } from '../arsredovisning-k3-pdf'
 import { ArsredovisningPDF } from '../arsredovisning-pdf'
@@ -225,4 +229,45 @@ describe('ArsredovisningPDF (K2) — byte-equivalence guard', () => {
     const buffer = await renderToBuffer(doc)
     expect(buffer.length).toBeGreaterThan(0)
   })
+
+  const pdfTextTest = existsSync('/usr/bin/pdftotext') ? it : it.skip
+  pdfTextTest('extracts canonical minus signs, page numbers and no UTKAST from a final K2 PDF', async () => {
+    const data = makeMinimalK3Data()
+    data.accounting_framework = 'k2'
+    delete data.kassaflodesanalys
+    delete data.equity_changes_statement
+    data.resultatrakning = [
+      { label: 'Nettoomsättning', amount: 21_300 },
+      { label: 'Övriga externa kostnader', amount: -1_456 },
+      { label: 'Skatt på årets resultat', amount: -2_154 },
+      { label: 'Årets resultat', amount: 17_690, is_total: true },
+    ]
+    data.signatures = [
+      {
+        role: 'Styrelseledamot',
+        name: 'Anna Andersson',
+        signed_at: '2026-04-30T10:00:00Z',
+        status: 'signed',
+      },
+    ]
+    const buffer = await renderToBuffer(
+      ArsredovisningPDF({ data, isDraft: false, draftBlockers: [] }),
+    )
+    const directory = mkdtempSync(join(tmpdir(), 'nordklart-final-pdf-'))
+    const file = join(directory, 'annual-report.pdf')
+    try {
+      writeFileSync(file, buffer)
+      const text = execFileSync('/usr/bin/pdftotext', [file, '-'], {
+        encoding: 'utf8',
+      })
+      expect(text).not.toMatch(/UTKAST/i)
+      expect(text).toContain('-1 456')
+      expect(text).toContain('-2 154')
+      expect(text).toMatch(/Sida\s+1\s+av\s+\d+/)
+      expect(text).not.toMatch(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/)
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
 })

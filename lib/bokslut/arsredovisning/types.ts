@@ -20,8 +20,13 @@ export interface FlerarsoversiktRow {
 
 export interface EgenKapitalRow {
   label: string
-  /** Single SEK number — positive = credit balance (typical for equity). */
+  /** Total movement/value for backwards-compatible consumers. */
   amount: number
+  /** Optional component columns used by the K2 equity roll-forward table. */
+  aktiekapital?: number
+  balanserat_resultat?: number
+  arets_resultat?: number
+  row_kind?: 'opening' | 'movement' | 'result' | 'closing'
 }
 
 export interface NoteEntry {
@@ -61,6 +66,8 @@ export interface ArsredovisningData {
     /** Företagets säte (Bolagsverket-registered registered office city).
      *  Used in the underskrifter "Stad, datum" line and the fastställelseintyg. */
     city: string | null
+    /** Historical legal name retained from SIE/registry source data. */
+    prior_legal_name?: string | null
   }
   fiscal_period: {
     id: string
@@ -80,6 +87,8 @@ export interface ArsredovisningData {
     description: string
     /** Viktiga händelser (företaget kan editera). */
     important_events: string
+    /** Verifierade händelser efter balansdagen, e.g. a legal-name change. */
+    events_after_balance_sheet?: string
     /** Har kontrollbalansräkning upprättats? */
     kontrollbalans_required: boolean
     flerarsoversikt: FlerarsoversiktRow[]
@@ -91,6 +100,12 @@ export interface ArsredovisningData {
      *  Populates the fastställelseintyg date blank. Null means "not yet
      *  recorded" — PDF then leaves the blank. */
     agm_date: string | null
+    /** AGM adoption is separate from the board proposal. */
+    agm_accounts_adopted?: boolean | null
+    agm_result_disposition_decision?: string | null
+    certificate_signer_name?: string | null
+    certificate_signer_role?: string | null
+    certificate_signed_at?: string | null
   }
   resultatrakning: IncomeStatementLine[]
   balansrakning: {
@@ -123,7 +138,14 @@ export interface ArsredovisningData {
     status?: 'pending' | 'signed' | 'declined'
   }[]
   /** Prior period metadata for the jämförelse column (R03). */
-  prior_period?: { id: string; name: string } | null
+  prior_period?: {
+    id: string
+    name: string
+    source_type?: 'established_annual_report' | 'final_report_snapshot' | 'manually_verified' | null
+    source_label?: string | null
+    verified_at?: string | null
+    verified_by?: string | null
+  } | null
   /** Förvaltningsberättelse fields still on unconfirmed boilerplate (R10).
    *  Non-empty blocks the FINAL document — standard texts asserting facts
    *  require active user confirmation. */

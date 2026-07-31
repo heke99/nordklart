@@ -11,13 +11,69 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { PageHeader } from '@/components/ui/page-header'
-import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2 } from 'lucide-react'
+import {
+  ArrowLeft,
+  FileDown,
+  Plus,
+  ExternalLink,
+  Loader2,
+  Save,
+  CheckCircle2,
+  LockKeyhole,
+  RefreshCw,
+} from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
 import { ConsentSigningDialog } from '@/components/bankid/ConsentSigningDialog'
 import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
+
+type PresentationReclassification = {
+  id: string
+  account_number: string
+  source_concept: string
+  target_concept: string
+  original_presentation?: string
+  target_presentation: string
+  amount: number
+  reason: string
+  created_at: string
+}
+
+type AnnualReportLifecycle = {
+  ledger_locked: boolean
+  annual_report_locked: boolean
+  status: string
+  preflight: {
+    preflight_status: 'passed' | 'failed'
+    blocking_issue_count: number
+    warning_count: number
+    issues: Array<{
+      code: string
+      severity: 'blocking' | 'warning'
+      scope: string
+      message: string
+      requires_reopen: boolean
+      actions: Array<{ id: string; label: string }>
+    }>
+  }
+  final_pdf_url: string | null
+  final_ixbrl_url: string | null
+  presentation_reclassifications: PresentationReclassification[]
+}
+
+type FiscalPeriodReopenRequest = {
+  id: string
+  status: 'requested' | 'approved' | 'reopening' | 'reopened' | 'rejected' | 'blocked' | 'failed'
+  reason: string
+  requested_changes: string[]
+  designated_approver_name: string
+  error_code?: string | null
+  error_message?: string | null
+  requested_at: string
+  reopened_at?: string | null
+}
 
 export default function ArsredovisningPage() {
   const router = useRouter()
@@ -32,18 +88,54 @@ export default function ArsredovisningPage() {
   const [bankIdSignFor, setBankIdSignFor] = useState<SignatureRequest | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [lifecycle, setLifecycle] = useState<AnnualReportLifecycle | null>(null)
+  const [finalizing, setFinalizing] = useState(false)
+  const [creatingVersion, setCreatingVersion] = useState(false)
+  const [reopenRequests, setReopenRequests] = useState<FiscalPeriodReopenRequest[]>([])
+  const [reopenReason, setReopenReason] = useState('')
+  const [reopenChanges, setReopenChanges] = useState('')
+  const [reopenApprover, setReopenApprover] = useState('')
+  const [annualReportAlreadyFiled, setAnnualReportAlreadyFiled] = useState(false)
+  const [taxReturnAlreadyFiled, setTaxReturnAlreadyFiled] = useState(false)
+  const [submittingReopen, setSubmittingReopen] = useState(false)
+  const [approvingReopenId, setApprovingReopenId] = useState<string | null>(null)
+  const [reclassAccount, setReclassAccount] = useState('')
+  const [reclassTargetConcept, setReclassTargetConcept] = useState('OvrigaFordringarKortfristiga')
+  const [reclassTargetLabel, setReclassTargetLabel] = useState('Övriga kortfristiga fordringar')
+  const [reclassAmount, setReclassAmount] = useState('')
+  const [reclassReason, setReclassReason] = useState('')
+  const [savingReclassification, setSavingReclassification] = useState(false)
+  const [revokingReclassificationId, setRevokingReclassificationId] = useState<string | null>(null)
 
   // Editable narrative fields — persisted to arsredovisning_narratives so
   // the PDF always reflects the latest saved version and a refresh / new
   // user picks up the same content.
   const [description, setDescription] = useState('')
   const [importantEvents, setImportantEvents] = useState('')
+  const [eventsAfterBalanceSheet, setEventsAfterBalanceSheet] = useState('')
+  const [reportLegalName, setReportLegalName] = useState('')
+  const [reportRegisteredOffice, setReportRegisteredOffice] = useState('')
+  const [priorLegalName, setPriorLegalName] = useState('')
   const [resultatdisposition, setResultatdisposition] = useState('')
   const [savedDescription, setSavedDescription] = useState('')
   const [savedImportantEvents, setSavedImportantEvents] = useState('')
+  const [savedEventsAfterBalanceSheet, setSavedEventsAfterBalanceSheet] = useState('')
+  const [savedReportLegalName, setSavedReportLegalName] = useState('')
+  const [savedReportRegisteredOffice, setSavedReportRegisteredOffice] = useState('')
+  const [savedPriorLegalName, setSavedPriorLegalName] = useState('')
   const [savedResultatdisposition, setSavedResultatdisposition] = useState('')
   const [agmDate, setAgmDate] = useState('')
   const [savedAgmDate, setSavedAgmDate] = useState('')
+  const [agmAccountsAdopted, setAgmAccountsAdopted] = useState(false)
+  const [savedAgmAccountsAdopted, setSavedAgmAccountsAdopted] = useState(false)
+  const [agmDecision, setAgmDecision] = useState('')
+  const [savedAgmDecision, setSavedAgmDecision] = useState('')
+  const [certificateSignerName, setCertificateSignerName] = useState('')
+  const [savedCertificateSignerName, setSavedCertificateSignerName] = useState('')
+  const [certificateSignerRole, setCertificateSignerRole] = useState('Styrelseledamot')
+  const [savedCertificateSignerRole, setSavedCertificateSignerRole] = useState('Styrelseledamot')
+  const [certificateSignedAt, setCertificateSignedAt] = useState('')
+  const [savedCertificateSignedAt, setSavedCertificateSignedAt] = useState('')
   // Disclosure fields per ÅRL 5:13-15 § + BFNAR koncernförhållanden.
   // Persisted via the same POST endpoint as the förvaltningsberättelse text.
   const [longTermDebt, setLongTermDebt] = useState('')
@@ -65,6 +157,17 @@ export default function ArsredovisningPage() {
   const [signerName, setSignerName] = useState('')
   const [signerRole, setSignerRole] = useState('Styrelseledamot')
 
+  const refreshAnnualReportState = useCallback(async () => {
+    if (!periodId) return
+    const response = await fetch(
+      `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning${companySuffix}`,
+    )
+    if (!response.ok) return
+    const body = await response.json()
+    if (body?.data) setData(body.data as ArsredovisningData)
+    setLifecycle((body?.lifecycle ?? null) as AnnualReportLifecycle | null)
+  }, [periodId, companySuffix])
+
   useEffect(() => {
     if (!periodId) return
     let cancelled = false
@@ -73,8 +176,9 @@ export default function ArsredovisningPage() {
       fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures${companySuffix}`).then((r) =>
         r.json(),
       ),
+      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/reopen${companySuffix}`).then((r) => r.json()),
     ])
-      .then(([arBody, sigBody]) => {
+      .then(([arBody, sigBody, reopenBody]) => {
         if (cancelled) return
         if (arBody?.error) {
           setError(arBody.error.message ?? 'Kunde inte hämta årsredovisning')
@@ -82,18 +186,42 @@ export default function ArsredovisningPage() {
         }
         const d = arBody.data as ArsredovisningData
         setData(d)
+        setLifecycle((arBody.lifecycle ?? null) as AnnualReportLifecycle | null)
         // buildArsredovisningData merges persisted narrative + boilerplate,
         // so the values here are whatever the user will see in the PDF
         // unless they edit. Track both "current draft" and "last saved" so
         // we can disable Spara when there's nothing pending.
         setDescription(d.forvaltningsberattelse.description)
         setImportantEvents(d.forvaltningsberattelse.important_events)
+        setEventsAfterBalanceSheet(d.forvaltningsberattelse.events_after_balance_sheet ?? '')
+        setReportLegalName(d.company.name)
+        setReportRegisteredOffice(d.company.city ?? '')
+        setPriorLegalName(d.company.prior_legal_name ?? '')
         setResultatdisposition(d.forvaltningsberattelse.resultatdisposition)
         setAgmDate(d.forvaltningsberattelse.agm_date ?? '')
         setSavedDescription(d.forvaltningsberattelse.description)
         setSavedImportantEvents(d.forvaltningsberattelse.important_events)
+        setSavedEventsAfterBalanceSheet(d.forvaltningsberattelse.events_after_balance_sheet ?? '')
+        setSavedReportLegalName(d.company.name)
+        setSavedReportRegisteredOffice(d.company.city ?? '')
+        setSavedPriorLegalName(d.company.prior_legal_name ?? '')
         setSavedResultatdisposition(d.forvaltningsberattelse.resultatdisposition)
         setSavedAgmDate(d.forvaltningsberattelse.agm_date ?? '')
+        const adopted = d.forvaltningsberattelse.agm_accounts_adopted === true
+        const decision = d.forvaltningsberattelse.agm_result_disposition_decision ?? ''
+        const certName = d.forvaltningsberattelse.certificate_signer_name ?? ''
+        const certRole = d.forvaltningsberattelse.certificate_signer_role ?? 'Styrelseledamot'
+        const certDate = d.forvaltningsberattelse.certificate_signed_at ?? ''
+        setAgmAccountsAdopted(adopted)
+        setSavedAgmAccountsAdopted(adopted)
+        setAgmDecision(decision)
+        setSavedAgmDecision(decision)
+        setCertificateSignerName(certName)
+        setSavedCertificateSignerName(certName)
+        setCertificateSignerRole(certRole)
+        setSavedCertificateSignerRole(certRole)
+        setCertificateSignedAt(certDate)
+        setSavedCertificateSignedAt(certDate)
         const ltd = d.disclosures.long_term_debt_over_five_years
         const ltdStr = ltd != null ? String(ltd) : ''
         setLongTermDebt(ltdStr)
@@ -109,6 +237,7 @@ export default function ArsredovisningPage() {
         setParentCity(d.disclosures.parent_company_city ?? '')
         setSavedParentCity(d.disclosures.parent_company_city ?? '')
         setSignatures((sigBody.data ?? []) as SignatureRequest[])
+        setReopenRequests((reopenBody?.data ?? []) as FiscalPeriodReopenRequest[])
       })
       .catch(() => {
         if (!cancelled) setError('Kunde inte hämta årsredovisning')
@@ -124,8 +253,17 @@ export default function ArsredovisningPage() {
   const hasUnsavedNarrative =
     description !== savedDescription ||
     importantEvents !== savedImportantEvents ||
+    eventsAfterBalanceSheet !== savedEventsAfterBalanceSheet ||
+    reportLegalName !== savedReportLegalName ||
+    reportRegisteredOffice !== savedReportRegisteredOffice ||
+    priorLegalName !== savedPriorLegalName ||
     resultatdisposition !== savedResultatdisposition ||
     agmDate !== savedAgmDate ||
+    agmAccountsAdopted !== savedAgmAccountsAdopted ||
+    agmDecision !== savedAgmDecision ||
+    certificateSignerName !== savedCertificateSignerName ||
+    certificateSignerRole !== savedCertificateSignerRole ||
+    certificateSignedAt !== savedCertificateSignedAt ||
     longTermDebt !== savedLongTermDebt ||
     securitiesPledged !== savedSecuritiesPledged ||
     contingentLiabilities !== savedContingentLiabilities ||
@@ -162,8 +300,17 @@ export default function ArsredovisningPage() {
           body: JSON.stringify({
             description,
             important_events: importantEvents,
+            events_after_balance_sheet: eventsAfterBalanceSheet,
+            report_legal_name: reportLegalName.trim() || null,
+            report_registered_office: reportRegisteredOffice.trim() || null,
+            prior_legal_name: priorLegalName.trim() || null,
             resultatdisposition,
             agm_date: agmDate || null,
+            agm_accounts_adopted: agmAccountsAdopted,
+            agm_result_disposition_decision: agmDecision.trim() || null,
+            certificate_signer_name: certificateSignerName.trim() || null,
+            certificate_signer_role: certificateSignerRole.trim() || null,
+            certificate_signed_at: certificateSignedAt || null,
             long_term_debt_over_five_years: longTermDebtParsed,
             securities_pledged: securitiesPledged.trim() || null,
             contingent_liabilities: contingentLiabilities.trim() || null,
@@ -184,8 +331,17 @@ export default function ArsredovisningPage() {
       }
       setSavedDescription(description)
       setSavedImportantEvents(importantEvents)
+      setSavedEventsAfterBalanceSheet(eventsAfterBalanceSheet)
+      setSavedReportLegalName(reportLegalName)
+      setSavedReportRegisteredOffice(reportRegisteredOffice)
+      setSavedPriorLegalName(priorLegalName)
       setSavedResultatdisposition(resultatdisposition)
       setSavedAgmDate(agmDate)
+      setSavedAgmAccountsAdopted(agmAccountsAdopted)
+      setSavedAgmDecision(agmDecision)
+      setSavedCertificateSignerName(certificateSignerName)
+      setSavedCertificateSignerRole(certificateSignerRole)
+      setSavedCertificateSignedAt(certificateSignedAt)
       setSavedLongTermDebt(longTermDebt)
       setSavedSecuritiesPledged(securitiesPledged)
       setSavedContingentLiabilities(contingentLiabilities)
@@ -193,6 +349,7 @@ export default function ArsredovisningPage() {
       setSavedParentOrgNr(parentOrgNr)
       setSavedParentCity(parentCity)
       setSavedAt(Date.now())
+      await refreshAnnualReportState()
     } catch (err) {
       toast({
         title: 'Kunde inte spara texten',
@@ -207,27 +364,55 @@ export default function ArsredovisningPage() {
     companySuffix,
     description,
     importantEvents,
+    eventsAfterBalanceSheet,
+    reportLegalName,
+    reportRegisteredOffice,
+    priorLegalName,
     resultatdisposition,
     agmDate,
+    agmAccountsAdopted,
+    agmDecision,
+    certificateSignerName,
+    certificateSignerRole,
+    certificateSignedAt,
     longTermDebt,
     securitiesPledged,
     contingentLiabilities,
     parentName,
     parentOrgNr,
     parentCity,
+    refreshAnnualReportState,
     toast,
   ])
 
   const handleMarkSigned = useCallback(
     async (signatureId: string) => {
       if (!periodId) return
+      const now = new Date()
+      const localToday = [
+        now.getFullYear(),
+        String(now.getMonth() + 1).padStart(2, '0'),
+        String(now.getDate()).padStart(2, '0'),
+      ].join('-')
+      const signedAt = window.prompt(
+        'Ange den verkliga underskriftsdagen (ÅÅÅÅ-MM-DD):',
+        localToday,
+      )?.trim()
+      if (!signedAt || !/^\d{4}-\d{2}-\d{2}$/.test(signedAt)) {
+        toast({
+          title: 'Underskriftsdag krävs',
+          description: 'Ange datum i formatet ÅÅÅÅ-MM-DD. Datumet sätts aldrig automatiskt.',
+          variant: 'destructive',
+        })
+        return
+      }
       try {
         const res = await fetch(
           `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures/${signatureId}${companySuffix}`,
           {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'signed' }),
+            body: JSON.stringify({ status: 'signed', signed_at: signedAt }),
           },
         )
         const body = await res.json()
@@ -243,6 +428,7 @@ export default function ArsredovisningPage() {
           prev.map((s) => (s.id === signatureId ? (body.data as SignatureRequest) : s)),
         )
         toast({ title: 'Underskrift registrerad' })
+        await refreshAnnualReportState()
       } catch (err) {
         toast({
           title: 'Kunde inte markera som signerad',
@@ -251,7 +437,7 @@ export default function ArsredovisningPage() {
         })
       }
     },
-    [periodId, companySuffix, toast],
+    [periodId, companySuffix, refreshAnnualReportState, toast],
   )
 
   const handleAddSigner = useCallback(async () => {
@@ -277,6 +463,7 @@ export default function ArsredovisningPage() {
       setSignatures((prev) => [...prev, body.data as SignatureRequest])
       setSignerName('')
       toast({ title: 'Undertecknare tillagd', description: `${signerRole}: ${signerName}` })
+      await refreshAnnualReportState()
     } catch (err) {
       toast({
         title: 'Kunde inte lägga till undertecknare',
@@ -284,7 +471,313 @@ export default function ArsredovisningPage() {
         variant: 'destructive',
       })
     }
-  }, [periodId, companySuffix, signerName, signerRole, toast])
+  }, [periodId, companySuffix, signerName, signerRole, refreshAnnualReportState, toast])
+
+  const handleFinalize = useCallback(async () => {
+    if (!periodId || hasUnsavedNarrative) return
+    setFinalizing(true)
+    try {
+      const res = await fetch(
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/finalize${companySuffix}`,
+        { method: 'POST' },
+      )
+      const body = await res.json()
+      if (!res.ok) {
+        const preflight = body?.error?.details?.preflight
+        if (preflight && lifecycle) setLifecycle({ ...lifecycle, preflight })
+        toast({
+          title: 'Årsredovisningen kunde inte färdigställas',
+          description: getYearEndApiErrorMessage(body, 'Kontrollera blockerarna nedan.', res.status),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: 'Slutversion skapad och arkiverad' })
+      window.location.reload()
+    } catch (err) {
+      toast({
+        title: 'Årsredovisningen kunde inte färdigställas',
+        description: err instanceof Error ? err.message : 'Okänt fel',
+        variant: 'destructive',
+      })
+    } finally {
+      setFinalizing(false)
+    }
+  }, [periodId, companySuffix, hasUnsavedNarrative, lifecycle, toast])
+
+  const handleCreateNewVersion = useCallback(async () => {
+    if (!periodId) return
+    const reason = window.prompt('Ange varför en ny årsredovisningsversion behövs:')?.trim()
+    if (!reason || reason.length < 10) return
+    setCreatingVersion(true)
+    try {
+      const res = await fetch(
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/versions${companySuffix}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason }),
+        },
+      )
+      const body = await res.json()
+      if (!res.ok) {
+        toast({
+          title: 'Ny version kunde inte skapas',
+          description: getYearEndApiErrorMessage(body, 'Åtgärden misslyckades.', res.status),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: 'Nytt redigerbart utkast skapat' })
+      window.location.reload()
+    } catch (err) {
+      toast({
+        title: 'Ny version kunde inte skapas',
+        description: err instanceof Error ? err.message : 'Okänt fel',
+        variant: 'destructive',
+      })
+    } finally {
+      setCreatingVersion(false)
+    }
+  }, [periodId, companySuffix, toast])
+
+  const handleRequestReopen = useCallback(async () => {
+    if (!periodId) return
+    const requestedChanges = reopenChanges
+      .split(/\n|,/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+    if (reopenReason.trim().length < 10 || requestedChanges.length === 0 || reopenApprover.trim().length < 2) {
+      toast({
+        title: 'Komplettera återöppningsbegäran',
+        description: 'Ange orsak, minst en konkret ändring och vem som ska godkänna.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setSubmittingReopen(true)
+    try {
+      const response = await fetch(
+        `/api/bookkeeping/fiscal-periods/${periodId}/reopen${companySuffix}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reason: reopenReason.trim(),
+            requested_changes: requestedChanges,
+            annual_report_already_filed: annualReportAlreadyFiled,
+            tax_return_already_filed: taxReturnAlreadyFiled,
+            designated_approver_name: reopenApprover.trim(),
+          }),
+        },
+      )
+      const body = await response.json()
+      if (!response.ok && response.status !== 409) {
+        toast({
+          title: 'Återöppningsbegäran kunde inte sparas',
+          description: getYearEndApiErrorMessage(body, 'Åtgärden misslyckades.', response.status),
+          variant: 'destructive',
+        })
+        return
+      }
+      const request = body?.data as FiscalPeriodReopenRequest | undefined
+      if (request) setReopenRequests((current) => [request, ...current])
+      setReopenReason('')
+      setReopenChanges('')
+      setReopenApprover('')
+      toast({
+        title: request?.status === 'blocked' ? 'Särskilt rättelseflöde krävs' : 'Återöppningsbegäran skapad',
+        description: request?.error_message ?? 'Begäran är sparad och kan godkännas av behörig person.',
+        variant: request?.status === 'blocked' ? 'destructive' : 'default',
+      })
+    } catch (requestError) {
+      toast({
+        title: 'Återöppningsbegäran kunde inte sparas',
+        description: requestError instanceof Error ? requestError.message : 'Okänt fel',
+        variant: 'destructive',
+      })
+    } finally {
+      setSubmittingReopen(false)
+    }
+  }, [
+    periodId,
+    companySuffix,
+    reopenChanges,
+    reopenReason,
+    reopenApprover,
+    annualReportAlreadyFiled,
+    taxReturnAlreadyFiled,
+    toast,
+  ])
+
+  const handleApproveReopen = useCallback(async (requestId: string) => {
+    if (!periodId) return
+    const approvalNote = window.prompt('Ange godkännandemotivering (minst 5 tecken):')?.trim()
+    if (!approvalNote || approvalNote.length < 5) return
+    setApprovingReopenId(requestId)
+    try {
+      const response = await fetch(
+        `/api/bookkeeping/fiscal-periods/${periodId}/reopen/${requestId}/approve${companySuffix}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approval_note: approvalNote }),
+        },
+      )
+      const body = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Räkenskapsåret kunde inte återöppnas',
+          description: getYearEndApiErrorMessage(body, body?.data?.error_message ?? 'Åtgärden misslyckades.', response.status),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: 'Räkenskapsåret har återöppnats för kontrollerad rättelse' })
+      window.location.reload()
+    } catch (approvalError) {
+      toast({
+        title: 'Räkenskapsåret kunde inte återöppnas',
+        description: approvalError instanceof Error ? approvalError.message : 'Okänt fel',
+        variant: 'destructive',
+      })
+    } finally {
+      setApprovingReopenId(null)
+    }
+  }, [periodId, companySuffix, toast])
+
+  const handleCreateReclassification = useCallback(async () => {
+    if (!periodId) return
+    const amount = Number(reclassAmount.replace(',', '.'))
+    if (!/^\d{4}$/.test(reclassAccount) || !Number.isFinite(amount) || amount <= 0 || reclassReason.trim().length < 10) {
+      toast({
+        title: 'Ofullständig omklassificering',
+        description: 'Ange ett fyrsiffrigt konto, ett positivt belopp och en motivering på minst 10 tecken.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setSavingReclassification(true)
+    try {
+      const response = await fetch(
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/reclassifications${companySuffix}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            account_number: reclassAccount,
+            target_concept: reclassTargetConcept,
+            target_presentation: reclassTargetLabel,
+            amount,
+            reason: reclassReason.trim(),
+          }),
+        },
+      )
+      const body = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Omklassificeringen kunde inte sparas',
+          description: getYearEndApiErrorMessage(body, body?.error?.message ?? 'Åtgärden misslyckades.', response.status),
+          variant: 'destructive',
+        })
+        return
+      }
+      setReclassAccount('')
+      setReclassAmount('')
+      setReclassReason('')
+      toast({ title: 'Presentationsomklassificeringen har sparats' })
+      await refreshAnnualReportState()
+    } catch (reclassificationError) {
+      toast({
+        title: 'Omklassificeringen kunde inte sparas',
+        description: reclassificationError instanceof Error ? reclassificationError.message : 'Okänt fel',
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingReclassification(false)
+    }
+  }, [
+    periodId,
+    companySuffix,
+    reclassAccount,
+    reclassAmount,
+    reclassReason,
+    reclassTargetConcept,
+    reclassTargetLabel,
+    refreshAnnualReportState,
+    toast,
+  ])
+
+  const handleRevokeReclassification = useCallback(async (id: string) => {
+    if (!periodId) return
+    const reason = window.prompt('Ange varför omklassificeringen återkallas (minst 10 tecken):')?.trim()
+    if (!reason || reason.length < 10) return
+    setRevokingReclassificationId(id)
+    try {
+      const response = await fetch(
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/reclassifications${companySuffix}`,
+        {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, reason }),
+        },
+      )
+      const body = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Omklassificeringen kunde inte återkallas',
+          description: getYearEndApiErrorMessage(body, body?.error?.message ?? 'Åtgärden misslyckades.', response.status),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: 'Omklassificeringen har återkallats' })
+      await refreshAnnualReportState()
+    } finally {
+      setRevokingReclassificationId(null)
+    }
+  }, [periodId, companySuffix, refreshAnnualReportState, toast])
+
+  const focusIssueAction = useCallback((actionId: string, requiresReopen: boolean) => {
+    const target = requiresReopen || actionId === 'request_reopen'
+      ? 'controlled-reopen'
+      : actionId === 'manage_signatures'
+        ? 'annual-report-signatures'
+        : ['edit_narrative', 'complete_agm', 'complete_certificate'].includes(actionId)
+          ? 'annual-report-narrative'
+          : ['create_presentation_reclassification', 'review_reclassifications'].includes(actionId)
+            ? 'annual-report-reclassifications'
+            : null
+    if (target) {
+      document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+    if (['open_year_end', 'show_balance_analysis', 'show_account_analysis', 'review_equity'].includes(actionId)) {
+      router.push(
+        `/bookkeeping/year-end?period=${encodeURIComponent(periodId ?? '')}${
+          companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''
+        }`,
+      )
+      return
+    }
+    if (actionId === 'download_k3_draft' && periodId) {
+      window.open(
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf${companySuffix}`,
+        '_blank',
+        'noopener,noreferrer',
+      )
+      return
+    }
+    if (['import_prior_annual_report', 'enter_verified_comparatives', 'complete_multi_year_overview'].includes(actionId)) {
+      toast({
+        title: 'Verifierade jämförelsetal krävs',
+        description: 'Registrera föregående fastställda årsredovisning via jämförelseimporten innan slutversion skapas.',
+      })
+      return
+    }
+    void refreshAnnualReportState()
+    toast({ title: 'Kontrollen har körts om' })
+  }, [companyId, companySuffix, periodId, refreshAnnualReportState, router, toast])
 
   if (!periodId) {
     return (
@@ -395,7 +888,7 @@ export default function ArsredovisningPage() {
         </Card>
       )}
 
-      <Card>
+      <Card id="annual-report-narrative">
         <CardHeader>
           <CardTitle className="text-base">Förvaltningsberättelse — narrativ</CardTitle>
           <p className="text-sm text-muted-foreground">
@@ -404,6 +897,36 @@ export default function ArsredovisningPage() {
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
+          {lifecycle?.annual_report_locked && (
+            <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+              Slutversionen är skrivskyddad. Välj <strong>Skapa ny version</strong> för
+              att redigera dokumentuppgifter utan att öppna huvudboken.
+            </div>
+          )}
+          <fieldset disabled={lifecycle?.annual_report_locked} className="space-y-4 disabled:opacity-70">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="ar-legal-name">Juridiskt företagsnamn i årsredovisningen</Label>
+              <Input
+                id="ar-legal-name"
+                value={reportLegalName}
+                onChange={(e) => setReportLegalName(e.target.value)}
+                placeholder="Exempel: Gridex EL AB"
+              />
+              <p className="text-xs text-muted-foreground">
+                Dokumentuppgift. Ändrar inte företagsregistret eller huvudboken.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ar-registered-office">Säte</Label>
+              <Input
+                id="ar-registered-office"
+                value={reportRegisteredOffice}
+                onChange={(e) => setReportRegisteredOffice(e.target.value)}
+                placeholder="Exempel: Linköping"
+              />
+            </div>
+          </div>
           <div className="space-y-1.5">
             <Label htmlFor="ar-description">Verksamhetsbeskrivning</Label>
             <Textarea
@@ -420,6 +943,25 @@ export default function ArsredovisningPage() {
               value={importantEvents}
               onChange={(e) => setImportantEvents(e.target.value)}
               rows={4}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ar-after-balance">Händelser efter balansdagen</Label>
+            <Textarea
+              id="ar-after-balance"
+              value={eventsAfterBalanceSheet}
+              onChange={(e) => setEventsAfterBalanceSheet(e.target.value)}
+              rows={3}
+              placeholder="Exempel: Bolaget ändrade under 2026 företagsnamn från Div3rsa AB till Gridex EL AB."
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ar-prior-name">Tidigare juridiskt företagsnamn</Label>
+            <Input
+              id="ar-prior-name"
+              value={priorLegalName}
+              onChange={(e) => setPriorLegalName(e.target.value)}
+              placeholder="Exempel: Div3rsa AB"
             />
           </div>
           <div className="space-y-1.5">
@@ -444,6 +986,54 @@ export default function ArsredovisningPage() {
               Datum då årsstämman fastställde årsredovisningen — fyller i datumraden på
               fastställelseintyget i PDF:en (krävs för inlämning till Bolagsverket).
             </p>
+          </div>
+
+          <div className="space-y-3 rounded-md border border-border p-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={agmAccountsAdopted}
+                onChange={(e) => setAgmAccountsAdopted(e.target.checked)}
+              />
+              Årsstämman har fastställt resultat- och balansräkningen
+            </label>
+            <div className="space-y-1.5">
+              <Label htmlFor="ar-agm-decision">Årsstämmans beslut om resultatdisposition</Label>
+              <Textarea
+                id="ar-agm-decision"
+                value={agmDecision}
+                onChange={(e) => setAgmDecision(e.target.value)}
+                rows={2}
+                placeholder="Resultatet disponeras enligt styrelsens förslag."
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-cert-name">Fastställelseintyg — namn</Label>
+                <Input
+                  id="ar-cert-name"
+                  value={certificateSignerName}
+                  onChange={(e) => setCertificateSignerName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-cert-role">Roll</Label>
+                <Input
+                  id="ar-cert-role"
+                  value={certificateSignerRole}
+                  onChange={(e) => setCertificateSignerRole(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ar-cert-date">Signeringsdatum</Label>
+                <Input
+                  id="ar-cert-date"
+                  type="date"
+                  value={certificateSignedAt}
+                  onChange={(e) => setCertificateSignedAt(e.target.value)}
+                />
+              </div>
+            </div>
           </div>
 
           <div className="pt-4 border-t border-border space-y-4">
@@ -546,7 +1136,9 @@ export default function ArsredovisningPage() {
             </div>
             <Button
               onClick={handleSaveNarrative}
-              disabled={savingNarrative || !hasUnsavedNarrative}
+              disabled={
+                savingNarrative || !hasUnsavedNarrative || lifecycle?.annual_report_locked
+              }
             >
               {savingNarrative ? (
                 <>
@@ -559,6 +1151,7 @@ export default function ArsredovisningPage() {
               )}
             </Button>
           </div>
+          </fieldset>
         </CardContent>
       </Card>
 
@@ -581,15 +1174,19 @@ export default function ArsredovisningPage() {
                 <tr key={row.year} className="border-b border-border last:border-b-0">
                   <td className="py-2">{row.year}</td>
                   <td className="py-2 text-right tabular-nums">
-                    {row.net_revenue.toLocaleString('sv-SE')}
+                    {row.data_missing ? 'Saknas' : row.net_revenue.toLocaleString('sv-SE')}
                   </td>
                   <td className="py-2 text-right tabular-nums">
-                    {row.result_after_financial.toLocaleString('sv-SE')}
+                    {row.data_missing
+                      ? 'Saknas'
+                      : row.result_after_financial.toLocaleString('sv-SE')}
                   </td>
                   <td className="py-2 text-right tabular-nums">
-                    {row.soliditet_pct === null
-                      ? '—'
-                      : `${row.soliditet_pct.toFixed(1)} %`}
+                    {row.data_missing
+                      ? 'Saknas'
+                      : row.soliditet_pct === null
+                        ? '—'
+                        : `${row.soliditet_pct.toFixed(1)} %`}
                   </td>
                 </tr>
               ))}
@@ -598,7 +1195,7 @@ export default function ArsredovisningPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="annual-report-signatures">
         <CardHeader>
           <CardTitle className="text-base">Underskrifter</CardTitle>
           <p className="text-sm text-muted-foreground">
@@ -632,13 +1229,18 @@ export default function ArsredovisningPage() {
                 ) : (
                   <>
                     <Badge variant="outline">Väntar på underskrift</Badge>
-                    <Button size="sm" onClick={() => setBankIdSignFor(sig)}>
+                    <Button
+                      size="sm"
+                      onClick={() => setBankIdSignFor(sig)}
+                      disabled={lifecycle?.annual_report_locked}
+                    >
                       Signera med BankID
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => void handleMarkSigned(sig.id)}
+                      disabled={lifecycle?.annual_report_locked}
                     >
                       Markera som signerad
                     </Button>
@@ -673,6 +1275,7 @@ export default function ArsredovisningPage() {
                   ),
                 )
                 toast({ title: 'Underskrift signerad med BankID' })
+                void refreshAnnualReportState()
               }}
             />
           )}
@@ -686,6 +1289,7 @@ export default function ArsredovisningPage() {
                 className="border border-border rounded-md h-9 text-sm px-2 bg-background"
                 value={signerRole}
                 onChange={(e) => setSignerRole(e.target.value)}
+                disabled={lifecycle?.annual_report_locked}
               >
                 <option>Styrelseledamot</option>
                 <option>Styrelseordförande</option>
@@ -703,12 +1307,221 @@ export default function ArsredovisningPage() {
                 onChange={(e) => setSignerName(e.target.value)}
                 placeholder="t.ex. Anna Andersson"
                 className="h-9"
+                disabled={lifecycle?.annual_report_locked}
               />
             </div>
-            <Button onClick={handleAddSigner} disabled={!signerName.trim()}>
+            <Button
+              onClick={handleAddSigner}
+              disabled={!signerName.trim() || lifecycle?.annual_report_locked}
+            >
               <Plus className="mr-1 h-4 w-4" /> Lägg till
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+
+      <Card id="annual-report-reclassifications">
+        <CardHeader>
+          <CardTitle className="text-base">Presentationsomklassificeringar</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Flytta ett onormalt debetsaldo på ett skuldkonto till en fordringsrad enbart i
+            årsredovisningen. Ingen verifikation skapas och huvudboken ändras inte.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {(lifecycle?.presentation_reclassifications ?? []).map((entry) => (
+            <div key={entry.id} className="rounded-md border border-border p-3 text-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-medium">
+                    Konto {entry.account_number}: {entry.amount.toLocaleString('sv-SE')} kr
+                  </p>
+                  <p className="text-muted-foreground">
+                    {entry.source_concept} → {entry.target_presentation}
+                  </p>
+                  <p className="mt-1">{entry.reason}</p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={lifecycle?.annual_report_locked || revokingReclassificationId === entry.id}
+                  onClick={() => void handleRevokeReclassification(entry.id)}
+                >
+                  {revokingReclassificationId === entry.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Återkalla
+                </Button>
+              </div>
+            </div>
+          ))}
+          {(lifecycle?.presentation_reclassifications ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground">Inga aktiva presentationsomklassificeringar.</p>
+          ) : null}
+          <fieldset disabled={lifecycle?.annual_report_locked} className="grid grid-cols-1 gap-3 rounded-md border border-border p-4 disabled:opacity-70 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="reclass-account">Konto</Label>
+              <Input
+                id="reclass-account"
+                inputMode="numeric"
+                maxLength={4}
+                value={reclassAccount}
+                onChange={(event) => setReclassAccount(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                placeholder="2893"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="reclass-amount">Belopp</Label>
+              <Input
+                id="reclass-amount"
+                inputMode="decimal"
+                value={reclassAmount}
+                onChange={(event) => setReclassAmount(event.target.value)}
+                placeholder="1250,00"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="reclass-target">Presentera som</Label>
+              <select
+                id="reclass-target"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={reclassTargetConcept}
+                onChange={(event) => {
+                  const concept = event.target.value
+                  setReclassTargetConcept(concept)
+                  setReclassTargetLabel(
+                    concept === 'Kundfordringar'
+                      ? 'Kundfordringar'
+                      : concept === 'AndraLangfristigaFordringar'
+                        ? 'Andra långfristiga fordringar'
+                        : 'Övriga kortfristiga fordringar',
+                  )
+                }}
+              >
+                <option value="OvrigaFordringarKortfristiga">Övriga kortfristiga fordringar</option>
+                <option value="Kundfordringar">Kundfordringar</option>
+                <option value="AndraLangfristigaFordringar">Andra långfristiga fordringar</option>
+              </select>
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="reclass-reason">Motivering</Label>
+              <Textarea
+                id="reclass-reason"
+                value={reclassReason}
+                onChange={(event) => setReclassReason(event.target.value)}
+                rows={2}
+                placeholder="Förklara varför saldot ska presenteras som en fordran."
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <Button
+                type="button"
+                onClick={() => void handleCreateReclassification()}
+                disabled={savingReclassification}
+              >
+                {savingReclassification ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Spara presentationsomklassificering
+              </Button>
+            </div>
+          </fieldset>
+        </CardContent>
+      </Card>
+
+      <Card id="controlled-reopen">
+        <CardHeader>
+          <CardTitle className="text-base">Återöppna räkenskapsår för rättelse</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Använd endast detta när bokföringen måste rättas. Dokumenttexter, jämförelsetal och
+            undertecknare kan ändras utan att huvudboken öppnas.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="reopen-reason">Orsak</Label>
+              <Textarea
+                id="reopen-reason"
+                value={reopenReason}
+                onChange={(event) => setReopenReason(event.target.value)}
+                rows={3}
+                placeholder="Beskriv varför den låsta huvudboken måste rättas."
+              />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="reopen-changes">Poster som ska ändras</Label>
+              <Textarea
+                id="reopen-changes"
+                value={reopenChanges}
+                onChange={(event) => setReopenChanges(event.target.value)}
+                rows={3}
+                placeholder="En ändring per rad, exempelvis: Rätta skatt på årets resultat."
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="reopen-approver">Godkännare</Label>
+              <Input
+                id="reopen-approver"
+                value={reopenApprover}
+                onChange={(event) => setReopenApprover(event.target.value)}
+                placeholder="Namn på behörig godkännare"
+              />
+            </div>
+            <div className="space-y-2 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={annualReportAlreadyFiled}
+                  onChange={(event) => setAnnualReportAlreadyFiled(event.target.checked)}
+                />
+                Årsredovisningen är redan inlämnad
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={taxReturnAlreadyFiled}
+                  onChange={(event) => setTaxReturnAlreadyFiled(event.target.checked)}
+                />
+                Deklarationen är redan inlämnad
+              </label>
+            </div>
+          </div>
+          <Button onClick={handleRequestReopen} disabled={submittingReopen} variant="destructive">
+            {submittingReopen && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Skapa återöppningsbegäran
+          </Button>
+
+          {reopenRequests.length > 0 && (
+            <div className="space-y-2 border-t border-border pt-4">
+              <p className="font-medium">Tidigare begäranden</p>
+              {reopenRequests.map((request) => (
+                <div key={request.id} className="rounded-md border border-border p-3 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-medium">{request.reason}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Godkännare: {request.designated_approver_name} · {request.status}
+                      </p>
+                    </div>
+                    {request.status === 'requested' && (
+                      <Button
+                        size="sm"
+                        onClick={() => void handleApproveReopen(request.id)}
+                        disabled={approvingReopenId === request.id}
+                      >
+                        {approvingReopenId === request.id && (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        )}
+                        Godkänn och återöppna
+                      </Button>
+                    )}
+                  </div>
+                  {request.error_message && (
+                    <p className="mt-2 text-destructive">{request.error_message}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -718,15 +1531,73 @@ export default function ArsredovisningPage() {
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
           <p className="text-muted-foreground">
-            Ladda ner PDF-utkastet, granska, skriv ut och låt undertecknarna signera
-            fastställelseintyget. Ladda sedan upp PDF:en till Bolagsverkets e-tjänst.
+            Utkast kan alltid granskas. En slutversion skapas först när huvudboken är
+            stängd och samtliga dokument-, underskrifts-, jämförelse- och iXBRL-kontroller
+            är godkända.
           </p>
           <div className="flex flex-wrap gap-3">
-            <Button asChild>
+            <Button variant="outline" asChild>
               <Link href={pdfUrl} target="_blank" rel="noopener noreferrer">
-                <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
+                <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF-utkast
               </Link>
             </Button>
+            <Button variant="outline" asChild>
+              <Link
+                href={`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/ixbrl${companySuffix}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <FileDown className="mr-2 h-4 w-4" /> Ladda ner iXBRL-utkast
+              </Link>
+            </Button>
+            {lifecycle?.annual_report_locked ? (
+              <Button onClick={handleCreateNewVersion} disabled={creatingVersion}>
+                {creatingVersion ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Skapa ny version
+              </Button>
+            ) : (
+              <Button
+                onClick={handleFinalize}
+                disabled={
+                  finalizing ||
+                  hasUnsavedNarrative ||
+                  (lifecycle?.preflight.blocking_issue_count ?? 1) > 0
+                }
+              >
+                {finalizing ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <LockKeyhole className="mr-2 h-4 w-4" />
+                )}
+                Färdigställ årsredovisning
+              </Button>
+            )}
+            {lifecycle?.final_pdf_url && (
+              <Button asChild>
+                <Link
+                  href={`${lifecycle.final_pdf_url}${companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <FileDown className="mr-2 h-4 w-4" /> Ladda ner slutlig PDF
+                </Link>
+              </Button>
+            )}
+            {lifecycle?.final_ixbrl_url && (
+              <Button variant="outline" asChild>
+                <Link
+                  href={`${lifecycle.final_ixbrl_url}${companyId ? `&company_id=${encodeURIComponent(companyId)}` : ''}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <FileDown className="mr-2 h-4 w-4" /> Ladda ner slutlig iXBRL
+                </Link>
+              </Button>
+            )}
             <Button variant="outline" asChild>
               <Link
                 href="https://www.bolagsverket.se/foretag/aktiebolag/arsredovisning/lamna-in-arsredovisning"
@@ -747,13 +1618,41 @@ export default function ArsredovisningPage() {
               </ul>
             </div>
           )}
-          <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning-foreground">
-            <strong>Notis om digital inlämning:</strong> Bolagsverket har föreslagit att
-            digital inlämning (iXBRL) av årsredovisning för aktiebolag ska bli
-            obligatorisk — beslut och ikraftträdande är ännu inte fastställda. Idag är
-            PDF-inlämning fortfarande godkänd. Nordklart stödjer för närvarande endast
-            PDF-utkast; iXBRL-generering är planerad till en kommande version.
-          </div>
+          {lifecycle && (
+            <div className="rounded-md border border-border p-3 text-xs space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <strong>Preflight: {lifecycle.preflight.preflight_status === 'passed' ? 'godkänd' : 'blockerad'}</strong>
+                <Badge variant={lifecycle.preflight.blocking_issue_count === 0 ? 'success' : 'destructive'}>
+                  {lifecycle.preflight.blocking_issue_count} blockerare
+                </Badge>
+              </div>
+              {lifecycle.preflight.issues.map((issue) => (
+                <div key={issue.code} className="rounded border border-border p-2">
+                  <p className="font-medium">{issue.message}</p>
+                  <p className="text-muted-foreground mt-1">
+                    {issue.scope === 'ledger'
+                      ? 'Påverkar huvudboken.'
+                      : 'Dokumentuppgift — kan rättas utan att huvudboken öppnas.'}
+                  </p>
+                  {issue.actions.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {issue.actions.map((action) => (
+                        <Button
+                          key={action.id}
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => focusIssueAction(action.id, issue.requires_reopen)}
+                        >
+                          {action.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

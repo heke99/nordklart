@@ -8,19 +8,24 @@ import {
   upsertNarrative,
 } from '@/lib/bokslut/arsredovisning/narrative-service'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
-
-// Strip non-printable control characters that would corrupt PDF output or
-// mislead a human reader of the årsredovisning. Whitelist printable ASCII
-// + every byte ≥ 0x20 (covers Latin-1 + UTF-8 multi-byte sequences) while
-// allowing tab/LF/CR for legitimate line breaks.
-const stripControlChars = (s: string): string =>
-  s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+import { stripAnnualReportControlCharacters } from '@/lib/bokslut/arsredovisning/format'
 
 const sanitizedText = (max: number) =>
   z
     .string()
     .max(max)
-    .transform(stripControlChars)
+    .transform(stripAnnualReportControlCharacters)
+
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine(
+    (value) => {
+      const date = new Date(`${value}T00:00:00Z`)
+      return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+    },
+    { message: 'Invalid calendar date' },
+  )
 
 const PostSchema = z.object({
   // Match the DB CHECK lengths exactly so a payload that would fail at the
@@ -30,22 +35,20 @@ const PostSchema = z.object({
   // tampered payload could corrupt PDF output or hide content from auditors.
   description: sanitizedText(4000).nullable().optional(),
   important_events: sanitizedText(4000).nullable().optional(),
+  events_after_balance_sheet: sanitizedText(4000).nullable().optional(),
+  report_legal_name: sanitizedText(200).nullable().optional(),
+  report_registered_office: sanitizedText(100).nullable().optional(),
+  prior_legal_name: sanitizedText(200).nullable().optional(),
   resultatdisposition: sanitizedText(2000).nullable().optional(),
   // ISO YYYY-MM-DD per the DATE column; null clears it. Validate as a
   // real calendar date (not just regex) so '2024-13-99' returns 400 from
   // the API instead of bubbling up as a Postgres 500.
-  agm_date: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .refine(
-      (s) => {
-        const d = new Date(`${s}T00:00:00Z`)
-        return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
-      },
-      { message: 'Invalid calendar date' },
-    )
-    .nullable()
-    .optional(),
+  agm_date: isoDate.nullable().optional(),
+  agm_accounts_adopted: z.boolean().nullable().optional(),
+  agm_result_disposition_decision: sanitizedText(2000).nullable().optional(),
+  certificate_signer_name: sanitizedText(200).nullable().optional(),
+  certificate_signer_role: sanitizedText(100).nullable().optional(),
+  certificate_signed_at: isoDate.nullable().optional(),
   // Disclosure fields per ÅRL 5:13-15 § + BFNAR koncernförhållanden. All
   // optional; null clears the override and the builder falls back to
   // boilerplate ("Inga." / "Inga skulder förfaller efter mer än fem år.").
@@ -126,21 +129,36 @@ export const POST = withRouteContext(
       })
       if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
 
-      // Verify the fiscal period belongs to the authenticated company before
-      // writing — defense-in-depth alongside RLS, gives a cleaner 404 than
-      // the RLS rejection envelope. Also refuse mutations on locked/closed
-      // periods (BFL 5 kap 5 § — räkenskapsinformation immutability).
-      const { data: period } = await supabase
-        .from('fiscal_periods')
-        .select('id, is_closed, locked_at, closing_entry_id')
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .maybeSingle()
+      // The ledger lock and annual-report lock are separate. Narrative,
+      // signer, AGM and disclosure edits do not create journal entries and
+      // therefore remain editable after the fiscal period is closed. Only a
+      // locked final annual-report version blocks document edits.
+      const [{ data: period }, { data: project }] = await Promise.all([
+        supabase
+          .from('fiscal_periods')
+          .select('id, ledger_locked')
+          .eq('id', id)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+        supabase
+          .from('annual_report_projects')
+          .select('id, status, annual_report_locked')
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', id)
+          .maybeSingle(),
+      ])
       if (!period) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
       }
-      if (period.is_closed || period.locked_at || period.closing_entry_id) {
-        return errorResponseFromCode('PERIOD_LOCKED', log, { requestId })
+      if (project?.annual_report_locked) {
+        return errorResponseFromCode('VALIDATION_FAILED', log, {
+          requestId,
+          details: {
+            code: 'ANNUAL_REPORT_LOCKED',
+            reason: 'Slutversionen är låst. Skapa en ny årsredovisningsversion innan dokumentuppgifter ändras.',
+            action: 'create_new_version',
+          },
+        })
       }
       const data = await upsertNarrative(supabase, companyId, user.id, id, validation.data)
       return NextResponse.json({ data })

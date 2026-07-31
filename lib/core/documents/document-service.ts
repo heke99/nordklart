@@ -35,6 +35,7 @@ function sanitizeFileName(name: string): string {
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10 MB
 export const ALLOWED_DOCUMENT_TYPES = [
   'application/pdf',
+  'application/xhtml+xml',
   'image/jpeg',
   'image/png',
   'image/webp',
@@ -52,7 +53,7 @@ export function validateDocumentFile(file: { size: number; type?: string }): str
     return `Filen är för stor (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`
   }
   if (!file.type || !ALLOWED_DOCUMENT_TYPES.includes(file.type)) {
-    return 'Otillåten filtyp. Tillåtna: PDF, JPG, PNG, WebP.'
+    return 'Otillåten filtyp. Tillåtna: PDF, XHTML, JPG, PNG, WebP.'
   }
   return null
 }
@@ -75,6 +76,13 @@ function detectFileMagic(bytes: Uint8Array): string | null {
     bytes[offset + 3] === 0x46 &&
     bytes[offset + 4] === 0x2D
   ) return 'application/pdf'
+  // XHTML/XML: tolerate BOM and leading whitespace, then require a real XML/HTML root.
+  const prefix = new TextDecoder().decode(bytes.slice(offset, Math.min(bytes.length, offset + 512))).trimStart().toLowerCase()
+  if (
+    prefix.startsWith('<?xml') ||
+    prefix.startsWith('<!doctype html') ||
+    prefix.startsWith('<html')
+  ) return 'application/xhtml+xml'
   // PNG: 89 50 4E 47
   if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
   // JPEG: FF D8 FF

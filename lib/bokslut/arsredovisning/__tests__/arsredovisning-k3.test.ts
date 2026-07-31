@@ -138,6 +138,19 @@ function makeSupabase(opts: {
         }),
       }
     }
+    if (table === 'annual_report_presentation_reclassifications') {
+      return {
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              is: () => ({
+                order: () => Promise.resolve({ data: [], error: null }),
+              }),
+            }),
+          }),
+        }),
+      }
+    }
     return {
       select: () => ({
         eq: () => ({

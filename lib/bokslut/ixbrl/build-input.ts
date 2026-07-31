@@ -138,6 +138,7 @@ export async function buildIxbrlInput(
   const flerarsoversikt: FlerarsRow[] = []
   const flerarsPerioder: Array<{ start: string; end: string }> = []
   for (const row of [...pdfData.forvaltningsberattelse.flerarsoversikt].reverse()) {
+    if (row.data_missing) continue
     const match = periodByName.get(row.year)
     if (!match) continue // can't tag a year without a known period range
     flerarsoversikt.push({
@@ -208,12 +209,29 @@ export async function buildIxbrlInput(
     ub:
       totalt.ub - aktiekapital.ub - balanserat.ub - aretsRes.ub,
   }
-  // Movement derivation: föregående års resultat balanseras; vad som därutöver
-  // lämnat balanserat resultat antas vara utdelning (vanligaste fallet).
-  const balanserasINyRakning = aretsRes.ib
-  const balanseratResidual = balanserat.ub - (balanserat.ib + balanserasINyRakning)
-  const utdelning = balanseratResidual < 0 ? -balanseratResidual : 0
-  const ovrigForandringBalanserat = balanseratResidual > 0 ? balanseratResidual : 0
+  // Movement rows are projected from the same verified equity roll-forward
+  // that the PDF uses. A residual is never guessed to be a dividend.
+  const equityMovements = pdfData.forvaltningsberattelse.egen_kapital_changes.filter(
+    (row) => row.row_kind === 'movement' || row.row_kind === 'result',
+  )
+  const transferRow = equityMovements.find((row) =>
+    /omföring av föregående års resultat/i.test(row.label),
+  )
+  const dividendRow = equityMovements.find((row) => /beslutad utdelning/i.test(row.label))
+  const resultRow = equityMovements.find((row) => row.row_kind === 'result')
+  const classifiedRows = equityMovements.filter(
+    (row) => row !== transferRow && row !== dividendRow && row !== resultRow,
+  )
+  const balanserasINyRakning = transferRow?.balanserat_resultat ?? 0
+  const utdelning = Math.max(0, -(dividendRow?.balanserat_resultat ?? 0))
+  const forandringAktiekapital = equityMovements.reduce(
+    (sum, row) => sum + (row.aktiekapital ?? 0),
+    0,
+  )
+  const ovrigForandringBalanserat = classifiedRows.reduce(
+    (sum, row) => sum + (row.balanserat_resultat ?? 0),
+    0,
+  )
   const egetKapital: EgetKapitalForandring = {
     aktiekapital,
     balanseratResultat: balanserat,
@@ -222,9 +240,9 @@ export async function buildIxbrlInput(
     ovrigaPoster,
     balanserasINyRakning,
     utdelning,
-    forandringAktiekapital: aktiekapital.ub - aktiekapital.ib,
+    forandringAktiekapital,
     ovrigForandringBalanserat,
-    aretsResultatRorelse: aretsRes.ub,
+    aretsResultatRorelse: resultRow?.arets_resultat ?? aretsRes.ub,
   }
 
   // ---- resultatdisposition --------------------------------------------------
@@ -300,10 +318,16 @@ export async function buildIxbrlInput(
     )
   }
   const fallbackSigner = signers[0] ?? { firstName: '', lastName: '', role: null }
+  const narrativeCertificateSigner = pdfData.forvaltningsberattelse.certificate_signer_name
+    ? splitName(pdfData.forvaltningsberattelse.certificate_signer_name)
+    : null
   const undertecknare = options.undertecknare ?? {
-    firstName: fallbackSigner.firstName,
-    lastName: fallbackSigner.lastName,
-    role: fallbackSigner.role ?? 'Styrelseledamot',
+    firstName: narrativeCertificateSigner?.firstName ?? fallbackSigner.firstName,
+    lastName: narrativeCertificateSigner?.lastName ?? fallbackSigner.lastName,
+    role:
+      pdfData.forvaltningsberattelse.certificate_signer_role ??
+      fallbackSigner.role ??
+      'Styrelseledamot',
   }
   if (!undertecknare.firstName) {
     warnings.push('Undertecknare av fastställelseintyget saknas (kontrollera-kod 1169).')
@@ -356,7 +380,14 @@ export async function buildIxbrlInput(
     totals: mapping.totals,
     forvaltningsberattelse: {
       allmantOmVerksamheten: allmant,
-      vasentligaHandelser: pdfData.forvaltningsberattelse.important_events,
+      vasentligaHandelser: [
+        pdfData.forvaltningsberattelse.important_events,
+        pdfData.forvaltningsberattelse.events_after_balance_sheet
+          ? `Händelser efter balansdagen: ${pdfData.forvaltningsberattelse.events_after_balance_sheet}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
       flerarsoversikt,
       flerarsPerioder,
       egetKapital,

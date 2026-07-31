@@ -3,6 +3,7 @@ import {
   K2_MAPPING_VERSION,
   K2_RR_MAPPINGS,
   mapTrialBalancesToK2,
+  computeK2Totals,
   type K2MappingResult,
   type TrialBalancePair,
 } from '@/lib/bokslut/ixbrl/k2-mapper'
@@ -486,6 +487,131 @@ export function assertK2FormalReportModel(model: K2FormalReportModel): void {
   }
 }
 
+
+/**
+ * Attach comparison figures from a verified prior annual-report snapshot.
+ * The prior model's current values become this model's previous values. No
+ * live prior-year ledger query is used, so a reopened or partially imported
+ * historical year cannot silently rewrite published comparison figures.
+ */
+export function applyVerifiedComparativeSnapshot(
+  currentModel: K2FormalReportModel,
+  priorModel: K2FormalReportModel,
+): K2FormalReportModel {
+  assertK2FormalReportModel(currentModel)
+  assertK2FormalReportModel(priorModel)
+
+  const priorNodes = new Map(priorModel.nodes.map((node) => [node.key, node]))
+  const nodes = currentModel.nodes.map((node) => {
+    if (node.kind === 'section') return { ...node }
+    const prior = priorNodes.get(node.key)
+    const previous = prior?.current ?? null
+    return {
+      ...node,
+      previous,
+      displayPrevious: displayAmount(previous, node.signRule),
+      visible: node.required || node.current !== 0 || (previous ?? 0) !== 0,
+    }
+  })
+
+  const rr = Object.fromEntries(
+    Object.entries(currentModel.rr).map(([concept, amount]) => [
+      concept,
+      { ...amount, previous: priorModel.rr[concept]?.current ?? null },
+    ]),
+  ) as K2FormalReportModel['rr']
+  const br = Object.fromEntries(
+    Object.entries(currentModel.br).map(([concept, amount]) => [
+      concept,
+      { ...amount, previous: priorModel.br[concept]?.current ?? null },
+    ]),
+  ) as K2FormalReportModel['br']
+  const totals = Object.fromEntries(
+    Object.entries(currentModel.totals).map(([key, amount]) => [
+      key,
+      { ...amount, previous: priorModel.totals[key as TotalKey]?.current ?? null },
+    ]),
+  ) as K2FormalReportModel['totals']
+
+  const model: K2FormalReportModel = { ...currentModel, nodes, rr, br, totals }
+  assertK2FormalReportModel(model)
+  return model
+}
+
+export interface AnnualReportPresentationReclassification {
+  id: string
+  account_number: string
+  source_concept: string
+  target_concept: string
+  amount: number
+  reason: string
+}
+
+/**
+ * Move an abnormal balance between K2 presentation concepts without touching
+ * the ledger. This intentionally supports only a negative credit-oriented
+ * balance being moved to an asset concept. More general reclassifications must
+ * be handled as a controlled accounting correction.
+ */
+export function applyPresentationReclassifications(
+  currentModel: K2FormalReportModel,
+  reclassifications: AnnualReportPresentationReclassification[],
+): K2FormalReportModel {
+  assertK2FormalReportModel(currentModel)
+  if (reclassifications.length === 0) return currentModel
+
+  const br = Object.fromEntries(
+    Object.entries(currentModel.br).map(([concept, amount]) => [concept, { ...amount }]),
+  ) as K2FormalReportModel['br']
+  const warnings = [...currentModel.warnings]
+
+  for (const row of reclassifications) {
+    const amount = Number(row.amount)
+    const source = br[row.source_concept]
+    const target = br[row.target_concept]
+    if (!source || !target) {
+      throw new Error(`Unknown K2 presentation concept for reclassification ${row.id}`)
+    }
+    const sourceNode = currentModel.nodes.find((node) => node.taxonomyConcept === row.source_concept)
+    const targetNode = currentModel.nodes.find((node) => node.taxonomyConcept === row.target_concept)
+    if (sourceNode?.balanceSide !== 'equity_liabilities' || targetNode?.balanceSide !== 'assets') {
+      throw new Error(
+        `Presentation reclassification ${row.id} must move a negative liability to an asset concept`,
+      )
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error(`Invalid presentation amount for reclassification ${row.id}`)
+    }
+    if (source.current >= 0 || amount > Math.abs(source.current) + 0.005) {
+      throw new Error(
+        `Presentation reclassification ${row.id} exceeds the abnormal source balance`,
+      )
+    }
+    source.current = Math.round((source.current + amount) * 100) / 100
+    target.current = Math.round((target.current + amount) * 100) / 100
+    warnings.push(
+      `Presentationsomklassificering konto ${row.account_number}: ${row.source_concept} till ${row.target_concept}, ${amount.toFixed(2)} kr. ${row.reason}`,
+    )
+  }
+
+  const totals = computeK2Totals(currentModel.rr, br)
+  const model: K2FormalReportModel = {
+    ...currentModel,
+    br,
+    totals,
+    warnings,
+    nodes: [
+      ...createNodes('income_statement', RR_SEQUENCE, currentModel.rr, totals),
+      ...createNodes('balance_sheet', BR_SEQUENCE, br, totals),
+    ],
+  }
+  if (Math.abs(model.totals.tillgangar.current - model.totals.egetKapitalSkulder.current) >= 0.01) {
+    throw new Error('Presentation reclassification does not preserve a balanced annual report')
+  }
+  assertK2FormalReportModel(model)
+  return model
+}
+
 export function formalIncomeStatementLines(model: K2FormalReportModel): IncomeStatementLine[] {
   assertK2FormalReportModel(model)
   return model.nodes
@@ -515,7 +641,11 @@ export function formalBalanceSheetLines(model: K2FormalReportModel): {
     indent: node.kind === 'line' ? 1 : 0,
   })
   const rows = model.nodes.filter(
-    (node) => node.reportType === 'balance_sheet' && node.kind !== 'section' && node.visible,
+    (node) =>
+      node.reportType === 'balance_sheet'
+      && node.kind !== 'section'
+      && node.kind !== 'total'
+      && node.visible,
   )
   return {
     assets: rows.filter((node) => node.balanceSide === 'assets').map(toLine),

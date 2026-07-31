@@ -67,6 +67,23 @@ export const POST = withRouteContext(
       if (!period) {
         return NextResponse.json({ error: { code: 'PERIOD_NOT_FOUND' } }, { status: 404 })
       }
+      const { data: project } = await supabase
+        .from('annual_report_projects')
+        .select('annual_report_locked')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', id)
+        .maybeSingle()
+      if (project?.annual_report_locked) {
+        return NextResponse.json(
+          {
+            error: {
+              code: 'ANNUAL_REPORT_LOCKED',
+              message: 'Slutversionen är låst. Skapa en ny version innan undertecknare ändras.',
+            },
+          },
+          { status: 409 },
+        )
+      }
       const data = await createSignatureRequest(supabase, companyId, user.id, id, validation.data)
       return NextResponse.json({ data })
     } catch (err) {
