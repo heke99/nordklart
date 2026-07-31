@@ -33,6 +33,11 @@ type RequireYearEndAccessOptions = {
   requireWrite?: boolean
 }
 
+async function createTrustedAccessClient(): Promise<SupabaseClient> {
+  const { createServiceClient } = await import('@/lib/supabase/server')
+  return createServiceClient()
+}
+
 async function isPlatformAdmin(supabase: SupabaseClient, userId?: string | null): Promise<boolean> {
   if (!userId) return false
   const { data } = await supabase
@@ -59,8 +64,7 @@ async function auditPlatformBypass(
   // client when the service client is unavailable (e.g. unit tests).
   let supabase = fallbackClient
   try {
-    const { createServiceClient } = await import('@/lib/supabase/server')
-    supabase = createServiceClient()
+    supabase = await createTrustedAccessClient()
   } catch {
     // Keep the fallback client.
   }
@@ -117,7 +121,20 @@ export async function resolveYearEndAccess(
   let canWrite = false
   let canManagePlatform = false
   if (userId) {
-    const { data: accessData, error: accessError } = await supabase.rpc(
+    // The explicit-user resolver is intentionally executable only by
+    // service_role. Route callers normally pass an authenticated RLS client,
+    // so invoking it through `supabase` would fail with PostgreSQL 42501 and
+    // incorrectly surface FEATURE_ACCESS_UNAVAILABLE before a valid one-time
+    // purchase can be evaluated. Keep operational reads on the caller client,
+    // but perform this canonical actor/company authorization check through the
+    // trusted server client.
+    let accessDb: SupabaseClient
+    try {
+      accessDb = await createTrustedAccessClient()
+    } catch {
+      return { allowed: false, reason: 'database_error' }
+    }
+    const { data: accessData, error: accessError } = await accessDb.rpc(
       'resolve_company_access_for_user',
       { p_user_id: userId, p_company_id: companyId },
     )

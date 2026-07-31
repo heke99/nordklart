@@ -79,6 +79,34 @@ describe('year-end period-scoped access', () => {
     })
   })
 
+  it('uses the service-only explicit-user resolver instead of the authenticated caller client', async () => {
+    checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'sub-1' })
+    const authenticatedDb = {
+      ...db,
+      rpc: vi.fn(async () => ({
+        data: null,
+        error: { code: '42501', message: 'permission denied for function resolve_company_access_for_user' },
+      })),
+    }
+
+    await expect(resolveYearEndAccess(
+      authenticatedDb as never,
+      'company-1',
+      'period-1',
+      'user-1',
+    )).resolves.toMatchObject({
+      allowed: true,
+      source: 'feature_entitlement',
+      sourceId: 'sub-1',
+    })
+
+    expect(authenticatedDb.rpc).not.toHaveBeenCalled()
+    expect(db.rpc).toHaveBeenCalledWith('resolve_company_access_for_user', {
+      p_user_id: 'user-1',
+      p_company_id: 'company-1',
+    })
+  })
+
   it('allows an active one-time purchase only for the exact period', async () => {
     purchaseRow = { id: 'purchase-1', permanent_access: true, access_starts_at: null, access_expires_at: null }
     const decision = await resolveYearEndAccess(db as never, 'company-1', 'period-1', 'user-1')
