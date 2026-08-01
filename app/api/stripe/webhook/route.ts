@@ -10,6 +10,8 @@ type StripeObject = {
   customer?: string | null
   subscription?: string | null
   invoice?: string | null
+  payment_intent?: string | null
+  charge?: string | { id?: string | null } | null
   payment_status?: string | null
   amount_subtotal?: number | null
   amount_total?: number | null
@@ -22,6 +24,8 @@ type StripeObject = {
   items?: { data?: Array<{ price?: { id?: string | null } | null }> }
   parent?: { subscription_details?: { subscription?: string | null } | null } | null
   amount_paid?: number | null
+  amount?: number | null
+  amount_refunded?: number | null
   hosted_invoice_url?: string | null
   invoice_pdf?: string | null
   created?: number | null
@@ -31,6 +35,7 @@ type StripeObject = {
 type StripeEvent = {
   id: string
   type: string
+  created?: number | null
   livemode?: boolean
   api_version?: string | null
   data?: { object?: StripeObject }
@@ -49,6 +54,50 @@ function toIso(value: number | null | undefined) {
 
 function subscriptionIdFromObject(object: StripeObject) {
   return object.subscription || object.parent?.subscription_details?.subscription || null
+}
+
+function chargeIdFromObject(object: StripeObject) {
+  return typeof object.charge === 'string' ? object.charge : object.charge?.id || null
+}
+
+async function applyOneTimeLifecycle(
+  service: ReturnType<typeof createServiceClient>,
+  event: StripeEvent,
+  object: StripeObject,
+) {
+  const { data } = await service.rpc('stripe_apply_one_time_purchase_event', {
+    p_stripe_event_id: event.id,
+    p_event_type: event.type,
+    p_event_created_at: toIso(event.created) || toIso(object.created) || new Date().toISOString(),
+    p_checkout_session_id: event.type.startsWith('checkout.session.') ? object.id || null : null,
+    p_payment_intent_id: object.payment_intent || null,
+    p_charge_id: event.type.startsWith('charge.') && event.type !== 'charge.refunded'
+      ? object.id || chargeIdFromObject(object)
+      : chargeIdFromObject(object) || (event.type === 'charge.refunded' ? object.id || null : null),
+    p_refund_id: event.type.startsWith('refund.') ? object.id || null : null,
+    p_payment_status: object.payment_status || object.status || null,
+    p_gross_paid_minor: event.type.startsWith('refund.')
+      ? null
+      : object.amount_total ?? object.amount_paid ?? object.amount ?? null,
+    // For refund.* this is the individual refund amount. PostgreSQL stores it
+    // per refund id and sums only successful rows. For charge.refunded it is
+    // Stripe's cumulative amount_refunded.
+    p_refunded_minor: event.type.startsWith('refund.')
+      ? object.amount ?? null
+      : object.amount_refunded ?? null,
+    p_currency: object.currency || null,
+    p_dispute_status: event.type.startsWith('charge.dispute.') ? object.status || null : null,
+  }).throwOnError()
+
+  const result = data as { applied?: boolean; reason?: string } | null
+  const isCheckoutEvent = event.type.startsWith('checkout.session.')
+  if (!isCheckoutEvent && result?.applied === false && result.reason === 'purchase_not_found') {
+    // Refund/dispute events may arrive before the checkout event that creates
+    // the local purchase. Fail deliberately so Stripe retries instead of
+    // permanently marking an economically relevant event as processed.
+    throw new Error('STRIPE_PURCHASE_NOT_READY')
+  }
+  return result
 }
 
 export async function POST(request: Request) {
@@ -101,7 +150,10 @@ export async function POST(request: Request) {
 
   try {
     let ignored = false
-    if (event.type === 'checkout.session.completed') {
+    if (
+      event.type === 'checkout.session.completed' ||
+      event.type === 'checkout.session.async_payment_succeeded'
+    ) {
       await service.rpc('stripe_finalize_checkout_v2', {
         p_stripe_event_id: event.id,
         p_stripe_checkout_session_id: object.id,
@@ -114,6 +166,9 @@ export async function POST(request: Request) {
         p_currency: object.currency || null,
         p_stripe_invoice_id: typeof object.invoice === 'string' ? object.invoice : null,
       }).throwOnError()
+      await applyOneTimeLifecycle(service, event, object)
+    } else if (event.type === 'checkout.session.async_payment_failed') {
+      await applyOneTimeLifecycle(service, event, object)
     } else if (event.type === 'checkout.session.expired') {
       await service.rpc('stripe_mark_checkout_expired', {
         p_stripe_event_id: event.id,
@@ -131,6 +186,13 @@ export async function POST(request: Request) {
         p_current_period_end: toIso(object.current_period_end),
         p_cancel_at_period_end: object.cancel_at_period_end === true,
       }).throwOnError()
+    } else if (
+      event.type.startsWith('refund.') ||
+      event.type === 'charge.refunded' ||
+      event.type === 'charge.dispute.created' ||
+      event.type === 'charge.dispute.closed'
+    ) {
+      await applyOneTimeLifecycle(service, event, object)
     } else if (event.type.startsWith('invoice.')) {
       await service.rpc('stripe_record_invoice_event_v2', {
         p_stripe_event_id: event.id,

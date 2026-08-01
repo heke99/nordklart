@@ -34,9 +34,8 @@ export const GET = withRouteContext(
       if (/not found/i.test(message)) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
       }
-      return errorResponseFromCode('YEAR_END_PREVIEW_FAILED', opLog, {
+      return errorResponseFromCode('YEAR_END_READINESS_UNAVAILABLE', opLog, {
         requestId,
-        details: { reason: message },
       })
     }
   },

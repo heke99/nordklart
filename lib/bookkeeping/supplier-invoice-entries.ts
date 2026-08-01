@@ -1,4 +1,4 @@
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { createDraftEntry, createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import {
   generateReverseChargeLines,
@@ -270,7 +270,8 @@ export async function createSupplierInvoicePaymentEntry(
   paymentDate: string,
   exchangeRateDifference?: number,
   supplierName?: string,
-  paymentAccount?: string
+  paymentAccount?: string,
+  options?: { draftOnly?: boolean }
 ): Promise<JournalEntry | null> {
   const creditAccount = paymentAccount || '1930'
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
@@ -347,7 +348,9 @@ export async function createSupplierInvoicePaymentEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return options?.draftOnly
+    ? createDraftEntry(supabase, companyId, userId, input)
+    : createJournalEntry(supabase, companyId, userId, input)
 }
 
 /**
@@ -372,7 +375,8 @@ export async function createSupplierInvoiceCashEntry(
   // a foreign-currency invoice this pins the whole entry to the PAYMENT-date
   // rate — see the kontantmetoden note below. Omit for SEK invoices and the
   // behaviour is byte-identical to before.
-  settledBankSek?: number
+  settledBankSek?: number,
+  options?: { draftOnly?: boolean }
 ): Promise<JournalEntry | null> {
   const creditAccount = paymentAccount || '1930'
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
@@ -535,7 +539,9 @@ export async function createSupplierInvoiceCashEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return options?.draftOnly
+    ? createDraftEntry(supabase, companyId, userId, input)
+    : createJournalEntry(supabase, companyId, userId, input)
 }
 
 /**

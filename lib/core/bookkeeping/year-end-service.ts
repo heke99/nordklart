@@ -547,7 +547,7 @@ export async function executeYearEndClosing(
     })
     if (recordError) {
       throw new YearEndExecutionError({
-        code: 'YE_UNKNOWN',
+        code: 'YE_FAILURE_RECORDING_FAILED',
         correlationId,
         technicalMessage:
           `Year-end failure persistence failed: ${recordError.message}; original: ${error.message}`,

@@ -25,6 +25,7 @@ export const YearEndExecutionErrorCodeSchema = z.enum([
   'YE_RESULT_INVALID',
   'YE_RUN_NOT_COMMITTED',
   'YE_PERIOD_NOT_FOUND',
+  'YE_FAILURE_RECORDING_FAILED',
   'YE_UNKNOWN',
 ])
 
@@ -76,12 +77,14 @@ const USER_MESSAGES: Record<YearEndExecutionErrorCode, string> = {
   YE_RESULT_INVALID: 'Bokslutet kan vara genomfört, men resultatet kunde inte verifieras. Kontrollera körningsstatusen med request-ID:t.',
   YE_RUN_NOT_COMMITTED: 'Bokslutskörningen är inte slutförd och kan ännu inte bekräftas.',
   YE_PERIOD_NOT_FOUND: 'Räkenskapsåret kunde inte hittas för det valda företaget.',
+  YE_FAILURE_RECORDING_FAILED: 'Bokslutet misslyckades och felstatusen kunde inte sparas. Kontrollera körningsstatusen med request-ID:t innan du försöker igen.',
   YE_UNKNOWN: 'Bokslutet kunde inte verkställas. Ingen ofullständig stängning har godkänts.',
 }
 
 const RETRYABLE_CODES = new Set<YearEndExecutionErrorCode>([
   'YE_EXECUTION_IN_PROGRESS',
   'YE_DATABASE_UNAVAILABLE',
+  'YE_FAILURE_RECORDING_FAILED',
 ])
 
 interface DatabaseErrorShape {

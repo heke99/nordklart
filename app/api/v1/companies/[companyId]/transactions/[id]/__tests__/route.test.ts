@@ -28,12 +28,25 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 // Engine stubs — happy-path returns reusable across cases.
-const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSupplierInvPmtJE, findMissingAccountsMock } = vi.hoisted(() => ({
+const {
+  createTxJE,
+  reverseEntryMock,
+  createInvPmtJE,
+  createInvCashJE,
+  createSupplierInvPmtJE,
+  findMissingAccountsMock,
+  markInvoicePaidMock,
+  settleSupplierInvoiceMock,
+  detectDuplicatePaymentVoucherMock,
+} = vi.hoisted(() => ({
   createTxJE: vi.fn().mockResolvedValue({ id: 'je-fresh' }),
   reverseEntryMock: vi.fn().mockResolvedValue(undefined),
   createInvPmtJE: vi.fn().mockResolvedValue({ id: 'je-invpmt' }),
   createInvCashJE: vi.fn().mockResolvedValue({ id: 'je-invcash' }),
   createSupplierInvPmtJE: vi.fn().mockResolvedValue({ id: 'je-sipmt' }),
+  markInvoicePaidMock: vi.fn(),
+  settleSupplierInvoiceMock: vi.fn(),
+  detectDuplicatePaymentVoucherMock: vi.fn(),
   // Default: no missing accounts. Per-case overrides simulate the
   // template-references-inactive-account bug or a race where deactivation
   // happened between our validation and the engine's resolveAccountIds.
@@ -56,6 +69,15 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
 }))
 vi.mock('@/lib/invoices/match-log', () => ({
   logMatchEvent: vi.fn(),
+}))
+vi.mock('@/lib/invoices/mark-paid-service', () => ({
+  markInvoicePaid: markInvoicePaidMock,
+}))
+vi.mock('@/lib/supplier-invoices/mark-paid-service', () => ({
+  settleSupplierInvoiceAtomic: settleSupplierInvoiceMock,
+}))
+vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
+  detectDuplicatePaymentVoucher: detectDuplicatePaymentVoucherMock,
 }))
 vi.mock('@/lib/bookkeeping/mapping-engine', () => ({
   saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
@@ -131,6 +153,31 @@ function txParams(id: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  detectDuplicatePaymentVoucherMock.mockResolvedValue(null)
+  markInvoicePaidMock.mockResolvedValue({
+    ok: true,
+    invoice: { id: INV_ID, paid_at: '2026-05-12T00:00:00.000Z' },
+    journalEntryId: 'je-invpmt',
+    paymentId: 'payment-1',
+    appliedAmount: 12500,
+    overpaymentAmount: 0,
+    newStatus: 'paid',
+    newPaidAmount: 12500,
+    newRemaining: 0,
+    customerCreditId: null,
+    warnings: [],
+  })
+  settleSupplierInvoiceMock.mockResolvedValue({
+    ok: true,
+    supplierInvoiceId: SI_ID,
+    paymentId: 'supplier-payment-1',
+    journalEntryId: 'je-sipmt',
+    appliedAmount: 5000,
+    paidAmount: 5000,
+    remainingAmount: 0,
+    status: 'paid',
+    paidAt: '2026-05-12T00:00:00.000Z',
+  })
   mockValidate.mockResolvedValue({
     userId: 'user-1',
     companyId: COMPANY_ID,

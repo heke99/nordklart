@@ -125,8 +125,11 @@ export const POST = withRouteContext(
     const result = await markInvoicePaid(supabase, companyId!, user.id, {
       invoiceId: id,
       paymentDate,
+      paymentAmount,
       exchangeRateDifference,
       customLines,
+      idempotencyKey: request.headers.get('idempotency-key') || requestId,
+      requestId,
     })
 
     if (!result.ok) {

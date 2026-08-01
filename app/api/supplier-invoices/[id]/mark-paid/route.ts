@@ -1,22 +1,16 @@
 import { NextResponse } from 'next/server'
-import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
-import {
-  createSupplierInvoicePaymentEntry,
-  createSupplierInvoiceCashEntry,
-} from '@/lib/bookkeeping/supplier-invoice-entries'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { settleSupplierInvoiceAtomic } from '@/lib/supplier-invoices/mark-paid-service'
 import {
   DUPLICATE_AMOUNT_TOLERANCE_PCT,
   DUPLICATE_DATE_WINDOW_DAYS,
   escapeLikePattern,
 } from '@/lib/invoices/duplicate-payment-guard'
-import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { SupplierInvoice } from '@/types'
 
 ensureInitialized()
 
@@ -54,7 +48,6 @@ export const POST = withRouteContext(
 
     const paymentDate = body.payment_date || new Date().toISOString().split('T')[0]
     const paymentAmount = body.amount || invoice.remaining_amount
-    const now = new Date().toISOString()
 
     if (body.force) {
       opLog.warn('duplicate-payment guard bypassed', {
@@ -125,188 +118,50 @@ export const POST = withRouteContext(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('accounting_method, last_supplier_payment_account')
+      .select('last_supplier_payment_account')
       .eq('company_id', companyId)
-      .single()
+      .maybeSingle()
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
     const paymentAccount = body.payment_account || undefined
+    const result = await settleSupplierInvoiceAtomic(supabase, companyId!, user.id, {
+      invoice: invoice as never,
+      paymentDate,
+      paymentAmount,
+      exchangeRateDifference: body.exchange_rate_difference,
+      paymentAccount,
+      customLines: body.lines,
+      notes: body.notes,
+      idempotencyKey: request.headers.get('idempotency-key') || requestId,
+      requestId,
+    })
 
-    // Route on the supplier invoice's actual booking state, not the current
-    // accounting_method. A supplier invoice that was booked at receipt under
-    // accrual (Dr expense + 2641 / Cr 2440) must clear 2440 here even if the
-    // company has since switched to kontantmetoden — otherwise the supplier
-    // debt orphans on 2440 and expense + input VAT double-count.
-    const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
-    const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
-
-    let journalEntryId: string | null = null
-
-    try {
-      if (body.lines) {
-        const totalDebit = body.lines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = body.lines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return errorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', opLog, {
-            requestId,
-            details: { totalDebit, totalCredit },
-          })
-        }
-        const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, paymentDate)
-        if (!fiscalPeriodId) {
-          return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', opLog, {
-            requestId,
-            details: { paymentDate },
-          })
-        }
-        const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
-        const desc = invoice.supplier?.name
-          ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
-          : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
-        const je = await createJournalEntry(supabase, companyId!, user.id, {
-          fiscal_period_id: fiscalPeriodId,
-          entry_date: paymentDate,
-          description: desc,
-          source_type: sourceType,
-          source_id: invoice.id,
-          lines: body.lines,
-        })
-        if (je) journalEntryId = je.id
-      } else if (useCashEntry) {
-        const journalEntry = await createSupplierInvoiceCashEntry(
-          supabase, companyId!, user.id,
-          invoice as SupplierInvoice,
-          (invoice.items || []) as SupplierInvoiceItem[],
-          paymentDate,
-          invoice.supplier?.supplier_type || 'swedish_business',
-          invoice.supplier?.name,
-          paymentAccount,
-        )
-        if (journalEntry) journalEntryId = journalEntry.id
-      } else {
-        const journalEntry = await createSupplierInvoicePaymentEntry(
-          supabase, companyId!, user.id,
-          invoice as SupplierInvoice,
-          paymentAmount, paymentDate,
-          body.exchange_rate_difference,
-          invoice.supplier?.name,
-          paymentAccount,
-        )
-        if (journalEntry) journalEntryId = journalEntry.id
+    if (!result.ok) {
+      if (result.bookkeepingError) {
+        return errorResponse(result.bookkeepingError, opLog, { requestId })
       }
-    } catch (err) {
-      if (isBookkeepingError(err)) {
-        return errorResponse(err, opLog, { requestId })
-      }
-      opLog.error('failed to create payment journal entry', err as Error)
-      return errorResponseFromCode('SI_PAID_FAILED', opLog, {
+      return errorResponseFromCode(result.code, opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: result.details,
       })
     }
 
-    const newRemaining = Math.round((invoice.remaining_amount - paymentAmount) * 100) / 100
-    const newPaidAmount = Math.round((invoice.paid_amount + paymentAmount) * 100) / 100
-    const isFullyPaid = newRemaining <= 0
-    const newStatus = isFullyPaid ? 'paid' : 'partially_paid'
-
-    const { data: updateResult, error: updateError } = await supabase
-      .from('supplier_invoices')
-      .update({
-        status: newStatus,
-        remaining_amount: Math.max(0, newRemaining),
-        paid_amount: newPaidAmount,
-        paid_at: isFullyPaid ? now : null,
-        payment_journal_entry_id: journalEntryId,
-      })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
-      .select('id')
-
-    if (updateError) {
-      opLog.error('supplier invoice update failed', updateError)
-      return errorResponse(updateError, opLog, { requestId })
-    }
-
-    if (!updateResult || updateResult.length === 0) {
-      // CAS guard: another request paid the invoice between our read and write.
-      // Cancel the orphaned JE and document the voucher gap.
-      if (journalEntryId) {
-        const { data: orphan } = await supabase
-          .from('journal_entries')
-          .select('fiscal_period_id, voucher_series, voucher_number')
-          .eq('id', journalEntryId)
-          .single()
-
-        await supabase
-          .from('journal_entries')
-          .update({ status: 'cancelled' })
-          .eq('id', journalEntryId)
-
-        if (orphan) {
-          await supabase.from('voucher_gap_explanations').insert({
-            company_id: companyId,
-            fiscal_period_id: orphan.fiscal_period_id,
-            voucher_series: orphan.voucher_series || 'A',
-            gap_number: orphan.voucher_number,
-            explanation: 'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-            created_by: user.id,
-          })
-        }
-      }
-      return errorResponseFromCode('SI_PAID_ALREADY', opLog, {
-        requestId,
-        details: { reason: 'race' },
-      })
-    }
-
-    const { error: paymentError } = await supabase
-      .from('supplier_invoice_payments')
-      .insert({
-        user_id: user.id,
-        company_id: companyId,
-        supplier_invoice_id: id,
-        payment_date: paymentDate,
-        amount: paymentAmount,
-        currency: invoice.currency,
-        exchange_rate_difference: body.exchange_rate_difference || 0,
-        journal_entry_id: journalEntryId,
-        notes: body.notes || null,
-      })
-
-    if (paymentError) {
-      opLog.warn('failed to record supplier_invoice_payments row', paymentError)
-    }
-
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.paid',
-        payload: { supplierInvoice: invoice as SupplierInvoice, paymentAmount, companyId: companyId!, userId: user.id },
-      })
-    } catch (err) {
-      opLog.warn('supplier_invoice.paid event emission failed', err as Error)
-    }
-
-    // Remember the chosen payment account so the next dialog can default to it.
-    // Only update when the caller actually picked one — the MCP / agent path
-    // sends no payment_account and shouldn't churn this setting.
+    // User preference is deliberately outside the economic transaction. A
+    // failure here cannot alter the already-committed supplier settlement.
     if (paymentAccount && paymentAccount !== settings?.last_supplier_payment_account) {
       const { error: settingsError } = await supabase
         .from('company_settings')
         .update({ last_supplier_payment_account: paymentAccount })
         .eq('company_id', companyId)
-      if (settingsError) {
-        opLog.warn('failed to persist last_supplier_payment_account', settingsError)
-      }
+      if (settingsError) opLog.warn('failed to persist last_supplier_payment_account', settingsError)
     }
 
     return NextResponse.json({
       success: true,
-      status: newStatus,
-      paid_amount: newPaidAmount,
-      remaining_amount: Math.max(0, newRemaining),
-      journal_entry_id: journalEntryId,
+      status: result.status,
+      paid_amount: result.paidAmount,
+      remaining_amount: result.remainingAmount,
+      journal_entry_id: result.journalEntryId,
+      payment_id: result.paymentId,
     })
   },
   { requireWrite: true },

@@ -1,15 +1,9 @@
 /**
  * POST /api/v1/companies/{companyId}/supplier-invoices/{id}/mark-paid
  *
- * Records a payment against a supplier invoice. Books the payment journal
- * entry via createSupplierInvoicePaymentEntry (accrual) or
- * createSupplierInvoiceCashEntry (cash basis — recognizes the expense here),
- * then flips status to `paid` or `partially_paid` with an optimistic-lock
- * UPDATE that prevents double-booking under concurrent calls.
- *
- * Strict-mode v1 (per Phase 3 lessons): if JE creation fails, the route
- * ABORTS before any SI state mutation — no payment row is written, status
- * is unchanged. The caller can retry cleanly.
+ * Records a supplier payment through the canonical database-owned settlement
+ * transaction. Journal posting, payment allocation, AP balance, bank linkage,
+ * audit and outbox either commit together or roll back together.
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  */
@@ -22,17 +16,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
-import {
-  createSupplierInvoiceCashEntry,
-  createSupplierInvoicePaymentEntry,
-} from '@/lib/bookkeeping/supplier-invoice-entries'
-import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { eventBus } from '@/lib/events'
-import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
-
-const SI_PAID_RESPONSE_COLUMNS =
-  'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id'
+import { settleSupplierInvoiceAtomic } from '@/lib/supplier-invoices/mark-paid-service'
 
 const PAYABLE_STATUSES = ['registered', 'approved', 'partially_paid', 'overdue'] as const
 
@@ -52,7 +36,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices/:id/mark-paid',
   summary: 'Record a payment against a supplier invoice.',
   description:
-    'Books the payment journal entry (Debit 2440 / Credit 1930 under accrual; or Debit expense + Debit 2641 / Credit 1930 under cash) and flips the SI status to `paid` (full settlement) or `partially_paid`. Strict-mode: a JE failure aborts before any SI mutation. Idempotent. Dry-runnable.',
+    'Atomically posts the payment journal entry (Debit 2440 / Credit 1930 under accrual, or cash-basis expense/VAT recognition), creates the allocation and updates AP. The database transaction owns all economic writes. Idempotent and dry-runnable.',
   useWhen:
     'You paid a registered or approved leverantörsfaktura through a channel other than the synced bank flow. For bank-matched payments use POST /transactions/{id}/match-supplier-invoice instead — that path also reconciles the bank line.',
   doNotUseFor:
@@ -61,7 +45,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'payment_date must fall in an open fiscal period — locked period returns 400 PERIOD_LOCKED.',
     'exchange_rate_difference (SEK delta vs the booked rate at registration) is required for foreign-currency SIs to book the FX gain/loss to 3960 / 7960. Omitting it on a non-SEK SI under accrual mis-books FX.',
-    'Strict-mode: a JE creation failure ABORTS before the status flip. There is no partial-state recovery banner — retry the call.',
+    'A failure in posting, allocation, AP update, bank linkage, audit or outbox rolls back the entire settlement.',
     'Cash basis (kontantmetoden) recognizes the expense + ingående moms HERE, not at :create.',
   ],
   example: {
@@ -167,7 +151,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         id, supplier_id, status, currency, exchange_rate, total, paid_amount, remaining_amount,
         supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge,
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
-        is_credit_note, credited_invoice_id, payment_journal_entry_id,
+        is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id,
         supplier:suppliers(id, name, supplier_type),
         items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate)
       `)
@@ -195,6 +179,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       arrival_number: number
       invoice_date: string
       is_credit_note: boolean
+      registration_journal_entry_id?: string | null
       supplier: SupplierObj | SupplierObj[] | null
       items?: unknown[]
     } & Record<string, unknown>
@@ -329,196 +314,56 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
-    const pickSupplier = (s: SI['supplier']): SupplierObj | null => {
-      if (!s) return null
-      return Array.isArray(s) ? (s[0] ?? null) : s
-    }
-    const supplierRow = pickSupplier(typed.supplier)
+    const supplierRow = Array.isArray(typed.supplier)
+      ? (typed.supplier[0] ?? null)
+      : typed.supplier
 
-    // Strict-mode: book the JE FIRST. Failure aborts before any SI mutation.
-    let journalEntryId: string | null = null
-    try {
-      if (customLines) {
-        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', ctx.log, {
-            requestId: ctx.requestId,
-            details: { totalDebit, totalCredit },
-          })
-        }
-        const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, paymentDate)
-        if (!fiscalPeriodId) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
-            requestId: ctx.requestId,
-            details: { payment_date: paymentDate },
-          })
-        }
-        const sourceType = useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
-        const desc = supplierRow?.name
-          ? `Utbetalning leverantörsfaktura ${typed.supplier_invoice_number}, ${supplierRow.name}`
-          : `Utbetalning leverantörsfaktura ${typed.supplier_invoice_number}`
-        const entry = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
-          fiscal_period_id: fiscalPeriodId,
-          entry_date: paymentDate,
-          description: desc,
-          source_type: sourceType,
-          source_id: typed.id,
-          lines: customLines,
-        })
-        journalEntryId = entry?.id ?? null
-      } else if (useCashEntry) {
-        const entry = await createSupplierInvoiceCashEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          typed as unknown as SupplierInvoice,
-          (typed.items ?? []) as SupplierInvoiceItem[],
-          paymentDate,
-          supplierRow?.supplier_type ?? 'swedish_business',
-          supplierRow?.name,
-        )
-        journalEntryId = entry?.id ?? null
-      } else {
-        const entry = await createSupplierInvoicePaymentEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          typed as unknown as SupplierInvoice,
-          paymentAmount,
-          paymentDate,
-          exchangeRateDifference,
-          supplierRow?.name,
-        )
-        journalEntryId = entry?.id ?? null
-      }
-      if (!journalEntryId) {
-        // Engine returned null (no open fiscal period). Strict-mode abort.
-        return v1ErrorResponseFromCode('SI_PAID_FAILED', ctx.log, {
-          requestId: ctx.requestId,
-          details: { reason: 'no_fiscal_period', payment_date: paymentDate },
-        })
-      }
-    } catch (err) {
-      if (isBookkeepingError(err)) {
-        return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
-      }
-      ctx.log.error('supplier-invoice mark-paid JE creation failed', err as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('SI_PAID_FAILED', ctx.log, {
+    const result = await settleSupplierInvoiceAtomic(
+      ctx.supabase,
+      ctx.companyId!,
+      ctx.userId,
+      {
+        invoice: {
+          ...typed,
+          supplier: supplierRow,
+          items: (typed.items ?? []) as never,
+        } as never,
+        paymentDate,
+        paymentAmount,
+        exchangeRateDifference,
+        customLines,
+        notes: bodyNotes,
+        idempotencyKey: ctx.idempotencyKey!,
         requestId: ctx.requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
-      })
-    }
+      },
+    )
 
-    // Step 2: optimistic-lock SI update. The .in() filter guards against
-    // concurrent calls (or a credit/mark-paid race) flipping the status
-    // between our pre-flight and write.
-    const { data: updated, error: updateErr } = await ctx.supabase
-      .from('supplier_invoices')
-      .update({
-        status: newStatus,
-        remaining_amount: newRemaining,
-        paid_amount: newPaidAmount,
-        paid_at: newStatus === 'paid' ? new Date().toISOString() : null,
-        payment_journal_entry_id: journalEntryId,
-      })
-      .eq('company_id', ctx.companyId!)
-      .eq('id', invoiceId)
-      .in('status', PAYABLE_STATUSES as unknown as string[])
-      .select(SI_PAID_RESPONSE_COLUMNS)
-      .maybeSingle()
-
-    if (updateErr) {
-      ctx.log.error('supplier-invoice mark-paid update failed — attempting storno of orphaned JE', updateErr, {
-        invoiceId,
-        companyId: ctx.companyId,
-        userId: ctx.userId,
-        journalEntryId,
-      })
-      // The payment JE is already posted but the SI update failed — without a
-      // storno, the AP ledger would carry a 2440/1930 entry with no matching
-      // SI status change (BFL 5 kap 5 § integrity violation). reverseEntry()
-      // takes the entry id directly (no pre-fetch needed), matching the CAS-
-      // race branch immediately below.
-      try {
-        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
-      } catch (revErr) {
-        ctx.log.error('orphan JE storno failed after SI update error — manual reconciliation required', revErr as Error, {
-          invoiceId,
-          companyId: ctx.companyId,
-          userId: ctx.userId,
-          journalEntryId,
-        })
+    if (!result.ok) {
+      if (result.bookkeepingError) {
+        return v1ErrorResponse(result.bookkeepingError, ctx.log, { requestId: ctx.requestId })
       }
-      return v1ErrorResponseFromCode('SI_PAID_FAILED', ctx.log, {
+      return v1ErrorResponseFromCode(result.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: 'si_update_failed', journal_entry_id: journalEntryId },
-      })
-    }
-    if (!updated) {
-      // CAS race: the SI moved out of a payable state between pre-flight and
-      // write. The JE we just posted is now orphaned. Storno it.
-      ctx.log.warn('supplier-invoice mark-paid race — JE was orphaned, attempting storno', {
-        invoiceId,
-        companyId: ctx.companyId,
-        userId: ctx.userId,
-        journalEntryId,
-      })
-      try {
-        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
-      } catch (revErr) {
-        ctx.log.error('orphan JE storno failed — manual reconciliation required', revErr as Error, {
-          invoiceId,
-          companyId: ctx.companyId,
-          userId: ctx.userId,
-          journalEntryId,
-        })
-      }
-      return v1ErrorResponseFromCode('SI_PAID_ALREADY', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: 'race' },
+        details: result.details,
       })
     }
 
-    // Step 3: record the payment row (non-blocking — its only consumer is the
-    // dashboard's "payment history" tab, and the JE is the source of truth).
-    const { error: paymentErr } = await ctx.supabase
-      .from('supplier_invoice_payments')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        supplier_invoice_id: invoiceId,
-        payment_date: paymentDate,
-        amount: paymentAmount,
+    return ok(
+      {
+        id: typed.id,
+        supplier_id: typed.supplier_id,
+        arrival_number: typed.arrival_number,
+        supplier_invoice_number: typed.supplier_invoice_number,
+        status: result.status,
         currency: typed.currency,
-        exchange_rate_difference: exchangeRateDifference ?? 0,
-        journal_entry_id: journalEntryId,
-        notes: bodyNotes ?? null,
-      })
-    if (paymentErr) {
-      ctx.log.warn('supplier_invoice_payments insert failed (non-blocking)', paymentErr, {
-        invoiceId,
-      })
-    }
-
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.paid',
-        payload: {
-          supplierInvoice: typed as unknown as SupplierInvoice,
-          paymentAmount,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-        },
-      })
-    } catch (err) {
-      ctx.log.warn('supplier_invoice.paid emit failed', err as Error)
-    }
-
-    return ok(updated, { requestId: ctx.requestId })
+        total: typed.total,
+        paid_amount: result.paidAmount,
+        remaining_amount: result.remainingAmount,
+        paid_at: result.paidAt,
+        payment_journal_entry_id: result.journalEntryId,
+      },
+      { requestId: ctx.requestId },
+    )
   },
   { requireIdempotencyKey: true },
 )

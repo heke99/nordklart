@@ -845,15 +845,19 @@ async function commitMarkInvoicePaid(
       ? (params.amount as number)
       : undefined
 
-  // Delegates to the shared mark-paid service — the same orchestration the
-  // dashboard and v1 routes use: partial payments, overpayment→kundsaldo,
-  // invoice_payments row, race-guarded update with orphan-JE cleanup and the
-  // invoice.paid event.
+  // Delegates to the same database-owned atomic settlement used by every
+  // dashboard, v1 and bank-matching write surface.
   const result = await markInvoicePaid(supabase, companyId, userId, {
     invoiceId,
     paymentDate,
     paymentAmount,
     notes: typeof params.notes === 'string' ? params.notes : undefined,
+    idempotencyKey: typeof params.idempotency_key === 'string'
+      ? params.idempotency_key
+      : `pending-operation:${String(params.operation_id ?? invoiceId)}:${paymentDate}`,
+    requestId: typeof params.request_id === 'string'
+      ? params.request_id
+      : `pending_${String(params.operation_id ?? invoiceId)}`,
   })
 
   if (!result.ok) {
@@ -1114,189 +1118,93 @@ async function commitMatchTransactionInvoice(
 ): Promise<ExecutorResult> {
   const transactionId = params.transaction_id as string
   const invoiceId = params.invoice_id as string
+  if (!transactionId || !invoiceId) {
+    return { error: 'transaction_id and invoice_id are required', status: 400 }
+  }
 
   const { data: transaction, error: txError } = await supabase
-    .from('transactions').select('*').eq('id', transactionId).eq('company_id', companyId).single()
-
+    .from('transactions')
+    .select('*')
+    .eq('id', transactionId)
+    .eq('company_id', companyId)
+    .single()
   if (txError || !transaction) return { error: 'Transaction not found', status: 404 }
-  if (transaction.amount <= 0) return { error: 'Only income transactions can be matched', status: 400 }
-  if (transaction.invoice_id) return { error: 'Transaction already linked to an invoice', status: 409 }
+  if (transaction.amount <= 0) return { error: 'Transaction is not an income payment', status: 400 }
+  if (transaction.invoice_id && transaction.invoice_id !== invoiceId) {
+    return { error: 'Transaction is already linked to another invoice', status: 409 }
+  }
+  const isReplay = transaction.invoice_id === invoiceId
+  if (transaction.journal_entry_id && !isReplay) {
+    return { error: 'BANK_TRANSACTION_ALREADY_ALLOCATED', status: 409 }
+  }
 
-  const { data: invoice, error: invError } = await supabase
+  const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
-    .select('*, customer:customers(*), items:invoice_items(*)')
+    .select('id, currency, exchange_rate, remaining_amount')
     .eq('id', invoiceId)
     .eq('company_id', companyId)
     .single()
+  if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
 
-  if (invError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
-    return { error: 'Invoice is not in a matchable state', status: 409 }
-  }
+  const transactionCurrency = transaction.currency ?? 'SEK'
+  const invoiceCurrency = invoice.currency ?? 'SEK'
+  const paymentAmount = transactionCurrency === invoiceCurrency
+    ? Number(transaction.amount)
+    : Number(invoice.remaining_amount)
+  const bookedSek = invoiceCurrency === 'SEK'
+    ? paymentAmount
+    : Math.round(paymentAmount * Number(invoice.exchange_rate ?? 1) * 100) / 100
+  const actualBankSek = transactionCurrency === 'SEK'
+    ? Number(transaction.amount)
+    : Number(transaction.amount_sek ?? bookedSek)
+  const exchangeRateDifference = invoiceCurrency === 'SEK'
+    ? 0
+    : Math.round((actualBankSek - bookedSek) * 100) / 100
 
-  const paidAmount = transaction.amount
-  const allocation = planInvoiceCustomerPayment(invoice, paidAmount)
-  const {
-    appliedAmount,
-    overpaymentAmount,
-    newPaidAmount,
-    newRemaining,
-    isFullyPaid,
-    newStatus,
-  } = allocation
+  const result = await markInvoicePaid(supabase, companyId, userId, {
+    invoiceId,
+    paymentDate: transaction.date,
+    paymentAmount,
+    exchangeRateDifference,
+    transactionId,
+    paymentReference: transaction.reference ?? null,
+    notes: typeof params.notes === 'string' ? params.notes : undefined,
+    idempotencyKey: typeof params.idempotency_key === 'string'
+      ? `pending-match-invoice:${params.idempotency_key}`
+      : `pending-match-invoice:${String(params.operation_id ?? transactionId)}:${invoiceId}`,
+    requestId: typeof params.request_id === 'string'
+      ? params.request_id
+      : `pending_${String(params.operation_id ?? transactionId)}`,
+  })
 
-  if (overpaymentAmount > 0 && (transaction.currency !== 'SEK' || invoice.currency !== 'SEK')) {
-    return {
-      error: 'Överbetalning på valutafaktura behöver hanteras manuellt så kundsaldo och valutakursdifferens blir korrekt.',
-      status: 400,
+  if (!result.ok) {
+    if (result.bookkeepingError && isBookkeepingError(result.bookkeepingError)) {
+      throw result.bookkeepingError
     }
-  }
-
-  if (transaction.journal_entry_id) {
-    await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
-    await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
-  }
-
-  const now = new Date().toISOString()
-
-  const { data: settings } = await supabase
-    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
-
-  const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
-
-  // Route on invoice state, not the company's current setting. Mirror of
-  // the match-invoice route fix — see that handler for the full rationale.
-  const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-  const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid && overpaymentAmount === 0
-
-  if (overpaymentAmount > 0 && !invoiceAlreadyBooked && accountingMethod === 'cash') {
-    return {
-      error: 'Överbetalning på kontantmetoden-faktura utan tidigare verifikation behöver hanteras manuellt.',
-      status: 400,
+    const statusByCode: Record<string, number> = {
+      INVOICE_PAID_NOT_FOUND: 404,
+      INVOICE_PAID_NOT_PAYABLE: 409,
+      INVOICE_PAID_RACE: 409,
+      BANK_TRANSACTION_ALREADY_ALLOCATED: 409,
+      IDEMPOTENCY_KEY_REUSE: 409,
+      VALIDATION_ERROR: 400,
+      INVOICE_PAID_NO_FISCAL_PERIOD: 400,
+      PERIOD_LOCKED: 409,
     }
+    return { error: result.code, status: statusByCode[result.code] ?? 500 }
   }
 
-  let journalEntryId: string | null = null
-  try {
-    if (overpaymentAmount > 0) {
-      const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
-      if (!fiscalPeriodId) return { error: 'No open fiscal period found for payment date', status: 400 }
-      const desc = invoice.customer?.name
-        ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
-        : `Inbetalning kundfaktura ${invoice.invoice_number}`
-      const je = await createJournalEntry(supabase, companyId, userId, {
-        fiscal_period_id: fiscalPeriodId,
-        entry_date: transaction.date,
-        description: `${desc} med överbetalning`,
-        source_type: 'invoice_paid',
-        source_id: invoice.id,
-        lines: buildInvoicePaymentWithCustomerCreditLines({
-          bankAmount: transaction.amount,
-          invoiceSettlementAmount: appliedAmount,
-          customerCreditAmount: overpaymentAmount,
-          description: desc,
-        }),
-      })
-      journalEntryId = je?.id ?? null
-    } else if (useCashEntry) {
-      const je = await createInvoiceCashEntry(
-        supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name
-      )
-      journalEntryId = je?.id ?? null
-    } else {
-      const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, transaction.date, undefined, invoice.customer?.name, appliedAmount
-      )
-      journalEntryId = je?.id ?? null
-    }
-  } catch (err) {
-    if (isBookkeepingError(err)) throw err
-    log.error('Failed to create match journal entry:', err)
+  return {
+    data: {
+      status: result.newStatus,
+      paid_amount: result.newPaidAmount,
+      remaining_amount: result.newRemaining,
+      applied_amount: result.appliedAmount,
+      overpayment_amount: result.overpaymentAmount,
+      customer_credit_id: result.customerCreditId,
+      journal_entry_id: result.journalEntryId,
+    },
   }
-
-  const { data: updatedRows, error: updateInvError } = await supabase
-    .from('invoices')
-    .update({
-      status: newStatus,
-      paid_at: isFullyPaid ? now : null,
-      paid_amount: newPaidAmount,
-      remaining_amount: newRemaining,
-    })
-    .eq('id', invoiceId)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
-    .select('id')
-
-  if (updateInvError) return { error: 'Failed to update invoice status', status: 500 }
-  if (!updatedRows || updatedRows.length === 0) {
-    return { error: 'Invoice has already been fully paid or is no longer matchable', status: 409 }
-  }
-
-  const paymentNotes = (accountingMethod === 'cash' && !isFullyPaid)
-    ? 'Kontantmetoden: intäkt bokförs vid slutbetalning' : null
-
-  const { data: paymentRow } = await supabase.from('invoice_payments').insert({
-    user_id: userId,
-    company_id: companyId,
-    invoice_id: invoiceId,
-    payment_date: transaction.date,
-    amount: appliedAmount,
-    currency: invoice.currency,
-    exchange_rate: invoice.exchange_rate,
-    journal_entry_id: journalEntryId,
-    transaction_id: transactionId,
-    notes: paymentNotes,
-  }).select('id').single()
-
-  const paymentId = (paymentRow as { id?: string } | null)?.id ?? null
-  let customerCreditId: string | null = null
-  if (overpaymentAmount > 0) {
-    const result = await recordCustomerOverpayment(supabase, {
-      userId,
-      companyId,
-      customerId: invoice.customer_id ?? null,
-      invoiceId,
-      paymentId,
-      transactionId,
-      journalEntryId,
-      amount: overpaymentAmount,
-      currency: invoice.currency,
-      notes: `Överbetalning ${overpaymentAmount} ${invoice.currency} på faktura ${invoice.invoice_number}.`,
-    })
-    customerCreditId = result.creditId
-  } else if (newRemaining > 0) {
-    await recordInvoiceUnderpayment(supabase, {
-      userId,
-      companyId,
-      invoiceId,
-      paymentId,
-      transactionId,
-      journalEntryId,
-      amount: newRemaining,
-      currency: invoice.currency,
-      notes: `Restbelopp ${newRemaining} ${invoice.currency} kvar efter delbetalning.`,
-    })
-  }
-
-  await supabase
-    .from('transactions')
-    .update({
-      invoice_id: invoiceId,
-      potential_invoice_id: null,
-      journal_entry_id: journalEntryId,
-      is_business: true,
-      category: 'income_services',
-    })
-    .eq('id', transactionId)
-
-  try {
-    await eventBus.emit({
-      type: 'invoice.match_confirmed',
-      payload: { invoice: invoice as Invoice, transaction: transaction as Transaction, userId, companyId },
-    })
-  } catch { /* non-critical */ }
-
-  return { data: { invoice_status: newStatus, paid_amount: newPaidAmount, remaining_amount: newRemaining, applied_amount: appliedAmount, overpayment_amount: overpaymentAmount, customer_credit_id: customerCreditId, journal_entry_id: journalEntryId } }
 }
 
 async function commitLinkInvoiceVoucher(

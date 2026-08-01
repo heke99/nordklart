@@ -15,11 +15,16 @@ export interface YearEndAccessDecision {
   reason?: 'missing_entitlement' | 'expired' | 'unauthorized' | 'database_error'
 }
 
-type OneTimePurchaseRow = {
-  id: string
-  permanent_access?: boolean | null
-  access_starts_at?: string | null
-  access_expires_at?: string | null
+
+type CanonicalPeriodAccessRow = {
+  allowed: boolean
+  code: string
+  access_source: YearEndAccessSource | null
+  access_source_id: string | null
+  effective_role: string | null
+  purchase_id: string | null
+  feature_access: boolean
+  one_time_access: boolean
 }
 
 type RequireYearEndAccessOptions = {
@@ -36,6 +41,53 @@ type RequireYearEndAccessOptions = {
 async function createTrustedAccessClient(): Promise<SupabaseClient> {
   const { createServiceClient } = await import('@/lib/supabase/server')
   return createServiceClient()
+}
+
+async function resolveCanonicalPeriodAccess(
+  userId: string,
+  companyId: string,
+  fiscalPeriodId: string,
+  requireWrite: boolean,
+): Promise<YearEndAccessDecision> {
+  let accessDb: SupabaseClient
+  try {
+    accessDb = await createTrustedAccessClient()
+  } catch {
+    return { allowed: false, reason: 'database_error' }
+  }
+
+  const { data, error } = await accessDb.rpc(
+    'resolve_year_end_period_capability_for_user',
+    {
+      p_user_id: userId,
+      p_company_id: companyId,
+      p_fiscal_period_id: fiscalPeriodId,
+      p_require_write: requireWrite,
+    },
+  )
+  if (error) return { allowed: false, reason: 'database_error' }
+
+  const row = (Array.isArray(data) ? data[0] : data) as CanonicalPeriodAccessRow | null
+  if (!row) return { allowed: false, reason: 'database_error' }
+  if (row.allowed && row.access_source) {
+    return {
+      allowed: true,
+      source: row.access_source,
+      sourceId: row.access_source_id ?? row.purchase_id ?? null,
+    }
+  }
+
+  if (row.code === 'YEAR_END_PERIOD_PURCHASE_REQUIRED') {
+    return { allowed: false, reason: 'missing_entitlement' }
+  }
+  if (
+    row.code === 'YEAR_END_PERIOD_FORBIDDEN'
+    || row.code === 'YEAR_END_COMPANY_ACCESS_FORBIDDEN'
+    || row.code === 'YEAR_END_COMPANY_WRITE_FORBIDDEN'
+  ) {
+    return { allowed: false, reason: 'unauthorized' }
+  }
+  return { allowed: false, reason: 'database_error' }
 }
 
 async function isPlatformAdmin(supabase: SupabaseClient, userId?: string | null): Promise<boolean> {
@@ -117,86 +169,46 @@ export async function resolveYearEndAccess(
   userId?: string | null,
   options: RequireYearEndAccessOptions = {},
 ): Promise<YearEndAccessDecision> {
-  let effectiveRole: string | null = null
-  let canWrite = false
-  let canManagePlatform = false
-  if (userId) {
-    // The explicit-user resolver is intentionally executable only by
-    // service_role. Route callers normally pass an authenticated RLS client,
-    // so invoking it through `supabase` would fail with PostgreSQL 42501 and
-    // incorrectly surface FEATURE_ACCESS_UNAVAILABLE before a valid one-time
-    // purchase can be evaluated. Keep operational reads on the caller client,
-    // but perform this canonical actor/company authorization check through the
-    // trusted server client.
-    let accessDb: SupabaseClient
-    try {
-      accessDb = await createTrustedAccessClient()
-    } catch {
-      return { allowed: false, reason: 'database_error' }
-    }
-    const { data: accessData, error: accessError } = await accessDb.rpc(
-      'resolve_company_access_for_user',
-      { p_user_id: userId, p_company_id: companyId },
-    )
-    if (accessError) return { allowed: false, reason: 'database_error' }
-    const access = Array.isArray(accessData) ? accessData[0] : null
-    if (!access?.can_read) return { allowed: false, reason: 'unauthorized' }
-    effectiveRole = access.effective_role ?? null
-    canWrite = Boolean(access.can_write)
-    canManagePlatform = Boolean(access.can_manage_platform) && effectiveRole === 'platform_admin'
-    if (options.requireWrite && !canWrite && !canManagePlatform) {
-      return { allowed: false, reason: 'unauthorized' }
-    }
-  }
-
-  const projectEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.projects')
-  if (projectEntitlement.allowed) {
-    return { allowed: true, source: 'feature_entitlement', sourceId: projectEntitlement.sourceId ?? null }
-  }
-  let accessResolutionFailed = projectEntitlement.reason === 'database_error'
-
+  // iXBRL may be sold as a distinct feature. It is checked explicitly, while
+  // the normal year-end product and every exact-period one-time purchase are
+  // resolved by one database authority below.
   if (options.allowIxbrlFeature) {
     const ixbrlEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.ixbrl')
     if (ixbrlEntitlement.allowed) {
-      return { allowed: true, source: 'ixbrl_feature_entitlement', sourceId: ixbrlEntitlement.sourceId ?? null }
-    }
-    accessResolutionFailed ||= ixbrlEntitlement.reason === 'database_error'
-  }
-
-  if (fiscalPeriodId) {
-    const { data, error: purchaseError } = await supabase
-      .from('one_time_purchases')
-      .select('id, status, access_starts_at, access_expires_at, permanent_access')
-      .eq('company_id', companyId)
-      .eq('purchase_type', 'year_end')
-      .eq('fiscal_period_id', fiscalPeriodId)
-      .in('status', ['paid', 'active', 'fulfilled'])
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (purchaseError) accessResolutionFailed = true
-    const row = data as OneTimePurchaseRow | null
-    if (row) {
-      const hasStarted = !row.access_starts_at || new Date(row.access_starts_at).getTime() <= Date.now()
-      const hasAccess = hasStarted && (Boolean(row.permanent_access)
-        || !row.access_expires_at
-        || new Date(row.access_expires_at).getTime() >= Date.now())
-      if (hasAccess) {
-        return { allowed: true, source: 'one_time_purchase', sourceId: row.id }
+      return {
+        allowed: true,
+        source: 'ixbrl_feature_entitlement',
+        sourceId: ixbrlEntitlement.sourceId ?? null,
       }
-      return { allowed: false, reason: 'expired', sourceId: row.id }
     }
   }
 
-  if (canManagePlatform || await isPlatformAdmin(supabase, userId)) {
-    return { allowed: true, source: 'platform_admin_bypass' }
+  if (userId && fiscalPeriodId) {
+    return resolveCanonicalPeriodAccess(
+      userId,
+      companyId,
+      fiscalPeriodId,
+      options.requireWrite === true,
+    )
   }
 
-  if (accessResolutionFailed) {
+  // Compatibility path for pre-period screens. Exact-period operations must
+  // always pass both actor and fiscal period and therefore cannot use this.
+  const projectEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.projects')
+  if (projectEntitlement.allowed) {
+    return {
+      allowed: true,
+      source: 'feature_entitlement',
+      sourceId: projectEntitlement.sourceId ?? null,
+    }
+  }
+
+  if (projectEntitlement.reason === 'database_error') {
     return { allowed: false, reason: 'database_error' }
   }
-
+  if (await isPlatformAdmin(supabase, userId)) {
+    return { allowed: true, source: 'platform_admin_bypass' }
+  }
   return { allowed: false, reason: 'missing_entitlement' }
 }
 

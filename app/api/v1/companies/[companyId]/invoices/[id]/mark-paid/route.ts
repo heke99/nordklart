@@ -18,12 +18,9 @@
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  *
- * On commit:
- *   1. Build journal entry (default 1930/1510 split, or custom lines).
- *   2. Post via createInvoicePaymentJournalEntry / createJournalEntry.
- *   3. Update invoice: status → 'paid' (or 'partially_paid' for partial),
- *      remaining_amount decremented, paid_at set, paid_amount accumulated.
- *   4. Emit invoice.paid.
+ * On commit, the canonical PostgreSQL settlement function posts the staged
+ * journal entry, creates the allocation, updates AR, links any bank row and
+ * writes audit/outbox in one transaction.
  */
 
 import { z } from 'zod'
@@ -360,6 +357,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       exchangeRateDifference,
       customLines,
       notes: paymentNotesInput,
+      idempotencyKey: ctx.idempotencyKey!,
+      requestId: ctx.requestId,
     })
 
     if (!result.ok) {

@@ -129,6 +129,31 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
         'Use a fresh UUID for a new operation, or send the original request body to replay.',
     },
   },
+  COMPANY_WRITE_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att ändra det här företaget.',
+    message_en: 'The actor is not allowed to write to this company.',
+  },
+  PAYMENT_CURRENCY_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Betalningens valuta stämmer inte med fakturans valuta.',
+    message_en: 'Payment currency does not match the invoice currency.',
+  },
+  BANK_TRANSACTION_ALREADY_ALLOCATED: {
+    httpStatus: 409,
+    message_sv: 'Banktransaktionen är redan kopplad till en annan ekonomisk post.',
+    message_en: 'The bank transaction is already allocated to another economic record.',
+  },
+  POSTED_ENTRY_REQUIRES_REVERSAL: {
+    httpStatus: 409,
+    message_sv: 'En bokförd verifikation måste rättas genom en länkad rättelseverifikation.',
+    message_en: 'A posted journal entry must be corrected through a linked reversal.',
+  },
+  REVERSAL_LINK_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Rättelseverifikationen saknar en giltig ömsesidig länk till originalet.',
+    message_en: 'The reversal is missing a valid mutual link to the original journal entry.',
+  },
   INSUFFICIENT_SCOPE: {
     httpStatus: 403,
     message_sv: 'API-nyckeln saknar behörighet för denna åtgärd.',
@@ -1086,10 +1111,22 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
     message_sv: 'Räkenskapsåret kunde inte hittas för det valda företaget.',
     message_en: 'The fiscal year was not found for the selected company.',
   },
+  YE_FAILURE_RECORDING_FAILED: {
+    httpStatus: 503,
+    message_sv: 'Bokslutet misslyckades och felstatusen kunde inte sparas. Kontrollera körningsstatusen med request-ID:t innan du försöker igen.',
+    message_en: 'The year-end operation failed and its failure status could not be persisted.',
+    retryable: true,
+  },
   YE_UNKNOWN: {
     httpStatus: 500,
     message_sv: 'Bokslutet kunde inte verkställas. Ingen ofullständig stängning har godkänts.',
     message_en: 'The year-end close failed. No partial close was accepted.',
+  },
+  YEAR_END_READINESS_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Beredskapskontrollen kunde inte genomföras just nu. Försök igen eller kontakta supporten med request-ID:t.',
+    message_en: 'Year-end readiness could not be evaluated at this time.',
+    retryable: true,
   },
   YEAR_END_READINESS_BLOCKED: {
     httpStatus: 409,
@@ -1897,6 +1934,11 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Bokföringen är låst. Betalningen kan inte registreras.',
     message_en: 'Bookkeeping is locked; payment cannot be recorded.',
+  },
+  SI_PAID_RACE: {
+    httpStatus: 409,
+    message_sv: 'Leverantörsfakturan ändrades av en annan förfrågan. Läs in den på nytt.',
+    message_en: 'Supplier invoice changed concurrently; reload before retrying.',
   },
   SI_PAID_FAILED: {
     httpStatus: 500,

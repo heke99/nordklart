@@ -845,6 +845,9 @@ export interface SupplierInvoicePayment {
 
   journal_entry_id: string | null
   transaction_id: string | null
+  idempotency_key?: string | null
+  request_id?: string | null
+  payment_reference?: string | null
   notes: string | null
 
   created_at: string
@@ -865,6 +868,9 @@ export interface InvoicePayment {
 
   journal_entry_id: string | null
   transaction_id: string | null
+  idempotency_key?: string | null
+  request_id?: string | null
+  payment_reference?: string | null
   notes: string | null
 
   created_at: string
@@ -1007,6 +1013,8 @@ export interface Invoice {
   // Lets the payment flow detect an already-booked sale and clear 1510 rather
   // than re-recognising revenue.
   journal_entry_id?: string | null
+  // Dedicated settlement entry. The registration entry above must never be overwritten.
+  payment_journal_entry_id?: string | null
 
   // Payment tracking
   paid_at: string | null

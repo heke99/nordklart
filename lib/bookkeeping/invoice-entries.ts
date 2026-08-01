@@ -1,4 +1,4 @@
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { createDraftEntry, createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { generateSalesVatLines } from './vat-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
@@ -363,7 +363,8 @@ export async function createInvoicePaymentJournalEntry(
   paymentDate: string,
   exchangeRateDifference?: number,
   customerName?: string,
-  paymentAmount?: number
+  paymentAmount?: number,
+  options?: { draftOnly?: boolean }
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -387,8 +388,10 @@ export async function createInvoicePaymentJournalEntry(
 
   const lines: CreateJournalEntryLineInput[] = []
 
-  if (!isPartial && exchangeRateDifference && exchangeRateDifference !== 0) {
-    // Foreign currency with exchange rate difference
+  if (exchangeRateDifference && exchangeRateDifference !== 0) {
+    // Foreign currency with exchange rate difference. This applies to both
+    // full and partial settlements; paymentAmount is converted at the original
+    // invoice rate and the bank line uses the actual SEK delta.
     // For receivables: positive diff = gain (received more), negative = loss (received less)
     const actualSekReceived = bookedSekAmount + exchangeRateDifference
 
@@ -453,7 +456,9 @@ export async function createInvoicePaymentJournalEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return options?.draftOnly
+    ? createDraftEntry(supabase, companyId, userId, input)
+    : createJournalEntry(supabase, companyId, userId, input)
 }
 
 /**
@@ -571,7 +576,8 @@ export async function createInvoiceCashEntry(
   invoice: Invoice,
   paymentDate: string,
   entityType: EntityType = 'enskild_firma',
-  customerName?: string
+  customerName?: string,
+  options?: { draftOnly?: boolean }
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -649,7 +655,9 @@ export async function createInvoiceCashEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return options?.draftOnly
+    ? createDraftEntry(supabase, companyId, userId, input)
+    : createJournalEntry(supabase, companyId, userId, input)
 }
 
 /**

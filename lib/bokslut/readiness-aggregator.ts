@@ -172,7 +172,7 @@ export async function buildBokslutReadinessReport(
   if (dbBlockersError) {
     blockerDetails.push({
       code: 'readiness_check_failed',
-      message: `Beredskapskontrollen kunde inte slutföras (${dbBlockersError.message}). Bokslut blockeras tills kontrollen kan köras.`,
+      message: 'Beredskapskontrollen kunde inte genomföras just nu. Bokslut blockeras tills kontrollen kan köras.',
       count: 0,
       checkCompleted: false,
     })
@@ -212,7 +212,7 @@ export async function buildBokslutReadinessReport(
   if (controlsError) {
     blockerDetails.push({
       code: 'year_end_control_status_failed',
-      message: `Bokslutets stödregister kunde inte kontrolleras (${controlsError.message}). Bokslut blockeras tills kontrollen kan köras.`,
+      message: 'Bokslutets stödregister kunde inte kontrolleras just nu. Bokslut blockeras tills kontrollen kan köras.',
       count: 0,
       checkCompleted: false,
       href: historicalSupportHref,

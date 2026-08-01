@@ -88,6 +88,30 @@ function extractCode(error: unknown): string | null {
     }
   }
 
+  for (const field of ['details', 'hint'] as const) {
+    const value = obj[field]
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nestedCode = (value as Record<string, unknown>).code
+      if (typeof nestedCode === 'string' && /^[A-Z][A-Z0-9_]+$/.test(nestedCode)) {
+        return nestedCode
+      }
+    }
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value) as unknown
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const nestedCode = (parsed as Record<string, unknown>).code
+          if (typeof nestedCode === 'string' && /^[A-Z][A-Z0-9_]+$/.test(nestedCode)) {
+            return nestedCode
+          }
+        }
+      } catch {
+        const match = value.match(/"code"\s*:\s*"([A-Z][A-Z0-9_]+)"/)
+        if (match) return match[1]
+      }
+    }
+  }
+
   return null
 }
 
@@ -163,14 +187,25 @@ export function getStructuredError(
 // ────────────────────────────────────────────────────────────────────
 
 export interface ErrorEnvelope {
+  code: string
+  message: string
+  request_id: string
+  retryable: boolean
+  blocking: boolean
+  http_status: number
+  action_url?: string
+  metadata?: Record<string, unknown>
+  idempotency_key?: string
+  recovery_required?: boolean
+  /** Backwards-compatible envelope for existing dashboard/API consumers. */
   error: {
     code: string
     message: string
     message_en?: string
     remediation?: StructuredErrorRemediation
-    retryable?: boolean
-    requestId?: string
-    details?: unknown
+    retryable: boolean
+    requestId: string
+    details?: Record<string, unknown>
   }
 }
 
@@ -184,6 +219,10 @@ interface ErrorResponseContext {
   details?: unknown
   /** When known, override the http status from the registry entry. */
   status?: number
+  idempotencyKey?: string
+  actionUrl?: string
+  blocking?: boolean
+  recoveryRequired?: boolean
 }
 
 interface MinimalLogger {
@@ -260,7 +299,7 @@ export function errorResponse(
     const { code, details } = extractBookkeepingDetails(err)
     log.error(code, err as Error, { requestId: ctx.requestId })
     const entry = entryFor(code)
-    return buildResponse(code, entry, ctx.requestId, details ?? ctx.details)
+    return buildResponse(code, entry, ctx.requestId, details ?? ctx.details, ctx)
   }
 
   // 2. Zod validation errors
@@ -276,7 +315,7 @@ export function errorResponse(
     })
     const entry = entryFor('VALIDATION_ERROR')
     const details = mergeDetails({ issues }, ctx.details)
-    return buildResponse('VALIDATION_ERROR', entry, ctx.requestId, details)
+    return buildResponse('VALIDATION_ERROR', entry, ctx.requestId, details, ctx)
   }
 
   // 3. Postgres errors
@@ -288,8 +327,7 @@ export function errorResponse(
     })
     if (mapped) {
       const entry = entryFor(mapped)
-      const details = mergeDetails({ pgCode: err.code }, ctx.details)
-      return buildResponse(mapped, entry, ctx.requestId, details)
+      return buildResponse(mapped, entry, ctx.requestId, ctx.details, ctx)
     }
   }
 
@@ -299,7 +337,7 @@ export function errorResponse(
     const entry = entryFor(code)
     log.error(`${code}`, err instanceof Error ? err : new Error(String(err)), { requestId: ctx.requestId })
     const status = ctx.status ?? entry.httpStatus
-    return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details)
+    return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details, ctx)
   }
 
   // 5. Fallback — log the actual error so we can still debug
@@ -307,7 +345,7 @@ export function errorResponse(
     requestId: ctx.requestId,
   })
   const fallback = entryFor('INTERNAL_ERROR')
-  return buildResponse('INTERNAL_ERROR', fallback, ctx.requestId, ctx.details)
+  return buildResponse('INTERNAL_ERROR', fallback, ctx.requestId, undefined, ctx)
 }
 
 function mergeDetails(
@@ -375,25 +413,72 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   return { code: 'INTERNAL_ERROR' }
 }
 
+function sanitizeMetadata(details: unknown): Record<string, unknown> | undefined {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return undefined
+  const forbidden = new Set([
+    'technical_error',
+    'internal_cause',
+    'pgCode',
+    'pg_code',
+    'schema',
+    'table',
+    'column',
+    'constraint',
+    'stack',
+  ])
+  const sanitized = Object.fromEntries(
+    Object.entries(details as Record<string, unknown>)
+      .filter(([key]) => !forbidden.has(key))
+      .map(([key, value]) => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          return [key, sanitizeMetadata(value) ?? {}]
+        }
+        if (typeof value === 'string' && /(?:SQLSTATE|relation |column |constraint |PL\/pgSQL|stack trace)/i.test(value)) {
+          return [key, 'Teknisk detalj har dolts.']
+        }
+        return [key, value]
+      }),
+  )
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined
+}
+
 function buildResponse(
   code: string,
   entry: StructuredErrorEntry,
   requestId: string | undefined,
   details: unknown,
+  ctx: ErrorResponseContext = {},
 ): NextResponse {
+  const stableRequestId = requestId ?? 'req_unavailable'
+  const retryable = entry.retryable === true
+  const metadata = sanitizeMetadata(details)
+  const actionUrl = ctx.actionUrl
+    ?? (entry.remediation?.resource?.startsWith('/') ? entry.remediation.resource : undefined)
   const body: ErrorEnvelope = {
+    code,
+    message: entry.message_sv,
+    request_id: stableRequestId,
+    retryable,
+    blocking: ctx.blocking ?? true,
+    http_status: entry.httpStatus,
+    ...(actionUrl ? { action_url: actionUrl } : {}),
+    ...(metadata ? { metadata } : {}),
+    ...(ctx.idempotencyKey ? { idempotency_key: ctx.idempotencyKey } : {}),
+    ...(ctx.recoveryRequired !== undefined
+      ? { recovery_required: ctx.recoveryRequired }
+      : {}),
     error: {
       code,
       message: entry.message_sv,
       message_en: entry.message_en,
       ...(entry.remediation ? { remediation: entry.remediation } : {}),
-      ...(entry.retryable ? { retryable: true } : {}),
-      ...(requestId ? { requestId } : {}),
-      ...(details !== undefined ? { details } : {}),
+      retryable,
+      requestId: stableRequestId,
+      ...(metadata ? { details: metadata } : {}),
     },
   }
   const res = NextResponse.json(body, { status: entry.httpStatus })
-  if (requestId) res.headers.set('X-Request-Id', requestId)
+  res.headers.set('X-Request-Id', stableRequestId)
   return res
 }
 
@@ -420,5 +505,6 @@ export function errorResponseFromCode(
     },
     ctx.requestId,
     ctx.details,
+    ctx,
   )
 }
