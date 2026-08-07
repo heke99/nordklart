@@ -130,3 +130,75 @@ feature-policy passerar, migrationen parsas som 42 PostgreSQL-statements och
 Next-produktionsbygget passerar med 356 routes/sidor. Live-migration och
 pg-real är fortfarande blockerade av saknad PostgreSQL på `localhost:5432`
 och saknad `SUPABASE_DB_URL`/`DATABASE_URL`.
+
+---
+
+# Remediation 2026-08-07 (audit 2026-08-06)
+
+Branch: `claude/nordklart-remediation-hardening-lbyqtt`.
+
+## Åtgärdat och verifierat
+
+- **R-01 bekräftad och fixad (behörighetseskalering).**
+  `resolveYearEndAccess()` löste den bolagsövergripande `year_end.ixbrl`-rätten
+  *före* den kanoniska aktör-/bolag-/period-/skrivkontrollen och returnerade
+  access direkt. `arsredovisning/finalize` skickar både
+  `allowIxbrlFeature: true` och `requireWrite: true` — genvägen hoppade över
+  skrivkontrollen helt, så en `viewer` i ett bolag med iXBRL-rätten kunde
+  färdigställa (låsa) en årsredovisning. `requireYearEndReportAccess()` hade
+  samma form via `reports.core`. Auktorisation och entitlement är nu två
+  ordnade grindar; entitlement kan bara ersätta *betalning*
+  (`YEAR_END_PERIOD_PURCHASE_REQUIRED`), aldrig access, periodbindning,
+  skrivrätt eller ett resolverfel. 7 regressionstester failar mot den gamla
+  implementationen.
+  Det var **inte** en cross-tenant-bypass: `withRouteContext` validerar
+  `?company_id=` mot `resolve_company_access_for_user` innan handlern körs.
+
+- **H-01 CI.** `core-build` och `test-pg-real` körs nu även på push till `main`,
+  med `cancel-in-progress`. `typecheck` är ett eget steg. pg-reals diff-baserade
+  `coverage-gate` är PR-only (ingen `base_ref` vid push).
+
+- **M-04.** `verify:fast` / `verify:db` / `verify:release`.
+
+- **M-02.** `skills-lock.json` hade proveniens för alla 41 — TSV:n var
+  föråldrad. Regenererad från låsfilen med verkliga first-commit-datum.
+  `scripts/checks/skill-provenance.mjs` kräver mängdlikhet mellan disk,
+  `SKILLS_LOCK.sha256`, `skills-lock.json` och `SKILLS_SOURCES.tsv` samt
+  verifierar varje SHA-256 mot filen på disk.
+
+- **Migrationsdrift.** `--db`-kontrollen jämförde bara registry→repo och
+  checksums; riktningen repo→registry beräknades (`seen`) men jämfördes aldrig.
+  Därför var 68-filersglappet osynligt. Rapporteras och failar nu.
+
+- **Ny migration 20260807120000.** RLS + revoke på
+  `public.nordklart_schema_migrations` (advisor-ERROR), samt pinnad
+  `search_path` på 12 bokföringskritiska funktioner. Kontrollerat mot
+  produktion före skrivning: ingen av de 12 anropar pgcrypto/uuid-ossp, så
+  `digest`-incidenten kan inte återuppstå.
+
+- **Pre-existerande typecheck-fel** i supplier-invoice-testet rättat.
+  `next build` typkontrollerar inte testfiler, så det var osynligt tills
+  `typecheck` kom in i CI.
+
+## Verifierat mot live-databasen (H-02)
+
+Supabase `rpajvvngvcutffwucbdy`, read-only. 273 tabeller, 272 med RLS, 625
+policies, 466 funktioner. `supabase_migrations.schema_migrations` finns inte —
+den egna runnern är enda migrationsauktoritet, vilket avgör H-06 empiriskt.
+Migration `20260801140000` **är** applicerad (alla funktioner, tabeller, vyer
+och unika index finns). `invoice_payments_bank_tx_review_idx` saknas, vilket
+bevisar att migrationen tog ren-data-vägen: den ovillkorliga unika invarianten
+är aktiv.
+
+**H-04 är inte reproducerbar här.** Alla fyra discrepancy-vyer returnerar 0
+rader. Databasen är pre-launch: 2 bolag, 53 verifikat, 0 `invoice_payments`,
+0 `one_time_purchases`.
+
+Full evidens: `docs/audits/2026-08-07-live-database-verification.md`.
+
+## Viktigast att veta
+
+pg-real är **rött på `main`** — 36/501 failar mot riktig PostgreSQL, med
+tyngdpunkt i bokslut (10) och SIE-import (7). Orsak: ändrat felkontrakt
+(`YE_READINESS_BLOCKED: <reason>` i stället för `YE_NOT_READY`) och föråldrade
+fixtures. Se `open-blockers.md` punkt 1 och `next-actions.md` punkt 1.

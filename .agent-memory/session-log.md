@@ -70,3 +70,42 @@
   guards, feature-policy, PostgreSQL-parser och produktionsbygge.
 - Försökte migrationsstatus och pg-real; dokumenterade saknad DB-URL och
   `ECONNREFUSED localhost:5432` utan att räkna dem som godkända.
+
+## 2026-08-07 — Remediation av systemkonsistensauditen 2026-08-06
+
+Utgångspunkt: `origin/main` @ `a8dee572` (= auditens baseline). Auditrapporten
+låg bara på auditbranchen `audit/nordklart-system-consistency-2026-08-06`
+(`63849a9d`) och hämtades därifrån; ingen produktionskod ändrades där.
+
+Verifierade varje fynd själv i stället för att lita på rapporten. Resultat som
+avviker från auditen:
+
+- **H-04 inte reproducerbar** — produktionsdatabasen är ren och pre-launch;
+  de ovillkorliga unika indexen finns redan.
+- **M-02 delvis felaktig** — proveniens saknades inte, den härledda TSV:n var
+  föråldrad.
+- **M-03 delvis felaktig** — den citerade raden i `mark-paid-service.ts` är ett
+  balanspredikat i öre, inte en beloppsberäkning.
+- **H-06 avgjord empiriskt** — produktion har ingen Supabase-CLI-historik alls,
+  så det finns bara en migrationssanning där.
+- **R-01 bekräftad som exploaterbar**, men som privilegieeskalering inom en
+  tenant (viewer → skriv på bokslutslåsning), inte som cross-tenant-bypass.
+
+Nya fynd som auditen inte hade:
+
+1. pg-real är rött på `main`: 36/501 failar (baslinje 37). Osynligt eftersom
+   pg-real bara kördes på `pull_request` och inga PR:er fanns.
+2. Migrationsliggaren i produktion saknar 68 rader trots att SQL:en är
+   applicerad — och `--db`-kontrollen kunde aldrig se det, eftersom riktningen
+   repo→registry beräknades men aldrig jämfördes.
+3. Repo-wide typecheck-fel på `main` som `next build` inte fångar.
+4. `requireYearEndReportAccess()` hade samma bypassform som R-01.
+
+Kört: `npm ci`, `npx tsc --noEmit` (grönt), `npm run check:guards` (grönt),
+`npm run check:skill-provenance` (grönt), unit-tester för berörda områden
+(grönt), samt full pg-real mot lokal PostgreSQL 16 med alla 427 migrationer
+applicerade — 36 failar, alla pre-existerande (baslinje utan 2026-08-07-
+migrationen: 37, dvs. migrationen fixar ett test och bryter inget).
+
+Ej gjort: H-03 (betalningsatomicitet) och H-05 (utbyggd testmatris). Att bygga
+ut sviten innan de 36 befintliga failen är rättade ger inget bevisvärde.
