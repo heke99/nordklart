@@ -2131,6 +2131,11 @@
       "file": "20260801140000_production_financial_atomicity_and_billing_lifecycle.sql",
       "version": "20260801140000",
       "sha256": "7c185ace5b4214f7f2f38b6dc0a703833b4f2bba9cc19e3d86c1b06b5ce9ad50"
+    },
+    {
+      "file": "20260807120000_secure_migration_ledger_and_pin_search_path.sql",
+      "version": "20260807120000",
+      "sha256": "0d1702330b5ea568d4dc88c5dfbe41b034bb4395212ab397c1961113b93e32c2"
     }
   ]
 }
