@@ -25,8 +25,9 @@ import { settleSupplierInvoiceAtomic } from '../mark-paid-service'
 const caller = createQueuedMockSupabase()
 const companyId = '00000000-0000-4000-8000-000000000101'
 const userId = '00000000-0000-4000-8000-000000000102'
+const supplierInvoiceId = '00000000-0000-4000-8000-000000000103'
 const supplierInvoice = {
-  id: '00000000-0000-4000-8000-000000000103',
+  id: supplierInvoiceId,
   supplier_id: '00000000-0000-4000-8000-000000000104',
   supplier_invoice_number: 'LF-42',
   status: 'approved',
@@ -95,7 +96,7 @@ describe('settleSupplierInvoiceAtomic', () => {
     expect(service.supabase.rpc).toHaveBeenCalledWith(
       'settle_supplier_invoice',
       expect.objectContaining({
-        p_supplier_invoice_id: supplierInvoice.id,
+        p_supplier_invoice_id: supplierInvoiceId,
         p_idempotency_key: 'supplier-idem-2',
         p_draft_journal_entry_id: atomic.journal_entry_id,
       }),

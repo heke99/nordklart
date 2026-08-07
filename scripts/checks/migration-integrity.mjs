@@ -155,6 +155,9 @@ async function compareDatabase(migrations) {
   try {
     const localByFile = new Map(migrations.map((m) => [m.file, m]))
     const localVersions = new Set(migrations.map((m) => m.version))
+    // Supabase-CLI history is optional: Nordklart production is migrated by
+    // scripts/supabase-migrate.cjs, which writes public.nordklart_schema_migrations
+    // instead. Its absence is expected there and is not drift by itself.
     const supabaseTable = await client.query("select to_regclass('supabase_migrations.schema_migrations')::text as name")
     if (supabaseTable.rows[0]?.name) {
       const rows = await client.query('select version::text from supabase_migrations.schema_migrations order by version')
@@ -186,6 +189,27 @@ async function compareDatabase(migrations) {
         else if (migration.sha256 !== row.checksum) errors.push(`Runner checksum mismatch: ${row.version}`)
       }
       console.log(`public.nordklart_schema_migrations: ${rows.rowCount} file(s)`)
+
+      // Repository files with no registry row. This direction was previously
+      // computed (`seen`) but never compared, so a production database whose
+      // ledger had fallen behind the repository reported clean. That is how a
+      // 68-file gap stayed invisible: the schema objects existed because the
+      // SQL had been applied out-of-band, but nothing recorded that it had.
+      const unrecorded = migrations.map((m) => m.file).filter((file) => !seen.has(file))
+      if (unrecorded.length) {
+        console.error(
+          `\n${unrecorded.length} migration file(s) have no row in public.nordklart_schema_migrations.`,
+        )
+        console.error('The schema objects may still exist if the SQL was applied out-of-band,')
+        console.error('but the ledger cannot prove what this database actually has:')
+        for (const file of unrecorded) console.error(`  - ${file}`)
+        console.error(
+          '\nReconcile with: npm run db:migrate:mark-through -- <lastAppliedFile>'
+          + '\nthen apply the remainder with: npm run db:migrate\n',
+        )
+        errors.push(`${unrecorded.length} repository migration(s) missing from the runner registry`)
+      }
+
       if (errors.length) {
         errors.forEach((error) => console.error(error))
         process.exitCode = 1

@@ -33,6 +33,7 @@ import { eventBus } from '@/lib/events'
 import { computePreviousAttributes } from '@/lib/webhooks/diff'
 import { createLogger } from '@/lib/logger'
 import { getCompanyEntityType } from '@/lib/company/entity-type'
+import { equalOre, sumOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
 const log = createLogger('invoices/mark-paid')
@@ -172,9 +173,9 @@ export async function prepareMarkInvoicePaid(
   }
 
   if (request.customLines) {
-    const totalDebit = request.customLines.reduce((s, l) => s + l.debit_amount, 0)
-    const totalCredit = request.customLines.reduce((s, l) => s + l.credit_amount, 0)
-    if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+    const totalDebit = sumOre(request.customLines.map((l) => l.debit_amount))
+    const totalCredit = sumOre(request.customLines.map((l) => l.credit_amount))
+    if (!equalOre(totalDebit, totalCredit) || totalDebit <= 0) {
       return {
         ok: false,
         code: 'INVOICE_PAID_LINES_UNBALANCED',
