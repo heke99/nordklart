@@ -1,36 +1,42 @@
-skill	source	installed_at_utc
-acquire-codebase-knowledge	github/awesome-copilot	2026-08-05T21:44:09Z
-quality-playbook	github/awesome-copilot	2026-08-05T21:44:09Z
-threat-model-analyst	github/awesome-copilot	2026-08-05T21:44:09Z
-refactor	github/awesome-copilot	2026-08-05T21:44:09Z
-code-review	getsentry/skills	2026-08-05T21:44:09Z
-code-simplifier	getsentry/skills	2026-08-05T21:44:09Z
-find-bugs	getsentry/skills	2026-08-05T21:44:09Z
-security-threat-model	openai/skills	2026-08-05T21:44:09Z
-supabase	supabase/agent-skills	2026-08-05T21:44:09Z
-supabase-postgres-best-practices	supabase/agent-skills	2026-08-05T21:44:09Z
-vercel-react-best-practices	vercel-labs/agent-skills	2026-08-05T21:44:09Z
-web-design-guidelines	vercel-labs/agent-skills	2026-08-05T21:44:09Z
-api-and-interface-design	addyosmani/agent-skills	2026-08-05T21:44:09Z
-source-driven-development	addyosmani/agent-skills	2026-08-05T21:44:09Z
-security-and-hardening	addyosmani/agent-skills	2026-08-05T21:44:09Z
-test-driven-development	addyosmani/agent-skills	2026-08-05T21:44:09Z
-code-review-and-quality	addyosmani/agent-skills	2026-08-05T21:44:09Z
-debugging-and-error-recovery	addyosmani/agent-skills	2026-08-05T21:44:09Z
-incremental-implementation	addyosmani/agent-skills	2026-08-05T21:44:09Z
-doubt-driven-development	addyosmani/agent-skills	2026-08-05T21:44:09Z
-performance-optimization	addyosmani/agent-skills	2026-08-05T21:44:09Z
-ci-cd-and-automation	addyosmani/agent-skills	2026-08-05T21:44:09Z
-observability-and-instrumentation	addyosmani/agent-skills	2026-08-05T21:44:09Z
-documentation-and-adrs	addyosmani/agent-skills	2026-08-05T21:44:09Z
-api-design-principles	wshobson/agents	2026-08-05T21:44:10Z
-openapi-spec-generation	wshobson/agents	2026-08-05T21:44:10Z
-auth-implementation-patterns	wshobson/agents	2026-08-05T21:44:10Z
-error-handling-patterns	wshobson/agents	2026-08-05T21:44:10Z
-e2e-testing-patterns	wshobson/agents	2026-08-05T21:44:10Z
-secrets-management	wshobson/agents	2026-08-05T21:44:10Z
-sast-configuration	wshobson/agents	2026-08-05T21:44:10Z
-deployment-pipeline-design	wshobson/agents	2026-08-05T21:44:10Z
-nextjs-app-router-patterns	wshobson/agents	2026-08-05T21:44:10Z
-nodejs-backend-patterns	wshobson/agents	2026-08-05T21:44:10Z
-sql-optimization-patterns	wshobson/agents	2026-08-05T21:44:10Z
+skill	source	installed_at_utc	source_type	skill_path	computed_hash
+acquire-codebase-knowledge	github/awesome-copilot	2026-08-05T21:44:09Z	github	skills/acquire-codebase-knowledge/SKILL.md	06b7a3d0bb44b70b470247aacc2ffffe37c8ce64cc3f9178be6f392c81cb6d22
+api-and-interface-design	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/api-and-interface-design/SKILL.md	3cf54553433e55875c664baf78f9c769820bdfac155f09bf2989d70e20e6e147
+api-design-principles	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/backend-development/skills/api-design-principles/SKILL.md	19715a3a3ff7bf7b1e2ab1cb631ebe810d5b050ed6b3ab0c358e39e5e2e6d33a
+auth-implementation-patterns	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/developer-essentials/skills/auth-implementation-patterns/SKILL.md	f97118b792830d928ce691a44d0f38fb55a2032e2fa15b22b482c229d2853e87
+ci-cd-and-automation	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/ci-cd-and-automation/SKILL.md	578b098a7d2352ccdac8b8abdc40eb6803538e81cf8382f138da6188a655087c
+code-review	getsentry/skills	2026-08-05T21:44:09Z	github	skills/code-review/SKILL.md	f0604d278cfd4eac4dac29eb297a5c6b6ebfb9f020235e8aafbe2eff0e42a147
+code-review-and-quality	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/code-review-and-quality/SKILL.md	ae7a873053c84dd5a76f70c05a21efc4095017e95b8f5db778eb826809859cac
+code-simplifier	getsentry/skills	2026-08-05T21:44:09Z	github	skills/code-simplifier/SKILL.md	ff9cb10181e31daf1f1644754c491601a7849dff4b4536a1d0ec4f97f680348e
+debugging-and-error-recovery	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/debugging-and-error-recovery/SKILL.md	1a119d27e8f1d27ed6317adf3115826336491346780dcb7d7a7a7f79fe3ffe10
+deploy-to-vercel	vercel-labs/agent-skills	2026-07-02T16:26:41Z	github	skills/deploy-to-vercel/SKILL.md	03e0eaaa9bf13ba1e7ffa387f5893de6f324c0868c627001f179395a8feaa7c9
+deployment-pipeline-design	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/cicd-automation/skills/deployment-pipeline-design/SKILL.md	57b928db2182b0fae02581e95a3b77f0354d2b1f5a48dd12eadf2f0ddbb34db8
+documentation-and-adrs	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/documentation-and-adrs/SKILL.md	7464fd2950b99fb00bbf65cab27653e0a049eef00c98927713ffdfe232a9daa9
+doubt-driven-development	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/doubt-driven-development/SKILL.md	f6094460ebc9512285c85790e49f612081b9dd6a2b77d874fe2d960ef50a9ef1
+e2e-testing-patterns	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/developer-essentials/skills/e2e-testing-patterns/SKILL.md	6daed3254a84348588532aca327ec82a57cafefd7c97c50e75879788f7c1a18d
+error-handling-patterns	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/developer-essentials/skills/error-handling-patterns/SKILL.md	73f0570edd3ddc740ba5411932a67954df375530bbffbe7fa0cecd8e59b0711e
+find-bugs	getsentry/skills	2026-08-05T21:44:09Z	github	skills/find-bugs/SKILL.md	7bf00be700d1d205b747126aa96d3587bbc2855cd09897614676e179eebe35ed
+incremental-implementation	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/incremental-implementation/SKILL.md	d83e705bd54b0a4b02a75cdda0a3f2a28b935286e31eb945e13aafe079c87b59
+nextjs-app-router-patterns	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/frontend-mobile-development/skills/nextjs-app-router-patterns/SKILL.md	b4fea42eecf1f803155ef7fa133d5286ee8f2dbba3e616954e9e43c6f0ffc144
+nodejs-backend-patterns	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/javascript-typescript/skills/nodejs-backend-patterns/SKILL.md	b63b54d09c77cec0e84cdd42424c12909785f14bdb286c835c45420b885ff1f3
+observability-and-instrumentation	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/observability-and-instrumentation/SKILL.md	9bfc314353e4a55d691faca5b1a894e38a9897d88aabff34ea2c6a039d86bf8d
+openapi-spec-generation	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/documentation-generation/skills/openapi-spec-generation/SKILL.md	d062c891d58ef7e38c56360d4c325aff70247d1b5880b8b299098d7e51e38294
+performance-optimization	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/performance-optimization/SKILL.md	3881a49f910607b36f4fb1f9f17b4ef703293c6073986bcfa9f7839d44680aba
+quality-playbook	github/awesome-copilot	2026-08-05T21:44:09Z	github	skills/quality-playbook/SKILL.md	995cfa79a5e410a2675a828da08fc2377f5ee7182d210787ae4bece43bad3857
+refactor	github/awesome-copilot	2026-08-05T21:44:09Z	github	skills/refactor/SKILL.md	87789a786b96f99ba0680e89345a975106e10e7db1071c7cdc2e76d507c449d6
+sast-configuration	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/security-scanning/skills/sast-configuration/SKILL.md	6169b0d02b289a8264010f9601ceb4f57b0ca1e9d463f2f8936b2d88a58267b8
+secrets-management	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/cicd-automation/skills/secrets-management/SKILL.md	ca8d6e0507564a438424b9408922f469ceb20827d6f60d845c103df8e5ac11e7
+security-and-hardening	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/security-and-hardening/SKILL.md	a0246e67cf8f8a18687a7736442738318b1997715fbdf53dfcf767082c51cca5
+security-threat-model	openai/skills	2026-08-05T21:44:09Z	github	skills/.curated/security-threat-model/SKILL.md	b3ad2dc0b2eee1f189680fdb8cf3b17853f12ab3403d389393f4237ebc6f9821
+skill-scanner	getsentry/skills	2026-08-06T00:02:49Z	github	skills/skill-scanner/SKILL.md	df6885edbf5ac5469bda13ba66d5598d94c248f24b526239b4861287df9e3ec6
+source-driven-development	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/source-driven-development/SKILL.md	235fb43569e9b21ec5d209818ff1ad3da9682be33c4e464ffa89ed348e7094a0
+sql-optimization-patterns	wshobson/agents	2026-08-05T21:44:10Z	github	plugins/developer-essentials/skills/sql-optimization-patterns/SKILL.md	19ff8ce86d20aa39cace441e15d23feb9b91be5fbed95526b5bd9ee3bffb6411
+supabase	supabase/agent-skills	2026-08-05T21:44:09Z	github	skills/supabase/SKILL.md	886743d08edece523e48b5c6c737afa29029503bdd3b28a722795712cedfcd91
+supabase-postgres-best-practices	supabase/agent-skills	2026-08-05T21:44:09Z	github	skills/supabase-postgres-best-practices/SKILL.md	e14e276241805c97dbcfe40dcbea1a3035269cc7293cac4b1832dda41a835e60
+test-driven-development	addyosmani/agent-skills	2026-08-05T21:44:09Z	github	skills/test-driven-development/SKILL.md	133428ac28fa75cf6f8cf5dafea8d603022852ce59a0520620784c7e3dc7e519
+threat-model-analyst	github/awesome-copilot	2026-08-05T21:44:09Z	github	skills/threat-model-analyst/SKILL.md	a4fd18bc3ddceade98533df503cd8d4906d96feaf3720d16d4d038544ca769eb
+vercel-cli-with-tokens	vercel-labs/agent-skills	2026-07-02T16:26:41Z	github	skills/vercel-cli-with-tokens/SKILL.md	eb16b20dcbe6ce51e0372083d624e0847af1b09487ec99249227d5a8eddebfc0
+vercel-composition-patterns	vercel-labs/agent-skills	2026-07-02T16:26:41Z	github	skills/composition-patterns/SKILL.md	575757e3e25761c8c562d6e395d29f0b76c98b1273c0bd72d88e6ab1bc9c7d42
+vercel-react-best-practices	vercel-labs/agent-skills	2026-08-05T21:44:09Z	github	skills/react-best-practices/SKILL.md	ca7b0c0c6e5f2750043f7f0cd72d16ac4e2abc48f9b5500d047a4b77a2506212
+vercel-react-native-skills	vercel-labs/agent-skills	2026-07-02T16:26:41Z	github	skills/react-native-skills/SKILL.md	41d24eafa7c3d82e270439808f7cfbc4d51aeb2d14f2809a2267c16275784d06
+vercel-react-view-transitions	vercel-labs/agent-skills	2026-07-02T16:26:41Z	github	skills/react-view-transitions/SKILL.md	c8952fc9127fa0564d0cb71dccb4215a5608ac933b5831104f09173a97a46f85
+web-design-guidelines	vercel-labs/agent-skills	2026-08-05T21:44:09Z	github	skills/web-design-guidelines/SKILL.md	f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474

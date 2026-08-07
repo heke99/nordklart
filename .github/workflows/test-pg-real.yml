@@ -1,6 +1,12 @@
 name: pg-real tests
 
-on: [pull_request]
+# Runs on pull_request AND on push to main, so the exact SHA that deploys has
+# had every migration applied to a real PostgreSQL and the pg-real suite run
+# against it. See docs/audits H-01.
+on:
+  pull_request:
+  push:
+    branches: [main]
 
 concurrency:
   group: pg-real-${{ github.ref }}
@@ -8,6 +14,10 @@ concurrency:
 
 jobs:
   coverage-gate:
+    # Diff-based gate: only meaningful against a PR base branch. On push to
+    # main there is no base_ref, so this job is skipped while pg-real below
+    # still runs the full migration + test chain.
+    if: github.event_name == 'pull_request'
     # Enforces the database.md rule: a migration touching a trigger/RPC/RLS/
     # DEFERRABLE must come with a *.pg.test.ts change. Previously instruction-
     # only. Escape hatch: `-- pg-test: covered-by <path>` / `-- pg-test: skip

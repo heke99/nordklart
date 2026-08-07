@@ -30,7 +30,11 @@
     "nordklart:platform-accounting-regression": "node scripts/nordklart-platform-accounting-regression.cjs",
     "check:migrations": "node scripts/checks/migration-integrity.mjs",
     "check:migrations:db": "node scripts/checks/migration-integrity.mjs --db",
-    "check:financial-hardening": "node scripts/checks/financial-hardening-contract.mjs"
+    "check:financial-hardening": "node scripts/checks/financial-hardening-contract.mjs",
+    "check:skill-provenance": "node scripts/checks/skill-provenance.mjs",
+    "verify:fast": "npm run typecheck && npm run check:lint && npm run check:guards && npm run check:feature-policy && npm run skills:check && npm run check:skill-provenance && npm test",
+    "verify:db": "npm run check:migrations:db && npm run test:pg",
+    "verify:release": "npm run verify:fast && npm run build && npm run verify:db"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.1",
