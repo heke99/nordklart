@@ -638,7 +638,12 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(details.overpayment_amount).toBe(700)
   })
 
-  it('cash method partial payment uses clearing entry with note', async () => {
+  // Under kontantmetoden revenue and VAT are recognised on payment, so a
+  // PARTIAL payment has no derivable revenue/VAT split. prepareMarkInvoicePaid
+  // therefore refuses it unless the caller supplies explicit balanced lines,
+  // rather than inventing a clearing booking. This replaced the older
+  // auto-generated accrual-style clearing entry.
+  it('refuses a cash-method partial payment without explicit lines', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 5000, invoice_id: null, date: '2024-06-15' })
     const invoice = makeInvoice({
       id: VALID_UUID,
@@ -646,29 +651,27 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       total: 12500,
       remaining_amount: 12500,
       paid_amount: 0,
+      journal_entry_id: null,
     })
 
     enqueueFor('transactions', { data: tx, error: null })
     enqueueFor('invoices', { data: invoice, error: null })
     enqueueFor('company_settings', { data: { accounting_method: 'cash', entity_type: 'enskild_firma' } })
+    enqueueCustomerSettlement(service)
 
-    mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
-
-
-    enqueueCustomerSettlement(service, { settlement: { invoice_id: VALID_UUID, applied_amount: 5000, paid_amount: 5000, remaining_amount: 7500, status: 'partially_paid' }, invoice: { ...invoice, status: 'partially_paid', paid_amount: 5000, remaining_amount: 7500 } })
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
       body: { invoice_id: VALID_UUID },
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ invoice_status: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: unknown }>(response)
 
-    expect(status).toBe(200)
-    expect(body.invoice_status).toBe('partially_paid')
-    // Cash partial uses accrual-style clearing entry (now via the shared
-    // helper + createJournalEntry), NOT createInvoiceCashEntry.
-    expectStagedPaymentDraft()
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('VALIDATION_ERROR')
+    // Nothing economic is attempted: no voucher staged, no settlement.
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(service.supabase.rpc).not.toHaveBeenCalledWith('settle_customer_invoice', expect.anything())
   })
 
   it('returns 409 when invoice is fully paid (optimistic lock)', async () => {
@@ -739,62 +742,61 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect((body.error as unknown as { code: string }).code).toBe('BANK_TRANSACTION_ALREADY_ALLOCATED')
   })
 
-  it('returns success with journal_entry_error when journal entry fails (non-blocking)', async () => {
+  // Staging the voucher is no longer "non-blocking". The settlement is one
+  // database transaction and the voucher is part of it, so a payment can never
+  // be recorded without its bookkeeping. A staging failure fails the request.
+  it('fails the whole match when the payment voucher cannot be staged', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 12500, remaining_amount: 12500 })
 
     enqueueFor('transactions', { data: tx, error: null })
     enqueueFor('invoices', { data: invoice, error: null })
     enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
+    enqueueCustomerSettlement(service)
 
-    mockCreateJournalEntry.mockRejectedValue(new Error('Period locked'))
+    mockCreateInvoicePaymentJournalEntry.mockRejectedValue(new Error('Period locked'))
 
-
-    enqueueCustomerSettlement(service, { settlement: { invoice_id: VALID_UUID, applied_amount: 12500, paid_amount: 12500 }, invoice: { ...invoice, status: 'paid', paid_amount: 12500, remaining_amount: 0 } })
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
       body: { invoice_id: VALID_UUID },
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{
-      success: boolean
-      journal_entry_id: null
-      journal_entry_error: string
-    }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_id).toBeNull()
-    expect(body.journal_entry_error).toBe('Period locked')
+    expect(status).not.toBe(200)
+    expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
+    // The settlement transaction is never reached, so no payment is recorded.
+    expect(service.supabase.rpc).not.toHaveBeenCalledWith('settle_customer_invoice', expect.anything())
   })
 
-  // ────────────────────────────────────────────────────────────────
-  // Duplicate-payment guards (Phase A4)
-  // ────────────────────────────────────────────────────────────────
-
-  it('returns 409 MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER when a payment row already links a JE for a sent invoice', async () => {
-    const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null })
-    const invoice = makeInvoice({
-      id: VALID_UUID,
-      status: 'sent',
-      total: 12500,
-      remaining_amount: 12500,
-    })
+  // The application-side hard-duplicate guard was replaced by a database
+  // invariant: invoice_payments is unique per (company, transaction, invoice),
+  // and settle_customer_invoice surfaces a violation as
+  // BANK_TRANSACTION_ALREADY_ALLOCATED. MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER
+  // is no longer produced by this route.
+  it('surfaces a duplicate payment voucher from the settlement transaction', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
+    const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 12500, remaining_amount: 12500 })
 
     enqueueFor('transactions', { data: tx, error: null })
     enqueueFor('invoices', { data: invoice, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
+    enqueueCustomerSettlement(service, {
+      error: {
+        message: 'Bank transaction is already allocated to this invoice.',
+        details: '{"code":"BANK_TRANSACTION_ALREADY_ALLOCATED"}',
+      },
+    })
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
       body: { invoice_id: VALID_UUID },
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: { existing_journal_entry_id?: string } } }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(409)
-    expect(body.error.code).toBe('MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER')
-    expect(body.error.details?.existing_journal_entry_id).toBe('je-existing')
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(body.error.code).toBe('BANK_TRANSACTION_ALREADY_ALLOCATED')
   })
 
   it('does NOT run hard-duplicate guard for partially_paid invoices (legitimate additional payment)', async () => {
@@ -813,7 +815,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
     enqueue({ data: null, error: null }) // update tx
 
-    enqueueCustomerSettlement(service, { settlement: { invoice_id: VALID_UUID, applied_amount: 5000, paid_amount: 10000, remaining_amount: 2500, status: 'partially_paid' }, invoice: { ...invoice, status: 'partially_paid', paid_amount: 10000, remaining_amount: 2500 } })
+    enqueueCustomerSettlement(service, { settlement: { invoice_id: VALID_UUID, applied_amount: 2500, paid_amount: 12500, remaining_amount: 0, status: 'paid' }, invoice: { ...invoice, status: 'paid', paid_amount: 12500, remaining_amount: 0 } })
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
       body: { invoice_id: VALID_UUID },
