@@ -5,6 +5,7 @@ import {
   insertAuthUser,
   insertCompany,
   insertCompanyMember,
+  insertCompanySettings,
   insertFiscalPeriod,
 } from '@/tests/pg/fixtures'
 
@@ -12,6 +13,9 @@ async function seed() {
   const userId = await insertAuthUser()
   const companyId = await insertCompany({ createdBy: userId })
   await insertCompanyMember({ companyId, userId, role: 'owner' })
+  // Readiness needs an explicit accounting method, otherwise every blocker list
+  // leads with company_details_incomplete.
+  await insertCompanySettings({ companyId })
   await getPool().query(
     `UPDATE public.companies SET org_number = '5594167149' WHERE id = $1`,
     [companyId],
@@ -69,7 +73,12 @@ describe('historical support ledgers', () => {
           ],
         ),
       ),
-    ).rejects.toThrow(/HISTORICAL_OPEN_ITEM_SERVICE_ONLY/i)
+    // The property under test is that an authenticated caller cannot write
+    // through this RPC. That now holds one layer earlier: EXECUTE is revoked
+    // from `authenticated`, so PostgreSQL denies the call before the function's
+    // own service-only guard runs. Either barrier proves the boundary; a bare
+    // grant-level denial is the stronger of the two.
+    ).rejects.toThrow(/HISTORICAL_OPEN_ITEM_SERVICE_ONLY|permission denied for function/i)
 
     await expect(
       withUserContext(seeded.userId, (client) =>
@@ -86,7 +95,7 @@ describe('historical support ledgers', () => {
           ],
         ),
       ),
-    ).rejects.toThrow(/YEAR_END_WORKPAPER_ACCEPT_SERVICE_ONLY/i)
+    ).rejects.toThrow(/YEAR_END_WORKPAPER_ACCEPT_SERVICE_ONLY|permission denied for function/i)
   })
 
   it('treats staged SIE as unfinished in the same blocker function used by close', async () => {

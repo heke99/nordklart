@@ -97,6 +97,26 @@ describe('create_fiscal_year_atomic_internal', () => {
   it('rejects an overlapping range without altering the existing year', async () => {
     const { userId, companyId } = await seedOneOffCompany()
     await createYear(companyId, userId, 'req-first')
+
+    // The first year consumed (bound) the one-off purchase, so a second period
+    // legitimately needs its own. Without this the call fails commercially with
+    // ONE_OFF_YEAR_END_NOT_ACTIVE and never reaches the overlap validation this
+    // test is about.
+    const { rows: products } = await getPool().query<{ id: string }>(
+      `SELECT pr.id
+       FROM public.platform_products pr
+       JOIN public.platform_price_plans pp ON pp.product_id = pr.id
+       WHERE pp.code = 'year_end_one_time'
+       LIMIT 1`,
+    )
+    await getPool().query(
+      `INSERT INTO public.one_time_purchases
+         (id, company_id, product_id, purchase_type, status, permanent_access,
+          access_starts_at, paid_at, created_by)
+       VALUES ($1,$2,$3,'year_end','paid',true,now(),now(),$4)`,
+      [randomUUID(), companyId, products[0].id, userId],
+    )
+
     await expect(asService((client) => client.query(
       `SELECT * FROM public.create_fiscal_year_atomic_internal(
         $1::uuid,$2::uuid,'Overlap','2026-06-01'::date,'2027-05-31'::date,'req-overlap'

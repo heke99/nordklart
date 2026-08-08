@@ -2151,6 +2151,11 @@
       "file": "20260807140000_restore_opening_balance_retag_carveout.sql",
       "version": "20260807140000",
       "sha256": "f9bfd0cd89f090d5aa25a20badaca1f19130b210fa41b7af053867d5816749ab"
+    },
+    {
+      "file": "20260807150000_restore_sie_imported_workpaper_blocker_precedence.sql",
+      "version": "20260807150000",
+      "sha256": "db93b22f52f72c6fab22cdff3c2d59a74f91dde365c87b8f9d3faa1951cc4a93"
     }
   ]
 }

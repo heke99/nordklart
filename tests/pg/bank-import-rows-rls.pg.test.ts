@@ -128,7 +128,7 @@ describe('viewer write-hardening on bank tables (K08)', () => {
     await withUserContext(viewerId, async (client) => {
       await expect(
         client.query(`SELECT public.undo_sie_import($1::uuid, $2::uuid)`, [companyId, importId]),
-      ).rejects.toThrow(/Only company owners and admins/)
+      ).rejects.toThrow(/Only company owners and admins|permission denied for function/i)
     })
     await withUserContext(viewerId, async (client) => {
       await expect(
@@ -136,7 +136,7 @@ describe('viewer write-hardening on bank tables (K08)', () => {
           companyId,
           importId,
         ]),
-      ).rejects.toThrow(/Only company owners and admins/)
+      ).rejects.toThrow(/Only company owners and admins|permission denied for function/i)
     })
 
     // Viewer also cannot run the year-end close.
