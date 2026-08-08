@@ -7,38 +7,40 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 ## Blockerande före produktionsanspråk
 
-1. **Unit-sviten: 43 av 6162 failar.** `origin/main` har **47** i 8 filer —
-   den här grenen har alltså strikt färre och har lagat två hela filer.
-   Felen är **ärvda från main**, inte introducerade här.
+1. **Unit-sviten: 41 av 6162 failar.** `origin/main` har **47** i 8 filer.
+   Felen är **ärvda från main**, inte introducerade av den här grenen.
 
-   Kvar i: `transactions/[id]/match-invoice` (18),
-   `match-supplier-invoice` (11), `supplier-invoices/[id]/mark-paid` (6),
-   `v1 supplier-invoices` (3), `v1 invoices mark-paid` (3),
-   `stripe/webhook` (2).
+   Kvar: `match-invoice` (16), `match-supplier-invoice` (11),
+   `supplier-invoices/[id]/mark-paid` (6), `v1 supplier-invoices` (3),
+   `v1 invoices mark-paid` (3), `stripe/webhook` (2).
 
-   Infrastrukturen är på plats (commit 9e97822): separat service-klientkö,
-   `enqueueCustomerSettlement()`/`enqueueSupplierSettlement()` i
-   `tests/helpers.ts`, och modulmockar som sprider `importOriginal`.
-   Kvarvarande arbete är **per-test query-sekvensering**.
+   **Verktygen är på plats — kvar är rutinarbete per test.**
 
-   Routernas läsordning har ändrats sedan testerna skrevs. Verifierad ordning
-   för `match-invoice`:
+   `createQueuedMockSupabase()` har nu `enqueueFor(name, result)`, nycklad på
+   relation/RPC-namn. Nycklade svar vinner över den positionella kön och det
+   sista svaret för ett namn är "sticky". Det gör testerna oberoende av
+   routernas läsordning — vilket var grundorsaken till att 18 tester föll av en
+   rutinmässig omordning i `match-invoice`.
 
-       transactions -> invoices -> company_settings
-                    -> journal_entry_lines -> invoices
+   `enqueueCustomerSettlement()` / `enqueueSupplierSettlement()` köar
+   service-sidans rundtur nycklad:
+   `get_financial_operation_result` -> `settle_*_invoice` -> hydreringsläsning.
+   Båda tar `error` för felvägarna.
 
-   (hard-duplicate-guarden kör numera före statuskontrollen, så testerna
-   svälter senare läsningar). Varje test köar den äldre, kortare sekvensen.
+   Recept för varje kvarvarande test:
+   1. byt positionella `enqueue()` mot `enqueueFor('<relation>', …)`
+   2. lägg `enqueueCustomerSettlement(service, { settlement: {...}, invoice: {...} })`
+      i de tester som förväntar sig lyckad settlement (de flesta "expected 500
+      to be 200" beror på att den saknas)
+   3. flytta assertions från `createJournalEntry` till
+      `createInvoicePaymentJournalEntry(..., { draftOnly: true })` — verifikatet
+      stagas som draft och committas av RPC:n
 
-   **Metod för att härleda verklig ordning** (vitest tystar console i denna
-   konfiguration): wrappa mockens `from`/`rpc` med en recorder och skriv
-   anropslistan till fil inifrån testet:
-
-       const calls: string[] = []
-       const orig = mockSupabase.from
-       mockSupabase.from = vi.fn((t) => { calls.push('from:'+t); return orig(t) })
-       // ...
-       require('node:fs').writeFileSync('/tmp/probe.out', JSON.stringify(calls))
+   Om läsordningen behöver härledas för en route: wrappa mockens `from`/`rpc`
+   med en recorder och skriv listan till fil inifrån testet (vitest tystar
+   console i denna konfiguration). Verifierad ordning för `match-invoice`:
+   `transactions -> invoices -> company_settings -> [S.rpc replay] -> invoices
+   -> company_settings -> companies -> [S.rpc settle] -> [S.from invoices]`.
 
 2. **Migrationsliggaren beskriver inte databasen.** Produktion har 358 rader i
    `public.nordklart_schema_migrations` mot 426 filer i repot (427 efter denna
