@@ -1,18 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   createMockRequest,
-  parseJsonResponse,
   createMockRouteParams,
   createQueuedMockSupabase,
-  makeTransaction,
-  makeInvoice,
   makeCustomer,
+  makeInvoice,
+  makeTransaction,
+  parseJsonResponse,
+  supabaseServerMock,
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
-}))
+vi.mock('@/lib/supabase/server', () => supabaseServerMock({ client: () => mockSupabase }))
 
 const mockCreateInvoiceCashEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/invoice-entries', () => ({

@@ -4,7 +4,10 @@
  * finalization RPC (no duplicate purchases/subscription writes).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { parseJsonResponse } from '@/tests/helpers'
+import {
+  parseJsonResponse,
+  supabaseServerMock,
+} from '@/tests/helpers'
 
 const verifySignatureMock = vi.fn()
 vi.mock('@/lib/billing/stripe', () => ({
@@ -37,9 +40,7 @@ const mockService = {
   },
 }
 
-vi.mock('@/lib/supabase/server', () => ({
-  createServiceClient: () => mockService,
-}))
+vi.mock('@/lib/supabase/server', () => supabaseServerMock({ serviceClient: () => mockService }))
 
 import { POST } from '../route'
 

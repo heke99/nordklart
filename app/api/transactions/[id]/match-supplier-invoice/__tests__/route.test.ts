@@ -1,14 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
-  createQueuedMockSupabase,
   createMockRouteParams,
+  createQueuedMockSupabase,
   parseJsonResponse,
+  supabaseServerMock,
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
-}))
+vi.mock('@/lib/supabase/server', () => supabaseServerMock({ client: () => mockSupabase }))
 
 vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),

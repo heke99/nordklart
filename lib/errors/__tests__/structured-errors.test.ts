@@ -87,13 +87,17 @@ describe('errorResponse', () => {
     })
   })
 
-  it('maps Postgres unique violation to VALIDATION_ERROR with pgCode', async () => {
+  it('maps a Postgres unique violation to VALIDATION_ERROR without leaking the pg code', async () => {
     const pgErr = Object.assign(new Error('duplicate key'), { code: '23505' })
     const res = errorResponse(pgErr, noopLogger, { requestId: 'req_4' })
     expect(res.status).toBe(400)
     const body = await readEnvelope(res)
     expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details).toMatchObject({ pgCode: '23505' })
+    // sanitizeMetadata() forbids pgCode (and schema/table/column/constraint)
+    // in the client envelope: internal SQL detail is for the server log only.
+    // The pg code is still logged server-side with the request id.
+    expect(JSON.stringify(body)).not.toContain('23505')
+    expect(body.error.details ?? {}).not.toHaveProperty('pgCode')
   })
 
   it('falls back to INTERNAL_ERROR for unknown shapes', async () => {

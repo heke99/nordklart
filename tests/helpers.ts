@@ -813,3 +813,41 @@ export function makeSIEVoucher(
     ...overrides,
   }
 }
+
+/**
+ * Complete mock factory for `@/lib/supabase/server`.
+ *
+ * `vi.mock` with a factory REPLACES the module, so a factory that returns only
+ * `createClient` leaves every other export undefined. When production code
+ * later reached for `createServiceClient` — as the settlement services now do —
+ * the tests failed with:
+ *
+ *   No "createServiceClient" export is defined on the "@/lib/supabase/server" mock
+ *
+ * Declaring the mock through this helper keeps the mocked surface in step with
+ * the real module: every export is present by default, and a test overrides
+ * only the client it cares about.
+ *
+ *   vi.mock('@/lib/supabase/server', () => supabaseServerMock({
+ *     client: mockSupabase,
+ *     serviceClient: serviceMock,
+ *   }))
+ *
+ * `serviceClient` defaults to whatever `client` is, which is what a route test
+ * that does not distinguish the two wants.
+ */
+export function supabaseServerMock(clients: {
+  client?: () => unknown
+  serviceClient?: () => unknown
+} = {}) {
+  // Both accessors are thunks and are only invoked when the code under test
+  // actually asks for a client. vi.mock factories are hoisted above every
+  // top-level binding in the file, so reading a `const mockSupabase` eagerly
+  // here would throw "Cannot access 'mockSupabase' before initialization".
+  const resolveClient = () => (clients.client ?? clients.serviceClient ?? (() => createMockSupabase().supabase))()
+  const resolveService = () => (clients.serviceClient ?? clients.client ?? (() => createMockSupabase().supabase))()
+  return {
+    createClient: () => Promise.resolve(resolveClient()),
+    createServiceClient: () => resolveService(),
+  }
+}
