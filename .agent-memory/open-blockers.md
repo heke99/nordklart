@@ -7,17 +7,23 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 ## Blockerande före produktionsanspråk
 
-1. **pg-real: 12 av 501 tester failar** (var 37 vid remediationens start).
-   Kvar, alla i bokslut/år-relaterade sviter:
-   - `year-end-historical-support.pg.test.ts` — 3
-   - `year-end-atomic-close.pg.test.ts` — 3 (idempotent replay, samtidig close,
-     manipulerad FX-payload; alla stannar på
-     `manual_cash_reconciliation_missing` vid andra/parallella anrop)
-   - `match-batch-allocate`, `bank-import-rows-rls`, `fiscal-year-creation`,
-     `year-end-readiness-reconciliation`, `financial-atomicity`,
-     `delete-last-voucher` — 1 vardera
+1. **Unit-sviten: 43 av 6162 failar** (var 47). Alla i settlement-routetester:
+   `transactions/[id]/match-invoice` (18), `match-supplier-invoice` (11),
+   `supplier-invoices/[id]/mark-paid` (6), `v1 supplier-invoices` (3),
+   `v1 invoices mark-paid` (3), `stripe/webhook` (2).
 
-   Kör lokalt utan Docker: se `next-actions.md` punkt 1.
+   Grundorsak: testerna modellerar bara EN Supabase-klient. Sedan
+   settlement-tjänsterna började använda `createServiceClient()` för
+   `settle_customer_invoice` / `settle_supplier_invoice` behöver de en separat
+   service-klient med egen kö. `supabaseServerMock()` i `tests/helpers.ts`
+   speglar nu modulens exportyta (det löste 54 modulladdningsfel), men varje
+   test måste fortfarande köa sitt eget RPC-svar.
+
+   **Ordningsanmärkning:** detta är exakt den kodväg H-03 (Phase 3) bygger om.
+   Att laga mockarna mot nuvarande form och sedan igen efter H-03 är dubbelt
+   arbete. Gör H-03 först, laga sedan dessa tester en gång mot slutlig form.
+
+   pg-real är däremot **501/501 grönt** från en ren replay av 433 migrationer.
 
 2. **Migrationsliggaren beskriver inte databasen.** Produktion har 358 rader i
    `public.nordklart_schema_migrations` mot 426 filer i repot (427 efter denna

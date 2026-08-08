@@ -146,3 +146,40 @@ de fem fixarna nedan är verifierade som trasiga även i produktion.
 
 Ingen produktionskod försvagades, inget test avstängdes. Varje carve-out som
 återställdes är den snävaste som får den parade RPC:n att fungera.
+
+## 2026-08-07 (forts. 2) — pg-real 501/501, tre produktionsbuggar till
+
+Phase 1 avslutad: `npm run test:pg` är **0 failures** (501/501) från en ren
+replay av samtliga 433 migrationer. Tre av de sista tolv var riktiga produktfel:
+
+6. **Batchallokering av bank var omöjlig.** H-04-härdningen la
+   UNIQUE (company_id, transaction_id) på invoice_payments och
+   supplier_invoice_payments samt en trigger som avvisade en transaktion som
+   redan hade NÅGON betalningsrad i NÅGON av tabellerna. Men
+   `match_batch_allocate()` skapar en betalningsrad per faktura med samma
+   transaction_id — en bankgirobetalning som reglerar flera leverantörsfakturor
+   är helt normalt. Varje flerfaktura-allokering föll på
+   BANK_TRANSACTION_ALREADY_ALLOCATED. Verifierat trasigt i produktion.
+   Unikheten är nu per (transaktion, faktura). Belopps-invarianten är orörd:
+   allokeringen måste redan exakt motsvara ABS(transaktionsbeloppet).
+
+7. **`is_reconciled` blev NULL för korrekt återskapad AR/AP.**
+   `__year_end_open_item_reconciliation_json()` hämtar den valfria externa
+   avstämningen med en icke-aggregerande `SELECT ... INTO`. Utan extern
+   registrering returneras ingen rad och PL/pgSQL nollställer ALLA målvariabler,
+   vilket raderade `:= false` på v_invalidated och
+   v_external_source_invalidated. `is_reconciled` är en AND-kedja, så ett NULL
+   gör hela uttrycket NULL. Saknad evidens dolde felet (NULL AND false = false);
+   i samma stund som sista underlaget bifogades slog resultatet om från false
+   till NULL i stället för true — kontrollen blev omöjlig att uppfylla och
+   bokslutet permanent blockerat utan något användaren kunde göra.
+
+8. **`imported_from_sie` tappades ur SIE-precedensen** (se separat commit).
+
+Verifierat: replay-grenen i `execute_year_end_closing` returnerar det lagrade
+resultatet före varje readiness-kontroll, så äkta idempotent replay kör aldrig
+om readiness. Tidigare `manual_cash_reconciliation_missing` vid replay kom från
+previewordningen i testet, inte från RPC:n. Ett preview snapshotar readiness och
+måste därför skapas EFTER att blockerare är åtgärdade.
+
+Unit: 47 → 43. Se open-blockers punkt 1 för ordningsanmärkningen mot H-03.
