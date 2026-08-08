@@ -38,6 +38,7 @@ export const POST = withRouteContext(
       lines: customLines,
       manual_exchange_rate: manualExchangeRate,
       force,
+      expected_journal_entry_id: expectedJournalEntryId,
     } = validation.data
     const txLog = log.child({ transactionId, invoiceId })
 
@@ -163,10 +164,31 @@ export const POST = withRouteContext(
           transactionDate: transaction.date,
           transactionAmount: transaction.amount,
         })
-        if (candidate) {
-          return errorResponseFromCode('MATCH_INVOICE_POSSIBLE_DUPLICATE', txLog, {
+        // The soft guard is heuristic (same amount, same date), so false
+        // positives are expected and the user must be able to proceed. The
+        // override is deliberately NOT a blind force: per MatchInvoiceSchema the
+        // caller echoes the journal_entry_id of the candidate it showed the
+        // user, the server re-detects, and the override is honoured only if the
+        // two still agree. That binds the decision to a specific, user-seen
+        // duplicate so an automation cannot sweep force=true through the guard
+        // without ever consulting a candidate.
+        if (!force) {
+          if (candidate) {
+            return errorResponseFromCode('MATCH_INVOICE_POSSIBLE_DUPLICATE', txLog, {
+              requestId,
+              details: { candidate, forceIgnored: false },
+            })
+          }
+        } else if (candidate?.journal_entry_id !== expectedJournalEntryId) {
+          // Either the duplicate vanished or a different one is detected now:
+          // the state the user confirmed no longer holds, so refuse rather than
+          // proceed on a stale confirmation.
+          return errorResponseFromCode('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH', txLog, {
             requestId,
-            details: { candidate, forceIgnored: Boolean(force) },
+            details: {
+              expected_journal_entry_id: expectedJournalEntryId ?? null,
+              detected_journal_entry_id: candidate?.journal_entry_id ?? null,
+            },
           })
         }
       } catch (error) {

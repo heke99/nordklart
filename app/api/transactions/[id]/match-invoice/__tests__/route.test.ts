@@ -874,7 +874,6 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueueFor('transactions', { data: tx, error: null })
     enqueueFor('invoices', { data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate check: clean
 
     // force=true re-detects the candidate to verify the echoed id matches.
     mockDetectDuplicate.mockResolvedValueOnce({
@@ -889,10 +888,13 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
 
-    mockCreateJournalEntry.mockResolvedValue({ id: 'je-forced' })
-    enqueue({ data: null, error: null }) // update tx
-
-    enqueueCustomerSettlement(service, { settlement: { invoice_id: VALID_UUID, applied_amount: 12500, paid_amount: 12500 }, invoice: { ...invoice, status: 'paid', paid_amount: 12500, remaining_amount: 0 } })
+    enqueueCustomerSettlement(service, {
+      settlement: {
+        invoice_id: VALID_UUID, applied_amount: 1000, paid_amount: 1000,
+        remaining_amount: 0, status: 'paid', journal_entry_id: 'je-forced',
+      },
+      invoice: { ...invoice, status: 'paid', paid_amount: 1000, remaining_amount: 0 },
+    })
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
       body: { invoice_id: VALID_UUID, force: true, expected_journal_entry_id: CANDIDATE_UUID },
