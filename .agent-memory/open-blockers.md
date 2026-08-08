@@ -33,9 +33,22 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
    remediation). De 68 saknade migrationerna *är* applicerade — objekten finns
    (se `docs/audits/2026-08-07-live-database-verification.md` §3) — men de
    kördes utanför runnern utan att registrera en rad. Kräver en medveten
-   skrivåtgärd av en operatör:
-   `npm run db:migrate:mark-through -- 20260801140000_production_financial_atomicity_and_billing_lifecycle.sql`
-   följt av `npm run check:migrations:db`, som nu failar tills detta är gjort.
+   skrivåtgärd av en operatör. Verktyget finns nu:
+
+   ```
+   SUPABASE_DB_URL=... npm run db:ledger:reconcile           # dry run, default
+   SUPABASE_DB_URL=... npm run db:ledger:reconcile:apply     # skriver rader
+   npm run check:migrations:db                               # bekräftar
+   ```
+
+   Det klassar varje fil mot vad databasen faktiskt innehåller: RECORDED,
+   APPLIED_BUT_UNRECORDED, SUPERSEDED, NOT_APPLIED, CHECKSUM_MISMATCH,
+   AMBIGUOUS. Endast APPLIED_BUT_UNRECORDED skrivs, och bara med `--apply`.
+   NOT_APPLIED hör till `npm run db:migrate`; SUPERSEDED (objekten är borttagna
+   av en senare migration, så frånvaro bevisar ingenting) och AMBIGUOUS kräver
+   en människa. Verifierat i båda riktningarna mot den lokala replay-databasen:
+   0 NOT_APPLIED när allt är applicerat, och rätt fil flaggas som NOT_APPLIED
+   när dess objekt tas bort.
 
 3. **Supabase security advisor: 358 fynd.** 7 `security_definer_view` (ERROR)
    kvarstår. `public_price_*` är avsiktligt publik katalogdata; däremot behöver

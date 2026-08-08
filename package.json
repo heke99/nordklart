@@ -26,6 +26,8 @@
     "db:migrate:list": "node scripts/supabase-migrate.cjs list supabase/migrations",
     "db:migrate:plan-after": "node scripts/supabase-migrate.cjs plan-after supabase/migrations",
     "db:migrate:mark-through": "node scripts/supabase-migrate.cjs mark-through supabase/migrations",
+    "db:ledger:reconcile": "node scripts/reconcile-migration-ledger.mjs",
+    "db:ledger:reconcile:apply": "node scripts/reconcile-migration-ledger.mjs --apply",
     "check:feature-policy": "npx tsx scripts/check-feature-policy-coverage.ts",
     "nordklart:platform-accounting-regression": "node scripts/nordklart-platform-accounting-regression.cjs",
     "check:migrations": "node scripts/checks/migration-integrity.mjs",
@@ -107,7 +109,7 @@
     "typescript": "^5",
     "vitest": "^4.0.18"
   },
-  "description": "Nordklart — svensk bokföring, bokslut och byråplattform.",
+  "description": "Nordklart \u2014 svensk bokf\u00f6ring, bokslut och byr\u00e5plattform.",
   "overrides": {
     "next": "16.2.9",
     "postcss": "^8.5.10"
