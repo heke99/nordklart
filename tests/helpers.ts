@@ -711,11 +711,40 @@ export function createQueuedMockSupabase() {
 
   const reset = () => {
     queue.length = 0
+    byName.clear()
   }
 
-  const buildChain = (): unknown => {
-    // Capture the result at chain creation (when from/rpc is called)
-    const result = queue.shift() || { data: null, error: null, count: null }
+  // Optional table/RPC-keyed responses. A purely positional FIFO queue couples
+  // every test to a route's exact query ORDER, so reordering reads inside a
+  // route silently starves later ones and the failure surfaces as a nonsense
+  // assertion far away. enqueueFor('invoices', …) says what a read of that
+  // relation returns regardless of when it happens. Positional enqueue() still
+  // works and is used as the fallback, so existing tests are unaffected.
+  const byName = new Map<string, { data: unknown; error: unknown; count?: number | null }[]>()
+
+  const enqueueFor = (
+    name: string,
+    result: { data?: unknown; error?: unknown; count?: number | null },
+  ) => {
+    const list = byName.get(name) ?? []
+    list.push({
+      data: result.data ?? null,
+      error: result.error ?? null,
+      count: result.count ?? null,
+    })
+    byName.set(name, list)
+  }
+
+  const buildChain = (name?: string): unknown => {
+    // Capture the result at chain creation (when from/rpc is called).
+    // A keyed response for this relation wins; otherwise take the next
+    // positional item. The last keyed response for a name is sticky, so a
+    // relation read more times than the test enumerated keeps returning it
+    // instead of falling through to an unrelated queue entry.
+    const keyed = name ? byName.get(name) : undefined
+    const result = (keyed && (keyed.length > 1 ? keyed.shift() : keyed[0]))
+      || queue.shift()
+      || { data: null, error: null, count: null }
 
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -760,15 +789,15 @@ export function createQueuedMockSupabase() {
   }
 
   const supabase = {
-    from: vi.fn().mockImplementation(() => buildChain()),
-    rpc: vi.fn().mockImplementation(() => buildChain()),
+    from: vi.fn().mockImplementation((name?: string) => buildChain(name)),
+    rpc: vi.fn().mockImplementation((name?: string) => buildChain(name)),
     storage: storageMock,
     auth: {
       getUser: vi.fn(),
     },
   }
 
-  return { supabase, enqueue, enqueueMany, reset }
+  return { supabase, enqueue, enqueueMany, enqueueFor, reset }
 }
 
 export function makeCategorizationTemplate(
@@ -933,20 +962,30 @@ export function makeAtomicSupplierSettlement(
   }
 }
 
-type QueuedMock = { enqueue: (r: { data?: unknown; error?: unknown }) => void }
+type QueuedMock = {
+  enqueueFor: (name: string, r: { data?: unknown; error?: unknown }) => void
+}
 
-/** Queues replay-miss -> settlement -> hydration on the SERVICE client queue. */
+/**
+ * Keys the service-side settlement round-trip by RPC/relation name:
+ * get_financial_operation_result (replay miss), settle_*_invoice, then the
+ * hydration read. Keyed rather than positional so a change in call order inside
+ * the service cannot silently starve a later read.
+ */
 export function enqueueCustomerSettlement(
   service: QueuedMock,
   options: {
     settlement?: Partial<AtomicCustomerSettlementRow>
     invoice?: unknown
     replay?: unknown
+    error?: unknown
   } = {},
 ) {
-  service.enqueue({ data: options.replay ?? null })
-  service.enqueue({ data: makeAtomicCustomerSettlement(options.settlement) })
-  service.enqueue({ data: options.invoice ?? makeInvoice() })
+  service.enqueueFor('get_financial_operation_result', { data: options.replay ?? null })
+  service.enqueueFor('settle_customer_invoice', options.error
+    ? { data: null, error: options.error }
+    : { data: makeAtomicCustomerSettlement(options.settlement) })
+  service.enqueueFor('invoices', { data: options.invoice ?? makeInvoice() })
 }
 
 export function enqueueSupplierSettlement(
@@ -955,9 +994,12 @@ export function enqueueSupplierSettlement(
     settlement?: Partial<AtomicSupplierSettlementRow>
     invoice?: unknown
     replay?: unknown
+    error?: unknown
   } = {},
 ) {
-  service.enqueue({ data: options.replay ?? null })
-  service.enqueue({ data: makeAtomicSupplierSettlement(options.settlement) })
-  service.enqueue({ data: options.invoice ?? makeSupplierInvoice() })
+  service.enqueueFor('get_financial_operation_result', { data: options.replay ?? null })
+  service.enqueueFor('settle_supplier_invoice', options.error
+    ? { data: null, error: options.error }
+    : { data: makeAtomicSupplierSettlement(options.settlement) })
+  service.enqueueFor('supplier_invoices', { data: options.invoice ?? makeSupplierInvoice() })
 }

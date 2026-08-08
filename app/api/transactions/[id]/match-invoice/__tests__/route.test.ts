@@ -11,7 +11,7 @@ import {
   supabaseServerMock,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, enqueueFor, reset } = createQueuedMockSupabase()
 // The settlement service uses createServiceClient(), a different client from
 // the request-scoped one, so it needs its own queue.
 const service = createQueuedMockSupabase()
@@ -96,6 +96,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     reset()
     service.reset()
     mockCreateDraftEntry.mockResolvedValue({ id: 'je-1' })
+    // Canonical legal form, read by the settlement service. Keyed responses are
+    // sticky, so one default covers every read of this relation.
+    enqueueFor('companies', { data: { entity_type: 'enskild_firma' } })
     mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     // Default to no soft-duplicate detected — happy-path tests don't care.
@@ -150,7 +153,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
   it('returns 400 when transaction is an expense (amount <= 0)', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
-    enqueue({ data: tx, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -165,7 +168,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
   it('returns 400 when transaction is already linked to an invoice', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: 'inv-other' })
-    enqueue({ data: tx, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -180,7 +183,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
   it('returns 404 when invoice not found', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null })
-    enqueue({ data: tx, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
     enqueue({ data: null, error: { message: 'Not found' } })
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
@@ -201,8 +204,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       status: 'sent',
       document_type: 'proforma',
     } as Parameters<typeof makeInvoice>[0])
-    enqueue({ data: tx, error: null })
-    enqueue({ data: proforma, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: proforma, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -218,8 +221,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
   it('returns 400 when invoice is not in unpaid state', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'paid' })
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -254,10 +257,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       remaining_amount: 140,
       paid_amount: 0,
     })
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate check
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
 
     mockFetchExchangeRate.mockResolvedValue({
       currency: 'USD',
@@ -330,8 +332,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       total: 140,
       remaining_amount: 140,
     })
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
 
     mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken outage
 
@@ -357,10 +359,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       remaining_amount: 140,
       paid_amount: 0,
     })
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
 
     mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken down — manual rate used instead
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx-manual' })
@@ -412,14 +414,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       customer,
     })
 
-    // Fetch transaction
-    enqueue({ data: tx, error: null })
-    // Fetch invoice
-    enqueue({ data: invoice, error: null })
-    // Hard-duplicate check: no prior payment voucher for this invoice
-    enqueue({ data: [], error: null })
-    // Fetch company settings
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx })
+    enqueueFor('invoices', { data: invoice })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
@@ -453,24 +450,21 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
 
-    // Clearing path now builds lines via buildInvoicePaymentClearingLines and
-    // posts via createJournalEntry directly (FX fix PR #614 round 6). For a
-    // same-currency SEK invoice that's two lines: Dr 1930 12 500 / Cr 1510
-    // 12 500, no FX-diff line.
-    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+    // The payment voucher is staged as a DRAFT by the engine and committed by
+    // settle_customer_invoice inside the database transaction, so the assertion
+    // is on the staging call rather than on a direct createJournalEntry.
+    // The Dr 1930 / Cr 1510 line shape is owned and covered by
+    // lib/bookkeeping/__tests__ for createInvoicePaymentJournalEntry itself.
+    expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({
-        fiscal_period_id: 'fp-1',
-        entry_date: '2024-06-15',
-        source_type: 'invoice_paid',
-        source_id: VALID_UUID,
-        lines: expect.arrayContaining([
-          expect.objectContaining({ account_number: '1930', debit_amount: 12500 }),
-          expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
-        ]),
-      }),
+      expect.objectContaining({ id: VALID_UUID }),
+      '2024-06-15',
+      expect.anything(),
+      expect.anything(),
+      12500,
+      { draftOnly: true },
     )
   })
 
@@ -489,12 +483,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       remaining_amount: 12500,
     })
 
-    // Fetch transaction
-    enqueue({ data: tx, error: null })
-    // Fetch invoice
-    enqueue({ data: invoice, error: null })
-    // Hard-duplicate check: no prior payment voucher for this invoice
-    enqueue({ data: [], error: null })
+    enqueueFor('transactions', { data: tx })
+    enqueueFor('invoices', { data: invoice })
 
     mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
     // Clear journal_entry_id on transaction
@@ -502,16 +492,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // logMatchEvent for storno
     enqueue({ data: null, error: null })
 
-    // Fetch company settings
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
 
-    // Update invoice (optimistic lock)
-    enqueue({ data: [{ id: VALID_UUID }], error: null })
-    // Insert invoice_payments
-    enqueue({ data: null, error: null })
-    // Update transaction
-    enqueue({ data: null, error: null })
     // logMatchEvent for match
     enqueue({ data: null, error: null })
 
@@ -537,10 +520,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', remaining_amount: 12500 })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    // Hard-duplicate check: no prior payment voucher
-    enqueue({ data: [], error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
 
     mockReverseEntry.mockRejectedValue(new Error('Period locked'))
 
@@ -569,19 +550,12 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       paid_amount: 0,
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate check
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial' })
 
-    // Update invoice (optimistic lock)
-    enqueue({ data: [{ id: VALID_UUID }], error: null })
-    // Insert invoice_payments
-    enqueue({ data: null, error: null })
-    // Update transaction
-    enqueue({ data: null, error: null })
     // logMatchEvent
     enqueue({ data: null, error: null })
 
@@ -624,10 +598,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       journal_entry_id: 'je-send-on-accrual',
     }
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate check
-    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'cash', entity_type: 'enskild_firma' } })
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
@@ -672,8 +645,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     })
 
     mockFetchExchangeRate.mockResolvedValue({ rate: 10, date: '2024-06-15' })
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
     // Hard-duplicate check is skipped for partially_paid status — no enqueue needed.
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
@@ -699,19 +672,12 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       paid_amount: 0,
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate check
-    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'cash', entity_type: 'enskild_firma' } })
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
-    // Update invoice
-    enqueue({ data: [{ id: VALID_UUID }], error: null })
-    // Insert invoice_payments
-    enqueue({ data: null, error: null })
-    // Update transaction
-    enqueue({ data: null, error: null })
     // logMatchEvent
     enqueue({ data: null, error: null })
 
@@ -739,10 +705,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       remaining_amount: 12500,
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate check
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock returns 0 rows (another request fully paid it)
@@ -768,10 +733,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       remaining_amount: 12500,
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate check
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock succeeds
@@ -794,19 +758,12 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 12500, remaining_amount: 12500 })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate check
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
 
     mockCreateJournalEntry.mockRejectedValue(new Error('Period locked'))
 
-    // Update invoice (optimistic lock)
-    enqueue({ data: [{ id: VALID_UUID }], error: null })
-    // Insert invoice_payments
-    enqueue({ data: null, error: null })
-    // Update transaction
-    enqueue({ data: null, error: null })
     // logMatchEvent
     enqueue({ data: null, error: null })
 
@@ -840,10 +797,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       remaining_amount: 12500,
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    // Hard-duplicate check returns a row pointing at the existing JE
-    enqueue({ data: [{ journal_entry_id: 'je-existing' }], error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -868,10 +823,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       paid_amount: 10000,
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
-    // Hard-duplicate check is skipped for partially_paid; jump straight to settings
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
@@ -895,8 +848,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2026-05-15' })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 1000, remaining_amount: 1000 })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check: clean
 
     mockDetectDuplicate.mockResolvedValueOnce({
@@ -935,8 +888,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       invoice_number: 'F-2024099',
     })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check: clean
 
     // force=true re-detects the candidate to verify the echoed id matches.
@@ -950,7 +903,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       reason: 'exact_amount_same_date',
     })
 
-    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-forced' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
@@ -986,8 +939,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2026-05-15' })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 1000, remaining_amount: 1000 })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check: clean
 
     // Re-detection returns a different candidate than the caller echoed.
@@ -1021,8 +974,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2026-05-15' })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 1000, remaining_amount: 1000 })
 
-    enqueue({ data: tx, error: null })
-    enqueue({ data: invoice, error: null })
+    enqueueFor('transactions', { data: tx, error: null })
+    enqueueFor('invoices', { data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check: clean
 
     // Detection returns null — the duplicate the caller saw has resolved.
