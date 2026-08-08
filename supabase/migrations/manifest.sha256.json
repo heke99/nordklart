@@ -2186,6 +2186,11 @@
       "file": "20260808140000_allow_system_commit_method_for_prior_result_transfer.sql",
       "version": "20260808140000",
       "sha256": "e164c9bf86ca319fbae0113ee675ec23665a391ea0b26f1651b9d6990337a1d8"
+    },
+    {
+      "file": "20260808150000_security_invoker_on_tenant_scoped_views.sql",
+      "version": "20260808150000",
+      "sha256": "1dbb06cdd0d234767c802166e151339e5864bc6d01a21b5ffe84096e83763e38"
     }
   ]
 }
