@@ -2196,6 +2196,11 @@
       "file": "20260808160000_authorize_commit_journal_entry.sql",
       "version": "20260808160000",
       "sha256": "c816fbf1ef079b88563b8ceffe4a7917d02982a56329839f0d98d1974f6e57b7"
+    },
+    {
+      "file": "20260808170000_write_policies_require_write_capability.sql",
+      "version": "20260808170000",
+      "sha256": "aa8fa882ecd16423a8732fbe0b98ba191d52fbc3c81eb53edd756d3f10b9e4ad"
     }
   ]
 }
