@@ -14,7 +14,7 @@
     "prebuild": "npm run setup:extensions && node scripts/inject-public-branding.mjs",
     "build": "NODE_OPTIONS=--max-old-space-size=4096 next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "NODE_OPTIONS=--max-old-space-size=4096 tsc --noEmit",
     "lint": "eslint",
     "check:guards": "node scripts/checks/no-new-antipatterns.mjs && node scripts/checks/migration-integrity.mjs && node scripts/checks/migration-redefinition.mjs && node scripts/checks/financial-hardening-contract.mjs",
     "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
