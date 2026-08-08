@@ -851,3 +851,113 @@ export function supabaseServerMock(clients: {
     createServiceClient: () => resolveService(),
   }
 }
+
+// ---------------------------------------------------------------------------
+// Settlement service-client helpers
+// ---------------------------------------------------------------------------
+// Customer and supplier settlement moved into the database RPCs
+// settle_customer_invoice / settle_supplier_invoice, which the services call
+// through createServiceClient() — a DIFFERENT client from the request-scoped
+// one. Route tests therefore need two queues: the caller's reads on one, and
+// the settlement round-trip on the other.
+//
+// The service-side sequence for a successful settlement is fixed:
+//   1. rpc('get_financial_operation_result')  -> null when this is not a replay
+//   2. rpc('settle_(customer|supplier)_invoice') -> the atomic settlement row
+//   3. from('...invoices').select(...).single() -> row used to hydrate the result
+//
+// enqueueCustomerSettlement()/enqueueSupplierSettlement() encode that sequence
+// once so tests describe the outcome rather than the call order.
+
+export type AtomicCustomerSettlementRow = {
+  invoice_id: string
+  payment_id: string | null
+  journal_entry_id: string
+  customer_credit_id: string | null
+  applied_amount: number
+  overpayment_amount: number
+  paid_amount: number
+  remaining_amount: number
+  status: 'paid' | 'partially_paid'
+  paid_at: string | null
+  request_id: string
+}
+
+export function makeAtomicCustomerSettlement(
+  overrides: Partial<AtomicCustomerSettlementRow> = {},
+): AtomicCustomerSettlementRow {
+  const applied = overrides.applied_amount ?? 1000
+  return {
+    invoice_id: '00000000-0000-4000-8000-000000000001',
+    payment_id: '00000000-0000-4000-8000-000000000002',
+    journal_entry_id: 'je-1',
+    customer_credit_id: null,
+    applied_amount: applied,
+    overpayment_amount: 0,
+    paid_amount: applied,
+    remaining_amount: 0,
+    status: 'paid',
+    paid_at: '2026-06-01T00:00:00.000Z',
+    request_id: 'req_test',
+    ...overrides,
+  }
+}
+
+export type AtomicSupplierSettlementRow = {
+  supplier_invoice_id: string
+  payment_id: string | null
+  journal_entry_id: string
+  applied_amount: number
+  paid_amount: number
+  remaining_amount: number
+  status: 'paid' | 'partially_paid'
+  paid_at: string | null
+  request_id: string
+}
+
+export function makeAtomicSupplierSettlement(
+  overrides: Partial<AtomicSupplierSettlementRow> = {},
+): AtomicSupplierSettlementRow {
+  const applied = overrides.applied_amount ?? 1000
+  return {
+    supplier_invoice_id: '00000000-0000-4000-8000-000000000003',
+    payment_id: '00000000-0000-4000-8000-000000000004',
+    journal_entry_id: 'je-1',
+    applied_amount: applied,
+    paid_amount: applied,
+    remaining_amount: 0,
+    status: 'paid',
+    paid_at: '2026-06-01T00:00:00.000Z',
+    request_id: 'req_test',
+    ...overrides,
+  }
+}
+
+type QueuedMock = { enqueue: (r: { data?: unknown; error?: unknown }) => void }
+
+/** Queues replay-miss -> settlement -> hydration on the SERVICE client queue. */
+export function enqueueCustomerSettlement(
+  service: QueuedMock,
+  options: {
+    settlement?: Partial<AtomicCustomerSettlementRow>
+    invoice?: unknown
+    replay?: unknown
+  } = {},
+) {
+  service.enqueue({ data: options.replay ?? null })
+  service.enqueue({ data: makeAtomicCustomerSettlement(options.settlement) })
+  service.enqueue({ data: options.invoice ?? makeInvoice() })
+}
+
+export function enqueueSupplierSettlement(
+  service: QueuedMock,
+  options: {
+    settlement?: Partial<AtomicSupplierSettlementRow>
+    invoice?: unknown
+    replay?: unknown
+  } = {},
+) {
+  service.enqueue({ data: options.replay ?? null })
+  service.enqueue({ data: makeAtomicSupplierSettlement(options.settlement) })
+  service.enqueue({ data: options.invoice ?? makeSupplierInvoice() })
+}

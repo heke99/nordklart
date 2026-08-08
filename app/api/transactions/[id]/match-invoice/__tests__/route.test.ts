@@ -7,15 +7,29 @@ import {
   makeInvoice,
   makeTransaction,
   parseJsonResponse,
+  enqueueCustomerSettlement,
   supabaseServerMock,
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => supabaseServerMock({ client: () => mockSupabase }))
+// The settlement service uses createServiceClient(), a different client from
+// the request-scoped one, so it needs its own queue.
+const service = createQueuedMockSupabase()
+vi.mock('@/lib/supabase/server', () => supabaseServerMock({
+  client: () => mockSupabase,
+  serviceClient: () => service.supabase,
+}))
 
 const mockCreateInvoiceCashEntry = vi.fn()
-vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
+const mockCreateInvoicePaymentJournalEntry = vi.fn()
+// Spread the real module: a factory that lists only some exports leaves the
+// rest undefined, which is how createInvoicePaymentJournalEntry silently became
+// undefined once mark-paid-service started calling it.
+vi.mock('@/lib/bookkeeping/invoice-entries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/invoice-entries')>()),
   createInvoiceCashEntry: (...args: unknown[]) => mockCreateInvoiceCashEntry(...args),
+  createInvoicePaymentJournalEntry: (...args: unknown[]) =>
+    mockCreateInvoicePaymentJournalEntry(...args),
   getRevenueAccount: vi.fn().mockReturnValue('3001'),
   getOutputVatAccount: vi.fn().mockReturnValue('2611'),
 }))
@@ -23,10 +37,13 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
 const mockReverseEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
 const mockCreateJournalEntry = vi.fn()
-vi.mock('@/lib/bookkeeping/engine', () => ({
+const mockCreateDraftEntry = vi.fn()
+vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/engine')>()),
   reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
+  createDraftEntry: (...args: unknown[]) => mockCreateDraftEntry(...args),
 }))
 
 const mockFetchExchangeRate = vi.fn()
@@ -77,6 +94,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    service.reset()
+    mockCreateDraftEntry.mockResolvedValue({ id: 'je-1' })
+    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     // Default to no soft-duplicate detected — happy-path tests don't care.
     mockDetectDuplicate.mockResolvedValue(null)
@@ -403,13 +423,14 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
-    // Update invoice (optimistic lock returns updated row)
-    enqueue({ data: [{ id: VALID_UUID }], error: null })
-    // Insert invoice_payments
+    // Settlement now happens inside settle_customer_invoice on the service
+    // client: replay lookup -> settlement row -> hydration read.
+    enqueueCustomerSettlement(service, {
+      settlement: { invoice_id: VALID_UUID, applied_amount: 12500, paid_amount: 12500 },
+      invoice: { ...invoice, status: 'paid', paid_amount: 12500, remaining_amount: 0 },
+    })
+    // Update transaction + logMatchEvent still run on the caller client.
     enqueue({ data: null, error: null })
-    // Update transaction
-    enqueue({ data: null, error: null })
-    // logMatchEvent insert (fire-and-forget)
     enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
