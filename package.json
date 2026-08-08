@@ -16,7 +16,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "lint": "eslint",
-    "check:guards": "node scripts/checks/no-new-antipatterns.mjs && node scripts/checks/migration-integrity.mjs && node scripts/checks/financial-hardening-contract.mjs",
+    "check:guards": "node scripts/checks/no-new-antipatterns.mjs && node scripts/checks/migration-integrity.mjs && node scripts/checks/migration-redefinition.mjs && node scripts/checks/financial-hardening-contract.mjs",
     "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
     "test": "vitest run --project unit",
     "test:pg": "VITEST_PG_REAL=1 vitest run --project pg-real",
@@ -36,7 +36,8 @@
     "check:skill-provenance": "node scripts/checks/skill-provenance.mjs",
     "verify:fast": "npm run typecheck && npm run check:lint && npm run check:guards && npm run check:feature-policy && npm run skills:check && npm run check:skill-provenance && npm test",
     "verify:db": "npm run check:migrations:db && npm run test:pg",
-    "verify:release": "npm run verify:fast && npm run build && npm run verify:db"
+    "verify:release": "npm run verify:fast && npm run build && npm run verify:db",
+    "check:redefinition": "node scripts/checks/migration-redefinition.mjs"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.1",
