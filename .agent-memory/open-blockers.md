@@ -20,6 +20,16 @@ blockerare men nu är motbevisade eller åtgärdade ligger längst ned.
    Pro or make this repository public"*. Plangräns, inte behörighetsgräns. CI
    kan alltså inte krävas för merge — den är rådgivande tills planen ändras.
 
+4. **GitHub Actions slutade tilldela runners 2026-08-08 ~21:47 UTC.** Varje
+   workflow i repot failar sedan dess på 2–4 sekunder med `runner_id: 0`, noll
+   steg och ingen logg — inklusive de två rådgivande workflows som körde grönt
+   några minuter tidigare på samma SHA. Sju återförsök över tolv minuter, samma
+   signatur varje gång. Det är ett kontonivåtak (Actions-minuter eller
+   spending limit), inte något i branchen; billing-endpointen är blockerad
+   härifrån så exakt orsak går inte att läsa. Sista lyckade fjärrkörning:
+   `core-only` grön på `64ce246` (typecheck, lint, build, 6175 unit-tester,
+   guards, extension-isolering).
+
 ## Fynd från detta arbetspass (alla fixade i repot)
 
 | # | Fynd | Fix |
@@ -52,10 +62,13 @@ Två av dem är värda att minnas för formen, inte bara innehållet:
 
 ## Testläge
 
+Uppmätt på branchens HEAD:
+
 | Svit | Antal | Not |
 |---|---:|---|
-| unit | 6175 | `origin/main` har 53 failures i 10 filer |
-| pg-real | 669 | var 509 vid passets början |
+| unit | 6182 passerade, 3 skippade (500 filer) | `origin/main` har 53 failures i 10 filer |
+| pg-real | 669 passerade (91 filer) | var 509 vid passets början |
+| lint | 0 errors, 233 warnings | ratchet-baseline 0 errors |
 
 Inget test är borttaget, skippat eller nedgraderat. Varje failure klassades
 (TEST_STALE / PRODUCT_BUG / MOCK_STALE / CONTRACT_DRIFT) och åtgärdades i den
