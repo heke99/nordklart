@@ -366,3 +366,59 @@ export async function satisfyManualCashReconciliation(params: {
     })
   }
 }
+
+/**
+ * Reverses a posted entry the way the engine does, and the only way the
+ * immutability trigger accepts: a posted storno that points back at the
+ * original via reverses_id, linked from the original via reversed_by_id.
+ *
+ * A bare `UPDATE journal_entries SET status = 'reversed'` is rejected with
+ * REVERSAL_LINK_REQUIRED — posted entries may only be reversed by a real,
+ * mutually linked correction entry.
+ *
+ * Returns the reversal entry's id.
+ */
+export async function reversePostedEntry(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+  entryId: string
+  amount?: number
+  entryDate?: string
+}): Promise<string> {
+  // Posted directly with an explicitly free voucher number rather than through
+  // commit_journal_entry(): callers of this helper often post their original
+  // entry with a hand-picked voucher_number without advancing the sequence, so
+  // letting the RPC assign one collides on uq_journal_entries_voucher_number.
+  const { rows: next } = await getPool().query<{ n: number }>(
+    `SELECT coalesce(max(voucher_number), 0) + 1 AS n
+     FROM public.journal_entries WHERE company_id = $1`,
+    [params.companyId],
+  )
+  const reversalId = await insertDraftJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    entryDate: params.entryDate,
+    description: 'Storno',
+    voucherNumber: next[0].n,
+  })
+  await getPool().query(
+    `UPDATE public.journal_entries
+     SET reverses_id = $1, source_type = 'storno'
+     WHERE id = $2`,
+    [params.entryId, reversalId],
+  )
+  await insertBalancedLines(reversalId, params.amount ?? 1000)
+  await getPool().query(
+    `UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`,
+    [reversalId],
+  )
+  await getPool().query(
+    `UPDATE public.journal_entries
+     SET status = 'reversed', reversed_by_id = $1
+     WHERE id = $2`,
+    [reversalId, params.entryId],
+  )
+  return reversalId
+}

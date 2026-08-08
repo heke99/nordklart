@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
-import { insertBalancedLines, seedCompany } from '@/tests/pg/fixtures'
+import { insertBalancedLines, reversePostedEntry, seedCompany } from '@/tests/pg/fixtures'
 
 // Post a journal entry with balanced lines, going through draft so the
 // line-immutability + balance triggers are satisfied. Returns the entry id.
@@ -65,10 +65,9 @@ describe('enforce_journal_entry_immutability.pg — notes-only edits', () => {
   it('allows notes edits on a reversed entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
-    await getPool().query(
-      `UPDATE public.journal_entries SET status = 'reversed' WHERE id = $1`,
-      [entryId],
-    )
+    // A posted entry can only reach 'reversed' through a real, mutually
+    // linked storno — a bare status UPDATE is rejected (REVERSAL_LINK_REQUIRED).
+    await reversePostedEntry({ userId, companyId, fiscalPeriodId, entryId })
 
     await getPool().query(
       `UPDATE public.journal_entries SET notes = 'Makulerad pga dubbelbokning' WHERE id = $1`,

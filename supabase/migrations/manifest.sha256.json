@@ -2146,6 +2146,11 @@
       "file": "20260807130000_allow_sie_import_reversal_commit_method.sql",
       "version": "20260807130000",
       "sha256": "0441a84175b92fea4e9ffa2f9cdc35aa7ff133e144830fdbcf44379d7871ae3e"
+    },
+    {
+      "file": "20260807140000_restore_opening_balance_retag_carveout.sql",
+      "version": "20260807140000",
+      "sha256": "f9bfd0cd89f090d5aa25a20badaca1f19130b210fa41b7af053867d5816749ab"
     }
   ]
 }
