@@ -222,3 +222,100 @@ describe('auditPlatformSieImportOperation', () => {
     })).rejects.toThrow('Audit log write failed: write denied')
   })
 })
+
+describe('resolveSieImportAccess — entitlement never grants write', () => {
+  /**
+   * A commercial entitlement decides WHETHER a feature is available. It must
+   * never decide WHO may write — that comes from the canonical resolver alone.
+   *
+   * This path used to compute `canWrite: access.can_write || roleCanOperateOneOff`,
+   * where the second term re-derived write access from effective_role. The role
+   * list matched the one can_write uses, so it looked equivalent, but it dropped
+   * the membership_status condition: resolve_company_access_for_user computes
+   *
+   *     can_write = effective_role IN (...) AND membership_status = 'active'
+   *
+   * while company_member_is_active() admits 'active' AND 'active_limited'. An
+   * `active_limited` owner therefore resolves with can_write = false, still
+   * satisfies the role list, and was handed write access anyway.
+   */
+  const activeLimitedOwner = {
+    effective_role: 'company_owner',
+    can_read: true,
+    // Exactly what the resolver returns for membership_status = 'active_limited'.
+    can_write: false,
+    can_manage_platform: false,
+  }
+
+  const activePurchase = {
+    id: 'purchase-1',
+    fiscal_period_id: 'period-1',
+    permanent_access: true,
+    access_starts_at: null,
+    access_expires_at: null,
+    status: 'active',
+  }
+
+  it('does not let a one-off purchase grant write to a reduced-capability member', async () => {
+    const result = await resolveSieImportAccess(
+      mockDb({ access: activeLimitedOwner, purchases: [activePurchase] }) as never,
+      'user-1',
+      'company-1',
+    )
+
+    // The purchase legitimately opens the feature…
+    expect(result.allowed).toBe(true)
+    expect(result.mode).toBe('one_off')
+    // …but it must not confer write capability the resolver withheld.
+    expect(result.canWrite).toBe(false)
+  })
+
+  it('still grants write to a fully active member with the same purchase', async () => {
+    // Without this the fix could be "deny everyone", which would look identical.
+    const result = await resolveSieImportAccess(
+      mockDb({
+        access: { ...activeLimitedOwner, can_write: true },
+        purchases: [activePurchase],
+      }) as never,
+      'user-1',
+      'company-1',
+    )
+    expect(result.allowed).toBe(true)
+    expect(result.mode).toBe('one_off')
+    expect(result.canWrite).toBe(true)
+  })
+
+  it('never reports canWrite for a member the resolver denies write, on any path', async () => {
+    // The same invariant across every mode the resolver can return, so a future
+    // branch cannot reintroduce the shortcut somewhere else.
+    const modes: Array<{ label: string; setup: Record<string, unknown> }> = [
+      { label: 'bookkeeping', setup: { bookkeepingFeature: true } },
+      { label: 'year_end', setup: { yearEndFeature: true } },
+      { label: 'one_off', setup: { purchases: [activePurchase] } },
+    ]
+
+    for (const mode of modes) {
+      const result = await resolveSieImportAccess(
+        mockDb({ access: activeLimitedOwner, ...mode.setup }) as never,
+        'user-1',
+        'company-1',
+      )
+      expect(result.canWrite, `${mode.label} granted write to a can_write=false member`).toBe(false)
+    }
+  })
+
+  it('denies read entirely when the resolver denies read', async () => {
+    // Entitlement must not substitute for membership either.
+    const result = await resolveSieImportAccess(
+      mockDb({
+        access: { effective_role: 'read_only', can_read: false, can_write: false, can_manage_platform: false },
+        purchases: [activePurchase],
+        yearEndFeature: true,
+      }) as never,
+      'user-1',
+      'company-1',
+    )
+    expect(result.allowed).toBe(false)
+    expect(result.reason).toBe('permission_denied')
+  })
+})
