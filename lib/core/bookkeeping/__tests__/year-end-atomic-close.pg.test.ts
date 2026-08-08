@@ -5,6 +5,7 @@ import {
   insertAuthUser,
   insertCompany,
   insertCompanyMember,
+  insertCompanySettings,
   insertFiscalPeriod,
 } from '@/tests/pg/fixtures'
 
@@ -18,6 +19,9 @@ async function seedCompany(overrides: { isClosed?: boolean } = {}): Promise<{
   const userId = await insertAuthUser()
   const companyId = await insertCompany({ createdBy: userId })
   await insertCompanyMember({ companyId, userId, role: 'owner' })
+  // Readiness requires an explicit accounting method; without it every close
+  // stops at `company_details_incomplete` before the tested condition is hit.
+  await insertCompanySettings({ companyId })
   const fiscalPeriodId = await insertFiscalPeriod({
     userId,
     companyId,

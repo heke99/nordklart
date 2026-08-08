@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **427**.
+Antal SQL-migreringar: **428**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -448,6 +448,7 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 422 | 20260730170000 | `20260730170000_canonical_year_end_staging_preview_execute.sql` | `562bcf8db66f01dd7cab4f3d173a91422e4c4a1c69af07dd80c6c394d33ffee7` |
 | 423 | 20260730213000 | `20260730213000_canonical_year_end_completion_repair.sql` | `d0ac67c118aca78761f5c9a76be48cdda94a877709518c02af15e8f74774aaee` |
 | 424 | 20260731120000 | `20260731120000_year_end_execution_contract_repair.sql` | `ad83e1cae6a6f5c4bf7a079bb9d93d80110456977e4919dda19921b9350a62d0` |
-| 425 | 20260731171000 | `20260731171000_annual_report_finalization_and_controlled_reopen.sql` | `dd8ea2fc2171653ec02e11c6ceaabc6013643bbb9f4408dbff8d026e3da1951f` |
-| 426 | 20260801140000 | `20260801140000_production_financial_atomicity_and_billing_lifecycle.sql` | `7c185ace5b4214f7f2f38b6dc0a703833b4f2bba9cc19e3d86c1b06b5ce9ad50` |
-| 427 | 20260807120000 | `20260807120000_secure_migration_ledger_and_pin_search_path.sql` | `0d1702330b5ea568d4dc88c5dfbe41b034bb4395212ab397c1961113b93e32c2` |
+| 425 | 20260731163000 | `20260731163000_year_end_pgcrypto_search_path_repair.sql` | `75cdc34f7fbef0c12bb3d757b5e17f5a6bdbf28e7a2dab0238d9fc623e536c38` |
+| 426 | 20260731171000 | `20260731171000_annual_report_finalization_and_controlled_reopen.sql` | `dd8ea2fc2171653ec02e11c6ceaabc6013643bbb9f4408dbff8d026e3da1951f` |
+| 427 | 20260801140000 | `20260801140000_production_financial_atomicity_and_billing_lifecycle.sql` | `7c185ace5b4214f7f2f38b6dc0a703833b4f2bba9cc19e3d86c1b06b5ce9ad50` |
+| 428 | 20260807120000 | `20260807120000_secure_migration_ledger_and_pin_search_path.sql` | `0d1702330b5ea568d4dc88c5dfbe41b034bb4395212ab397c1961113b93e32c2` |

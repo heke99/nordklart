@@ -22,14 +22,42 @@ export async function insertCompany(params: {
   createdBy: string
   name?: string
   entityType?: 'enskild_firma' | 'aktiebolag'
+  orgNumber?: string | null
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
-    `INSERT INTO public.companies (id, name, entity_type, created_by)
-     VALUES ($1, $2, $3, $4)`,
-    [id, params.name ?? 'Test AB', params.entityType ?? 'aktiebolag', params.createdBy],
+    `INSERT INTO public.companies (id, name, entity_type, org_number, created_by)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      id,
+      params.name ?? 'Test AB',
+      params.entityType ?? 'aktiebolag',
+      // An economic close requires canonical company facts (name, org number,
+      // legal form, framework) — see year_end readiness `company_details_incomplete`.
+      // Pass orgNumber: null explicitly to test the incomplete case.
+      params.orgNumber === undefined ? '5560000001' : params.orgNumber,
+      params.createdBy,
+    ],
   )
   return id
+}
+
+/**
+ * company_settings row with the canonical defaults. Year-end readiness requires
+ * an explicit accounting_method, and the column already defaults to 'accrual',
+ * so the row's existence is what matters. Idempotent: tests that insert their
+ * own settings row still work.
+ */
+export async function insertCompanySettings(params: {
+  companyId: string
+  accountingMethod?: 'accrual' | 'cash'
+}): Promise<void> {
+  await getPool().query(
+    `INSERT INTO public.company_settings (company_id, accounting_method)
+     VALUES ($1, $2)
+     ON CONFLICT (company_id) DO UPDATE SET accounting_method = EXCLUDED.accounting_method`,
+    [params.companyId, params.accountingMethod ?? 'accrual'],
+  )
 }
 
 export async function insertCompanyMember(params: {
@@ -81,6 +109,7 @@ export async function seedCompany(overrides: { isClosed?: boolean } = {}): Promi
   const userId = await insertAuthUser()
   const companyId = await insertCompany({ createdBy: userId })
   await insertCompanyMember({ companyId, userId, role: 'owner' })
+  await insertCompanySettings({ companyId })
   const fiscalPeriodId = await insertFiscalPeriod({
     userId,
     companyId,
