@@ -52,10 +52,19 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 ## Ej åtgärdat av denna remediation
 
-7. **H-03 — betalningsatomicitet.** `mark-paid-service.ts` stagar fortfarande
-   ett draft-verifikat före settlement-RPC:n och kompenserar vid fel. Rätt fix
-   är att flytta draftskapandet in i `settle_customer_invoice` /
-   `settle_supplier_invoice`. Inte påbörjat i detta pass.
+7. **H-03 — betalningsatomicitet.** Delvis. Den akuta produktionsstoppande
+   buggen är fixad (se produktionsbuggar nedan): båda settlement-RPC:erna
+   committade med `commit_method` som deras egen CHECK-constraint förbjöd, så
+   ingen kund- eller leverantörsbetalning kunde genomföras alls. Happy path och
+   negativa fall täcks nu av `settlement-atomicity.pg.test.ts` (8 tester).
+
+   Kvar: själva atomicitetsrefaktorn. `markInvoicePaid()` skapar fortfarande
+   draftverifikatet via `createDraftEntry()` före `settle_customer_invoice` och
+   kompenserar vid fel. Fullständig design och call graph ligger i
+   `decisions.md` (2026-08-07) — planvariant av radbyggarna + ny RPC som tar
+   raderna som JSONB och skapar verifikatet inne i transaktionen. Radlogiken får
+   inte flyttas till PL/pgSQL (dubbel domänsanning).
+
 8. **H-05 — testmatrisen.** Concurrency, idempotens-race, failure injection,
    Stripe-livscykel och tenant-isolering i pg-real är fortfarande inte
    byggda. Att bygga ut sviten innan punkt 1 är löst är verkningslöst.

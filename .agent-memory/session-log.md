@@ -183,3 +183,31 @@ previewordningen i testet, inte från RPC:n. Ett preview snapshotar readiness oc
 måste därför skapas EFTER att blockerare är åtgärdade.
 
 Unit: 47 → 43. Se open-blockers punkt 1 för ordningsanmärkningen mot H-03.
+
+## 2026-08-07 (forts. 3) — H-03 påbörjad, total betalningsutestängning hittad
+
+Nionde och tionde produktionsbuggen, och de allvarligaste hittills:
+`settle_customer_invoice()` och `settle_supplier_invoice()` committar med
+`commit_method` `'atomic_customer_settlement'` / `'atomic_supplier_settlement'`.
+Ingetdera värdet lades till i `journal_entries_commit_method_check` i samma
+migration. **Varje** kund- och leverantörsbetalning avbryts därför med
+constraintbrott och hela transaktionen rullas tillbaka — kärnflödet "markera
+faktura betald" fungerar inte alls i produktion. Verifierat mot livedatabasen.
+
+Tredje förekomsten av samma defektform (jfr SIE-reverseringen): en funktion och
+den constraint som styr dess skrivningar införs i samma migration och är ändå
+oense.
+
+Dolt eftersom pg-real bara körde ROLLBACK-vägen för settlement-kontraktet.
+Ingen test drev någonsin en settlement till framgång. Nu täckt av
+`settlement-atomicity.pg.test.ts`: postat verifikat med verifikationsnummer, en
+betalningsrad kopplad till det, korrekt paid_amount/remaining_amount/status/
+paid_at, delbetalning, idempotent replay, payload-hash-återanvändning,
+cross-company-nekande, valutamismatch, stale expected-remaining och icke
+betalbar status. Bevisat med ren A/B-replay: utan migrationen failar 4 tester
+med constraintbrottet, med den 8/8 gröna.
+
+`tests/pg/setup.ts` har nu `withServiceRole()` — de finansiella RPC:erna kräver
+`require_service_role()`, som läser JWT-claim, inte PostgreSQL-rollen.
+
+pg-real: 509/509. Unit: oförändrat 43.
