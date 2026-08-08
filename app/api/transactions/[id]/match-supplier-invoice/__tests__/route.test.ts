@@ -78,8 +78,9 @@ function enqueueHappyPath(opts: {
   }
   accountingMethod?: string
 }) {
-  // 1. transactions fetch
-  enqueue({
+  // Keyed so both the route and the settlement service can read the same
+  // relation without the second read being starved by a positional queue.
+  enqueueFor('transactions', {
     data: {
       id: TX_UUID,
       company_id: 'company-1',
@@ -91,8 +92,7 @@ function enqueueHappyPath(opts: {
     },
     error: null,
   })
-  // 2. supplier_invoices fetch
-  enqueue({
+  enqueueFor('supplier_invoices', {
     data: {
       id: SI_UUID,
       currency: opts.invoice.currency,
@@ -105,8 +105,7 @@ function enqueueHappyPath(opts: {
     },
     error: null,
   })
-  // 3. company_settings fetch
-  enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
+  enqueueFor('company_settings', { data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
   // 4. The CAS update, the payment insert and the transaction link now all
   //    happen inside settle_supplier_invoice on the service client, so the
   //    caller no longer performs them. Queue the settlement round-trip instead.

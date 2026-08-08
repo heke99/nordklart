@@ -31,6 +31,15 @@ export interface SettleSupplierInvoiceRequest {
   /** SEK amount used to clear 2440; differs from invoice-currency amount for FX payments. */
   ledgerPaymentAmount?: number
   exchangeRateDifference?: number
+  /**
+   * SEK that actually left the bank, for a FULL cash-method settlement of a
+   * foreign-currency invoice. createSupplierInvoiceCashEntry derives the
+   * payment-date rate from it (settledBankSek / invoice.total) so the payment
+   * account credit equals the bank movement to the öre. Only meaningful for a
+   * full settlement — a partial amount cannot pin a whole-invoice entry — and
+   * omitted when no independent bank figure exists.
+   */
+  settledBankSek?: number
   paymentAccount?: string
   customLines?: SupplierPaymentLine[]
   notes?: string
@@ -162,7 +171,7 @@ export async function settleSupplierInvoiceAtomic(
         invoice.supplier?.supplier_type ?? 'swedish_business',
         invoice.supplier?.name,
         request.paymentAccount,
-        undefined,
+        request.settledBankSek,
         { draftOnly: true },
       ))?.id ?? null
     } else {
