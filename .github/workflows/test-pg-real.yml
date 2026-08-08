@@ -39,21 +39,15 @@ jobs:
   pg-real:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        # Supabase image ships the auth schema, auth.uid(), and the extensions
-        # (uuid-ossp, pg_cron, btree_gist, vector) this repo's migrations need.
-        # Plain postgres:15 would require manual bootstrap SQL.
-        image: supabase/postgres:15.8.1.060
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+    # Postgres is started as an ordinary docker container rather than a
+    # `services:` entry. Functionally identical, with one difference that
+    # matters: the runner dumps a service container's entire log at teardown,
+    # and this suite deliberately provokes constraint/RLS/trigger errors, each
+    # of which Postgres logs with its full failing statement. That dump ran to
+    # ~500 KB and pushed the actual vitest output past the end of what the
+    # Actions log API will hand back — a failing run was undiagnosable. Setting
+    # the server's log level instead is not an option: `postgres` is not a
+    # superuser in this image, so ALTER SYSTEM is denied.
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -61,6 +55,30 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Start PostgreSQL
+        # Supabase image ships the auth schema, auth.uid(), and the extensions
+        # (uuid-ossp, pg_cron, btree_gist, vector) this repo's migrations need.
+        # Plain postgres:15 would require manual bootstrap SQL.
+        run: |
+          set -euo pipefail
+          docker run -d --name nordklart-pg \
+            -e POSTGRES_PASSWORD=postgres \
+            -p 5432:5432 \
+            supabase/postgres:15.8.1.060
+          # Probe over TCP: during initdb the server listens on the unix socket
+          # only, so a TCP probe is what distinguishes "initialising" from
+          # "ready for us".
+          for _ in $(seq 1 60); do
+            if docker exec nordklart-pg pg_isready -h localhost -U postgres >/dev/null 2>&1; then
+              echo "postgres ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres did not become ready in time" >&2
+          docker logs --tail 100 nordklart-pg >&2
+          exit 1
 
       - uses: actions/setup-node@v4
         with:
@@ -77,21 +95,6 @@ jobs:
         # is provisioned by the storage-api service at runtime, which we do
         # not run in CI. This aligns the schema with what migrations expect.
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
-
-      - name: Quiet expected server-side error logging
-        # The suite deliberately provokes constraint, RLS and trigger errors —
-        # that is what it is for. Postgres logs every one with the full failing
-        # statement, and the service container's log is dumped wholesale at
-        # teardown: ~500 KB of expected noise, which is enough to push the
-        # actual vitest output out of reach when fetching job logs afterwards.
-        # Errors still reach the client, so the assertions are unaffected.
-        # One statement per -c: psql wraps a multi-statement -c in a single
-        # implicit transaction, and ALTER SYSTEM cannot run inside one.
-        run: |
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
-            -c "ALTER SYSTEM SET log_min_error_statement = 'panic'" \
-            -c "ALTER SYSTEM SET log_min_messages = 'fatal'" \
-            -c "SELECT pg_reload_conf()"
 
       - name: Apply migrations
         run: |
