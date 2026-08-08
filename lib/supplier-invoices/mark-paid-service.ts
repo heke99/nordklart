@@ -6,6 +6,7 @@ import {
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { eventBus } from '@/lib/events'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -262,7 +263,48 @@ export async function settleSupplierInvoiceAtomic(
     return mapError(atomicError)
   }
 
-  return fromAtomic(data as AtomicSupplierSettlement)
+  const settled = data as AtomicSupplierSettlement
+  const result = fromAtomic(settled)
+
+  // supplier_invoice.paid is a delivered webhook event (lib/webhooks/event-catalog.ts)
+  // and the only signal subscribers get for an AP payment. It lives here rather
+  // than in the routes so every settlement caller emits it exactly once, and it
+  // is deliberately below the replay short-circuit above: a retried request
+  // resolves to the same committed payment and must not deliver a second event.
+  const { data: settledInvoice } = await service
+    .from('supplier_invoices')
+    .select('*, supplier:suppliers(*), items:supplier_invoice_items(*)')
+    .eq('company_id', companyId)
+    .eq('id', invoice.id)
+    .maybeSingle()
+
+  try {
+    // External fan-out is best effort: the durable outbox row was committed by
+    // the settlement RPC, so a transient bus failure cannot corrupt the payment.
+    await eventBus.emit({
+      type: 'supplier_invoice.paid',
+      payload: {
+        supplierInvoice: ((settledInvoice as LoadedSupplierInvoice | null) ?? {
+          ...invoice,
+          status: settled.status,
+          paid_amount: Number(settled.paid_amount),
+          remaining_amount: Number(settled.remaining_amount),
+        }) as SupplierInvoice,
+        paymentAmount: Number(settled.applied_amount),
+        companyId,
+        userId,
+      },
+    })
+  } catch (eventError) {
+    log.warn('supplier_invoice.paid immediate dispatch failed; durable outbox retained', {
+      companyId,
+      supplierInvoiceId: invoice.id,
+      requestId: request.requestId,
+      reason: eventError instanceof Error ? eventError.message : 'unknown',
+    })
+  }
+
+  return result
 }
 
 function fromAtomic(atomic: AtomicSupplierSettlement): SettleSupplierInvoiceResult {

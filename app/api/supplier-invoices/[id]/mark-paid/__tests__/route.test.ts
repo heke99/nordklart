@@ -3,14 +3,20 @@ import {
   createMockRequest,
   createMockRouteParams,
   createQueuedMockSupabase,
+  enqueueSupplierSettlement,
   makeSupplier,
   makeSupplierInvoice,
   parseJsonResponse,
   supabaseServerMock,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => supabaseServerMock({ client: () => mockSupabase }))
+const { supabase: mockSupabase, enqueue, enqueueFor, reset } = createQueuedMockSupabase()
+// settleSupplierInvoiceAtomic runs through createServiceClient().
+const service = createQueuedMockSupabase()
+vi.mock('@/lib/supabase/server', () => supabaseServerMock({
+  client: () => mockSupabase,
+  serviceClient: () => service.supabase,
+}))
 
 vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
@@ -44,6 +50,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    service.reset()
     eventBus.clear()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   })
@@ -108,20 +115,15 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
       items: [],
     })
 
-    // Fetch invoice
-    enqueue({ data: invoice, error: null })
+    enqueueFor('supplier_invoices', { data: invoice })
     // Duplicate-payment guard: no candidate transactions
     enqueue({ data: [], error: null })
-    // Fetch company settings
-    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueueFor('company_settings', { data: { accounting_method: 'accrual' } })
 
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
 
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    // Record payment
-    enqueue({ data: null, error: null })
 
+    enqueueSupplierSettlement(service, { settlement: { supplier_invoice_id: 'si-1', applied_amount: 10000, paid_amount: 10000, remaining_amount: 0, status: 'paid', journal_entry_id: 'je-1' }, invoice: { ...invoice, status: 'paid', paid_amount: 10000, remaining_amount: 0 } })
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: {},
@@ -161,10 +163,9 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-2' })
 
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
     enqueue({ data: null, error: null })
 
+    enqueueSupplierSettlement(service, { settlement: { supplier_invoice_id: 'si-1', applied_amount: 5000, paid_amount: 5000, remaining_amount: 5000, status: 'partially_paid', journal_entry_id: 'je-2' }, invoice: { ...invoice, status: 'partially_paid', paid_amount: 5000, remaining_amount: 5000 } })
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: { amount: 5000 },
@@ -213,17 +214,18 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
       ],
     })
 
-    enqueue({ data: invoice, error: null })
+    enqueueFor('supplier_invoices', { data: invoice })
     // Duplicate-payment guard: no candidate transactions
-    enqueue({ data: [], error: null })
-    enqueue({ data: { accounting_method: 'cash' }, error: null })
+    enqueueFor('transactions', { data: [] })
+    // Read twice from company_settings: once by the route for the payment-account
+    // preference, once by the settlement service for the accounting method.
+    enqueueFor('company_settings', {
+      data: { accounting_method: 'cash', last_supplier_payment_account: null },
+    })
 
     mockCreateSupplierInvoiceCashEntry.mockResolvedValue({ id: 'je-3' })
 
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
-    enqueue({ data: null, error: null })
-
+    enqueueSupplierSettlement(service, { settlement: { supplier_invoice_id: 'si-1', applied_amount: 10000, paid_amount: 10000, remaining_amount: 0, status: 'paid', journal_entry_id: 'je-3' }, invoice: { ...invoice, status: 'paid', paid_amount: 10000, remaining_amount: 0 } })
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: {},
@@ -330,6 +332,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: [{ id: 'si-1' }], error: null })
     enqueue({ data: null, error: null })
 
+    enqueueSupplierSettlement(service, { settlement: { supplier_invoice_id: 'si-1', applied_amount: 10000, paid_amount: 10000, remaining_amount: 0, status: 'paid' }, invoice: { ...invoice, status: 'paid', paid_amount: 10000, remaining_amount: 0 } })
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: { force: true },
@@ -362,6 +365,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: [{ id: 'si-1' }], error: null })
     enqueue({ data: null, error: null })
 
+    enqueueSupplierSettlement(service, { settlement: { supplier_invoice_id: 'si-1', applied_amount: 5000, paid_amount: 5000, remaining_amount: 5000, status: 'partially_paid' }, invoice: { ...invoice, status: 'partially_paid', paid_amount: 5000, remaining_amount: 5000 } })
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: { amount: 3000 },
@@ -390,12 +394,11 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
-    // Update invoice (CAS guard: returns matched row)
-    enqueue({ data: [{ id: 'si-1' }], error: null })
     enqueue({ data: null, error: null })
 
     const emitSpy = vi.spyOn(eventBus, 'emit')
 
+    enqueueSupplierSettlement(service, { settlement: { supplier_invoice_id: 'si-1', applied_amount: 10000, paid_amount: 10000, remaining_amount: 0, status: 'paid' }, invoice: { ...invoice, status: 'paid', paid_amount: 10000, remaining_amount: 0 } })
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
       body: {},
