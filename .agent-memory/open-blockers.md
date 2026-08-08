@@ -50,7 +50,14 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
    0 NOT_APPLIED när allt är applicerat, och rätt fil flaggas som NOT_APPLIED
    när dess objekt tas bort.
 
-3. **Supabase security advisor: 358 fynd.** 7 `security_definer_view` (ERROR)
+3. **Supabase security advisor: 358 fynd (omgranskade 2026-08-08).** Se
+   `docs/audits/2026-08-08-supabase-advisors-and-ledger.md`. Produktion ligger
+   12 migrationer efter branchen, så fynden måste läsas mot branchens slutläge.
+   Fyra vyer, `commit_journal_entry` och 147 write-policies är åtgärdade;
+   leaked-password protection kvarstår som EXTERNAL OPERATOR ACTION.
+
+   Historisk formulering:
+   **Supabase security advisor: 358 fynd.** 7 `security_definer_view` (ERROR)
    kvarstår. `public_price_*` är avsiktligt publik katalogdata; däremot behöver
    `customer_ar_balances`, `company_commercial_usage_v`,
    `agency_commercial_usage_v` och `company_effective_commercial_limits_v`

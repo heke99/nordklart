@@ -357,3 +357,65 @@ avsiktligt ändrat kontrakt (planering i stället för staging). Inga assertions
 försvagades — argumentindex flyttades där signaturen tappade `userId`/`options`,
 och v1-sviternas `journal_entry_id` härleds nu ur planens `source_type`, vilket
 fortfarande skiljer accrual- och kontantvägen åt.
+
+## 2026-08-08 (forts.) — H-05, Stripe, redefinitionsgranskning och FYRA säkerhetsfynd
+
+unit 6175/6175, pg-real 640/640 (var 529), typecheck/lint/guards/build gröna.
+
+### Nya produktionsbuggar
+
+16. **`__year_end_prior_result_transfer` committade med `commit_method='system'`**
+    som CHECK-constraintet förbjöd → 23514. Tredje instansen av samma klass.
+    Träffar andra på varandra följande bokslut för ett AB (omföring 2099→2098).
+    Alla befintliga bokslutstester stänger ett FÖRSTA år, som saknar 2099-saldo
+    — samma success-path-blindfläck som de två settlement-incidenterna.
+    Hittad av drift-guarden som byggdes för att fånga just detta.
+
+17. **Fyra vyer läckte över tenantgränsen.** En vy kör med ÄGARENS rättigheter
+    om den inte har `security_invoker = true`. `customer_ar_balances`,
+    `company_commercial_usage_v`, `company_effective_commercial_limits_v` och
+    `agency_commercial_usage_v` saknade tenantfilter, ägdes av superuser och var
+    SELECT-grantade till `authenticated`. Mätt som vanlig medlem i ett företag:
+    388 / 4 433 / 22 165 / 104 främmande rader. `customer_ar_balances` innehåller
+    kundreskontra per företag — varje tenants orderbok läsbar för alla andra.
+
+18. **`commit_journal_entry` saknade auktorisering helt.** SECURITY DEFINER,
+    EXECUTE till anon+authenticated via PUBLIC-granten, och `auth.uid()` användes
+    bara som attributionsfallback. En autentiserad medlem i vilket företag som
+    helst kunde posta ett annat företags utkastverifikat. Postade verifikat är
+    oföränderliga enligt lag — offret kan bara stornera, så båda verifikaten
+    ligger kvar permanent. Samma anrop som `anon` nådde också
+    verifikationsnumret; det stoppades en sats senare enbart av att en
+    icke-definer-trigger saknar SELECT på `journal_entry_lines` för den rollen.
+
+19. **147 write-policies auktoriserade på läsmedlemskap.** `company_id IN
+    (SELECT user_company_ids())` betyder "är medlem", vilket en viewer är. 57
+    tabeller — leverantörsfakturor, betalningar, lönekörningar, kontoplanen,
+    räkenskapsår — lät en viewer INSERT/UPDATE/DELETE. Supabase publicerar
+    PostgREST med användarens egen JWT, så appens `requireWrite` är inte
+    kontrollen: en viewer kan PATCH:a `/rest/v1/supplier_invoices` direkt.
+    `invoices`/`journal_entries` hade redan rätt predikat; ändringen hade aldrig
+    spridits vidare.
+
+### Redefinitionsgranskningen (P10/P11)
+
+253 objekt är definierade i mer än en migration. 41 kritiska spåras nu i
+`supabase/critical-object-redefinitions.json`. Två pass: kronologisk
+token-diff, och — den avgörande — tokens som finns i historiken men saknas i
+den definition som faktiskt överlevde. Fyra flaggade, alla fyra verifierade
+individuellt och benigna (delegationskedjor, uppgradering till den kanoniska
+resolvern, ett medvetet hårdfel). `npm run check:redefinition` failar nu bygget
+när antalet definitioner för ett spårat objekt ändras.
+
+### Nya guards som inte kan tystna
+
+- `commit-method-provenance` jämför varje `commit_method`-literal som någon
+  live-funktion skriver mot CHECK-constraintet.
+- `security-definer-search-path` kräver pinnad search_path på alla SECURITY
+  DEFINER och att pgcrypto-anropare behåller `extensions` på vägen.
+- `view-tenant-isolation` failar på ny definer-vy som är tenantläsbar.
+- `tenant-isolation-matrix` failar på write-policy som auktoriserar på
+  läsmedlemskap.
+
+Samtliga läser live-katalogen, inte migrationstexten, så de bedömer den
+definition som överlevde alla senare redefinitioner.
