@@ -7,23 +7,38 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 ## Blockerande före produktionsanspråk
 
-1. **Unit-sviten: 43 av 6162 failar** (var 47). Alla i settlement-routetester:
-   `transactions/[id]/match-invoice` (18), `match-supplier-invoice` (11),
-   `supplier-invoices/[id]/mark-paid` (6), `v1 supplier-invoices` (3),
-   `v1 invoices mark-paid` (3), `stripe/webhook` (2).
+1. **Unit-sviten: 43 av 6162 failar.** `origin/main` har **47** i 8 filer —
+   den här grenen har alltså strikt färre och har lagat två hela filer.
+   Felen är **ärvda från main**, inte introducerade här.
 
-   Grundorsak: testerna modellerar bara EN Supabase-klient. Sedan
-   settlement-tjänsterna började använda `createServiceClient()` för
-   `settle_customer_invoice` / `settle_supplier_invoice` behöver de en separat
-   service-klient med egen kö. `supabaseServerMock()` i `tests/helpers.ts`
-   speglar nu modulens exportyta (det löste 54 modulladdningsfel), men varje
-   test måste fortfarande köa sitt eget RPC-svar.
+   Kvar i: `transactions/[id]/match-invoice` (18),
+   `match-supplier-invoice` (11), `supplier-invoices/[id]/mark-paid` (6),
+   `v1 supplier-invoices` (3), `v1 invoices mark-paid` (3),
+   `stripe/webhook` (2).
 
-   **Ordningsanmärkning:** detta är exakt den kodväg H-03 (Phase 3) bygger om.
-   Att laga mockarna mot nuvarande form och sedan igen efter H-03 är dubbelt
-   arbete. Gör H-03 först, laga sedan dessa tester en gång mot slutlig form.
+   Infrastrukturen är på plats (commit 9e97822): separat service-klientkö,
+   `enqueueCustomerSettlement()`/`enqueueSupplierSettlement()` i
+   `tests/helpers.ts`, och modulmockar som sprider `importOriginal`.
+   Kvarvarande arbete är **per-test query-sekvensering**.
 
-   pg-real är däremot **501/501 grönt** från en ren replay av 433 migrationer.
+   Routernas läsordning har ändrats sedan testerna skrevs. Verifierad ordning
+   för `match-invoice`:
+
+       transactions -> invoices -> company_settings
+                    -> journal_entry_lines -> invoices
+
+   (hard-duplicate-guarden kör numera före statuskontrollen, så testerna
+   svälter senare läsningar). Varje test köar den äldre, kortare sekvensen.
+
+   **Metod för att härleda verklig ordning** (vitest tystar console i denna
+   konfiguration): wrappa mockens `from`/`rpc` med en recorder och skriv
+   anropslistan till fil inifrån testet:
+
+       const calls: string[] = []
+       const orig = mockSupabase.from
+       mockSupabase.from = vi.fn((t) => { calls.push('from:'+t); return orig(t) })
+       // ...
+       require('node:fs').writeFileSync('/tmp/probe.out', JSON.stringify(calls))
 
 2. **Migrationsliggaren beskriver inte databasen.** Produktion har 358 rader i
    `public.nordklart_schema_migrations` mot 426 filer i repot (427 efter denna

@@ -211,3 +211,22 @@ med constraintbrottet, med den 8/8 gröna.
 `require_service_role()`, som läser JWT-claim, inte PostgreSQL-rollen.
 
 pg-real: 509/509. Unit: oförändrat 43.
+
+## 2026-08-07 (forts. 4) — build grön, unit-baslinjen mätt mot main
+
+`npm run build` kördes till slut: **exit 0**. Det var den sista overifierade
+punkten i Definition of Done som gick att köra här.
+
+Mätte unit-sviten på `origin/main` för att avgöra om grenen är mergebar:
+main har **47 failures i 8 filer**, grenen har **43 i 6 filer**. Felen är alltså
+ärvda, och grenen är strikt bättre på varje mätt axel. CI på main har varit röd
+utan att någon sett det — vilket var remediationens första fynd.
+
+Lade grunden för de återstående 43 (commit 9e97822): separat service-klientkö,
+settlement-helpers och modulmockar som sprider `importOriginal`. Ingen ändring i
+antal fel — kvarvarande arbete är per-test query-sekvensering. Metoden för att
+härleda routernas verkliga läsordning finns i `open-blockers.md` punkt 1.
+
+Obs: `git checkout origin/main -- .` återintroducerar den nästlade
+`supabase/migrations/supabase/migrations/`-filen. Den togs bort igen och
+`check:migrations` (som nu har en guard mot nästlade .sql) passerar.
