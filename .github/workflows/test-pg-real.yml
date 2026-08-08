@@ -62,8 +62,14 @@ jobs:
         # Plain postgres:15 would require manual bootstrap SQL.
         run: |
           set -euo pipefail
+          # The workspace is bind-mounted so the container's own psql can read
+          # the migration files. That removes the apt-get install of
+          # postgresql-client, which stalled for 13 minutes on a runner and is
+          # a network dependency this job does not need: the image already
+          # ships a psql, and it is the one that matches the server.
           docker run -d --name nordklart-pg \
             -e POSTGRES_PASSWORD=postgres \
+            -v "$PWD":/workspace \
             -p 5432:5432 \
             supabase/postgres:15.8.1.060
           # Probe over TCP: during initdb the server listens on the unix socket
@@ -87,14 +93,13 @@ jobs:
 
       - run: npm ci
 
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
-
       - name: Bootstrap storage schema
         # The supabase/postgres image ships a partial storage schema; the rest
         # is provisioned by the storage-api service at runtime, which we do
         # not run in CI. This aligns the schema with what migrations expect.
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+        run: |
+          docker exec nordklart-pg psql -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -q -f /workspace/tests/pg/bootstrap.sql
 
       - name: Apply migrations
         run: |
@@ -107,7 +112,8 @@ jobs:
           fi
           for f in "${files[@]}"; do
             echo "Applying $f"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+            docker exec nordklart-pg psql -U postgres -d postgres \
+              -v ON_ERROR_STOP=1 -q -f "/workspace/$f"
           done
 
       - name: Run pg-real suite
@@ -121,4 +127,8 @@ jobs:
         if: failure()
         run: |
           echo '===== pg-real failure summary ====='
-          grep -aE '^ *(FAIL|❯|×|AssertionError|Error:)|Test Files|Tests  ' /tmp/pg-real.log | head -300 || true
+          # Strip ANSI first — vitest colours the FAIL marker, so an anchored
+          # grep silently matched nothing the first time this ran.
+          sed -r 's/\x1b\[[0-9;]*m//g' /tmp/pg-real.log \
+            | grep -aE 'FAIL|AssertionError|Error:|Test Files|Tests ' \
+            | head -300 || true
