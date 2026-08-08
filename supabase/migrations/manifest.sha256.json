@@ -2191,6 +2191,11 @@
       "file": "20260808150000_security_invoker_on_tenant_scoped_views.sql",
       "version": "20260808150000",
       "sha256": "1dbb06cdd0d234767c802166e151339e5864bc6d01a21b5ffe84096e83763e38"
+    },
+    {
+      "file": "20260808160000_authorize_commit_journal_entry.sql",
+      "version": "20260808160000",
+      "sha256": "c816fbf1ef079b88563b8ceffe4a7917d02982a56329839f0d98d1974f6e57b7"
     }
   ]
 }

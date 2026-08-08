@@ -22,8 +22,8 @@
       "last": "20260330130000_multi_tenant_company_refactor.sql"
     },
     "commit_journal_entry": {
-      "definitions": 5,
-      "last": "20260619120000_journal_entry_committed_actor.sql"
+      "definitions": 6,
+      "last": "20260808160000_authorize_commit_journal_entry.sql"
     },
     "delete_last_voucher": {
       "definitions": 4,
