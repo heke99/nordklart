@@ -2176,6 +2176,11 @@
       "file": "20260808120000_settlement_creates_its_own_voucher.sql",
       "version": "20260808120000",
       "sha256": "bbf6422cc51116b89bc3b8910dae9cf82cefe3d066a4052ed62b886d37ebaa8b"
+    },
+    {
+      "file": "20260808130000_pin_search_path_on_remaining_security_definer.sql",
+      "version": "20260808130000",
+      "sha256": "dd763a0e1fc1e73c9c2a588b23623a346bf4bc3e00b81cc8730069700d55c140"
     }
   ]
 }
