@@ -22,8 +22,8 @@
       "last": "20260330130000_multi_tenant_company_refactor.sql"
     },
     "commit_journal_entry": {
-      "definitions": 6,
-      "last": "20260808160000_authorize_commit_journal_entry.sql"
+      "definitions": 7,
+      "last": "20260808190000_commit_journal_entry_is_unreachable_for_anon.sql"
     },
     "delete_last_voucher": {
       "definitions": 4,

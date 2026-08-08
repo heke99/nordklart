@@ -2201,6 +2201,16 @@
       "file": "20260808170000_write_policies_require_write_capability.sql",
       "version": "20260808170000",
       "sha256": "aa8fa882ecd16423a8732fbe0b98ba191d52fbc3c81eb53edd756d3f10b9e4ad"
+    },
+    {
+      "file": "20260808180000_personal_assistant_rows_are_owner_scoped.sql",
+      "version": "20260808180000",
+      "sha256": "a591934fba796c6abf6351fa8c35433da45b245cbfee3dd438a166df982d1f18"
+    },
+    {
+      "file": "20260808190000_commit_journal_entry_is_unreachable_for_anon.sql",
+      "version": "20260808190000",
+      "sha256": "31cc30503a8c0398a1c600908f664684b90adc0b3e7b08b8ff01ff60c258b873"
     }
   ]
 }

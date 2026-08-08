@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getPool, openUserTx, withServiceRole } from './setup'
+import { getClient, getPool, openUserTx, withServiceRole } from './setup'
 import {
   insertAuthUser,
   insertCompanyMember,
@@ -155,7 +155,12 @@ describe('commit_journal_entry authorization', () => {
   })
 
   it('does not grant anon execute on the function', async () => {
-    // Defence in depth behind the check, not a substitute for it.
+    // On Supabase this is not the same statement as "PUBLIC has no grant".
+    // The platform image runs ALTER DEFAULT PRIVILEGES granting all on
+    // functions in public to anon, so every function is created with an
+    // EXPLICIT anon grant that REVOKE ... FROM PUBLIC leaves untouched. This
+    // assertion passed on plain PostgreSQL and failed on the real image —
+    // which is the whole reason pg-real runs against supabase/postgres.
     const { rows } = await getPool().query<{ allowed: boolean }>(
       `SELECT has_function_privilege('anon', p.oid, 'EXECUTE') AS allowed
        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -163,5 +168,48 @@ describe('commit_journal_entry authorization', () => {
     )
     expect(rows).toHaveLength(1)
     expect(rows[0].allowed).toBe(false)
+  })
+
+  it('keeps the grant that authenticated callers need', async () => {
+    // The revoke must not overshoot — the dashboard commits as `authenticated`.
+    const { rows } = await getPool().query<{ allowed: boolean }>(
+      `SELECT has_function_privilege('authenticated', p.oid, 'EXECUTE') AS allowed
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = 'commit_journal_entry'`,
+    )
+    expect(rows[0].allowed).toBe(true)
+  })
+
+  it('refuses an anon caller even when it can reach the function', async () => {
+    // The grant is one layer; this is the other. A restore, a fresh database or
+    // an operator re-running the default-privileges statement can hand anon
+    // EXECUTE back, and the body must still refuse. It matters more than usual
+    // here because auth.uid() is NULL for anon, so the write check below it
+    // does not fire — the function would otherwise post the voucher.
+    const seed = await seedCompany()
+    const entryId = await stageDraft(seed)
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `SELECT set_config('request.jwt.claims', '{"role":"anon"}', true)`,
+      )
+      await expect(
+        client.query(
+          `SELECT public.commit_journal_entry($1::uuid, $2::uuid, 'manual')`,
+          [seed.companyId, entryId],
+        ),
+      ).rejects.toThrow(/Anonymous callers cannot commit/i)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+
+    const state = await entryState(entryId)
+    expect(state.status).toBe('draft')
+    // stageDraft seeds voucher_number 0; a real commit replaces it with the
+    // next number in the series, so 0 means nothing was assigned.
+    expect(state.voucher_number).toBe(0)
   })
 })

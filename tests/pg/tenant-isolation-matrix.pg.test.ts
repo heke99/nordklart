@@ -110,8 +110,24 @@ describe('every company-scoped table is wired for isolation', () => {
     // supplier invoices, payments, salary runs, the chart of accounts — and
     // Supabase publishes PostgREST with the user's own JWT, so RLS is the only
     // thing standing between a viewer and a direct PATCH.
-    const { rows } = await getPool().query<{ tablename: string; cmd: string }>(`
-      SELECT tablename, cmd FROM pg_policies
+    //
+    // Exactly one shape is allowed to keep membership as its company predicate:
+    // a personal row the user owns, where the policy ALSO pins
+    // `user_id = auth.uid()`. A viewer must be able to talk to the assistant,
+    // and that write is not a write to the company's books. Membership alone is
+    // still forbidden there — the ownership clause is what makes it safe, and
+    // it is tighter than the write-capability version, which let any writer
+    // edit any other member's conversation.
+    const { rows } = await getPool().query<{
+      tablename: string
+      cmd: string
+      owner_scoped: boolean
+    }>(`
+      SELECT
+        tablename,
+        cmd,
+        (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_id = auth.uid()%' AS owner_scoped
+      FROM pg_policies
       WHERE schemaname = 'public' AND cmd IN ('INSERT', 'UPDATE', 'DELETE')
         AND (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_company_ids() AS user_company_ids%'
         AND (coalesce(qual, '') || coalesce(with_check, '')) NOT LIKE '%user_can_write_company%'
@@ -122,11 +138,22 @@ describe('every company-scoped table is wired for isolation', () => {
         )
       ORDER BY tablename, cmd
     `)
+
     expect(
-      rows.map((row) => `${row.tablename}.${row.cmd}`),
+      rows.filter((row) => !row.owner_scoped).map((row) => `${row.tablename}.${row.cmd}`),
       'These write policies authorize on read-level membership, so a viewer can '
-      + 'write. Use user_can_write_company(company_id) instead.',
+      + 'write. Use user_can_write_company(company_id) instead — or, for a row the '
+      + 'user owns, add user_id = auth.uid() alongside the membership check.',
     ).toEqual([])
+
+    // And the owner-scoped exemption is not open-ended: it covers the personal
+    // assistant tables and nothing else. A new table appearing here means
+    // someone reached for the carve-out; that should be a decision, not a
+    // side effect.
+    const OWNER_SCOPED_TABLES = ['agent_conversations', 'chat_messages', 'chat_sessions']
+    expect(
+      [...new Set(rows.filter((row) => row.owner_scoped).map((row) => row.tablename))].sort(),
+    ).toEqual(OWNER_SCOPED_TABLES)
   })
 })
 
