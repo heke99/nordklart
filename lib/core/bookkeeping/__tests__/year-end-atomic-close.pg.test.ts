@@ -7,6 +7,7 @@ import {
   insertCompanyMember,
   insertCompanySettings,
   insertFiscalPeriod,
+  satisfyManualCashReconciliation,
 } from '@/tests/pg/fixtures'
 
 // Local seed with a PAST fiscal period (2025) — the close requires the
@@ -103,6 +104,11 @@ async function closePeriodViaRpc(
   idempotencyKey: string,
   previewId?: string,
 ): Promise<Record<string, unknown>> {
+  // The seeded company has no bank connection, so every cash account needs a
+  // manual statement attestation before the books may close. Done here (rather
+  // than in the seed) because it must happen after the test has posted its
+  // activity, otherwise the ledger snapshot goes stale.
+  await satisfyManualCashReconciliation({ companyId, fiscalPeriodId, userId })
   const canonicalPreviewId = previewId
     ?? await createCanonicalPreview(companyId, fiscalPeriodId, userId)
   const { rows } = await getPool().query(
@@ -354,7 +360,7 @@ describe('execute_year_end_closing (atomic close)', () => {
 
     await expect(
       closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'draft-key'),
-    ).rejects.toThrow(/YE_NOT_READY/)
+    ).rejects.toThrow(/YE_READINESS_BLOCKED: draft_entries/)
 
     // Nothing persisted: period fully open, no closing entry, no run row.
     const pool = getPool()
@@ -411,7 +417,7 @@ describe('execute_year_end_closing (atomic close)', () => {
 
     await expect(
       closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'fail-key'),
-    ).rejects.toThrow(/YE_NOT_READY|YE_NEXT_PERIOD_HAS_CONFLICTING_OB/)
+    ).rejects.toThrow(/YE_READINESS_BLOCKED: next_period_has_ob/)
 
     // Fully open — the closing entry that may have been created inside the
     // transaction was rolled back with it.

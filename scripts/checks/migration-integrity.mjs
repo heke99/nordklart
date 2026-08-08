@@ -28,7 +28,38 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex')
 }
 
+/**
+ * Every consumer of the migration chain globs `supabase/migrations/*.sql`: the
+ * runner, this manifest, and the pg-real bootstrap. A .sql file in a
+ * subdirectory is therefore silently never applied, while still being tracked
+ * by git and looking like it shipped.
+ *
+ * That is not hypothetical — 20260731163000_year_end_pgcrypto_search_path_repair.sql
+ * sat in supabase/migrations/supabase/migrations/ and no environment built from
+ * the repository ever ran it, reintroducing the pgcrypto `digest` incident.
+ */
+function assertNoNestedMigrations() {
+  const orphans = []
+  const walk = (dir, relative) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name)
+      const rel = relative ? path.join(relative, entry.name) : entry.name
+      if (entry.isDirectory()) walk(abs, rel)
+      else if (entry.name.endsWith('.sql') && relative) orphans.push(rel)
+    }
+  }
+  walk(MIGRATION_DIR, '')
+  if (orphans.length) {
+    throw new Error(
+      `Migration file(s) in a subdirectory of supabase/migrations/ will never be applied:\n`
+      + orphans.map((file) => `  - ${file}`).join('\n')
+      + '\nMove them to the top level of supabase/migrations/.',
+    )
+  }
+}
+
 function readMigrations() {
+  assertNoNestedMigrations()
   return fs.readdirSync(MIGRATION_DIR)
     .filter((name) => name.endsWith('.sql'))
     .sort((a, b) => a.localeCompare(b))

@@ -262,3 +262,107 @@ export async function insertBalancedLines(
     [journalEntryId, amount],
   )
 }
+
+// ---------------------------------------------------------------------------
+// Year-end manual cash reconciliation
+// ---------------------------------------------------------------------------
+// A company without a bank connection must verify each cash account's balance
+// manually against an uploaded statement before the books can be closed
+// (`manual_cash_reconciliation_missing`). Creating a company seeds a default
+// cash account, so *every* year-end close test hits this gate.
+
+/** WORM evidence document standing in for an uploaded bank statement. */
+export async function insertEvidenceDocument(params: {
+  userId: string
+  companyId: string
+  fileName?: string
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.document_attachments
+       (id, user_id, company_id, storage_path, file_name, file_size_bytes,
+        mime_type, sha256_hash, uploaded_by, upload_source)
+     VALUES ($1, $2, $3, $4, $5, 1024,
+             'application/pdf', $6, $2, 'file_upload')`,
+    [
+      id,
+      params.userId,
+      params.companyId,
+      `documents/${params.userId}/${id}.pdf`,
+      params.fileName ?? 'kontoutdrag.pdf',
+      randomUUID().replace(/-/g, '').padEnd(64, '0').slice(0, 64),
+    ],
+  )
+  return id
+}
+
+export async function recordManualCashReconciliation(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+  /** Null when the company has no cash_accounts row for the ledger account. */
+  cashAccountId: string | null
+  statementBalance: number
+  evidenceDocumentId: string
+}): Promise<void> {
+  await getPool().query(
+    `SELECT public.record_year_end_manual_cash_reconciliation(
+       $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric, $6::uuid, $7
+     )`,
+    [
+      params.companyId,
+      params.fiscalPeriodId,
+      params.userId,
+      params.cashAccountId,
+      params.statementBalance,
+      params.evidenceDocumentId,
+      `test-${randomUUID()}`,
+    ],
+  )
+}
+
+/**
+ * Clears the manual-cash-reconciliation blocker for every cash account on the
+ * company by attesting the statement balance at the account's actual posted
+ * ledger balance, so the recorded difference is zero.
+ *
+ * Call this AFTER posting the entries a test needs, otherwise the snapshot goes
+ * stale (`manual_cash_reconciliation_stale`) as soon as another line lands on
+ * the account.
+ */
+export async function satisfyManualCashReconciliation(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+}): Promise<void> {
+  // Drive off the status function, not cash_accounts: a company with no
+  // cash_accounts row still gets a synthetic manual row for its ledger cash
+  // account (e.g. 1930) with a NULL cash_account_id, and that row is what the
+  // blocker iterates. It also hands back the server-computed ledger_balance,
+  // so attesting to exactly that value yields a zero difference.
+  const { rows: accounts } = await getPool().query<{
+    cash_account_id: string | null
+    ledger_balance: string
+    reconciliation_mode: string
+    is_reconciled: boolean
+  }>(
+    `SELECT cash_account_id, ledger_balance, reconciliation_mode, is_reconciled
+     FROM public.year_end_cash_reconciliation_status($1::uuid, $2::uuid)`,
+    [params.companyId, params.fiscalPeriodId],
+  )
+
+  const pending = accounts.filter(
+    (account) => account.reconciliation_mode === 'manual' && !account.is_reconciled,
+  )
+  if (pending.length === 0) return
+
+  const evidenceDocumentId = await insertEvidenceDocument(params)
+  for (const account of pending) {
+    await recordManualCashReconciliation({
+      ...params,
+      cashAccountId: account.cash_account_id,
+      statementBalance: Number(account.ledger_balance ?? 0),
+      evidenceDocumentId,
+    })
+  }
+}
