@@ -2181,6 +2181,11 @@
       "file": "20260808130000_pin_search_path_on_remaining_security_definer.sql",
       "version": "20260808130000",
       "sha256": "dd763a0e1fc1e73c9c2a588b23623a346bf4bc3e00b81cc8730069700d55c140"
+    },
+    {
+      "file": "20260808140000_allow_system_commit_method_for_prior_result_transfer.sql",
+      "version": "20260808140000",
+      "sha256": "e164c9bf86ca319fbae0113ee675ec23665a391ea0b26f1651b9d6990337a1d8"
     }
   ]
 }
