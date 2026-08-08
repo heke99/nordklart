@@ -176,6 +176,43 @@ export async function openServiceRoleTx(): Promise<ServiceRoleTx> {
 }
 
 /**
+ * Same as openServiceRoleTx() but authenticated as `userId`.
+ *
+ * withUserContext() always rolls back, which is right for RLS assertions and
+ * useless for concurrency: an RPC that authorizes through auth.uid() can only
+ * be raced by two transactions that each choose when to commit.
+ */
+export async function openUserTx(userId: string): Promise<ServiceRoleTx> {
+  const client = await getClient()
+  let settled = false
+  const finish = async (verb: 'COMMIT' | 'ROLLBACK') => {
+    if (settled) return
+    settled = true
+    try {
+      await client.query(verb)
+    } finally {
+      client.release()
+    }
+  }
+  try {
+    await client.query('BEGIN')
+    await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
+      JSON.stringify({ sub: userId, role: 'authenticated' }),
+    ])
+    await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
+    const check = await client.query<{ uid: string | null }>(`SELECT auth.uid()::text AS uid`)
+    if (check.rows[0]?.uid !== userId) {
+      throw new Error(`openUserTx: auth.uid() resolved to ${check.rows[0]?.uid ?? 'NULL'}`)
+    }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    client.release()
+    throw error
+  }
+  return { client, commit: () => finish('COMMIT'), rollback: () => finish('ROLLBACK') }
+}
+
+/**
  * True once `pid` is waiting on a lock. Concurrency tests need to prove that
  * the second transaction actually BLOCKS rather than racing past — polling
  * pg_stat_activity is the only way to observe that from outside.
