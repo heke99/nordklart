@@ -464,7 +464,13 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     )
   })
 
-  it('stornos conflicting journal entry before matching', async () => {
+  // The match route no longer auto-stornos a conflicting voucher. A bank
+  // transaction that already carries a journal entry must have that voucher
+  // explicitly reversed first: silently reversing posted bookkeeping as a side
+  // effect of matching is not an acceptable posture under BFL. The route
+  // therefore refuses with BANK_TRANSACTION_ALREADY_ALLOCATED and the caller
+  // decides.
+  it('refuses to match a transaction that already carries a voucher', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
       amount: 12500,
@@ -472,51 +478,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       journal_entry_id: 'je-conflict',
       date: '2024-06-15',
     })
-    const invoice = makeInvoice({
-      id: VALID_UUID,
-      status: 'sent',
-      total: 12500,
-      remaining_amount: 12500,
-    })
 
     enqueueFor('transactions', { data: tx })
-    enqueueFor('invoices', { data: invoice })
-
-    mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
-    // Clear journal_entry_id on transaction
-    enqueue({ data: null, error: null })
-
-    enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
-    mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
-
-
-    enqueueCustomerSettlement(service, { settlement: { invoice_id: VALID_UUID, applied_amount: 12500, paid_amount: 12500 }, invoice: { ...invoice, status: 'paid', paid_amount: 12500, remaining_amount: 0 } })
-    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
-      method: 'POST',
-      body: { invoice_id: VALID_UUID },
-    })
-    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
-
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_id).toBe('je-payment')
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-conflict')
-  })
-
-  it('returns 500 when storno fails — no partial state change', async () => {
-    const tx = makeTransaction({
-      id: 'tx-1',
-      amount: 12500,
-      invoice_id: null,
-      journal_entry_id: 'je-conflict',
-    })
-    const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', remaining_amount: 12500 })
-
-    enqueueFor('transactions', { data: tx, error: null })
-    enqueueFor('invoices', { data: invoice, error: null })
-
-    mockReverseEntry.mockRejectedValue(new Error('Period locked'))
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -525,12 +488,36 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
-    expect(status).toBe(500)
-    // Storno failures bubble up through the bookkeeping engine; the wrapper
-    // routes any non-typed error to INTERNAL_ERROR.
-    expect((body.error as unknown as { code: string }).code).toBe('INTERNAL_ERROR')
-    // Invoice should NOT have been updated — no further DB calls after storno failure
+    expect(status).toBe(409)
+    expect((body.error as unknown as { code: string }).code).toBe('BANK_TRANSACTION_ALREADY_ALLOCATED')
+    expect((body.error as unknown as { details?: { action?: string } }).details?.action)
+      .toBe('reverse_existing_voucher_first')
+  })
+
+  it('leaves the books untouched when it refuses an already-allocated transaction', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: 12500,
+      invoice_id: null,
+      journal_entry_id: 'je-conflict',
+    })
+
+    enqueueFor('transactions', { data: tx, error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(409)
+    // No reversal, no staged voucher, no settlement: the refusal happens before
+    // any economic work is attempted.
+    expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(service.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('supports partial payment (partially_paid status)', async () => {

@@ -1,5 +1,6 @@
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
@@ -138,6 +139,9 @@ export const POST = withRouteContext(
         details: {
           field: 'amount',
           message: 'Överbetalning i annan valuta kräver manuell granskning.',
+          // By how much, in invoice currency. Without it the caller is told to
+          // review manually but not what the discrepancy is.
+          overpayment_amount: roundOre(paymentAmount - Number(invoice.remaining_amount)),
         },
       })
     }
