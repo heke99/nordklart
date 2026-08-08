@@ -111,7 +111,12 @@ describe('settleSupplierInvoiceAtomic', () => {
   // locked here rather than only in the route tests.
   it('emits supplier_invoice.paid with the committed invoice state', async () => {
     const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined as never)
-    const settled = { ...supplierInvoice, status: 'paid', paid_amount: 1000, remaining_amount: 0 }
+    const settled = {
+      ...(supplierInvoice as Record<string, unknown>),
+      status: 'paid',
+      paid_amount: 1000,
+      remaining_amount: 0,
+    }
     service.enqueueFor('get_financial_operation_result', { data: null })
     caller.enqueueFor('company_settings', { data: { accounting_method: 'accrual' } })
     service.enqueueFor('settle_supplier_invoice', { data: atomic })
