@@ -7,40 +7,46 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 ## Blockerande före produktionsanspråk
 
-1. **Unit-sviten: 41 av 6162 failar.** `origin/main` har **47** i 8 filer.
-   Felen är **ärvda från main**, inte introducerade av den här grenen.
+1. **Unit-sviten: 19 av 6162 failar** (var 47 vid start; `origin/main` har 47).
+   pg-real är 509/509 grönt.
 
-   Kvar: `match-invoice` (16), `match-supplier-invoice` (11),
-   `supplier-invoices/[id]/mark-paid` (6), `v1 supplier-invoices` (3),
-   `v1 invoices mark-paid` (3), `stripe/webhook` (2).
+   `match-invoice` är **helt grön (31/31)**. Kvar:
+   - `supplier-invoices/[id]/mark-paid` — 6
+   - `match-supplier-invoice` — 5
+   - `v1 supplier-invoices` — 3
+   - `v1 invoices mark-paid` — 3
+   - `stripe/webhook` — 2
 
-   **Verktygen är på plats — kvar är rutinarbete per test.**
+   **EXAKT NÄSTA EXEKVERINGSPUNKT**
 
-   `createQueuedMockSupabase()` har nu `enqueueFor(name, result)`, nycklad på
-   relation/RPC-namn. Nycklade svar vinner över den positionella kön och det
-   sista svaret för ett namn är "sticky". Det gör testerna oberoende av
-   routernas läsordning — vilket var grundorsaken till att 18 tester föll av en
-   rutinmässig omordning i `match-invoice`.
+   Fil: `app/api/transactions/[id]/match-supplier-invoice/route.ts`
+   Guard: `!customLines && unbookedCashInvoice && invoiceCurrency !== 'SEK'`
+   → `VALIDATION_ERROR` "Betalning av utländsk kontantmetodsfaktura kräver
+   balanserade SEK-rader med betalningsdagens kurs."
 
-   `enqueueCustomerSettlement()` / `enqueueSupplierSettlement()` köar
-   service-sidans rundtur nycklad:
-   `get_financial_operation_result` -> `settle_*_invoice` -> hydreringsläsning.
-   Båda tar `error` för felvägarna.
+   Routen blockerar i dag **alla** utländska kontantmetodsbetalningar. Avsett
+   kontrakt enligt två tester + en oanvänd felkod i katalogen
+   (`MATCH_SI_CASH_FX_UNSUPPORTED`, produceras ingenstans — samma död-kod-mönster
+   som force-override i bug #11):
 
-   Recept för varje kvarvarande test:
-   1. byt positionella `enqueue()` mot `enqueueFor('<relation>', …)`
-   2. lägg `enqueueCustomerSettlement(service, { settlement: {...}, invoice: {...} })`
-      i de tester som förväntar sig lyckad settlement (de flesta "expected 500
-      to be 200" beror på att den saknas)
-   3. flytta assertions från `createJournalEntry` till
-      `createInvoicePaymentJournalEntry(..., { draftOnly: true })` — verifikatet
-      stagas som draft och committas av RPC:n
+   - **Full** utländsk kontantsettlement ska TILLÅTAS och bokas till faktiskt
+     bankbelopp i SEK, så 1930 matchar bankraden.
+     Test: `full cross-currency settlement books at the payment rate`
+     (förväntar `mockCreateCashEntry.mock.calls[0][9] === 239`).
+   - **Partiell** utländsk kontantsettlement ska AVVISAS med
+     `MATCH_SI_CASH_FX_UNSUPPORTED` (inte `VALIDATION_ERROR`).
+     Test: `PARTIAL foreign payment under the cash method is still rejected`.
 
-   Om läsordningen behöver härledas för en route: wrappa mockens `from`/`rpc`
-   med en recorder och skriv listan till fil inifrån testet (vitest tystar
-   console i denna konfiguration). Verifierad ordning för `match-invoice`:
-   `transactions -> invoices -> company_settings -> [S.rpc replay] -> invoices
-   -> company_settings -> companies -> [S.rpc settle] -> [S.from invoices]`.
+   Detta är en **produktändring som öppnar ett i dag blockerat bokföringsflöde**
+   och ska göras med omsorg: verifiera att `settledBankSek` (arg index 9 till
+   `createSupplierInvoiceCashEntry`) verkligen blir det belopp som lämnade
+   banken, och lägg pg-real-täckning innan den aktiveras.
+
+   Verktyg (klara): `enqueueFor(name, result)` på `createQueuedMockSupabase()`
+   gör testerna oberoende av routernas läsordning; `enqueueCustomerSettlement()`
+   / `enqueueSupplierSettlement()` köar service-sidans rundtur nycklad.
+   Recept per test: keyed enqueues -> settlement -> flytta assertions från
+   `createJournalEntry` till stagingbyggaren (`{ draftOnly: true }`).
 
 2. **Migrationsliggaren beskriver inte databasen.** Produktion har 358 rader i
    `public.nordklart_schema_migrations` mot 426 filer i repot (427 efter denna

@@ -230,3 +230,44 @@ härleda routernas verkliga läsordning finns i `open-blockers.md` punkt 1.
 Obs: `git checkout origin/main -- .` återintroducerar den nästlade
 `supabase/migrations/supabase/migrations/`-filen. Den togs bort igen och
 `check:migrations` (som nu har en guard mot nästlade .sql) passerar.
+
+## 2026-08-07 (forts. 5) — unit 47 -> 19, tre produktionsbuggar till
+
+`match-invoice` är helt grön (31/31). pg-real 509/509. Alla guards, typecheck,
+lint, build gröna. Unit: 19 kvar.
+
+Tre nya produktionsbuggar, alla hittade genom att spåra vad routen FAKTISKT gör
+i stället för att anta att testet var föråldrat:
+
+11. **Force-override var dokumenterad men aldrig implementerad.**
+    `MatchInvoiceSchema` tar `force` + `expected_journal_entry_id`, validerar att
+    det andra krävs när det första är satt, och beskriver kontraktet i detalj —
+    servern ska omdetektera kandidaten och bara godta override om id:t stämmer.
+    Routen läste aldrig `expected_journal_entry_id` och använde `force` enbart
+    till `forceIgnored: Boolean(force)`. Soft-duplicate-guarden är heuristisk
+    (samma belopp, samma datum), så falska positiva är väntade — en användare som
+    granskat verifikatet och korrekt svarat "detta är inte samma betalning" kunde
+    **aldrig** slutföra matchningen. Nu implementerad som confirm-what-you-saw.
+
+12. **FX-residual tappades när en SEK-skuld betalas i utländsk valuta.**
+    `exchangeRateDifference` nycklades på FAKTURANS valuta:
+    `invoiceCurrency === 'SEK' ? 0 : ...`. Omvända fallet — SEK-faktura betald
+    från ett valutakonto där `amount_sek` skiljer sig — gav 0. Att betala en
+    1 000 SEK-skuld med en kortrörelse värd 1 063 SEK är en realiserad förlust på
+    63 SEK som aldrig nådde 7960/3960. Beräknas nu alltid som
+    `roundOre(bookedSek - actualBankSek)`; vid SEK/SEK är de lika och värdet 0,
+    och byggaren lägger bara en FX-rad vid nollskilt värde.
+
+13. **Saknad `exchange_rate` tolkades som paritet.** `Number(invoice.exchange_rate ?? 1)`
+    bokade en 25 USD-skuld som 25 SEK. Frånvaron är nu explicit: utan kurs kan
+    AP-bokat SEK inte härledas, så betalningen bokas till faktiskt bankbelopp och
+    ingen FX-differens attribueras.
+
+Dessutom återställd FX-proveniens (`exchange_rate` + `rate_source`) i
+matchningens audit trail, och `overpayment_amount` i felsvaret vid
+cross-currency-överbetalning.
+
+Testinfrastruktur: `enqueueFor()` gör mocken nycklad på relation/RPC-namn i
+stället för positionell FIFO. Den positionella kön var grundorsaken till att en
+rutinmässig omordning i routen svälte 18 tester och gav orelaterade
+assertionsfel långt från orsaken.
