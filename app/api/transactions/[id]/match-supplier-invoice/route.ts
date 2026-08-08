@@ -1,4 +1,5 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
@@ -90,9 +91,15 @@ export const POST = withRouteContext(
     const actualBankSek = transactionCurrency === 'SEK'
       ? transactionAmount
       : Number(transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : bookedSek)
-    const exchangeRateDifference = invoiceCurrency === 'SEK'
-      ? 0
-      : Math.round((bookedSek - actualBankSek) * 100) / 100
+    // The residual is the difference between what the payable was booked at and
+    // what actually left the bank, in SEK. Keying it off the INVOICE currency
+    // dropped a real realised difference in the reverse case: a SEK invoice
+    // settled from a foreign-currency account, where amount_sek differs from the
+    // booked amount. Paying a 1 000 SEK payable with a card movement worth
+    // 1 063 SEK is a 63 SEK realised loss that must reach 7960/3960 rather than
+    // vanish. When both sides are SEK the two figures are equal and this is 0,
+    // and the entry builder only emits an FX line for a non-zero difference.
+    const exchangeRateDifference = roundOre(bookedSek - actualBankSek)
 
     const { data: settings } = await supabase
       .from('company_settings')

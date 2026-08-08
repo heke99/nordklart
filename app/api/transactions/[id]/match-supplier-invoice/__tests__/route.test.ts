@@ -2,12 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   createMockRouteParams,
   createQueuedMockSupabase,
+  enqueueSupplierSettlement,
   parseJsonResponse,
   supabaseServerMock,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => supabaseServerMock({ client: () => mockSupabase }))
+const { supabase: mockSupabase, enqueue, enqueueFor, reset } = createQueuedMockSupabase()
+// settleSupplierInvoiceAtomic runs through createServiceClient(), a different
+// client from the request-scoped one, so it needs its own queue.
+const service = createQueuedMockSupabase()
+vi.mock('@/lib/supabase/server', () => supabaseServerMock({
+  client: () => mockSupabase,
+  serviceClient: () => service.supabase,
+}))
 
 vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
@@ -44,6 +51,7 @@ const mockUser = { id: 'user-1', email: 'test@test.se' }
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  service.reset()
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   mockCreatePaymentEntry.mockResolvedValue({ id: 'je-1' })
   mockCreateCashEntry.mockResolvedValue({ id: 'je-1' })
@@ -99,12 +107,19 @@ function enqueueHappyPath(opts: {
   })
   // 3. company_settings fetch
   enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
-  // 4. supplier_invoices update (CAS)
-  enqueue({ data: [{ id: SI_UUID }], error: null })
-  // 5. supplier_invoice_payments insert
-  enqueue({ data: null, error: null })
-  // 6. transactions update (link)
-  enqueue({ data: null, error: null })
+  // 4. The CAS update, the payment insert and the transaction link now all
+  //    happen inside settle_supplier_invoice on the service client, so the
+  //    caller no longer performs them. Queue the settlement round-trip instead.
+  enqueueSupplierSettlement(service, {
+    settlement: {
+      supplier_invoice_id: SI_UUID,
+      applied_amount: opts.invoice.remaining_amount ?? 225,
+      paid_amount: opts.invoice.remaining_amount ?? 225,
+      remaining_amount: 0,
+      status: 'paid',
+    },
+    invoice: { id: SI_UUID, status: 'paid', paid_amount: opts.invoice.remaining_amount ?? 225, remaining_amount: 0 },
+  })
 }
 
 describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', () => {
@@ -118,7 +133,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', (
     const args = mockCreatePaymentEntry.mock.calls[0]
     // (supabase, companyId, userId, invoice, paymentAmountSek, paymentDate, exchangeRateDifference?)
     expect(args[4]).toBe(2390) // paymentAmountSek = actual bank SEK
-    expect(args[6]).toBeUndefined() // no FX diff
+    expect(args[6]).toBe(0) // no FX diff: booked SEK equals the bank movement
   })
 
   it('computes a loss when the SEK paid exceeds the AP booked SEK (EUR invoice)', async () => {
