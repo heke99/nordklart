@@ -1,123 +1,93 @@
 # Aktiva blockerare och skuld
 
-Uppdaterad 2026-08-07 efter remediation mot auditen 2026-08-06.
+Uppdaterad 2026-08-08, efter remediation-branchen
+`claude/nordklart-remediation-hardening-lbyqtt` (PR #7).
 
-Allt nedan är verifierat i detta arbetspass. Punkter som tidigare stod som
-blockerare men nu är motbevisade ligger under "Stängda antaganden".
+Allt nedan är verifierat i arbetspasset. Punkter som tidigare stod som
+blockerare men nu är motbevisade eller åtgärdade ligger längst ned.
 
 ## Blockerande före produktionsanspråk
 
-1. ~~**Unit-sviten failar.**~~ **STÄNGD.** Sviten är 6163/6163 grön (3 skippade
-   sedan tidigare, orörda). Utgångsläget var 47 failures, och `origin/main` har
-   fortfarande 47. pg-real är 509/509 grönt. Inget test är borttaget, skippat
-   eller nedgraderat — varje failure klassades först (TEST_STALE /
-   PRODUCT_BUG / MOCK_STALE / CONTRACT_DRIFT) och åtgärdades i den änden
-   klassningen pekade på. Fyra av dem var produktbuggar, inte testskuld.
+1. **De sex säkerhetsfynden är fixade i repot men inte i produktion.**
+   Produktion ligger 12+ migrationer efter branchen, så #16–#21 är levande i
+   drift tills branchen är deployad. Ordning och verifieringsfrågor står i
+   `next-actions.md` — `db:migrate` får inte köras före `mark-through`.
 
-   **EXAKT NÄSTA EXEKVERINGSPUNKT**
+2. **Leaked-password protection är avstängt.** Dashboard-only. EXTERN ÅTGÄRD.
 
-   H-03-atomicitetsrefaktorn (punkt 7 nedan). Design och call graph ligger
-   färdiga i `decisions.md` (2026-08-07). Grönt testläge är förutsättningen som
-   saknades — den finns nu, så refaktorn kan göras med en svit som faktiskt
-   fångar regressioner.
+3. **Branch protection går inte att konfigurera.** Privat repo på GitHub Free;
+   `/rulesets` och `/branches/main/protection` svarar 403 *"Upgrade to GitHub
+   Pro or make this repository public"*. Plangräns, inte behörighetsgräns. CI
+   kan alltså inte krävas för merge — den är rådgivande tills planen ändras.
 
-   Verktyg (klara): `enqueueFor(name, result)` på `createQueuedMockSupabase()`
-   gör testerna oberoende av routernas läsordning; `enqueueCustomerSettlement()`
-   / `enqueueSupplierSettlement()` köar service-sidans rundtur nycklad. De två
-   v1-sviterna har egna settlement-klienter (`makeSettlementClient` respektive
-   `setSettlementClient`) eftersom de mockar API-nyckelklienten och inte
-   `createServiceClient`.
+## Fynd från detta arbetspass (alla fixade i repot)
 
-2. **Migrationsliggaren beskriver inte databasen.** Produktion har 358 rader i
-   `public.nordklart_schema_migrations` mot 426 filer i repot (427 efter denna
-   remediation). De 68 saknade migrationerna *är* applicerade — objekten finns
-   (se `docs/audits/2026-08-07-live-database-verification.md` §3) — men de
-   kördes utanför runnern utan att registrera en rad. Kräver en medveten
-   skrivåtgärd av en operatör. Verktyget finns nu:
+| # | Fynd | Fix |
+|---|---|---|
+| 15 | `supplier_invoice.paid`-eventet tappades av `127bcf1` | återinfört i `mark-paid-service.ts` |
+| 16 | `commit_method='system'` förbjuden av sin egen CHECK — slår till vid *andra* bokslutet i rad för AB | `20260808140000` |
+| 17 | Fyra vyer läckte tvärs över tenants (388 / 4 433 / 22 165 / 104 främmande rader, uppmätt) | `20260808150000` |
+| 18 | `commit_journal_entry` saknade auktorisation helt | `20260808160000` |
+| 19 | 147 write-policies auktoriserade på läsnivå-medlemskap över 57 tabeller | `20260808170000` |
+| 20 | `resolveSieImportAccess` härledde skrivrätt ur `effective_role` och promoverade `active_limited` | `lib/import/access.ts` |
+| 21 | Återkallad plattformsroll auktoriserade fortfarande (`revoked_at` filtrerades inte) | två routes + permanent guard |
 
-   ```
-   SUPABASE_DB_URL=... npm run db:ledger:reconcile           # dry run, default
-   SUPABASE_DB_URL=... npm run db:ledger:reconcile:apply     # skriver rader
-   npm run check:migrations:db                               # bekräftar
-   ```
+Två av dem är värda att minnas för formen, inte bara innehållet:
 
-   Det klassar varje fil mot vad databasen faktiskt innehåller: RECORDED,
-   APPLIED_BUT_UNRECORDED, SUPERSEDED, NOT_APPLIED, CHECKSUM_MISMATCH,
-   AMBIGUOUS. Endast APPLIED_BUT_UNRECORDED skrivs, och bara med `--apply`.
-   NOT_APPLIED hör till `npm run db:migrate`; SUPERSEDED (objekten är borttagna
-   av en senare migration, så frånvaro bevisar ingenting) och AMBIGUOUS kräver
-   en människa. Verifierat i båda riktningarna mot den lokala replay-databasen:
-   0 NOT_APPLIED när allt är applicerat, och rätt fil flaggas som NOT_APPLIED
-   när dess objekt tas bort.
+- **#18 var inte helt fixad förrän CI körde.** `REVOKE ... FROM PUBLIC`
+  verifierades mot en vanlig PostgreSQL, där PUBLIC är enda vägen in. Supabase
+  kör `alter default privileges ... grant all on functions to ... anon`, så
+  varje funktion i `public` får ett **eget** anon-grant som ett PUBLIC-revoke
+  inte rör. anon behöll EXECUTE — och eftersom `auth.uid()` är NULL för anon
+  hoppades hela skrivkontrollen över. `20260808190000` tar bort grantet och
+  låter kroppen avvisa anon explicit. Ingen lokal databas kunde ha hittat det;
+  repots första CI-körning gjorde det.
 
-3. **Supabase security advisor: 358 fynd (omgranskade 2026-08-08).** Se
-   `docs/audits/2026-08-08-supabase-advisors-and-ledger.md`. Produktion ligger
-   12 migrationer efter branchen, så fynden måste läsas mot branchens slutläge.
-   Fyra vyer, `commit_journal_entry` och 147 write-policies är åtgärdade;
-   leaked-password protection kvarstår som EXTERNAL OPERATOR ACTION.
+- **#19 var för brett i tre tabeller.** `agent_conversations`, `chat_sessions`
+  och `chat_messages` är en användares egen konversation, inte bolagsdata. Krav
+  på bolagsskrivrätt låste ute viewers och auditors från assistenten.
+  `20260808180000` byter till medlemskap **och** `user_id = auth.uid()` — smalare
+  än båda tidigare versionerna, som lät vem som helst med skrivrätt redigera
+  någon annans konversation.
 
-   Historisk formulering:
-   **Supabase security advisor: 358 fynd.** 7 `security_definer_view` (ERROR)
-   kvarstår. `public_price_*` är avsiktligt publik katalogdata; däremot behöver
-   `customer_ar_balances`, `company_commercial_usage_v`,
-   `agency_commercial_usage_v` och `company_effective_commercial_limits_v`
-   granskas mot `security_invoker = true` — en `SECURITY DEFINER`-vy kringgår
-   frågeställarens RLS. Cirka 21 funktioner har fortfarande rörlig
-   `search_path` efter denna leverans (de 12 mest kritiska är nu pinnade).
-   `auth_leaked_password_protection` är avstängt.
+## Testläge
 
-## Kvarvarande produktarbete (oförändrat, ej verifierat som klart)
+| Svit | Antal | Not |
+|---|---:|---|
+| unit | 6175 | `origin/main` har 53 failures i 10 filer |
+| pg-real | 669 | var 509 vid passets början |
+
+Inget test är borttaget, skippat eller nedgraderat. Varje failure klassades
+(TEST_STALE / PRODUCT_BUG / MOCK_STALE / CONTRACT_DRIFT) och åtgärdades i den
+ände klassningen pekade på.
+
+## Kvarvarande produktarbete (oförändrat)
 
 4. Samlad produktionsroute som både länkar och vid behov bokar betalning av
    migrerade AR/AP-poster atomiskt.
 5. Import av äldre kontoutdrag till radnivå (parser/UI).
 6. Fullständigt fält-för-fält merge-UI mot Bolagsverket-snapshot.
 
-## Ej åtgärdat av denna remediation
-
-7. ~~**H-03 — betalningsatomicitet.**~~ **STÄNGD.** Både den akuta
-   produktionsstoppande buggen (settlement-RPC:erna committade med
-   `commit_method` som deras egen CHECK-constraint förbjöd) och själva
-   atomicitetsrefaktorn är klara.
-
-   `20260808120000_settlement_creates_its_own_voucher.sql` inför
-   `settle_customer_invoice_v2` / `settle_supplier_invoice_v2`, som tar
-   verifikatet som `p_journal` och skapar det inne i settlement-transaktionen.
-   Servicelagren bygger planen utan att skriva något; den kompenserande
-   draft-annulleringen är borttagen eftersom det inte finns något att
-   kompensera. Radlogiken ligger kvar i TypeScript (`plan*`-varianterna) —
-   ingen dubbel domänsanning. `settlement-v2-atomicity.pg.test.ts` (20 tester)
-   bevakar invarianten att ett avvisat settlement inte lämnar något verifikat
-   kvar, och `check:financial-hardening` förbjuder nu `createDraftEntry(` och
-   `from('journal_entries')` i båda servicelagren. Detaljerna i `decisions.md`.
-
-8. **H-05 — testmatrisen.** Delvis. Idempotens-replay, payload-reuse,
-   tenant-isolering och failure injection för båda settlement-vägarna finns nu i
-   `settlement-atomicity.pg.test.ts` + `settlement-v2-atomicity.pg.test.ts` (28
-   tester). Kvar: äkta concurrency-race (två samtidiga transaktioner mot samma
-   faktura) och Stripe-livscykeln i pg-real.
-
-9. **Kvarvarande releasekrav som ännu inte är körda.** Bokslutsmatris,
-   SIE-matris, engångsköps-E2E, tenant-isoleringsmatris, genomgången av
-   migrationer som omdefinierar funktioner (+ permanent CI-guard),
-   reconciliation-verktyget för migrationsliggaren (RECORDED /
-   APPLIED_BUT_UNRECORDED / NOT_APPLIED / AMBIGUOUS, dry-run som default),
-   prestandagenomgång, cache-/rate-limit-genomgång och andra passet.
-
 ## Miljö
 
-10. Bygget hämtar Google Fonts över nätet; hermetisk CI kan falla på det.
+7. Bygget hämtar Google Fonts över nätet; hermetisk CI kan falla på det.
+8. pg-real kör Postgres som en vanlig docker-container, inte som `services:`.
+   Runnern dumpar hela service-containerns logg vid teardown, och sviten
+   provocerar fel med flit — dumpen blev ~500 kB och tryckte ut vitest-utskriften
+   ur det Actions-API:t lämnar tillbaka. Att tysta servern går inte: `postgres`
+   är inte superuser i supabase-imagen, så ALTER SYSTEM nekas.
 
-## Stängda antaganden (tidigare blockerare som nu är motbevisade)
+## Stängda antaganden
 
-- ~~"`SUPABASE_DB_URL`/`DATABASE_URL` saknas, ingen DB kan nås."~~ Live-projektet
-  `rpajvvngvcutffwucbdy` är nåbart via Supabase-connectorn, och pg-real kördes
-  lokalt mot PostgreSQL 16 med samtliga migrationer applicerade.
-- ~~"Migration 424 får inte aktiveras i produktion."~~ Både 424 och 426
-  (`20260801140000`) är applicerade i produktion; objekten är verifierade.
-- ~~"Två dubbla migrationsversioner är ett olöst problem."~~ Produktion har
-  ingen `supabase_migrations.schema_migrations`; den egna runnern är enda
-  auktoritet och nycklar på fullt filnamn, så kollisionerna är entydiga där.
-  CI-guarden bär dem som en stängd allowlist och blockerar nya.
-- ~~"6 skills saknar proveniens."~~ `skills-lock.json` hade källa för samtliga
-  41; det var den härledda TSV-filen som var föråldrad.
+- ~~"Unit-sviten failar."~~ 6175/6175.
+- ~~"H-03 betalningsatomicitet."~~ Settlementet skapar sitt eget verifikat inne
+  i transaktionen; den kompenserande draft-annulleringen är borttagen.
+- ~~"H-05 testmatrisen."~~ Concurrency, failure injection, Stripe-livscykel,
+  bokslut, SIE, engångsköp och tenant-isolering finns i pg-real.
+- ~~"Migrationsliggaren beskriver inte databasen."~~ Verktyget finns och är
+  verifierat i båda riktningarna; körningen mot produktion är en operatörsåtgärd.
+- ~~"`SUPABASE_DB_URL` saknas, ingen DB kan nås."~~ Live-projektet är nåbart och
+  pg-real kördes mot riktig PostgreSQL.
+- ~~"Två dubbla migrationsversioner är ett olöst problem."~~ Egen runner nycklar
+  på fullt filnamn; CI-guarden bär dem som stängd allowlist.
+- ~~"6 skills saknar proveniens."~~ Det var den härledda TSV-filen som var gammal.
