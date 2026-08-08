@@ -85,11 +85,13 @@ jobs:
         # teardown: ~500 KB of expected noise, which is enough to push the
         # actual vitest output out of reach when fetching job logs afterwards.
         # Errors still reach the client, so the assertions are unaffected.
+        # One statement per -c: psql wraps a multi-statement -c in a single
+        # implicit transaction, and ALTER SYSTEM cannot run inside one.
         run: |
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
-            "ALTER SYSTEM SET log_min_error_statement = 'panic';
-             ALTER SYSTEM SET log_min_messages = 'fatal';
-             SELECT pg_reload_conf();"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET log_min_error_statement = 'panic'" \
+            -c "ALTER SYSTEM SET log_min_messages = 'fatal'" \
+            -c "SELECT pg_reload_conf()"
 
       - name: Apply migrations
         run: |
