@@ -2141,6 +2141,11 @@
       "file": "20260807120000_secure_migration_ledger_and_pin_search_path.sql",
       "version": "20260807120000",
       "sha256": "0d1702330b5ea568d4dc88c5dfbe41b034bb4395212ab397c1961113b93e32c2"
+    },
+    {
+      "file": "20260807130000_allow_sie_import_reversal_commit_method.sql",
+      "version": "20260807130000",
+      "sha256": "0441a84175b92fea4e9ffa2f9cdc35aa7ff133e144830fdbcf44379d7871ae3e"
     }
   ]
 }

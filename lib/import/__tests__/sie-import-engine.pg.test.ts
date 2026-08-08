@@ -50,10 +50,15 @@ async function insertImportRow(params: {
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
+    // org_number must match the company: finalize_sie_import compares the
+    // #ORGNR carried on the import against companies.org_number and refuses a
+    // file that belongs to another company (SIE_COMPANY_IDENTITY_*).
     `INSERT INTO public.sie_imports
        (id, user_id, company_id, filename, file_hash, sie_type,
-        fiscal_year_start, fiscal_year_end, status, fiscal_period_id, replaces_import_id)
-     VALUES ($1, $2, $3, 'test.se', $4, 4, '2025-01-01', '2025-12-31', $5, $6, $7)`,
+        fiscal_year_start, fiscal_year_end, status, fiscal_period_id, replaces_import_id,
+        org_number)
+     VALUES ($1, $2, $3, 'test.se', $4, 4, '2025-01-01', '2025-12-31', $5, $6, $7,
+             (SELECT org_number FROM public.companies WHERE id = $3))`,
     [
       id,
       params.userId,

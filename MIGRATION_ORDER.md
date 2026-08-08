@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **428**.
+Antal SQL-migreringar: **429**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -452,3 +452,4 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 426 | 20260731171000 | `20260731171000_annual_report_finalization_and_controlled_reopen.sql` | `dd8ea2fc2171653ec02e11c6ceaabc6013643bbb9f4408dbff8d026e3da1951f` |
 | 427 | 20260801140000 | `20260801140000_production_financial_atomicity_and_billing_lifecycle.sql` | `7c185ace5b4214f7f2f38b6dc0a703833b4f2bba9cc19e3d86c1b06b5ce9ad50` |
 | 428 | 20260807120000 | `20260807120000_secure_migration_ledger_and_pin_search_path.sql` | `0d1702330b5ea568d4dc88c5dfbe41b034bb4395212ab397c1961113b93e32c2` |
+| 429 | 20260807130000 | `20260807130000_allow_sie_import_reversal_commit_method.sql` | `0441a84175b92fea4e9ffa2f9cdc35aa7ff133e144830fdbcf44379d7871ae3e` |
