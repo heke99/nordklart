@@ -7,46 +7,26 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 ## Blockerande före produktionsanspråk
 
-1. **Unit-sviten: 19 av 6162 failar** (var 47 vid start; `origin/main` har 47).
-   pg-real är 509/509 grönt.
-
-   `match-invoice` är **helt grön (31/31)**. Kvar:
-   - `supplier-invoices/[id]/mark-paid` — 6
-   - `match-supplier-invoice` — 5
-   - `v1 supplier-invoices` — 3
-   - `v1 invoices mark-paid` — 3
-   - `stripe/webhook` — 2
+1. ~~**Unit-sviten failar.**~~ **STÄNGD.** Sviten är 6163/6163 grön (3 skippade
+   sedan tidigare, orörda). Utgångsläget var 47 failures, och `origin/main` har
+   fortfarande 47. pg-real är 509/509 grönt. Inget test är borttaget, skippat
+   eller nedgraderat — varje failure klassades först (TEST_STALE /
+   PRODUCT_BUG / MOCK_STALE / CONTRACT_DRIFT) och åtgärdades i den änden
+   klassningen pekade på. Fyra av dem var produktbuggar, inte testskuld.
 
    **EXAKT NÄSTA EXEKVERINGSPUNKT**
 
-   Fil: `app/api/transactions/[id]/match-supplier-invoice/route.ts`
-   Guard: `!customLines && unbookedCashInvoice && invoiceCurrency !== 'SEK'`
-   → `VALIDATION_ERROR` "Betalning av utländsk kontantmetodsfaktura kräver
-   balanserade SEK-rader med betalningsdagens kurs."
-
-   Routen blockerar i dag **alla** utländska kontantmetodsbetalningar. Avsett
-   kontrakt enligt två tester + en oanvänd felkod i katalogen
-   (`MATCH_SI_CASH_FX_UNSUPPORTED`, produceras ingenstans — samma död-kod-mönster
-   som force-override i bug #11):
-
-   - **Full** utländsk kontantsettlement ska TILLÅTAS och bokas till faktiskt
-     bankbelopp i SEK, så 1930 matchar bankraden.
-     Test: `full cross-currency settlement books at the payment rate`
-     (förväntar `mockCreateCashEntry.mock.calls[0][9] === 239`).
-   - **Partiell** utländsk kontantsettlement ska AVVISAS med
-     `MATCH_SI_CASH_FX_UNSUPPORTED` (inte `VALIDATION_ERROR`).
-     Test: `PARTIAL foreign payment under the cash method is still rejected`.
-
-   Detta är en **produktändring som öppnar ett i dag blockerat bokföringsflöde**
-   och ska göras med omsorg: verifiera att `settledBankSek` (arg index 9 till
-   `createSupplierInvoiceCashEntry`) verkligen blir det belopp som lämnade
-   banken, och lägg pg-real-täckning innan den aktiveras.
+   H-03-atomicitetsrefaktorn (punkt 7 nedan). Design och call graph ligger
+   färdiga i `decisions.md` (2026-08-07). Grönt testläge är förutsättningen som
+   saknades — den finns nu, så refaktorn kan göras med en svit som faktiskt
+   fångar regressioner.
 
    Verktyg (klara): `enqueueFor(name, result)` på `createQueuedMockSupabase()`
    gör testerna oberoende av routernas läsordning; `enqueueCustomerSettlement()`
-   / `enqueueSupplierSettlement()` köar service-sidans rundtur nycklad.
-   Recept per test: keyed enqueues -> settlement -> flytta assertions från
-   `createJournalEntry` till stagingbyggaren (`{ draftOnly: true }`).
+   / `enqueueSupplierSettlement()` köar service-sidans rundtur nycklad. De två
+   v1-sviterna har egna settlement-klienter (`makeSettlementClient` respektive
+   `setSettlementClient`) eftersom de mockar API-nyckelklienten och inte
+   `createServiceClient`.
 
 2. **Migrationsliggaren beskriver inte databasen.** Produktion har 358 rader i
    `public.nordklart_schema_migrations` mot 426 filer i repot (427 efter denna
@@ -90,11 +70,18 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 8. **H-05 — testmatrisen.** Concurrency, idempotens-race, failure injection,
    Stripe-livscykel och tenant-isolering i pg-real är fortfarande inte
-   byggda. Att bygga ut sviten innan punkt 1 är löst är verkningslöst.
+   byggda. Spärren mot att bygga ut sviten (punkt 1) är nu borta.
+
+9. **Kvarvarande releasekrav som ännu inte är körda.** Bokslutsmatris,
+   SIE-matris, engångsköps-E2E, tenant-isoleringsmatris, genomgången av
+   migrationer som omdefinierar funktioner (+ permanent CI-guard),
+   reconciliation-verktyget för migrationsliggaren (RECORDED /
+   APPLIED_BUT_UNRECORDED / NOT_APPLIED / AMBIGUOUS, dry-run som default),
+   prestandagenomgång, cache-/rate-limit-genomgång och andra passet.
 
 ## Miljö
 
-9. Bygget hämtar Google Fonts över nätet; hermetisk CI kan falla på det.
+10. Bygget hämtar Google Fonts över nätet; hermetisk CI kan falla på det.
 
 ## Stängda antaganden (tidigare blockerare som nu är motbevisade)
 

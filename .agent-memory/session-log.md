@@ -271,3 +271,45 @@ Testinfrastruktur: `enqueueFor()` gör mocken nycklad på relation/RPC-namn i
 stället för positionell FIFO. Den positionella kön var grundorsaken till att en
 rutinmässig omordning i routen svälte 18 tester och gav orelaterade
 assertionsfel långt från orsaken.
+
+## 2026-08-07 (forts. 6) — unit-sviten grön (0 av 6163), femtonde produktionsbuggen
+
+`npm test`: 6163 passerade, 0 failade, 3 skippade (samma tre som tidigare —
+orörda). Utgångsläget var 47 failures och `origin/main` har fortfarande 47.
+pg-real 509/509. typecheck, lint, guards, feature-policy, skills, provenance
+och build gröna.
+
+15. **`supplier_invoice.paid` slutade emitteras.** `127bcf1` flyttade
+    leverantörsbetalning bakom `settleSupplierInvoiceAtomic` och tog i samma veva
+    bort `eventBus.emit` ur BÅDA mark-paid-routerna (dashboard + v1). Eventet
+    står som `delivered: true` i `lib/webhooks/event-catalog.ts` och är den enda
+    signal en integratör får för en leverantörsbetalning; kundsidan behöll sitt
+    `invoice.paid` inne i sin service, så bortfallet var ensidigt och tyst.
+    Återställt i servicen i stället för i routerna, så alla fyra anropare beter
+    sig lika. Placerat under idempotens-short-circuiten: ett omförsök löser upp
+    till samma committade betalning och får inte leverera ett andra event.
+    Payloaden hydreras från den committade raden, med den obetalda snapshoten
+    sammanslagen med RPC-resultatet som fallback.
+
+De fyra sista testfilerna klassade före åtgärd:
+
+- **v1 invoices mark-paid (3) och v1 supplier-invoices (3) — MOCK_STALE.**
+  Båda sviterna mockar API-nyckelklienten (`createServiceClientNoCookies`) men
+  inte `createServiceClient`, som settlement-servicen faktiskt använder. Routen
+  byggde en riktig Supabase-klient och föll på saknade credentials. Varje svit
+  har nu en egen settlement-klient som täcker replay-uppslaget, settle-RPC:n och
+  hydreringsläsningen. Kundsidans ekar tillbaka `p_draft_journal_entry_id` så
+  accrual- och kontantfallen fortsatt bevisar att de stagar olika verifikat.
+- **stripe/webhook (2) — TEST_STALE.** En slutförd checkout kör numera två
+  RPC:er: finalisering plus engångsköpets livscykel. Testet låste totalen till
+  1. Nu låses den exakta ordnade sekvensen i stället, så det fortfarande failar
+  om något anrop tappas, dubbleras eller byter ordning.
+- **supplier-invoices mark-paid (2) — 1 PRODUCT_BUG (bug 15 ovan), 1
+  TEST_STALE** (routen läser `company_settings` före servicen gör det, så den
+  positionella kön gav accounting_method-raden till fel läsare).
+
+Kontraktet från bug 15 är nu låst på servicenivå i
+`lib/supplier-invoices/__tests__/mark-paid-service.test.ts`: emitteras vid
+verklig settlement, emitteras INTE vid replay, faller tillbaka korrekt när
+hydreringen är tom, och en trasig event-bus får inte fälla en redan committad
+betalning.
