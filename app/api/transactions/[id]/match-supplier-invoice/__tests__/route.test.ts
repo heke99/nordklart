@@ -189,7 +189,8 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', (
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
     const args = mockCreatePaymentEntry.mock.calls[0]
     expect(args[4]).toBe(239)
-    expect(args[6]).toBeUndefined()
+    // No rate on file: booked SEK equals the bank movement, so no FX residual.
+    expect(args[6]).toBe(0)
   })
 })
 

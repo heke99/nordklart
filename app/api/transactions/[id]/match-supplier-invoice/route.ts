@@ -85,12 +85,21 @@ export const POST = withRouteContext(
       })
     }
 
+    // Rate on the invoice row, if any. `?? 1` would silently treat a missing
+    // rate as parity and book a 25 USD payable as 25 SEK, so the absence is
+    // kept explicit and handled below.
+    const invoiceRate = invoice.exchange_rate != null ? Number(invoice.exchange_rate) : null
+    const bankSek = transactionCurrency === 'SEK'
+      ? transactionAmount
+      : (transaction.amount_sek != null ? Math.abs(Number(transaction.amount_sek)) : null)
     const bookedSek = invoiceCurrency === 'SEK'
       ? paymentAmount
-      : Math.round(paymentAmount * Number(invoice.exchange_rate ?? 1) * 100) / 100
-    const actualBankSek = transactionCurrency === 'SEK'
-      ? transactionAmount
-      : Number(transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : bookedSek)
+      : invoiceRate != null
+        ? roundOre(paymentAmount * invoiceRate)
+        // No rate on file: the AP-booked SEK cannot be derived, so settle at
+        // what actually left the bank rather than inventing a parity rate.
+        : (bankSek ?? paymentAmount)
+    const actualBankSek = bankSek ?? bookedSek
     // The residual is the difference between what the payable was booked at and
     // what actually left the bank, in SEK. Keying it off the INVOICE currency
     // dropped a real realised difference in the reverse case: a SEK invoice
@@ -99,6 +108,8 @@ export const POST = withRouteContext(
     // 1 063 SEK is a 63 SEK realised loss that must reach 7960/3960 rather than
     // vanish. When both sides are SEK the two figures are equal and this is 0,
     // and the entry builder only emits an FX line for a non-zero difference.
+    // With no rate on file the booked amount IS the bank amount, so there is no
+    // difference to attribute; every other case compares the two directly.
     const exchangeRateDifference = roundOre(bookedSek - actualBankSek)
 
     const { data: settings } = await supabase
