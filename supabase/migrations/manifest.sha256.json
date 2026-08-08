@@ -2156,6 +2156,16 @@
       "file": "20260807150000_restore_sie_imported_workpaper_blocker_precedence.sql",
       "version": "20260807150000",
       "sha256": "db93b22f52f72c6fab22cdff3c2d59a74f91dde365c87b8f9d3faa1951cc4a93"
+    },
+    {
+      "file": "20260807160000_bank_allocation_uniqueness_per_invoice.sql",
+      "version": "20260807160000",
+      "sha256": "03b4386744347aa23ca3be605a8856b1e0c97cb6eda8466bb55946a2b2c62758"
+    },
+    {
+      "file": "20260807170000_fix_null_invalidation_flags_in_open_item_reconciliation.sql",
+      "version": "20260807170000",
+      "sha256": "65612df63b3aae14dd320a114d91744321c4f53d43d0d6b5dec07353b6f55c53"
     }
   ]
 }

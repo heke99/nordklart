@@ -9,7 +9,7 @@ describe('financial atomicity database contract', () => {
     const entryId = await insertDraftJournalEntry(seeded)
     await insertBalancedLines(entryId, 1000)
     await getPool().query(
-      `SELECT public.commit_journal_entry($1::uuid, $2::uuid, 'pg_test', NULL, 'user', NULL)`,
+      `SELECT public.commit_journal_entry($1::uuid, $2::uuid, 'migration', NULL, 'user', NULL)`,
       [seeded.companyId, entryId],
     )
 

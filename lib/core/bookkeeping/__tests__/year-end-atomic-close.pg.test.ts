@@ -284,6 +284,10 @@ describe('execute_year_end_closing (atomic close)', () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await postSimpleActivity({ userId, companyId, fiscalPeriodId })
 
+    // The preview snapshots readiness, so the manual cash attestation has to
+    // exist BEFORE it is generated. A preview taken while a blocker is still
+    // open carries that blocked state into the close.
+    await satisfyManualCashReconciliation({ companyId, fiscalPeriodId, userId })
     const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
     const first = await closePeriodViaRpc(
       companyId,
@@ -302,9 +306,15 @@ describe('execute_year_end_closing (atomic close)', () => {
     expect(replay.idempotent).toBe(true)
     expect(replay.closing_entry_id).toBe(first.closing_entry_id)
 
+    // A different idempotency key must never produce a second close. The
+    // canonical preview was consumed by the run above, so the guard that fires
+    // first is YE_PREVIEW_ALREADY_EXECUTED rather than YE_ALREADY_CLOSED —
+    // both are stable, specific codes meaning "this close already happened",
+    // and neither degrades to a generic failure. The invariant that matters is
+    // asserted below: still exactly one closing entry and one IB.
     await expect(
       closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'different-key'),
-    ).rejects.toThrow(/YE_ALREADY_CLOSED/)
+    ).rejects.toThrow(/YE_ALREADY_CLOSED|YE_PREVIEW_ALREADY_EXECUTED/)
 
     // Still exactly one closing entry + one IB.
     const { rows } = await getPool().query(
@@ -318,6 +328,10 @@ describe('execute_year_end_closing (atomic close)', () => {
   it('two concurrent closes yield exactly one closing entry and one IB (B09)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await postSimpleActivity({ userId, companyId, fiscalPeriodId })
+    // The preview snapshots readiness, so the manual cash attestation has to
+    // exist BEFORE it is generated. A preview taken while a blocker is still
+    // open carries that blocked state into the close.
+    await satisfyManualCashReconciliation({ companyId, fiscalPeriodId, userId })
     const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
 
     const results = await Promise.allSettled([
@@ -646,6 +660,10 @@ describe('FX verification through the atomic close (B01 + B08)', () => {
       ],
       items: [],
     }
+    // The preview snapshots readiness, so the manual cash attestation has to
+    // exist BEFORE it is generated. A preview taken while a blocker is still
+    // open carries that blocked state into the close.
+    await satisfyManualCashReconciliation({ companyId, fiscalPeriodId, userId })
     const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
 
     await expect(
