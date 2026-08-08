@@ -101,11 +101,17 @@ export const POST = withRouteContext(
       : Number(transaction.amount_sek ?? transactionAmount * Number(transaction.exchange_rate ?? 1))
 
     let paymentAmount = transactionAmount
+    // Which rate settled a cross-currency payment, and where it came from, is
+    // audit-relevant: BFL requires the applied exchange rate to stay traceable.
+    // Both are recorded on the match event below.
+    let settlementRate: number | null = null
+    let settlementRateSource: 'manual' | 'riksbanken' | null = null
     if (transactionCurrency !== invoiceCurrency) {
       if (invoiceCurrency === 'SEK') {
         paymentAmount = transactionSek
       } else {
         let paymentRate = manualExchangeRate ?? null
+        settlementRateSource = paymentRate == null ? 'riksbanken' : 'manual'
         if (paymentRate == null) {
           const rateInfo = await fetchExchangeRate(invoiceCurrency, new Date(transaction.date))
           paymentRate = rateInfo?.rate ?? null
@@ -120,6 +126,7 @@ export const POST = withRouteContext(
             },
           })
         }
+        settlementRate = paymentRate
         paymentAmount = Math.round((transactionSek / paymentRate) * 10000) / 10000
       }
     }
@@ -206,6 +213,9 @@ export const POST = withRouteContext(
         paid_amount: result.newPaidAmount,
         remaining_amount: result.newRemaining,
         journal_entry_id: result.journalEntryId,
+        ...(settlementRate != null
+          ? { exchange_rate: settlementRate, rate_source: settlementRateSource }
+          : {}),
       },
     })
     try {

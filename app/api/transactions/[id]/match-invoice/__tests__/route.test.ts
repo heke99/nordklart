@@ -88,6 +88,24 @@ const CANDIDATE_UUID = '550e8400-e29b-41d4-a716-446655440003'
 const STALE_UUID = '550e8400-e29b-41d4-a716-446655440004'
 const OTHER_CANDIDATE_UUID = '550e8400-e29b-41d4-a716-446655440005'
 
+/**
+ * The payment voucher is staged as a DRAFT by the engine and committed by
+ * settle_customer_invoice inside the database transaction, so there is no
+ * direct createJournalEntry post to assert on any more.
+ *
+ * Positional reads rather than toHaveBeenCalledWith(...): the builder takes
+ * optional arguments (customer name, exchange-rate difference) that are
+ * legitimately `undefined`, and expect.anything() does not match undefined.
+ */
+function expectStagedPaymentDraft(): void {
+  expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalled()
+  const call = mockCreateInvoicePaymentJournalEntry.mock.calls[0] as unknown[]
+  expect(call[1]).toBe('company-1')
+  expect(call[2]).toBe('user-1')
+  expect((call[3] as { id: string }).id).toBe(VALID_UUID)
+  expect(call[8]).toEqual({ draftOnly: true })
+}
+
 describe('POST /api/transactions/[id]/match-invoice', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -294,17 +312,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.remaining_amount).toBeCloseTo(44.31, 1)
     // Verifikat: Dr 1930 1000, Cr 1510 889.95 (95.6938 × 9.30 ≈ 889.95),
     // Cr 3960 110.05 (gain). Balances to öre.
-    expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalledWith(
-      expect.anything(),
-      'company-1',
-      'user-1',
-      expect.objectContaining({ id: VALID_UUID }),
-      expect.any(String),
-      expect.anything(),
-      expect.anything(),
-      expect.any(Number),
-      { draftOnly: true },
-    )
+    expectStagedPaymentDraft()
     // The auto path records the rate provenance as 'riksbanken' (vs 'manual').
     expect(logMatchEvent).toHaveBeenCalledWith(
       expect.anything(),
@@ -356,16 +364,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     })
     enqueueFor('transactions', { data: tx, error: null })
     enqueueFor('invoices', { data: invoice, error: null })
-    enqueue({ data: [], error: null }) // hard-duplicate
     enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
 
     mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken down — manual rate used instead
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx-manual' })
-
-    enqueue({ data: [{ id: VALID_UUID }], error: null })
-    enqueue({ data: null, error: null })
-    enqueue({ data: null, error: null })
-    enqueue({ data: null, error: null })
 
     enqueueCustomerSettlement(service, { settlement: { invoice_id: VALID_UUID, applied_amount: 95.69, paid_amount: 95.69, remaining_amount: 44.31, status: 'partially_paid', journal_entry_id: 'je-fx' }, invoice: { ...invoice, status: 'partially_paid', paid_amount: 95.69, remaining_amount: 44.31 } })
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
@@ -382,7 +384,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // intentional: when the user types a rate from their bank statement we
     // honour it rather than overriding with a possibly-stale Riksbanken value.
     expect(mockFetchExchangeRate).not.toHaveBeenCalled()
-    expect(mockCreateJournalEntry).toHaveBeenCalled()
+    expectStagedPaymentDraft()
     // Provenance: the manual override is recorded in the audit trail's
     // new_state so it's distinguishable from an automatic Riksbanken lookup.
     expect(logMatchEvent).toHaveBeenCalledWith(
@@ -611,7 +613,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.invoice_status).toBe('paid')
     // Must clear 1510 via the clearing-entry path, not re-recognise revenue +
     // VAT via createInvoiceCashEntry.
-    expect(mockCreateJournalEntry).toHaveBeenCalled()
+    expectStagedPaymentDraft()
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
@@ -678,7 +680,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.invoice_status).toBe('partially_paid')
     // Cash partial uses accrual-style clearing entry (now via the shared
     // helper + createJournalEntry), NOT createInvoiceCashEntry.
-    expect(mockCreateJournalEntry).toHaveBeenCalled()
+    expectStagedPaymentDraft()
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
