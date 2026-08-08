@@ -7,28 +7,17 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 ## Blockerande före produktionsanspråk
 
-1. **pg-real är rött på `main`.** 36 av 501 tester i 14 filer failar mot en
-   riktig PostgreSQL med samtliga 427 migrationer applicerade. Baslinjen på
-   `main` (utan 2026-08-07-migrationen) är 37 failade. Detta är alltså inte
-   orsakat av remediationen — sviten har drivit ifrån koden och ingen har sett
-   det, eftersom pg-real bara kördes på `pull_request` och det inte fanns några
-   öppna PR:er. Tyngdpunkt:
-   - `year-end-atomic-close.pg.test.ts` — 10
-   - `sie-import-engine.pg.test.ts` — 7
-   - `mark-entry-as-opening-balance.pg.test.ts` — 4
+1. **pg-real: 12 av 501 tester failar** (var 37 vid remediationens start).
+   Kvar, alla i bokslut/år-relaterade sviter:
    - `year-end-historical-support.pg.test.ts` — 3
-   - resterande 12 spridda över 10 filer.
+   - `year-end-atomic-close.pg.test.ts` — 3 (idempotent replay, samtidig close,
+     manipulerad FX-payload; alla stannar på
+     `manual_cash_reconciliation_missing` vid andra/parallella anrop)
+   - `match-batch-allocate`, `bank-import-rows-rls`, `fiscal-year-creation`,
+     `year-end-readiness-reconciliation`, `financial-atomicity`,
+     `delete-last-voucher` — 1 vardera
 
-   Två tydliga orsaksklasser, båda äkta (inte miljöartefakter):
-   - **Ändrat felkontrakt.** Testerna väntar `YE_NOT_READY` /
-     `YE_NEXT_PERIOD_NOT_CONTIGUOUS`, koden kastar numera
-     `YE_READINESS_BLOCKED: <reason>`.
-   - **Föråldrade fixtures.** Seedade bolag saknar fält som nyare migrationer
-     kräver, vilket ger `YE_READINESS_BLOCKED: company_details_incomplete` och
-     `SIE_COMPANY_IDENTITY_MISSING_IN_SIE` innan det testade villkoret nås.
-
-   Detta måste åtgärdas genom att rätta testerna mot det faktiska kontraktet —
-   inte genom att skruva tillbaka koden och inte genom att stänga av tester.
+   Kör lokalt utan Docker: se `next-actions.md` punkt 1.
 
 2. **Migrationsliggaren beskriver inte databasen.** Produktion har 358 rader i
    `public.nordklart_schema_migrations` mot 426 filer i repot (427 efter denna

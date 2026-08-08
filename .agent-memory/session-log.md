@@ -109,3 +109,40 @@ migrationen: 37, dvs. migrationen fixar ett test och bryter inget).
 
 Ej gjort: H-03 (betalningsatomicitet) och H-05 (utbyggd testmatris). Att bygga
 ut sviten innan de 36 befintliga failen är rättade ger inget bevisvärde.
+
+## 2026-08-07 (forts.) — pg-real från 37 till 12, fyra riktiga produktionsbuggar
+
+Fortsatte enligt egen prioritering: pg-real före H-03/H-05. Att köra sviten mot
+en riktig PostgreSQL visade sig vara det som faktiskt hittade buggar — fyra av
+de fem fixarna nedan är verifierade som trasiga även i produktion.
+
+1. **Föräldralös migration.** `20260731163000_year_end_pgcrypto_search_path_repair.sql`
+   låg i `supabase/migrations/supabase/migrations/` — en nästlad dubblett.
+   Alla konsumenter globbar `supabase/migrations/*.sql`, så runnern, manifestet
+   och pg-real-bootstrappen hoppade över den. Den var git-spårad och såg därmed
+   levererad ut. Den reparerar `digest`-incidenten; produktion hade fixen
+   manuellt applicerad, repot hade den aldrig. Flyttad in i kedjan + ny guard
+   som failar på .sql i underkatalog.
+
+2. **SIE undo/replace trasigt i produktion.** `__sie_reverse_import_entries()`
+   committar med `commit_method = 'sie_import_reversal'`, men
+   `journal_entries_commit_method_check` tillåter inte värdet. Varje undo och
+   varje replace rullar tillbaka. Verifierat i produktion. Värdet tillagt i
+   vokabulären (migration 20260807130000).
+
+3. **`mark_entry_as_opening_balance` trasigt i produktion.** RPC:n sätter
+   `nordklart.allow_source_type_retag`, men härdningsmigrationen 20260801140000
+   skrev om `enforce_journal_entry_immutability()` och tappade carve-outen som
+   läser flaggan. Återställd verbatim i omfattning (20260807140000).
+
+4. **`delete_last_voucher` trasigt i produktion.** Kontrollerad un-reversal
+   sätter `status='posted', reversed_by_id=NULL`, men diff-kontrollen avvisade
+   allt utom `status`. `reversed_by_id` är nu undantagen och måste bli NULL.
+
+5. Föråldrade fixtures/assertions: org_number, company_settings, manuell
+   kassaavstämning, `YE_READINESS_BLOCKED`-kontraktet, och tre sviter som
+   fejkade en reversering med en naken status-UPDATE (numera
+   `reversePostedEntry()` som skapar en riktig länkad storno).
+
+Ingen produktionskod försvagades, inget test avstängdes. Varje carve-out som
+återställdes är den snävaste som får den parade RPC:n att fungera.
