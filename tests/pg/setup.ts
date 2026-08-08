@@ -116,3 +116,33 @@ afterAll(async () => {
     pool = null
   }
 })
+
+/**
+ * Runs `fn` with auth.role() = 'service_role' for the duration of one
+ * transaction.
+ *
+ * The financial RPCs (settle_customer_invoice, settle_supplier_invoice,
+ * record_year_end_manual_cash_reconciliation, …) call require_service_role(),
+ * which reads the JWT claim rather than the PostgreSQL role — connecting as
+ * superuser is not enough. The claim is set with `set_config(..., true)` so it
+ * is transaction-local and cannot leak to the next user of the pooled
+ * connection.
+ */
+export async function withServiceRole<T>(
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    await client.query(`SELECT set_config('request.jwt.claims', '{"role":"service_role"}', true)`)
+    await client.query(`SELECT set_config('request.jwt.claim.role', 'service_role', true)`)
+    const result = await fn(client)
+    await client.query('COMMIT')
+    return result
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}

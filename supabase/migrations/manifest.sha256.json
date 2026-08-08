@@ -2166,6 +2166,11 @@
       "file": "20260807170000_fix_null_invalidation_flags_in_open_item_reconciliation.sql",
       "version": "20260807170000",
       "sha256": "65612df63b3aae14dd320a114d91744321c4f53d43d0d6b5dec07353b6f55c53"
+    },
+    {
+      "file": "20260807180000_allow_atomic_settlement_commit_methods.sql",
+      "version": "20260807180000",
+      "sha256": "38b73e60cc1d805169e7be3485527fbfa2da663e4ed9ae3dd204c7027747afdf"
     }
   ]
 }
