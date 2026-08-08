@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **434**.
+Antal SQL-migreringar: **435**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -458,3 +458,4 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 432 | 20260807160000 | `20260807160000_bank_allocation_uniqueness_per_invoice.sql` | `03b4386744347aa23ca3be605a8856b1e0c97cb6eda8466bb55946a2b2c62758` |
 | 433 | 20260807170000 | `20260807170000_fix_null_invalidation_flags_in_open_item_reconciliation.sql` | `65612df63b3aae14dd320a114d91744321c4f53d43d0d6b5dec07353b6f55c53` |
 | 434 | 20260807180000 | `20260807180000_allow_atomic_settlement_commit_methods.sql` | `38b73e60cc1d805169e7be3485527fbfa2da663e4ed9ae3dd204c7027747afdf` |
+| 435 | 20260808120000 | `20260808120000_settlement_creates_its_own_voucher.sql` | `bbf6422cc51116b89bc3b8910dae9cf82cefe3d066a4052ed62b886d37ebaa8b` |

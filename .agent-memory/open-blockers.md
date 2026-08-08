@@ -55,22 +55,27 @@ blockerare men nu är motbevisade ligger under "Stängda antaganden".
 
 ## Ej åtgärdat av denna remediation
 
-7. **H-03 — betalningsatomicitet.** Delvis. Den akuta produktionsstoppande
-   buggen är fixad (se produktionsbuggar nedan): båda settlement-RPC:erna
-   committade med `commit_method` som deras egen CHECK-constraint förbjöd, så
-   ingen kund- eller leverantörsbetalning kunde genomföras alls. Happy path och
-   negativa fall täcks nu av `settlement-atomicity.pg.test.ts` (8 tester).
+7. ~~**H-03 — betalningsatomicitet.**~~ **STÄNGD.** Både den akuta
+   produktionsstoppande buggen (settlement-RPC:erna committade med
+   `commit_method` som deras egen CHECK-constraint förbjöd) och själva
+   atomicitetsrefaktorn är klara.
 
-   Kvar: själva atomicitetsrefaktorn. `markInvoicePaid()` skapar fortfarande
-   draftverifikatet via `createDraftEntry()` före `settle_customer_invoice` och
-   kompenserar vid fel. Fullständig design och call graph ligger i
-   `decisions.md` (2026-08-07) — planvariant av radbyggarna + ny RPC som tar
-   raderna som JSONB och skapar verifikatet inne i transaktionen. Radlogiken får
-   inte flyttas till PL/pgSQL (dubbel domänsanning).
+   `20260808120000_settlement_creates_its_own_voucher.sql` inför
+   `settle_customer_invoice_v2` / `settle_supplier_invoice_v2`, som tar
+   verifikatet som `p_journal` och skapar det inne i settlement-transaktionen.
+   Servicelagren bygger planen utan att skriva något; den kompenserande
+   draft-annulleringen är borttagen eftersom det inte finns något att
+   kompensera. Radlogiken ligger kvar i TypeScript (`plan*`-varianterna) —
+   ingen dubbel domänsanning. `settlement-v2-atomicity.pg.test.ts` (20 tester)
+   bevakar invarianten att ett avvisat settlement inte lämnar något verifikat
+   kvar, och `check:financial-hardening` förbjuder nu `createDraftEntry(` och
+   `from('journal_entries')` i båda servicelagren. Detaljerna i `decisions.md`.
 
-8. **H-05 — testmatrisen.** Concurrency, idempotens-race, failure injection,
-   Stripe-livscykel och tenant-isolering i pg-real är fortfarande inte
-   byggda. Spärren mot att bygga ut sviten (punkt 1) är nu borta.
+8. **H-05 — testmatrisen.** Delvis. Idempotens-replay, payload-reuse,
+   tenant-isolering och failure injection för båda settlement-vägarna finns nu i
+   `settlement-atomicity.pg.test.ts` + `settlement-v2-atomicity.pg.test.ts` (28
+   tester). Kvar: äkta concurrency-race (två samtidiga transaktioner mot samma
+   faktura) och Stripe-livscykeln i pg-real.
 
 9. **Kvarvarande releasekrav som ännu inte är körda.** Bokslutsmatris,
    SIE-matris, engångsköps-E2E, tenant-isoleringsmatris, genomgången av

@@ -49,9 +49,11 @@ const mockedCash = vi.fn()
 const mockedCredit = vi.fn()
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
   createSupplierInvoiceRegistrationEntry: (...args: unknown[]) => mockedReg(...args),
-  createSupplierInvoicePaymentEntry: (...args: unknown[]) => mockedPayment(...args),
-  createSupplierInvoiceCashEntry: (...args: unknown[]) => mockedCash(...args),
   createSupplierCreditNoteEntry: (...args: unknown[]) => mockedCredit(...args),
+  // Payment booking is planned, not written: settle_supplier_invoice_v2
+  // creates the voucher inside the settlement transaction.
+  planSupplierInvoicePaymentEntry: (...args: unknown[]) => mockedPayment(...args),
+  planSupplierInvoiceCashEntry: (...args: unknown[]) => mockedCash(...args),
 }))
 
 // reverseEntry is dynamically imported in the route file for orphan storno —
@@ -63,6 +65,7 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
   return {
     ...actual,
     reverseEntry: vi.fn().mockResolvedValue({ id: 'storno-1' }),
+    resolveSeriesFromSettings: vi.fn().mockResolvedValue('A'),
   }
 })
 
@@ -120,9 +123,10 @@ function makeFlexibleSupabase(
 }
 
 /**
- * Installs the service-role client that settleSupplierInvoiceAtomic uses:
- * an idempotency replay lookup (null = first attempt), the settlement RPC and
- * the post-settlement refetch feeding the supplier_invoice.paid event.
+ * Installs the service-role client that settleSupplierInvoiceAtomic uses: an
+ * idempotency replay lookup (null = first attempt), settle_supplier_invoice_v2
+ * (which creates the voucher from the plan), and the post-settlement refetch
+ * feeding the supplier_invoice.paid event.
  */
 function setSettlementClient(
   settlement: Record<string, unknown> | null,
@@ -132,7 +136,7 @@ function setSettlementClient(
     { supplier_invoices: { data: invoice, error: null }, journal_entries: { data: null, error: null } },
     {
       get_financial_operation_result: { data: null, error: null },
-      settle_supplier_invoice: { data: settlement, error: null },
+      settle_supplier_invoice_v2: { data: settlement, error: null },
     },
   )
 }
@@ -219,8 +223,28 @@ beforeEach(() => {
     request_id: 'req-1',
   })
   mockedReg.mockResolvedValue({ id: 'je-reg-1' })
-  mockedPayment.mockResolvedValue({ id: 'je-pay-1' })
-  mockedCash.mockResolvedValue({ id: 'je-cash-1' })
+  mockedPayment.mockResolvedValue({
+    fiscal_period_id: 'fp-1',
+    entry_date: '2026-05-13',
+    description: 'Utbetalning leverantörsfaktura 2026-1234',
+    source_type: 'supplier_invoice_paid',
+    source_id: SI_ID,
+    lines: [
+      { account_number: '2440', debit_amount: 1250, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1250 },
+    ],
+  })
+  mockedCash.mockResolvedValue({
+    fiscal_period_id: 'fp-1',
+    entry_date: '2026-05-13',
+    description: 'Betalning leverantörsfaktura 2026-1234',
+    source_type: 'supplier_invoice_cash_payment',
+    source_id: SI_ID,
+    lines: [
+      { account_number: '4010', debit_amount: 1250, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1250 },
+    ],
+  })
   mockedCredit.mockResolvedValue({ id: 'je-credit-1' })
   mockValidate.mockResolvedValue({
     userId: USER_ID,

@@ -2171,6 +2171,11 @@
       "file": "20260807180000_allow_atomic_settlement_commit_methods.sql",
       "version": "20260807180000",
       "sha256": "38b73e60cc1d805169e7be3485527fbfa2da663e4ed9ae3dd204c7027747afdf"
+    },
+    {
+      "file": "20260808120000_settlement_creates_its_own_voucher.sql",
+      "version": "20260808120000",
+      "sha256": "bbf6422cc51116b89bc3b8910dae9cf82cefe3d066a4052ed62b886d37ebaa8b"
     }
   ]
 }

@@ -982,7 +982,7 @@ export function enqueueCustomerSettlement(
   } = {},
 ) {
   service.enqueueFor('get_financial_operation_result', { data: options.replay ?? null })
-  service.enqueueFor('settle_customer_invoice', options.error
+  service.enqueueFor('settle_customer_invoice_v2', options.error
     ? { data: null, error: options.error }
     : { data: makeAtomicCustomerSettlement(options.settlement) })
   service.enqueueFor('invoices', { data: options.invoice ?? makeInvoice() })
@@ -998,7 +998,7 @@ export function enqueueSupplierSettlement(
   } = {},
 ) {
   service.enqueueFor('get_financial_operation_result', { data: options.replay ?? null })
-  service.enqueueFor('settle_supplier_invoice', options.error
+  service.enqueueFor('settle_supplier_invoice_v2', options.error
     ? { data: null, error: options.error }
     : { data: makeAtomicSupplierSettlement(options.settlement) })
   service.enqueueFor('supplier_invoices', { data: options.invoice ?? makeSupplierInvoice() })

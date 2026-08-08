@@ -20,16 +20,16 @@ vi.mock('@/lib/supabase/server', () => supabaseServerMock({
   serviceClient: () => service.supabase,
 }))
 
-const mockCreateInvoiceCashEntry = vi.fn()
-const mockCreateInvoicePaymentJournalEntry = vi.fn()
+const mockPlanInvoiceCashEntry = vi.fn()
+const mockPlanInvoicePaymentJournalEntry = vi.fn()
 // Spread the real module: a factory that lists only some exports leaves the
 // rest undefined, which is how createInvoicePaymentJournalEntry silently became
 // undefined once mark-paid-service started calling it.
 vi.mock('@/lib/bookkeeping/invoice-entries', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bookkeeping/invoice-entries')>()),
-  createInvoiceCashEntry: (...args: unknown[]) => mockCreateInvoiceCashEntry(...args),
-  createInvoicePaymentJournalEntry: (...args: unknown[]) =>
-    mockCreateInvoicePaymentJournalEntry(...args),
+  planInvoiceCashEntry: (...args: unknown[]) => mockPlanInvoiceCashEntry(...args),
+  planInvoicePaymentJournalEntry: (...args: unknown[]) =>
+    mockPlanInvoicePaymentJournalEntry(...args),
   getRevenueAccount: vi.fn().mockReturnValue('3001'),
   getOutputVatAccount: vi.fn().mockReturnValue('2611'),
 }))
@@ -37,13 +37,11 @@ vi.mock('@/lib/bookkeeping/invoice-entries', async (importOriginal) => ({
 const mockReverseEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
 const mockCreateJournalEntry = vi.fn()
-const mockCreateDraftEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bookkeeping/engine')>()),
   reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
-  createDraftEntry: (...args: unknown[]) => mockCreateDraftEntry(...args),
 }))
 
 const mockFetchExchangeRate = vi.fn()
@@ -85,25 +83,36 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const VALID_UUID_2 = '550e8400-e29b-41d4-a716-446655440001'
 const CANDIDATE_UUID = '550e8400-e29b-41d4-a716-446655440003'
+/** What the settlement service now sends to settle_customer_invoice_v2. */
+const PAYMENT_PLAN = {
+  fiscal_period_id: 'fp-1',
+  entry_date: '2024-06-15',
+  description: 'Inbetalning kundfaktura 2024-001',
+  source_type: 'invoice_paid',
+  source_id: '550e8400-e29b-41d4-a716-446655440000',
+  lines: [
+    { account_number: '1930', debit_amount: 12500, credit_amount: 0 },
+    { account_number: '1510', debit_amount: 0, credit_amount: 12500 },
+  ],
+}
+
 const STALE_UUID = '550e8400-e29b-41d4-a716-446655440004'
 const OTHER_CANDIDATE_UUID = '550e8400-e29b-41d4-a716-446655440005'
 
 /**
- * The payment voucher is staged as a DRAFT by the engine and committed by
- * settle_customer_invoice inside the database transaction, so there is no
- * direct createJournalEntry post to assert on any more.
+ * The payment voucher is PLANNED here and created + posted by
+ * settle_customer_invoice_v2 inside the database transaction, so there is no
+ * journal-entry write to assert on any more.
  *
  * Positional reads rather than toHaveBeenCalledWith(...): the builder takes
  * optional arguments (customer name, exchange-rate difference) that are
  * legitimately `undefined`, and expect.anything() does not match undefined.
  */
 function expectStagedPaymentDraft(): void {
-  expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalled()
-  const call = mockCreateInvoicePaymentJournalEntry.mock.calls[0] as unknown[]
+  expect(mockPlanInvoicePaymentJournalEntry).toHaveBeenCalled()
+  const call = mockPlanInvoicePaymentJournalEntry.mock.calls[0] as unknown[]
   expect(call[1]).toBe('company-1')
-  expect(call[2]).toBe('user-1')
-  expect((call[3] as { id: string }).id).toBe(VALID_UUID)
-  expect(call[8]).toEqual({ draftOnly: true })
+  expect((call[2] as { id: string }).id).toBe(VALID_UUID)
 }
 
 describe('POST /api/transactions/[id]/match-invoice', () => {
@@ -113,11 +122,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     vi.clearAllMocks()
     reset()
     service.reset()
-    mockCreateDraftEntry.mockResolvedValue({ id: 'je-1' })
+    mockPlanInvoicePaymentJournalEntry.mockResolvedValue(PAYMENT_PLAN)
     // Canonical legal form, read by the settlement service. Keyed responses are
     // sticky, so one default covers every read of this relation.
     enqueueFor('companies', { data: { entity_type: 'enskild_firma' } })
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     // Default to no soft-duplicate detected — happy-path tests don't care.
     mockDetectDuplicate.mockResolvedValue(null)
@@ -446,21 +454,18 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
 
-    // The payment voucher is staged as a DRAFT by the engine and committed by
-    // settle_customer_invoice inside the database transaction, so the assertion
-    // is on the staging call rather than on a direct createJournalEntry.
-    // The Dr 1930 / Cr 1510 line shape is owned and covered by
-    // lib/bookkeeping/__tests__ for createInvoicePaymentJournalEntry itself.
-    expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalledWith(
+    // The payment voucher is planned here and created by
+    // settle_customer_invoice_v2 inside the database transaction, so the
+    // assertion is on the planning call. The Dr 1930 / Cr 1510 line shape is
+    // owned and covered by lib/bookkeeping/__tests__ for the builder itself.
+    expect(mockPlanInvoicePaymentJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
-      'user-1',
       expect.objectContaining({ id: VALID_UUID }),
       '2024-06-15',
       expect.anything(),
       expect.anything(),
       12500,
-      { draftOnly: true },
     )
   })
 
@@ -516,7 +521,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // any economic work is attempted.
     expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
-    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(mockPlanInvoicePaymentJournalEntry).not.toHaveBeenCalled()
     expect(service.supabase.rpc).not.toHaveBeenCalled()
   })
 
@@ -601,7 +606,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Must clear 1510 via the clearing-entry path, not re-recognise revenue +
     // VAT via createInvoiceCashEntry.
     expectStagedPaymentDraft()
-    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+    expect(mockPlanInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
   it('rejects an overpayment on a foreign-currency invoice with 400 (must be handled manually)', async () => {
@@ -669,9 +674,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(status).toBe(400)
     expect((body.error as unknown as { code: string }).code).toBe('VALIDATION_ERROR')
     // Nothing economic is attempted: no voucher staged, no settlement.
-    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
-    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
-    expect(service.supabase.rpc).not.toHaveBeenCalledWith('settle_customer_invoice', expect.anything())
+    expect(mockPlanInvoiceCashEntry).not.toHaveBeenCalled()
+    expect(mockPlanInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(service.supabase.rpc).not.toHaveBeenCalledWith('settle_customer_invoice_v2', expect.anything())
   })
 
   it('returns 409 when invoice is fully paid (optimistic lock)', async () => {
@@ -754,7 +759,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueueFor('company_settings', { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' } })
     enqueueCustomerSettlement(service)
 
-    mockCreateInvoicePaymentJournalEntry.mockRejectedValue(new Error('Period locked'))
+    mockPlanInvoicePaymentJournalEntry.mockRejectedValue(new Error('Period locked'))
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
@@ -766,7 +771,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(status).not.toBe(200)
     expect(body.error.code).toBe('INVOICE_PAID_BOOK_FAILED')
     // The settlement transaction is never reached, so no payment is recorded.
-    expect(service.supabase.rpc).not.toHaveBeenCalledWith('settle_customer_invoice', expect.anything())
+    expect(service.supabase.rpc).not.toHaveBeenCalledWith('settle_customer_invoice_v2', expect.anything())
   })
 
   // The application-side hard-duplicate guard was replaced by a database

@@ -313,3 +313,47 @@ Kontraktet från bug 15 är nu låst på servicenivå i
 verklig settlement, emitteras INTE vid replay, faller tillbaka korrekt när
 hydreringen är tom, och en trasig event-bus får inte fälla en redan committad
 betalning.
+
+## 2026-08-08 — H-03 stängd: settlement skapar sitt eget verifikat
+
+Unit 6163/6163, pg-real 529/529 (var 509), typecheck/lint/guards/feature-policy/
+skills/provenance/build gröna.
+
+`settle_customer_invoice` / `settle_supplier_invoice` tog ett draftverifikat som
+applikationen redan hade committat i en EGEN transaktion, och annullerade det
+efteråt om settlementet rullade tillbaka. Den kompensationen är per definition
+best effort: en process som dör mellan de två satserna lämnar ett verifikat utan
+betalning bakom sig. Det var det tredje tillståndet H-03 handlade om.
+
+Genomfört exakt enligt designen i `decisions.md` (2026-08-07):
+
+1. `plan*`-varianter av alla fyra radbyggarna returnerar `CreateJournalEntryInput`
+   utan att skriva. `create*` är kvar som tunna wrappar — alla andra anropare är
+   orörda och beteendet är oförändrat.
+2. `20260808120000_settlement_creates_its_own_voucher.sql`:
+   `create_planned_draft_entry()` (delad, service-role, låser perioden, slår upp
+   `account_id` mot företagets kontoplan, avvisar okända konton och obalanserade
+   planer) plus `settle_customer_invoice_v2` / `settle_supplier_invoice_v2`.
+   Allt efter verifikatskapandet är byte-identiskt med v1. v1 ligger kvar.
+3. Servicelagren skickar planen som `p_journal` och resolvar voucher-serien som
+   en läsning. Draft-annulleringen är borttagen.
+
+Radlogiken flyttades INTE till PL/pgSQL. RPC:n persisterar en plan den får; den
+avgör aldrig vilka konton en betalning träffar.
+
+`settlement-v2-atomicity.pg.test.ts` (20 tester) bevakar rätt invariant: inte att
+happy path fungerar, utan att ett avvisat settlement inte lämnar NÅGOT verifikat
+kvar — inte ens ett annullerat. Åtta av testerna avvisar via olika vägar (ej
+betalbar, stale remaining, fel företag, obalanserad plan, konto utanför
+kontoplanen, fel `source_id`, fel `source_type`, låst period) och kräver att
+`journal_entries` för källan är tom efteråt.
+
+`check:financial-hardening` kräver nu v2-anropen och förbjuder `createDraftEntry(`
+och `from('journal_entries')` i båda servicelagren, så mönstret inte kan smyga
+tillbaka.
+
+Testklassning för de sex sviter som behövde ändras: samtliga TEST_STALE mot ett
+avsiktligt ändrat kontrakt (planering i stället för staging). Inga assertions
+försvagades — argumentindex flyttades där signaturen tappade `userId`/`options`,
+och v1-sviternas `journal_entry_id` härleds nu ur planens `source_type`, vilket
+fortfarande skiljer accrual- och kontantvägen åt.

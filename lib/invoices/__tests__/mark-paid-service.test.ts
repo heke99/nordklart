@@ -2,25 +2,25 @@
  * Canonical customer settlement service tests.
  *
  * These tests deliberately assert the transaction boundary: the application
- * may stage a draft, but only settle_customer_invoice may post it and mutate
- * AR/payment/bank/audit/outbox state.
+ * only PLANS the voucher, and settle_customer_invoice_v2 creates, posts and
+ * links it while mutating AR/payment/bank/audit/outbox state. Nothing economic
+ * exists before the RPC, so a rollback has nothing to compensate.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase, makeCustomer, makeInvoice } from '@/tests/helpers'
 
-const mockCreateInvoicePaymentJournalEntry = vi.fn()
-const mockCreateInvoiceCashEntry = vi.fn()
+const mockPlanInvoicePaymentJournalEntry = vi.fn()
+const mockPlanInvoiceCashEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
-  createInvoicePaymentJournalEntry: (...args: unknown[]) =>
-    mockCreateInvoicePaymentJournalEntry(...args),
-  createInvoiceCashEntry: (...args: unknown[]) => mockCreateInvoiceCashEntry(...args),
+  planInvoicePaymentJournalEntry: (...args: unknown[]) =>
+    mockPlanInvoicePaymentJournalEntry(...args),
+  planInvoiceCashEntry: (...args: unknown[]) => mockPlanInvoiceCashEntry(...args),
 }))
 
-const mockCreateDraftEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
-  createDraftEntry: (...args: unknown[]) => mockCreateDraftEntry(...args),
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
+  resolveSeriesFromSettings: vi.fn().mockResolvedValue('A'),
 }))
 
 const mockService = createQueuedMockSupabase()
@@ -46,11 +46,12 @@ import { markInvoicePaid } from '../mark-paid-service'
 
 const caller = createQueuedMockSupabase()
 const COMPANY_ID = '00000000-0000-4000-8000-000000000001'
+const INVOICE_ID = '00000000-0000-4000-8000-000000000010'
 const USER_ID = '00000000-0000-4000-8000-000000000002'
 
 function invoice(overrides: Record<string, unknown> = {}) {
   return makeInvoice({
-    id: '00000000-0000-4000-8000-000000000010',
+    id: INVOICE_ID,
     status: 'sent',
     document_type: 'invoice',
     invoice_number: '2026-0042',
@@ -86,8 +87,16 @@ beforeEach(() => {
   caller.reset()
   mockService.reset()
   mockGetCompanyEntityType.mockResolvedValue('aktiebolag')
-  mockCreateInvoicePaymentJournalEntry.mockResolvedValue({
-    id: '00000000-0000-4000-8000-000000000040',
+  mockPlanInvoicePaymentJournalEntry.mockResolvedValue({
+    fiscal_period_id: 'fp-1',
+    entry_date: '2026-05-12',
+    description: 'Inbetalning kundfaktura 2026-1',
+    source_type: 'invoice_paid',
+    source_id: INVOICE_ID,
+    lines: [
+      { account_number: '1930', debit_amount: 12500, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 12500 },
+    ],
   })
   mockEmit.mockResolvedValue(undefined)
 })
@@ -107,14 +116,14 @@ describe('markInvoicePaid atomic settlement', () => {
 
     expect(result.ok).toBe(true)
     expect(caller.supabase.from).not.toHaveBeenCalled()
-    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(mockPlanInvoicePaymentJournalEntry).not.toHaveBeenCalled()
     expect(mockService.supabase.rpc).toHaveBeenCalledWith(
       'get_financial_operation_result',
       expect.objectContaining({ p_idempotency_key: 'idem-1' }),
     )
   })
 
-  it('stages a draft and delegates every economic write to settle_customer_invoice', async () => {
+  it('plans the voucher and delegates every economic write to the settlement RPC', async () => {
     const original = invoice()
     mockService.enqueue({ data: null }) // initial replay lookup
     caller.enqueue({ data: original })
@@ -130,24 +139,26 @@ describe('markInvoicePaid atomic settlement', () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalledWith(
+    expect(mockPlanInvoicePaymentJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       COMPANY_ID,
-      USER_ID,
       expect.objectContaining({ id: original.id }),
       '2026-05-12',
       undefined,
       'Testkund AB',
       12500,
-      { draftOnly: true },
     )
     expect(mockService.supabase.rpc).toHaveBeenCalledWith(
-      'settle_customer_invoice',
+      'settle_customer_invoice_v2',
       expect.objectContaining({
         p_invoice_id: original.id,
-        p_draft_journal_entry_id: '00000000-0000-4000-8000-000000000040',
         p_idempotency_key: 'idem-2',
         p_request_id: 'req_test',
+        p_journal: expect.objectContaining({
+          source_type: 'invoice_paid',
+          source_id: original.id,
+          voucher_series: 'A',
+        }),
       }),
     )
     expect(mockEmit).toHaveBeenCalledWith(expect.objectContaining({ type: 'invoice.paid' }))
@@ -170,10 +181,10 @@ describe('markInvoicePaid atomic settlement', () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(mockService.supabase.from).toHaveBeenCalledTimes(1) // hydration only; draft was not cancelled
+    expect(mockService.supabase.from).toHaveBeenCalledTimes(1) // hydration only
   })
 
-  it('cancels only the unposted draft when the database transaction rolled back', async () => {
+  it('leaves no journal entry to clean up when the database transaction rolled back', async () => {
     const original = invoice()
     mockService.enqueue({ data: null })
     caller.enqueue({ data: original })
@@ -185,7 +196,6 @@ describe('markInvoicePaid atomic settlement', () => {
       },
     })
     mockService.enqueue({ data: null })
-    mockService.enqueue({ data: null }) // draft cancellation update
 
     const result = await markInvoicePaid(caller.supabase as never, COMPANY_ID, USER_ID, {
       invoiceId: original.id,
@@ -195,6 +205,8 @@ describe('markInvoicePaid atomic settlement', () => {
     })
 
     expect(result).toMatchObject({ ok: false, code: 'PERIOD_LOCKED' })
-    expect(mockService.supabase.from).toHaveBeenCalledWith('journal_entries')
+    // The voucher only ever existed inside the rolled-back transaction, so the
+    // service must not reach for journal_entries to compensate.
+    expect(mockService.supabase.from).not.toHaveBeenCalledWith('journal_entries')
   })
 })

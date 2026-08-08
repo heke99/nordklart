@@ -123,7 +123,7 @@ async function resolveAccountIds(
  * Only called when the caller of createDraftEntry omitted voucher_series.
  * Explicit voucher_series in the input always wins.
  */
-async function resolveSeriesFromSettings(
+export async function resolveSeriesFromSettings(
   supabase: SupabaseClient,
   companyId: string,
   sourceType: JournalEntrySourceType,

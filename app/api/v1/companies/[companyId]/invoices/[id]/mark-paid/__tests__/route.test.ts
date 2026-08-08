@@ -26,9 +26,9 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
-// markInvoicePaid stages the draft and runs settle_customer_invoice through the
-// service-role client from @/lib/supabase/server, which is a different client
-// from the API-key one mocked above and therefore needs its own stub.
+// markInvoicePaid runs settle_customer_invoice_v2 through the service-role
+// client from @/lib/supabase/server, which is a different client from the
+// API-key one mocked above and therefore needs its own stub.
 let settlementClient: unknown = null
 vi.mock('@/lib/supabase/server', async () => {
   const actual = await vi.importActual<typeof import('@/lib/supabase/server')>('@/lib/supabase/server')
@@ -36,25 +36,42 @@ vi.mock('@/lib/supabase/server', async () => {
 })
 
 // Stub the journal-entry helpers; route flow is what we're testing.
+// The settlement service plans the voucher; settle_customer_invoice_v2 creates
+// it. Each planner returns the source_type its booking path implies, which is
+// how these tests still tell the accrual and cash paths apart.
 vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
-  createInvoicePaymentJournalEntry: vi.fn().mockResolvedValue({
-    id: 'jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj',
+  planInvoicePaymentJournalEntry: vi.fn().mockResolvedValue({
+    fiscal_period_id: 'fp-1',
+    entry_date: '2026-05-12',
+    description: 'Inbetalning kundfaktura 2026-0042',
+    source_type: 'invoice_paid',
+    source_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    lines: [
+      { account_number: '1930', debit_amount: 12500, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 12500 },
+    ],
   }),
-  createInvoiceCashEntry: vi.fn().mockResolvedValue({
-    id: 'kkkkkkkk-kkkk-4kkk-8kkk-kkkkkkkkkkkk',
+  planInvoiceCashEntry: vi.fn().mockResolvedValue({
+    fiscal_period_id: 'fp-1',
+    entry_date: '2026-05-12',
+    description: 'Kontantbetalning kundfaktura 2026-0042',
+    source_type: 'invoice_cash_payment',
+    source_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    lines: [
+      { account_number: '1930', debit_amount: 12500, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 12500 },
+    ],
   }),
 }))
 vi.mock('@/lib/bookkeeping/engine', () => ({
-  createJournalEntry: vi.fn().mockResolvedValue({
-    id: 'llllllll-llll-4lll-8lll-llllllllllll',
-  }),
   findFiscalPeriod: vi.fn().mockResolvedValue('fp-1'),
+  resolveSeriesFromSettings: vi.fn().mockResolvedValue('A'),
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
-  createInvoicePaymentJournalEntry as mockedPayment,
-  createInvoiceCashEntry as mockedCash,
+  planInvoicePaymentJournalEntry as mockedPayment,
+  planInvoiceCashEntry as mockedCash,
 } from '@/lib/bookkeeping/invoice-entries'
 import { POST as markPaid } from '../route'
 
@@ -89,8 +106,8 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
 
 /**
  * Service-role client for the settlement round-trip: no idempotency replay,
- * then settle_customer_invoice echoing back the draft entry the route staged
- * (which is what the RPC commits), and the hydration read of the paid invoice.
+ * then settle_customer_invoice_v2 returning the voucher it created from the
+ * plan, and the hydration read of the paid invoice.
  */
 function makeSettlementClient(invoice: unknown = PAID_INVOICE) {
   const base = makeFlexibleSupabase({
@@ -100,12 +117,17 @@ function makeSettlementClient(invoice: unknown = PAID_INVOICE) {
   return {
     ...base,
     rpc: vi.fn((name: string, args: Record<string, unknown> = {}) => {
-      if (name === 'settle_customer_invoice') {
+      if (name === 'settle_customer_invoice_v2') {
+        const plan = args.p_journal as { source_type?: string } | undefined
         return Promise.resolve({
           data: {
             invoice_id: INVOICE_ID,
             payment_id: 'pppppppp-pppp-4ppp-8ppp-pppppppppppp',
-            journal_entry_id: args.p_draft_journal_entry_id,
+            // The RPC creates the voucher from the plan, so the id it returns
+            // identifies which booking path was planned.
+            journal_entry_id: plan?.source_type === 'invoice_cash_payment'
+              ? 'kkkkkkkk-kkkk-4kkk-8kkk-kkkkkkkkkkkk'
+              : 'jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj',
             customer_credit_id: null,
             applied_amount: 12500,
             overpayment_amount: 0,

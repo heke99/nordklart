@@ -67,8 +67,31 @@ tillstånd.
 
 ### Status
 
-Ej implementerat. Blockerande fynd som åtgärdades först: båda settlement-RPC:erna
+**Implementerat 2026-08-08** enligt planen ovan, utan avvikelser.
+
+- `plan*`-varianter av alla fyra radbyggarna (`planInvoicePaymentJournalEntry`,
+  `planInvoiceCashEntry`, `planSupplierInvoicePaymentEntry`,
+  `planSupplierInvoiceCashEntry`). De persisterande `create*`-funktionerna finns
+  kvar som tunna wrappar, så övriga anropare är orörda.
+- `20260808120000_settlement_creates_its_own_voucher.sql`:
+  `create_planned_draft_entry()` (delad, service-role) plus
+  `settle_customer_invoice_v2()` / `settle_supplier_invoice_v2()`. Allt efter
+  verifikatskapandet är byte-identiskt med v1. v1 lämnas kvar och fungerar.
+- Båda servicelagren bygger planen, resolvar voucher-serie (en läsning) och
+  skickar den som `p_journal`. Den kompenserande draft-annulleringen är borttagen
+  — det finns inget att kompensera.
+- Radlogiken ligger kvar i TypeScript. RPC:n persisterar en plan den får; den
+  avgör aldrig vilka konton en betalning träffar. Den slår upp `account_id` mot
+  företagets kontoplan och avvisar konton som inte finns där.
+- `settlement-v2-atomicity.pg.test.ts` (20 tester). Invarianten som bevakas är
+  inte happy path utan att ett avvisat settlement inte lämnar NÅGOT verifikat
+  kvar — inte ens ett annullerat.
+- `check:financial-hardening` kräver nu v2-anropen och **förbjuder**
+  `createDraftEntry(` och `from('journal_entries')` i båda servicelagren, så
+  mönstret inte kan smyga tillbaka.
+
+Föregående blockerande fynd (kvar för historik): båda settlement-RPC:erna
 committade med `commit_method` som deras egen CHECK-constraint förbjöd, så
 **varje** kund- och leverantörsbetalning failade i produktion (20260807180000).
 Den buggen låg dold eftersom pg-real bara körde rollback-vägen; happy path testas
-nu i `settlement-atomicity.pg.test.ts`.
+i `settlement-atomicity.pg.test.ts`.

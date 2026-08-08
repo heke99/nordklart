@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, resolveSeriesFromSettings } from '@/lib/bookkeeping/engine'
 import {
-  createSupplierInvoiceCashEntry,
-  createSupplierInvoicePaymentEntry,
+  planSupplierInvoiceCashEntry,
+  planSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import type { CreateJournalEntryInput } from '@/types'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -134,7 +135,10 @@ export async function settleSupplierInvoiceAtomic(
     }
   }
 
-  let draftJournalEntryId: string | null = null
+  // Plan the voucher without writing it. settle_supplier_invoice_v2 creates it
+  // inside the settlement transaction, so a failed settlement leaves no
+  // stranded draft to compensate for.
+  let journalPlan: CreateJournalEntryInput | null = null
   try {
     if (request.customLines) {
       const totalDebit = request.customLines.reduce((sum, line) => sum + line.debit_amount, 0)
@@ -153,19 +157,18 @@ export async function settleSupplierInvoiceAtomic(
       const description = invoice.supplier?.name
         ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
         : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
-      draftJournalEntryId = (await createDraftEntry(service, companyId, userId, {
+      journalPlan = {
         fiscal_period_id: fiscalPeriodId,
         entry_date: request.paymentDate,
         description,
         source_type: useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid',
         source_id: invoice.id,
         lines: request.customLines,
-      })).id
+      }
     } else if (useCashEntry) {
-      draftJournalEntryId = (await createSupplierInvoiceCashEntry(
+      journalPlan = await planSupplierInvoiceCashEntry(
         service,
         companyId,
-        userId,
         invoice,
         invoice.items ?? [],
         request.paymentDate,
@@ -173,25 +176,22 @@ export async function settleSupplierInvoiceAtomic(
         invoice.supplier?.name,
         request.paymentAccount,
         request.settledBankSek,
-        { draftOnly: true },
-      ))?.id ?? null
+      )
     } else {
-      draftJournalEntryId = (await createSupplierInvoicePaymentEntry(
+      journalPlan = await planSupplierInvoicePaymentEntry(
         service,
         companyId,
-        userId,
         invoice,
         request.ledgerPaymentAmount ?? request.paymentAmount,
         request.paymentDate,
         request.exchangeRateDifference,
         invoice.supplier?.name,
         request.paymentAccount,
-        { draftOnly: true },
-      ))?.id ?? null
+      )
     }
   } catch (error) {
     if (isBookkeepingError(error)) {
-      log.warn('supplier mark-paid: typed bookkeeping failure while staging draft', {
+      log.warn('supplier mark-paid: typed bookkeeping failure while planning the voucher', {
         companyId,
         supplierInvoiceId: invoice.id,
         requestId: request.requestId,
@@ -199,7 +199,7 @@ export async function settleSupplierInvoiceAtomic(
       })
       return { ok: false, code: 'SI_PAID_FAILED', bookkeepingError: error }
     }
-    log.error('supplier mark-paid: draft journal entry creation failed', error as Error, {
+    log.error('supplier mark-paid: journal entry planning failed', error as Error, {
       companyId,
       supplierInvoiceId: invoice.id,
       requestId: request.requestId,
@@ -207,11 +207,16 @@ export async function settleSupplierInvoiceAtomic(
     return { ok: false, code: 'SI_PAID_FAILED' }
   }
 
-  if (!draftJournalEntryId) {
+  if (!journalPlan) {
     return { ok: false, code: 'INVOICE_PAID_NO_FISCAL_PERIOD' }
   }
 
-  const { data, error } = await service.rpc('settle_supplier_invoice', {
+  // Voucher series is a company setting, not a settlement decision. Resolve it
+  // here (a read) so the RPC persists the same series createDraftEntry would.
+  const voucherSeries = journalPlan.voucher_series
+    ?? await resolveSeriesFromSettings(service, companyId, journalPlan.source_type)
+
+  const { data, error } = await service.rpc('settle_supplier_invoice_v2', {
     p_company_id: companyId,
     p_supplier_invoice_id: invoice.id,
     p_actor_user_id: userId,
@@ -225,14 +230,13 @@ export async function settleSupplierInvoiceAtomic(
     p_request_id: request.requestId,
     p_payment_reference: request.paymentReference ?? null,
     p_notes: request.notes ?? null,
-    p_draft_journal_entry_id: draftJournalEntryId,
+    p_journal: { ...journalPlan, voucher_series: voucherSeries },
     p_expected_remaining_amount: invoice.remaining_amount,
   })
 
   if (error || !data) {
-    // Resolve the classic "commit succeeded, HTTP response was lost" case
-    // before cancelling anything. The idempotency row is committed atomically
-    // with the supplier settlement.
+    // Resolve the classic "commit succeeded, HTTP response was lost" case.
+    // The idempotency row is committed atomically with the supplier settlement.
     const { data: committedReplay } = await service.rpc('get_financial_operation_result', {
       p_company_id: companyId,
       p_operation_type: 'supplier_invoice_settlement',
@@ -241,19 +245,6 @@ export async function settleSupplierInvoiceAtomic(
     })
     if (committedReplay) return fromAtomic(committedReplay as AtomicSupplierSettlement)
 
-    const { error: cleanupError } = await service
-      .from('journal_entries')
-      .update({ status: 'cancelled' })
-      .eq('company_id', companyId)
-      .eq('id', draftJournalEntryId)
-      .eq('status', 'draft')
-    if (cleanupError) {
-      log.error('failed to cancel rolled-back supplier payment draft', cleanupError as Error, {
-        companyId,
-        supplierInvoiceId: invoice.id,
-        requestId: request.requestId,
-      })
-    }
     const atomicError = error ?? new Error('Atomic supplier settlement returned no result.')
     log.error('supplier mark-paid: atomic settlement failed', atomicError as Error, {
       companyId,

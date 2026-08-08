@@ -422,3 +422,32 @@ export async function reversePostedEntry(params: {
   )
   return reversalId
 }
+
+/**
+ * Minimal chart of accounts. Entries created through the engine tolerate a
+ * missing chart (account_id is nullable), but any RPC that resolves accounts
+ * itself — settle_*_v2 via create_planned_draft_entry — rejects an account the
+ * company does not have, so tests that exercise those paths need real rows.
+ */
+export async function insertChartAccounts(params: {
+  userId: string
+  companyId: string
+  accountNumbers?: string[]
+}): Promise<void> {
+  const accounts = params.accountNumbers ?? ['1510', '1930', '2440', '2611', '2641', '3001', '3960', '7960']
+  for (const accountNumber of accounts) {
+    await getPool().query(
+      `INSERT INTO public.chart_of_accounts
+         (user_id, company_id, account_number, account_name, account_class, account_type, normal_balance)
+       VALUES ($1, $2, $3, $4, $5, 'asset', 'debit')
+       ON CONFLICT (company_id, account_number) DO NOTHING`,
+      [
+        params.userId,
+        params.companyId,
+        accountNumber,
+        `Konto ${accountNumber}`,
+        Number(accountNumber[0]),
+      ],
+    )
+  }
+}
