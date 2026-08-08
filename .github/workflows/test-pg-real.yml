@@ -78,6 +78,19 @@ jobs:
         # not run in CI. This aligns the schema with what migrations expect.
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
 
+      - name: Quiet expected server-side error logging
+        # The suite deliberately provokes constraint, RLS and trigger errors —
+        # that is what it is for. Postgres logs every one with the full failing
+        # statement, and the service container's log is dumped wholesale at
+        # teardown: ~500 KB of expected noise, which is enough to push the
+        # actual vitest output out of reach when fetching job logs afterwards.
+        # Errors still reach the client, so the assertions are unaffected.
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
+            "ALTER SYSTEM SET log_min_error_statement = 'panic';
+             ALTER SYSTEM SET log_min_messages = 'fatal';
+             SELECT pg_reload_conf();"
+
       - name: Apply migrations
         run: |
           set -euo pipefail
@@ -92,4 +105,15 @@ jobs:
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
           done
 
-      - run: npm run test:pg
+      - name: Run pg-real suite
+        run: |
+          set -o pipefail
+          npm run test:pg 2>&1 | tee /tmp/pg-real.log
+
+      - name: Failure summary
+        # Compact, greppable restatement of what failed, emitted last so it
+        # survives log truncation.
+        if: failure()
+        run: |
+          echo '===== pg-real failure summary ====='
+          grep -aE '^ *(FAIL|❯|×|AssertionError|Error:)|Test Files|Tests  ' /tmp/pg-real.log | head -300 || true
