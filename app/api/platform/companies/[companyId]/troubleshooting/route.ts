@@ -34,6 +34,10 @@ export async function GET(
     .select('role')
     .eq('user_id', auth.user.id)
     .in('role', [...PLATFORM_ROLES])
+    // A revoked grant is not a role. Without this predicate the export stayed
+    // available to anyone who had ever held platform access — revocation is
+    // recorded, not deleted (`revoked_at`), so the row survives the revoke.
+    .is('revoked_at', null)
     .limit(1)
     .maybeSingle()
   if (!platformRole) {
