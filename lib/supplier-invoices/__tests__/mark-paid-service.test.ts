@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const mockCreateSupplierInvoicePaymentEntry = vi.fn()
 const mockCreateSupplierInvoiceCashEntry = vi.fn()
@@ -101,5 +102,103 @@ describe('settleSupplierInvoiceAtomic', () => {
         p_draft_journal_entry_id: atomic.journal_entry_id,
       }),
     )
+  })
+
+  // supplier_invoice.paid is a delivered webhook event and the only signal an
+  // integrator gets for an AP payment. It was silently lost once when the
+  // routes were refactored onto this service, so both halves of the contract —
+  // emitted on a real settlement, NOT re-emitted on an idempotent replay — are
+  // locked here rather than only in the route tests.
+  it('emits supplier_invoice.paid with the committed invoice state', async () => {
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined as never)
+    const settled = { ...supplierInvoice, status: 'paid', paid_amount: 1000, remaining_amount: 0 }
+    service.enqueueFor('get_financial_operation_result', { data: null })
+    caller.enqueueFor('company_settings', { data: { accounting_method: 'accrual' } })
+    service.enqueueFor('settle_supplier_invoice', { data: atomic })
+    service.enqueueFor('supplier_invoices', { data: settled })
+
+    await settleSupplierInvoiceAtomic(caller.supabase as never, companyId, userId, {
+      invoice: supplierInvoice,
+      paymentDate: '2026-05-12',
+      paymentAmount: 1000,
+      idempotencyKey: 'supplier-idem-3',
+      requestId: 'req_supplier',
+    })
+
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'supplier_invoice.paid',
+      payload: {
+        supplierInvoice: settled,
+        paymentAmount: 1000,
+        companyId,
+        userId,
+      },
+    })
+  })
+
+  it('does not re-emit supplier_invoice.paid when replaying a settled payment', async () => {
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined as never)
+    service.enqueueFor('get_financial_operation_result', { data: atomic })
+
+    const result = await settleSupplierInvoiceAtomic(caller.supabase as never, companyId, userId, {
+      invoice: supplierInvoice,
+      paymentDate: '2026-05-12',
+      paymentAmount: 1000,
+      idempotencyKey: 'supplier-idem-4',
+      requestId: 'req_supplier',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(emitSpy).not.toHaveBeenCalled()
+  })
+
+  it('still settles when the post-settlement hydration read comes back empty', async () => {
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined as never)
+    service.enqueueFor('get_financial_operation_result', { data: null })
+    caller.enqueueFor('company_settings', { data: { accounting_method: 'accrual' } })
+    service.enqueueFor('settle_supplier_invoice', { data: atomic })
+    service.enqueueFor('supplier_invoices', { data: null })
+
+    const result = await settleSupplierInvoiceAtomic(caller.supabase as never, companyId, userId, {
+      invoice: supplierInvoice,
+      paymentDate: '2026-05-12',
+      paymentAmount: 1000,
+      idempotencyKey: 'supplier-idem-5',
+      requestId: 'req_supplier',
+    })
+
+    expect(result).toMatchObject({ ok: true, status: 'paid', remainingAmount: 0 })
+    // Falls back to the pre-payment snapshot merged with the committed result,
+    // so subscribers never see a stale unpaid status.
+    expect(emitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'supplier_invoice.paid',
+        payload: expect.objectContaining({
+          supplierInvoice: expect.objectContaining({
+            status: 'paid',
+            paid_amount: 1000,
+            remaining_amount: 0,
+          }),
+        }),
+      }),
+    )
+  })
+
+  it('settles even when the event bus throws — the payment is already committed', async () => {
+    vi.spyOn(eventBus, 'emit').mockRejectedValue(new Error('bus down'))
+    service.enqueueFor('get_financial_operation_result', { data: null })
+    caller.enqueueFor('company_settings', { data: { accounting_method: 'accrual' } })
+    service.enqueueFor('settle_supplier_invoice', { data: atomic })
+    service.enqueueFor('supplier_invoices', { data: supplierInvoice })
+
+    const result = await settleSupplierInvoiceAtomic(caller.supabase as never, companyId, userId, {
+      invoice: supplierInvoice,
+      paymentDate: '2026-05-12',
+      paymentAmount: 1000,
+      idempotencyKey: 'supplier-idem-6',
+      requestId: 'req_supplier',
+    })
+
+    expect(result).toMatchObject({ ok: true, status: 'paid' })
   })
 })

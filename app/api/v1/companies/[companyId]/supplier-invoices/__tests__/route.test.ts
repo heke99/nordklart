@@ -32,6 +32,16 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
+// settleSupplierInvoiceAtomic reaches for the service-role client from
+// @/lib/supabase/server (not createServiceClientNoCookies), so the settlement
+// round-trip has to be mocked separately from the API-key client above.
+// setSettlementClient() below installs the per-test settlement outcome.
+let settlementClient: unknown = null
+vi.mock('@/lib/supabase/server', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/supabase/server')>('@/lib/supabase/server')
+  return { ...actual, createServiceClient: () => settlementClient }
+})
+
 // Mock the engine so JE creation succeeds without hitting Postgres.
 const mockedReg = vi.fn()
 const mockedPayment = vi.fn()
@@ -72,7 +82,10 @@ interface TableResp {
   count?: number | null
 }
 
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
+function makeFlexibleSupabase(
+  byTable: Record<string, TableResp | TableResp[]>,
+  byRpc: Record<string, TableResp> = {},
+) {
   // Per-table queue: TableResp[] consumes one entry per await, then sticks
   // on the last entry. Plain TableResp is treated as a constant.
   const queues = new Map<string, TableResp[]>()
@@ -97,12 +110,31 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
   return {
     from: vi.fn((table: string) => buildChain(table)),
     rpc: vi.fn((name: string) => {
+      if (name in byRpc) return Promise.resolve(byRpc[name])
       if (name === 'get_next_arrival_number') {
         return Promise.resolve({ data: 42, error: null })
       }
       return Promise.resolve({ data: null, error: null })
     }),
   }
+}
+
+/**
+ * Installs the service-role client that settleSupplierInvoiceAtomic uses:
+ * an idempotency replay lookup (null = first attempt), the settlement RPC and
+ * the post-settlement refetch feeding the supplier_invoice.paid event.
+ */
+function setSettlementClient(
+  settlement: Record<string, unknown> | null,
+  invoice: Record<string, unknown> | null = null,
+) {
+  settlementClient = makeFlexibleSupabase(
+    { supplier_invoices: { data: invoice, error: null }, journal_entries: { data: null, error: null } },
+    {
+      get_financial_operation_result: { data: null, error: null },
+      settle_supplier_invoice: { data: settlement, error: null },
+    },
+  )
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -175,6 +207,17 @@ const SAMPLE_SI = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  setSettlementClient({
+    supplier_invoice_id: SI_ID,
+    payment_id: 'pay-1',
+    journal_entry_id: 'je-pay-1',
+    applied_amount: 1250,
+    paid_amount: 1250,
+    remaining_amount: 0,
+    status: 'paid',
+    paid_at: '2026-05-13T16:00:00Z',
+    request_id: 'req-1',
+  })
   mockedReg.mockResolvedValue({ id: 'je-reg-1' })
   mockedPayment.mockResolvedValue({ id: 'je-pay-1' })
   mockedCash.mockResolvedValue({ id: 'je-cash-1' })

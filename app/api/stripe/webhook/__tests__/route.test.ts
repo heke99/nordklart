@@ -80,11 +80,21 @@ describe('POST /api/stripe/webhook', () => {
 
     expect(status).toBe(200)
     expect(body.received).toBe(true)
-    expect(rpcCalls).toHaveLength(1)
-    expect(rpcCalls[0].fn).toBe('stripe_finalize_checkout_v2')
+    // A completed checkout runs finalization and then the one-time purchase
+    // lifecycle, each exactly once and in that order.
+    expect(rpcCalls.map((call) => call.fn)).toEqual([
+      'stripe_finalize_checkout_v2',
+      'stripe_apply_one_time_purchase_event',
+    ])
     expect(rpcCalls[0].args).toMatchObject({
       p_stripe_event_id: 'evt_1',
       p_stripe_checkout_session_id: 'cs_1',
+      p_payment_status: 'paid',
+    })
+    expect(rpcCalls[1].args).toMatchObject({
+      p_stripe_event_id: 'evt_1',
+      p_event_type: 'checkout.session.completed',
+      p_checkout_session_id: 'cs_1',
       p_payment_status: 'paid',
     })
   })
@@ -108,7 +118,10 @@ describe('POST /api/stripe/webhook', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
-    expect(rpcCalls).toHaveLength(1)
+    expect(rpcCalls.map((call) => call.fn)).toEqual([
+      'stripe_finalize_checkout_v2',
+      'stripe_apply_one_time_purchase_event',
+    ])
     const retryWrite = eventWrites.find((w) => w.kind === 'update' && w.attempt_count === 2)
     expect(retryWrite).toBeTruthy()
   })

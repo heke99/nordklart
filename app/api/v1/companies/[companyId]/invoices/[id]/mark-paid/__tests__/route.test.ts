@@ -26,6 +26,15 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
+// markInvoicePaid stages the draft and runs settle_customer_invoice through the
+// service-role client from @/lib/supabase/server, which is a different client
+// from the API-key one mocked above and therefore needs its own stub.
+let settlementClient: unknown = null
+vi.mock('@/lib/supabase/server', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/supabase/server')>('@/lib/supabase/server')
+  return { ...actual, createServiceClient: () => settlementClient }
+})
+
 // Stub the journal-entry helpers; route flow is what we're testing.
 vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
   createInvoicePaymentJournalEntry: vi.fn().mockResolvedValue({
@@ -78,6 +87,43 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
   return { from: vi.fn((table: string) => buildChain(table)) }
 }
 
+/**
+ * Service-role client for the settlement round-trip: no idempotency replay,
+ * then settle_customer_invoice echoing back the draft entry the route staged
+ * (which is what the RPC commits), and the hydration read of the paid invoice.
+ */
+function makeSettlementClient(invoice: unknown = PAID_INVOICE) {
+  const base = makeFlexibleSupabase({
+    invoices: { data: invoice, error: null },
+    journal_entries: { data: null, error: null },
+  })
+  return {
+    ...base,
+    rpc: vi.fn((name: string, args: Record<string, unknown> = {}) => {
+      if (name === 'settle_customer_invoice') {
+        return Promise.resolve({
+          data: {
+            invoice_id: INVOICE_ID,
+            payment_id: 'pppppppp-pppp-4ppp-8ppp-pppppppppppp',
+            journal_entry_id: args.p_draft_journal_entry_id,
+            customer_credit_id: null,
+            applied_amount: 12500,
+            overpayment_amount: 0,
+            paid_amount: 12500,
+            remaining_amount: 0,
+            status: 'paid',
+            paid_at: '2026-05-12',
+            request_id: 'req-1',
+          },
+          error: null,
+        })
+      }
+      // get_financial_operation_result and anything else: no prior result.
+      return Promise.resolve({ data: null, error: null })
+    }),
+  }
+}
+
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const USER_ID = 'user-1'
@@ -128,6 +174,7 @@ const PAID_INVOICE = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  settlementClient = makeSettlementClient()
   mockValidate.mockResolvedValue({
     userId: USER_ID,
     companyId: COMPANY_ID,
