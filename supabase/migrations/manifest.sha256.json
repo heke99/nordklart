@@ -2211,6 +2211,11 @@
       "file": "20260808190000_commit_journal_entry_is_unreachable_for_anon.sql",
       "version": "20260808190000",
       "sha256": "31cc30503a8c0398a1c600908f664684b90adc0b3e7b08b8ff01ff60c258b873"
+    },
+    {
+      "file": "20260809100000_child_row_write_policies_require_write_capability.sql",
+      "version": "20260809100000",
+      "sha256": "c51e4765ab13804dc49b60ace7b16597146bb90a06a477bd8ed3ce5a216bc261"
     }
   ]
 }
