@@ -343,7 +343,25 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`reconcile-migration-ledger: ${error.message}`)
-  process.exit(1)
-})
+/**
+ * Exported so the classification can be driven from somewhere other than a
+ * direct Postgres connection without a second copy of it existing.
+ *
+ * The Supabase project this deploys to is reachable from the agent environment
+ * only through the management API, which exposes SQL execution but no
+ * connection string — so `main()` cannot run there. Rather than reimplement
+ * "which objects does this migration create, and does absence prove anything",
+ * scripts/reconcile-via-catalog.mjs feeds the same functions an object-presence
+ * map fetched in bulk. Same rules, different transport.
+ */
+export { readMigrations, extractObjects, droppedLater, classify, sha256 }
+
+const INVOKED_DIRECTLY = process.argv[1]
+  && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+
+if (INVOKED_DIRECTLY) {
+  main().catch((error) => {
+    console.error(`reconcile-migration-ledger: ${error.message}`)
+    process.exit(1)
+  })
+}

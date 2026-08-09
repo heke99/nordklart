@@ -7,51 +7,65 @@ Allt som tidigare stod här — pg-real grönt, H-03-atomiciteten,
 testmatriserna, redefinitionsgranskningen — är gjort. Det som återstår är
 deploy och två saker som kräver en människa.
 
-## 1. Deploya branchen till produktion, i rätt ordning
+## 1. Deploya till produktion — LÄS DETTA FÖRST
 
-Produktion ligger **efter** repot. `db:migrate` får inte köras först: den
-skulle försöka applicera om de 69 filer som redan är applicerade men
-oregistrerade. Ordningen finns i sin helhet i
-`docs/audits/2026-08-08-supabase-advisors-and-ledger.md`.
+**Den tidigare dokumenterade sekvensen här var farlig och är borttagen.**
+Den sa `db:migrate:mark-through -- 20260801140000_...`. Verifierat mot live
+2026-08-09: den hade skrivit ledger-rader för filer som ALDRIG applicerats, och
+`db:migrate` hade sedan hoppat över dem för alltid.
+
+Två oberoende fällor, båda konstaterade i produktion:
+
+1. **`mark-through` markerar ett intervall, inte verifierade filer.**
+   `20260712120000_invoice_financing.sql` (#387) ligger inuti intervallet men
+   är helt oapplicerad — 5 tabeller, 8 index, 11 policies och 1 funktion saknas.
+
+2. **Objektexistens kan inte avgöra om en *ersättande* migration är körd.**
+   `20260808150000`–`20260808190000` och `20260809100000` gör `DROP/CREATE
+   POLICY` med oförändrade namn och `CREATE OR REPLACE FUNCTION` på befintliga
+   funktioner. Objekten finns redan, så både `mark-through` och reconcilerns
+   `--apply` klassar dem som applicerade. Live-innehållet visar motsatsen:
+
+   | Kontroll | Live 2026-08-09 |
+   |---|---|
+   | vyer med `security_invoker=true` | **0 av 4** |
+   | `anon` kan köra `commit_journal_entry` | **ja** |
+   | `commit_journal_entry` innehåller `user_can_write_company` | **nej** |
+   | write-policies på enbart medlemskap | **152** |
+   | child-row-policies fixade | **nej** |
+
+   Alla sex säkerhetsfynd är alltså levande i produktion.
+
+**Rätt sekvens.** Använd reconcilerns per-fil-klassificering, aldrig
+`mark-through`, och verifiera de ersättande migrationerna på innehåll:
 
 ```bash
-# 1. Registrera det som redan är applicerat, fram till sista filen i produktion.
-npm run db:migrate:mark-through -- 20260801140000_production_financial_atomicity_and_billing_lifecycle.sql
-
-# 2. Bekräfta att liggaren nu beskriver databasen (bara branchens migrationer kvar).
-SUPABASE_DB_URL=... npm run db:ledger:reconcile
-
-# 3. Applicera branchens migrationer.
-npm run db:migrate
-
-# 4. Verifiera.
+SUPABASE_DB_URL=... npm run db:ledger:reconcile          # dry run
+# Granska varje APPLIED_BUT_UNRECORDED manuellt. Migrationer som bara
+# ERSÄTTER objekt måste kontrolleras på innehåll, inte existens.
+SUPABASE_DB_URL=... npm run db:ledger:reconcile:apply    # skriver bara verifierade
+npm run db:migrate                                        # applicerar resterande
 npm run check:migrations:db
-SUPABASE_DB_URL=... npm run db:ledger:reconcile   # noll i allt utom RECORDED
 ```
 
-Steg 1 är en avsiktlig skrivning mot produktionens migrationsauktoritet.
-`--apply` är aldrig default, och sekvensen har inte körts härifrån.
+Verifierat läge 2026-08-09 (443 filer, ledger 358 rader, fingerprint matchar):
 
-**Verifiera efter deploy** — fynden är inte åtgärdade i produktion förrän
-migrationerna är körda:
+| Klass | Antal |
+|---|---:|
+| RECORDED | 358 |
+| APPLIED_BUT_UNRECORDED (objekt verifierade) | 66 |
+| SUPERSEDED (orsak verifierad för hand) | 2 |
+| AMBIGUOUS (skapar inget detekterbart objekt) | 14 |
+| NOT_APPLIED | 2 |
+| PARTIAL | 1 |
+| CHECKSUM_MISMATCH | **0** |
 
-```sql
--- #17: fyra vyer får inte längre kringgå RLS
-SELECT c.relname, c.reloptions FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
- WHERE n.nspname='public' AND c.relkind='v'
-   AND c.relname IN ('customer_ar_balances','company_commercial_usage_v',
-                     'agency_commercial_usage_v','company_effective_commercial_limits_v');
+De 14 AMBIGUOUS är seed-/GRANT-/ALTER-only-filer. Nio av dem är
+remediation-migrationer som måste köras. `20260807160000` är PARTIAL: dess två
+bank-unikhetsindex saknas.
 
--- #18 + anon-hålet: anon får inte ha EXECUTE
-SELECT has_function_privilege('anon','public.commit_journal_entry(uuid,uuid,text,text,text,text)','EXECUTE');
-
--- #19: inga write-policies kvar på enbart medlemskap (utom de tre ägarskopade)
-SELECT tablename, cmd FROM pg_policies
- WHERE schemaname='public' AND cmd IN ('INSERT','UPDATE','DELETE')
-   AND (coalesce(qual,'')||coalesce(with_check,'')) LIKE '%user_company_ids() AS user_company_ids%'
-   AND (coalesce(qual,'')||coalesce(with_check,'')) NOT LIKE '%user_can_write_company%'
-   AND (coalesce(qual,'')||coalesce(with_check,'')) NOT LIKE '%user_id = auth.uid()%';
-```
+**Ingen ledger-rad får skrivas för en fil vars effekt inte är verifierad i
+databasen.** Det är den enda regeln som betyder något här.
 
 ## 2. EXTERNA ÅTGÄRDER (kräver en människa)
 

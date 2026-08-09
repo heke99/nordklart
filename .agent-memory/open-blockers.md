@@ -8,10 +8,22 @@ blockerare men nu är motbevisade eller åtgärdade ligger längst ned.
 
 ## Blockerande före produktionsanspråk
 
-1. **De sex säkerhetsfynden är fixade i repot men inte i produktion.**
-   Produktion ligger 12+ migrationer efter branchen, så #16–#21 är levande i
-   drift tills branchen är deployad. Ordning och verifieringsfrågor står i
-   `next-actions.md` — `db:migrate` får inte köras före `mark-through`.
+0. **PRODUKTION ÄR OFIXAD. Alla sex säkerhetsfynd är levande.** Verifierat mot
+   projekt `rpajvvngvcutffwucbdy` 2026-08-09: 0 av 4 vyer har
+   `security_invoker`, `anon` har EXECUTE på `commit_journal_entry`, funktionen
+   saknar helt auktorisationskontroll, 152 write-policies auktoriserar på
+   enbart medlemskap, och child-row-policies är orörda. Koden ligger på `main`
+   sedan `79954cd` men databasen kör fortfarande det gamla kontraktet.
+
+   **Deploya aldrig med `mark-through`.** Se `next-actions.md` §1 — den
+   sekvensen hade permanent dolt både en helt oapplicerad julifil och samtliga
+   säkerhetsmigrationer, eftersom de senare bara ersätter befintliga objekt.
+
+
+1. **Migrationsliggaren är reconcilad men inte skriven.** 443 filer, 358
+   recorded (fingerprint verifierad mot live), 0 CHECKSUM_MISMATCH. 66
+   APPLIED_BUT_UNRECORDED, 2 SUPERSEDED (orsak verifierad för hand), 14
+   AMBIGUOUS, 2 NOT_APPLIED, 1 PARTIAL. Ingen rad har skrivits.
 
 2. **Leaked-password protection är avstängt.** Dashboard-only. EXTERN ÅTGÄRD.
 
