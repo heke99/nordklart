@@ -8,17 +8,25 @@ blockerare men nu är motbevisade eller åtgärdade ligger längst ned.
 
 ## Blockerande före produktionsanspråk
 
-0. **PRODUKTION ÄR OFIXAD. Alla sex säkerhetsfynd är levande.** Verifierat mot
-   projekt `rpajvvngvcutffwucbdy` 2026-08-09: 0 av 4 vyer har
-   `security_invoker`, `anon` har EXECUTE på `commit_journal_entry`, funktionen
-   saknar helt auktorisationskontroll, 152 write-policies auktoriserar på
-   enbart medlemskap, och child-row-policies är orörda. Koden ligger på `main`
-   sedan `79954cd` men databasen kör fortfarande det gamla kontraktet.
+0. **Produktion är DELVIS fixad. Deploy pågår.** Projekt
+   `rpajvvngvcutffwucbdy`, verifierat 2026-08-09.
 
-   **Deploya aldrig med `mark-through`.** Se `next-actions.md` §1 — den
-   sekvensen hade permanent dolt både en helt oapplicerad julifil och samtliga
-   säkerhetsmigrationer, eftersom de senare bara ersätter befintliga objekt.
+   | Fynd | Live-status |
+   |---|---|
+   | #17 cross-tenant-vyer | **STÄNGD** — 4/4 har `security_invoker=true` |
+   | #18 `commit_journal_entry` | **STÄNGD** — anon EXECUTE false, write-authz + anon-guard i kroppen, search_path pinnad |
+   | #19 write-policies | **ÖPPEN** — 152 policies auktoriserar fortfarande på enbart medlemskap |
+   | child-row-policies | **ÖPPEN** |
+   | settlement v2 | **EJ DEPLOYAD** — 0 av 3 funktioner finns |
+   | #16 commit_method 'system' | **EJ DEPLOYAD** |
 
+   De två som var exploaterbara utifrån är stängda. #19 kräver att angriparen
+   redan har en viewer-plats i offrets bolag, så kvarvarande exponering är
+   insider-begränsad — men den är verklig och ska stängas.
+
+   Deployade denna session, via MCP med `source='mcp-deploy'` och filens
+   sha256 som checksum, en migration per transaktion med postcheck:
+   `20260808150000` och `20260808190000`. Ledger: 358 → **360** rader.
 
 1. **Migrationsliggaren är reconcilad men inte skriven.** 443 filer, 358
    recorded (fingerprint verifierad mot live), 0 CHECKSUM_MISMATCH. 66
