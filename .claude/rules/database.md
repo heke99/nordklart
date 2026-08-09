@@ -21,7 +21,9 @@ Use the `/supabase-migration` skill for new migrations.
 7. Apply via Supabase MCP `apply_migration`
 8. Always end with `NOTIFY pgrst, 'reload schema'` when altering table structure
 
-**pg-real tests**: any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend a `*.pg.test.ts`. Parallel Vitest project against real Postgres (CI: `supabase/postgres:15`, migrations replayed). Local: `npm run test:pg`. Helpers: `tests/pg/setup.ts` (`getPool()`, `withUserContext()`), `tests/pg/fixtures.ts` (`seedCompany()`, `insertDraftJournalEntry()`, etc.).
+**pg-real tests**: any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend a `*.pg.test.ts`. Parallel Vitest project against real Postgres (CI: `supabase/postgres:15`, migrations replayed). Local: `npm run test:pg`.
+
+**Reset the local pg-real database when it has been run a lot**: `npm run test:pg:reset`. Fixtures seed through the pool and are deliberately not rolled back, so every run leaves rows behind. That accumulates — at 13k companies `tenant-isolation-matrix` began exceeding its 15 s budget while every assertion still held, which looks exactly like a regression and is not one. After a reset the suite is 675/675 in 50 s instead of 225 s. The reset also replays all migrations from an empty database, so it doubles as the clean-replay gate. Helpers: `tests/pg/setup.ts` (`getPool()`, `withUserContext()`), `tests/pg/fixtures.ts` (`seedCompany()`, `insertDraftJournalEntry()`, etc.).
 
 ## Key Tables (~60)
 

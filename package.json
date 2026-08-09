@@ -37,7 +37,8 @@
     "verify:fast": "npm run typecheck && npm run check:lint && npm run check:guards && npm run check:feature-policy && npm run skills:check && npm run check:skill-provenance && npm test",
     "verify:db": "npm run check:migrations:db && npm run test:pg",
     "verify:release": "npm run verify:fast && npm run build && npm run verify:db",
-    "check:redefinition": "node scripts/checks/migration-redefinition.mjs"
+    "check:redefinition": "node scripts/checks/migration-redefinition.mjs",
+    "test:pg:reset": "bash scripts/pg-test-db.sh --reset"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.1",
@@ -110,7 +111,7 @@
     "typescript": "^5",
     "vitest": "^4.0.18"
   },
-  "description": "Nordklart \u2014 svensk bokf\u00f6ring, bokslut och byr\u00e5plattform.",
+  "description": "Nordklart — svensk bokföring, bokslut och byråplattform.",
   "overrides": {
     "next": "16.2.9",
     "postcss": "^8.5.10"
