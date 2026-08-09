@@ -7,6 +7,7 @@ import {
   insertCompany,
   insertCompanyMember,
   insertDraftJournalEntry,
+  reversePostedEntry,
   seedCompany,
 } from '@/tests/pg/fixtures'
 
@@ -73,10 +74,14 @@ async function insertEntryAtStatus(params: {
     [entryId],
   )
   if (params.status === 'reversed') {
-    await getPool().query(
-      `UPDATE public.journal_entries SET status = 'reversed' WHERE id = $1`,
-      [entryId],
-    )
+    // A posted entry can only reach 'reversed' through a real, mutually
+    // linked storno — a bare status UPDATE is rejected (REVERSAL_LINK_REQUIRED).
+    await reversePostedEntry({
+      userId: params.userId,
+      companyId: params.companyId,
+      fiscalPeriodId: params.fiscalPeriodId,
+      entryId,
+    })
   }
   return entryId
 }

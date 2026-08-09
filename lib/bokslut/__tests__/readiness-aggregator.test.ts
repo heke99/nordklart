@@ -266,7 +266,11 @@ describe('buildBokslutReadinessReport', () => {
     const blocker = report.blockerDetails.find((d) => d.code === 'readiness_check_failed')
     expect(blocker).toBeDefined()
     expect(blocker?.checkCompleted).toBe(false)
-    expect(blocker?.message).toContain('connection reset')
+    // Fails closed with a safe, user-facing Swedish message. The raw driver
+    // text ("connection reset") stays in the server log — surfacing it here
+    // would leak database internals into the client payload.
+    expect(blocker?.message).not.toContain('connection reset')
+    expect(blocker?.message).toBeTruthy()
     expect(report.blockers).toContain(blocker!.message)
   })
 

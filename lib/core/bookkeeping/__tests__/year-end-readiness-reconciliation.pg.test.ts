@@ -162,6 +162,21 @@ describe('year-end database readiness reconciliation hardening', () => {
 
   it('blocks an unmatched general-ledger cash line', async () => {
     const seeded = await seedReadyCompany()
+    // bank_unmatched_gl_lines only exists on the automated reconciliation path,
+    // which year_end_cash_reconciliation_status() selects on
+    // cash_accounts.bank_connection_id IS NOT NULL. Without a feed the account
+    // is reconciled manually and reports manual_cash_reconciliation_missing
+    // instead, which is a different blocker for a different situation.
+    const connectionId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.bank_connections (id, user_id, company_id)
+       VALUES ($1, $2, $3)`,
+      [connectionId, seeded.userId, seeded.companyId],
+    )
+    await getPool().query(
+      `UPDATE public.cash_accounts SET bank_connection_id = $1 WHERE id = $2`,
+      [connectionId, seeded.cashAccountId],
+    )
     await postEntry({ ...seeded, account: '1930', amount: 500 })
 
     expect(await blockerCodes(seeded.companyId, seeded.fiscalPeriodId)).toContain('bank_unmatched_gl_lines')

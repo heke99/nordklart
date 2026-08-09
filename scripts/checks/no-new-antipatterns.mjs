@@ -51,6 +51,10 @@ const RAW_AUTH_RE = /\.auth\.getUser\(/
 // so accept either `<` or `(` after the name.
 const GUARD_RE = /requireAuth\(|withRouteContext[<(]/
 const NAIVE_ROUND_RE = /Math\.round\([^\n]*\*\s*100\s*\)\s*\/\s*100/
+// `NextResponse.json({ error: 'text' …` — a bare string where the canonical
+// envelope `{ error: { code, message, … } }` belongs.
+const ADHOC_ERROR_RE = /NextResponse\.json\(\s*\{\s*error:\s*['"`]/
+const CANONICAL_ERROR_RE = /errorResponse\(|errorResponseFromCode\(|v1ErrorResponse\(/
 
 function walk(dir, exts, out = []) {
   let entries
@@ -167,11 +171,31 @@ function findDuplicateMigrationVersions() {
     .sort()
 }
 
+/**
+ * Route files whose failure path is a hand-built `{ error: 'text' }` body and
+ * that never reach for a canonical helper. The contract is
+ * `{ error: { code, message, message_en?, requestId? } }` — a bare string
+ * gives clients nothing to branch on and no request id to trace with. The
+ * legacy set is large and is being converted route family by route family;
+ * this only stops it growing.
+ */
+function findAdhocErrorEnvelopes() {
+  const apiDir = path.join(ROOT, 'app', 'api')
+  return walk(apiDir, ['route.ts'])
+    .filter((f) => {
+      const src = fs.readFileSync(f, 'utf8')
+      return ADHOC_ERROR_RE.test(src) && !CANONICAL_ERROR_RE.test(src)
+    })
+    .map(rel)
+    .sort()
+}
+
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
   migrationsMissingRls: findMigrationsMissingRls(),
   duplicateMigrationVersions: findDuplicateMigrationVersions(),
+  adhocErrorEnvelope: findAdhocErrorEnvelopes(),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -186,6 +210,10 @@ if (isUpdate) {
     duplicateMigrationVersions: {
       count: current.duplicateMigrationVersions.length,
       entries: current.duplicateMigrationVersions,
+    },
+    adhocErrorEnvelope: {
+      count: current.adhocErrorEnvelope.length,
+      files: current.adhocErrorEnvelope,
     },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
@@ -255,6 +283,19 @@ if (newDuplicateMigrationVersions.length) {
   console.error('  → assign every new migration a unique, monotonically increasing timestamp.')
 }
 
+// 5. ad-hoc error envelope: any route not in the baseline set is a NEW violation.
+const adhocBaselineSet = new Set(baseline.adhocErrorEnvelope?.files ?? [])
+const newAdhocFiles = current.adhocErrorEnvelope.filter((f) => !adhocBaselineSet.has(f))
+if (newAdhocFiles.length) {
+  failed = true
+  console.error(
+    `\n✗ adhoc-error-envelope: ${newAdhocFiles.length} new route(s) return a bare ` +
+      `{ error: 'text' } body instead of the canonical { error: { code, message } } envelope:`,
+  )
+  newAdhocFiles.forEach((f) => console.error(`    ${f}`))
+  console.error('  → throw a typed error and let withRouteContext map it, or call errorResponseFromCode().')
+}
+
 // Report ratchet-down progress (informational, never fails).
 if (fixedAuthFiles.length || current.naiveOreRound < baseline.naiveOreRound.count) {
   console.log('\n✓ Progress since baseline:')
@@ -269,5 +310,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, legacy-duplicate-migration-sets: ${current.duplicateMigrationVersions.length}).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, adhoc-error-envelope: ${current.adhocErrorEnvelope.length}, legacy-duplicate-migration-sets: ${current.duplicateMigrationVersions.length}).`,
 )

@@ -45,6 +45,10 @@ export async function GET(request: Request) {
           .select('role')
           .eq('user_id', auth.user.id)
           .in('role', [...PLATFORM_ROLES])
+          // Revocation is recorded, not deleted, so the grant row outlives the
+          // access. Without this predicate a revoked operator kept the deep
+          // health view (queue depths, integration state, cron freshness).
+          .is('revoked_at', null)
           .limit(1)
           .maybeSingle()
         authorized = !!role

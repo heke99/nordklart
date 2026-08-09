@@ -10,8 +10,20 @@ import {
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
 import { requireCompanyId } from '@/lib/company/context'
+import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { truncateIp } from '@/lib/api/v1/with-api-v1'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
+
+// The sibling /register endpoint has carried a per-/24 limit since it shipped;
+// the token endpoint did not, even though it is the one that hands out
+// credentials. Codes and refresh tokens are high-entropy, so this is depth
+// rather than the only defence — but an unauthenticated endpoint that performs
+// crypto and database work on every call should not be free to hammer.
+const TOKEN_RATE_LIMIT = {
+  maxRequests: 30,
+  windowMs: 60 * 1000,
+}
 
 /**
  * OAuth 2.0 Token Endpoint.
@@ -24,6 +36,17 @@ const ACCESS_TOKEN_TTL_SECONDS = 3600
  *     server-side; expires_in is a hint so clients refresh on a cadence.
  */
 export async function POST(request: Request) {
+  const forwarded = request.headers.get('x-forwarded-for')
+  const rawIp = forwarded
+    ? forwarded.split(',')[0]?.trim()
+    : request.headers.get('x-real-ip') ?? undefined
+  const rl = await checkRateLimit({
+    prefix: 'mcp-oauth:token',
+    identifier: truncateIp(rawIp || undefined) ?? 'unknown',
+    ...TOKEN_RATE_LIMIT,
+  })
+  if (!rl.ok) return rl.response!
+
   let params: URLSearchParams
 
   const contentType = request.headers.get('content-type') || ''

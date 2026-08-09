@@ -5,7 +5,9 @@ import {
   insertAuthUser,
   insertCompany,
   insertCompanyMember,
+  insertCompanySettings,
   insertFiscalPeriod,
+  satisfyManualCashReconciliation,
 } from '@/tests/pg/fixtures'
 
 // Local seed with a PAST fiscal period (2025) — the close requires the
@@ -18,6 +20,9 @@ async function seedCompany(overrides: { isClosed?: boolean } = {}): Promise<{
   const userId = await insertAuthUser()
   const companyId = await insertCompany({ createdBy: userId })
   await insertCompanyMember({ companyId, userId, role: 'owner' })
+  // Readiness requires an explicit accounting method; without it every close
+  // stops at `company_details_incomplete` before the tested condition is hit.
+  await insertCompanySettings({ companyId })
   const fiscalPeriodId = await insertFiscalPeriod({
     userId,
     companyId,
@@ -99,6 +104,11 @@ async function closePeriodViaRpc(
   idempotencyKey: string,
   previewId?: string,
 ): Promise<Record<string, unknown>> {
+  // The seeded company has no bank connection, so every cash account needs a
+  // manual statement attestation before the books may close. Done here (rather
+  // than in the seed) because it must happen after the test has posted its
+  // activity, otherwise the ledger snapshot goes stale.
+  await satisfyManualCashReconciliation({ companyId, fiscalPeriodId, userId })
   const canonicalPreviewId = previewId
     ?? await createCanonicalPreview(companyId, fiscalPeriodId, userId)
   const { rows } = await getPool().query(
@@ -274,6 +284,10 @@ describe('execute_year_end_closing (atomic close)', () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await postSimpleActivity({ userId, companyId, fiscalPeriodId })
 
+    // The preview snapshots readiness, so the manual cash attestation has to
+    // exist BEFORE it is generated. A preview taken while a blocker is still
+    // open carries that blocked state into the close.
+    await satisfyManualCashReconciliation({ companyId, fiscalPeriodId, userId })
     const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
     const first = await closePeriodViaRpc(
       companyId,
@@ -292,9 +306,15 @@ describe('execute_year_end_closing (atomic close)', () => {
     expect(replay.idempotent).toBe(true)
     expect(replay.closing_entry_id).toBe(first.closing_entry_id)
 
+    // A different idempotency key must never produce a second close. The
+    // canonical preview was consumed by the run above, so the guard that fires
+    // first is YE_PREVIEW_ALREADY_EXECUTED rather than YE_ALREADY_CLOSED —
+    // both are stable, specific codes meaning "this close already happened",
+    // and neither degrades to a generic failure. The invariant that matters is
+    // asserted below: still exactly one closing entry and one IB.
     await expect(
       closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'different-key'),
-    ).rejects.toThrow(/YE_ALREADY_CLOSED/)
+    ).rejects.toThrow(/YE_ALREADY_CLOSED|YE_PREVIEW_ALREADY_EXECUTED/)
 
     // Still exactly one closing entry + one IB.
     const { rows } = await getPool().query(
@@ -308,6 +328,10 @@ describe('execute_year_end_closing (atomic close)', () => {
   it('two concurrent closes yield exactly one closing entry and one IB (B09)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     await postSimpleActivity({ userId, companyId, fiscalPeriodId })
+    // The preview snapshots readiness, so the manual cash attestation has to
+    // exist BEFORE it is generated. A preview taken while a blocker is still
+    // open carries that blocked state into the close.
+    await satisfyManualCashReconciliation({ companyId, fiscalPeriodId, userId })
     const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
 
     const results = await Promise.allSettled([
@@ -350,7 +374,7 @@ describe('execute_year_end_closing (atomic close)', () => {
 
     await expect(
       closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'draft-key'),
-    ).rejects.toThrow(/YE_NOT_READY/)
+    ).rejects.toThrow(/YE_READINESS_BLOCKED: draft_entries/)
 
     // Nothing persisted: period fully open, no closing entry, no run row.
     const pool = getPool()
@@ -407,7 +431,7 @@ describe('execute_year_end_closing (atomic close)', () => {
 
     await expect(
       closePeriodViaRpc(companyId, fiscalPeriodId, userId, 'fail-key'),
-    ).rejects.toThrow(/YE_NOT_READY|YE_NEXT_PERIOD_HAS_CONFLICTING_OB/)
+    ).rejects.toThrow(/YE_READINESS_BLOCKED: next_period_has_ob/)
 
     // Fully open — the closing entry that may have been created inside the
     // transaction was rolled back with it.
@@ -636,6 +660,10 @@ describe('FX verification through the atomic close (B01 + B08)', () => {
       ],
       items: [],
     }
+    // The preview snapshots readiness, so the manual cash attestation has to
+    // exist BEFORE it is generated. A preview taken while a blocker is still
+    // open carries that blocked state into the close.
+    await satisfyManualCashReconciliation({ companyId, fiscalPeriodId, userId })
     const previewId = await createCanonicalPreview(companyId, fiscalPeriodId, userId)
 
     await expect(

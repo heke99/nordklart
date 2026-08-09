@@ -28,7 +28,38 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex')
 }
 
+/**
+ * Every consumer of the migration chain globs `supabase/migrations/*.sql`: the
+ * runner, this manifest, and the pg-real bootstrap. A .sql file in a
+ * subdirectory is therefore silently never applied, while still being tracked
+ * by git and looking like it shipped.
+ *
+ * That is not hypothetical — 20260731163000_year_end_pgcrypto_search_path_repair.sql
+ * sat in supabase/migrations/supabase/migrations/ and no environment built from
+ * the repository ever ran it, reintroducing the pgcrypto `digest` incident.
+ */
+function assertNoNestedMigrations() {
+  const orphans = []
+  const walk = (dir, relative) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name)
+      const rel = relative ? path.join(relative, entry.name) : entry.name
+      if (entry.isDirectory()) walk(abs, rel)
+      else if (entry.name.endsWith('.sql') && relative) orphans.push(rel)
+    }
+  }
+  walk(MIGRATION_DIR, '')
+  if (orphans.length) {
+    throw new Error(
+      `Migration file(s) in a subdirectory of supabase/migrations/ will never be applied:\n`
+      + orphans.map((file) => `  - ${file}`).join('\n')
+      + '\nMove them to the top level of supabase/migrations/.',
+    )
+  }
+}
+
 function readMigrations() {
+  assertNoNestedMigrations()
   return fs.readdirSync(MIGRATION_DIR)
     .filter((name) => name.endsWith('.sql'))
     .sort((a, b) => a.localeCompare(b))
@@ -155,6 +186,9 @@ async function compareDatabase(migrations) {
   try {
     const localByFile = new Map(migrations.map((m) => [m.file, m]))
     const localVersions = new Set(migrations.map((m) => m.version))
+    // Supabase-CLI history is optional: Nordklart production is migrated by
+    // scripts/supabase-migrate.cjs, which writes public.nordklart_schema_migrations
+    // instead. Its absence is expected there and is not drift by itself.
     const supabaseTable = await client.query("select to_regclass('supabase_migrations.schema_migrations')::text as name")
     if (supabaseTable.rows[0]?.name) {
       const rows = await client.query('select version::text from supabase_migrations.schema_migrations order by version')
@@ -186,6 +220,27 @@ async function compareDatabase(migrations) {
         else if (migration.sha256 !== row.checksum) errors.push(`Runner checksum mismatch: ${row.version}`)
       }
       console.log(`public.nordklart_schema_migrations: ${rows.rowCount} file(s)`)
+
+      // Repository files with no registry row. This direction was previously
+      // computed (`seen`) but never compared, so a production database whose
+      // ledger had fallen behind the repository reported clean. That is how a
+      // 68-file gap stayed invisible: the schema objects existed because the
+      // SQL had been applied out-of-band, but nothing recorded that it had.
+      const unrecorded = migrations.map((m) => m.file).filter((file) => !seen.has(file))
+      if (unrecorded.length) {
+        console.error(
+          `\n${unrecorded.length} migration file(s) have no row in public.nordklart_schema_migrations.`,
+        )
+        console.error('The schema objects may still exist if the SQL was applied out-of-band,')
+        console.error('but the ledger cannot prove what this database actually has:')
+        for (const file of unrecorded) console.error(`  - ${file}`)
+        console.error(
+          '\nReconcile with: npm run db:migrate:mark-through -- <lastAppliedFile>'
+          + '\nthen apply the remainder with: npm run db:migrate\n',
+        )
+        errors.push(`${unrecorded.length} repository migration(s) missing from the runner registry`)
+      }
+
       if (errors.length) {
         errors.forEach((error) => console.error(error))
         process.exitCode = 1

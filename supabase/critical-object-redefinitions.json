@@ -1,0 +1,169 @@
+{
+  "format": 1,
+  "objects": {
+    "enforce_journal_entry_immutability": {
+      "definitions": 12,
+      "last": "20260807140000_restore_opening_balance_retag_carveout.sql"
+    },
+    "enforce_journal_entry_line_immutability": {
+      "definitions": 5,
+      "last": "20260415000000_schema_sync.sql"
+    },
+    "enforce_retention_journal_entries": {
+      "definitions": 5,
+      "last": "20260415000000_schema_sync.sql"
+    },
+    "enforce_document_metadata_immutability": {
+      "definitions": 5,
+      "last": "20260527160000_fix_supersede_audit_actor.sql"
+    },
+    "block_document_deletion": {
+      "definitions": 4,
+      "last": "20260330130000_multi_tenant_company_refactor.sql"
+    },
+    "commit_journal_entry": {
+      "definitions": 7,
+      "last": "20260808190000_commit_journal_entry_is_unreachable_for_anon.sql"
+    },
+    "delete_last_voucher": {
+      "definitions": 4,
+      "last": "20260528120600_delete_last_voucher_audit_company_id.sql"
+    },
+    "mark_entry_as_opening_balance": {
+      "definitions": 2,
+      "last": "20260619130100_securitydefiner_write_rpc_tenant_guards.sql"
+    },
+    "next_voucher_number": {
+      "definitions": 3,
+      "last": "20260330130000_multi_tenant_company_refactor.sql"
+    },
+    "enforce_period_lock": {
+      "definitions": 2,
+      "last": "20240101000017_enforcement_triggers.sql"
+    },
+    "enforce_company_lock_date": {
+      "definitions": 1,
+      "last": "20260401200000_settings_restructure.sql"
+    },
+    "settle_customer_invoice": {
+      "definitions": 1,
+      "last": "20260801140000_production_financial_atomicity_and_billing_lifecycle.sql"
+    },
+    "settle_supplier_invoice": {
+      "definitions": 1,
+      "last": "20260801140000_production_financial_atomicity_and_billing_lifecycle.sql"
+    },
+    "settle_customer_invoice_v2": {
+      "definitions": 1,
+      "last": "20260808120000_settlement_creates_its_own_voucher.sql"
+    },
+    "settle_supplier_invoice_v2": {
+      "definitions": 1,
+      "last": "20260808120000_settlement_creates_its_own_voucher.sql"
+    },
+    "create_planned_draft_entry": {
+      "definitions": 1,
+      "last": "20260808120000_settlement_creates_its_own_voucher.sql"
+    },
+    "match_batch_allocate": {
+      "definitions": 7,
+      "last": "20260601122000_match_batch_allocate_round3_fixes.sql"
+    },
+    "enforce_single_bank_payment_allocation": {
+      "definitions": 2,
+      "last": "20260807160000_bank_allocation_uniqueness_per_invoice.sql"
+    },
+    "execute_year_end_closing": {
+      "definitions": 6,
+      "last": "20260731120000_year_end_execution_contract_repair.sql"
+    },
+    "year_end_db_blockers": {
+      "definitions": 7,
+      "last": "20260807150000_restore_sie_imported_workpaper_blocker_precedence.sql"
+    },
+    "year_end_control_status": {
+      "definitions": 2,
+      "last": "20260730110000_canonical_historical_year_end_workpapers.sql"
+    },
+    "__year_end_assert_actor": {
+      "definitions": 2,
+      "last": "20260731120000_year_end_execution_contract_repair.sql"
+    },
+    "__year_end_prior_result_transfer": {
+      "definitions": 1,
+      "last": "20260729162000_historical_year_end_controls_and_atomic_close.sql"
+    },
+    "finalize_sie_import": {
+      "definitions": 2,
+      "last": "20260729160000_sie_identity_parse_sessions_and_corrections.sql"
+    },
+    "replace_sie_import": {
+      "definitions": 4,
+      "last": "20260720123000_sie_undo_replace_reversal_only.sql"
+    },
+    "undo_sie_import_internal": {
+      "definitions": 1,
+      "last": "20260720123000_sie_undo_replace_reversal_only.sql"
+    },
+    "__sie_reverse_import_entries": {
+      "definitions": 1,
+      "last": "20260720123000_sie_undo_replace_reversal_only.sql"
+    },
+    "resolve_company_access": {
+      "definitions": 5,
+      "last": "20260714120000_access_hardening_agency_status_service_resolver.sql"
+    },
+    "resolve_company_access_for_user": {
+      "definitions": 1,
+      "last": "20260714120000_access_hardening_agency_status_service_resolver.sql"
+    },
+    "user_company_ids": {
+      "definitions": 4,
+      "last": "20260630120000_company_authorization_access_control.sql"
+    },
+    "user_can_write_company": {
+      "definitions": 1,
+      "last": "20260715160000_bankid_consent_hardening.sql"
+    },
+    "user_can_access_company_v2": {
+      "definitions": 3,
+      "last": "20260630150000_commercial_plans_agency_limits.sql"
+    },
+    "require_service_role": {
+      "definitions": 1,
+      "last": "20260628180000_nordklart_commercial_admin_billing_stripe.sql"
+    },
+    "validate_and_increment_api_key": {
+      "definitions": 5,
+      "last": "20260512162506_api_v1_test_mode.sql"
+    },
+    "resolve_year_end_period_capability_for_user": {
+      "definitions": 1,
+      "last": "20260801140000_production_financial_atomicity_and_billing_lifecycle.sql"
+    },
+    "company_feature_access": {
+      "definitions": 3,
+      "last": "20260722233000_full_access_authoritative_resolver.sql"
+    },
+    "stripe_finalize_checkout_v2": {
+      "definitions": 1,
+      "last": "20260628190000_nordklart_commercial_go_live_hardening.sql"
+    },
+    "stripe_sync_subscription_v2": {
+      "definitions": 2,
+      "last": "20260715140000_stripe_incomplete_no_access.sql"
+    },
+    "stripe_apply_one_time_purchase_event": {
+      "definitions": 1,
+      "last": "20260801140000_production_financial_atomicity_and_billing_lifecycle.sql"
+    },
+    "write_audit_log": {
+      "definitions": 5,
+      "last": "20260715150000_fix_write_audit_log_missing_id.sql"
+    },
+    "audit_log_immutable": {
+      "definitions": 1,
+      "last": "20240101000014_audit_log.sql"
+    }
+  }
+}

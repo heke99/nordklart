@@ -37,5 +37,7 @@ export const POST = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
   },
-  { allowRequestedCompany: true },
+  // Finalizing locks a statutory annual-report version, so the wrapper gates
+  // write capability as well — requireYearEndAccess is not the only barrier.
+  { allowRequestedCompany: true, requireWrite: true },
 )

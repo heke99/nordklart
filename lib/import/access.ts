@@ -193,16 +193,28 @@ export async function resolveSieImportAccess(
         .map((row) => row.fiscal_period_id)
         .filter((id): id is string => Boolean(id)),
     )]
-    const roleCanOperateOneOff = [
-      'company_owner',
-      'company_admin',
-      'accountant',
-      'client_user',
-    ].includes(access.effective_role)
-
     return {
       allowed: true,
-      canWrite: access.can_write || roleCanOperateOneOff,
+      // Write capability comes from the canonical resolver and nowhere else.
+      //
+      // This used to be `access.can_write || roleCanOperateOneOff`, where the
+      // second term re-derived write access from effective_role alone. That
+      // looked equivalent — the role list is the same one can_write uses — but
+      // it dropped the membership_status condition. resolve_company_access_for_user
+      // computes can_write as
+      //
+      //     effective_role IN (...) AND membership_status = 'active'
+      //
+      // while company_member_is_active() admits both 'active' AND
+      // 'active_limited'. So an `active_limited` owner resolves with
+      // can_write = false and still satisfied the role list, and the `||`
+      // handed them write access on the one-off SIE import path — overriding a
+      // deliberate reduced-capability state.
+      //
+      // A commercial entitlement decides WHETHER the feature is available, never
+      // WHO may write. Those are separate gates and this is the one place they
+      // had been merged.
+      canWrite: access.can_write,
       companyExists: true,
       mode: 'one_off',
       effectiveRole: access.effective_role,

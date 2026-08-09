@@ -273,6 +273,40 @@ export async function createSupplierInvoicePaymentEntry(
   paymentAccount?: string,
   options?: { draftOnly?: boolean }
 ): Promise<JournalEntry | null> {
+  const input = await planSupplierInvoicePaymentEntry(
+    supabase,
+    companyId,
+    invoice,
+    paymentAmount,
+    paymentDate,
+    exchangeRateDifference,
+    supplierName,
+    paymentAccount,
+  )
+  if (!input) return null
+
+  return options?.draftOnly
+    ? createDraftEntry(supabase, companyId, userId, input)
+    : createJournalEntry(supabase, companyId, userId, input)
+}
+
+/**
+ * Line-building half of createSupplierInvoicePaymentEntry with no writes.
+ *
+ * Settlement commits the voucher inside the database transaction, so the entry
+ * has to exist as data first. The derivation rules stay in TypeScript — the
+ * ledger must not have two sources of truth for how a payment is booked.
+ */
+export async function planSupplierInvoicePaymentEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: SupplierInvoice,
+  paymentAmount: number,
+  paymentDate: string,
+  exchangeRateDifference?: number,
+  supplierName?: string,
+  paymentAccount?: string,
+): Promise<CreateJournalEntryInput | null> {
   const creditAccount = paymentAccount || '1930'
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -339,7 +373,7 @@ export async function createSupplierInvoicePaymentEntry(
     })
   }
 
-  const input: CreateJournalEntryInput = {
+  return {
     fiscal_period_id: fiscalPeriodId,
     entry_date: paymentDate,
     description: desc,
@@ -347,10 +381,6 @@ export async function createSupplierInvoicePaymentEntry(
     source_id: invoice.id,
     lines,
   }
-
-  return options?.draftOnly
-    ? createDraftEntry(supabase, companyId, userId, input)
-    : createJournalEntry(supabase, companyId, userId, input)
 }
 
 /**
@@ -378,6 +408,36 @@ export async function createSupplierInvoiceCashEntry(
   settledBankSek?: number,
   options?: { draftOnly?: boolean }
 ): Promise<JournalEntry | null> {
+  const input = await planSupplierInvoiceCashEntry(
+    supabase,
+    companyId,
+    invoice,
+    items,
+    paymentDate,
+    supplierType,
+    supplierName,
+    paymentAccount,
+    settledBankSek,
+  )
+  if (!input) return null
+
+  return options?.draftOnly
+    ? createDraftEntry(supabase, companyId, userId, input)
+    : createJournalEntry(supabase, companyId, userId, input)
+}
+
+/** Line-building half of createSupplierInvoiceCashEntry with no writes. See planSupplierInvoicePaymentEntry. */
+export async function planSupplierInvoiceCashEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: SupplierInvoice,
+  items: SupplierInvoiceItem[],
+  paymentDate: string,
+  supplierType: string,
+  supplierName?: string,
+  paymentAccount?: string,
+  settledBankSek?: number,
+): Promise<CreateJournalEntryInput | null> {
   const creditAccount = paymentAccount || '1930'
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -530,7 +590,7 @@ export async function createSupplierInvoiceCashEntry(
     line_description: desc,
   })
 
-  const input: CreateJournalEntryInput = {
+  return {
     fiscal_period_id: fiscalPeriodId,
     entry_date: paymentDate,
     description: desc,
@@ -538,10 +598,6 @@ export async function createSupplierInvoiceCashEntry(
     source_id: invoice.id,
     lines,
   }
-
-  return options?.draftOnly
-    ? createDraftEntry(supabase, companyId, userId, input)
-    : createJournalEntry(supabase, companyId, userId, input)
 }
 
 /**

@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, resolveSeriesFromSettings } from '@/lib/bookkeeping/engine'
 import {
-  createSupplierInvoiceCashEntry,
-  createSupplierInvoicePaymentEntry,
+  planSupplierInvoiceCashEntry,
+  planSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import type { CreateJournalEntryInput } from '@/types'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { eventBus } from '@/lib/events'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -31,6 +33,15 @@ export interface SettleSupplierInvoiceRequest {
   /** SEK amount used to clear 2440; differs from invoice-currency amount for FX payments. */
   ledgerPaymentAmount?: number
   exchangeRateDifference?: number
+  /**
+   * SEK that actually left the bank, for a FULL cash-method settlement of a
+   * foreign-currency invoice. createSupplierInvoiceCashEntry derives the
+   * payment-date rate from it (settledBankSek / invoice.total) so the payment
+   * account credit equals the bank movement to the öre. Only meaningful for a
+   * full settlement — a partial amount cannot pin a whole-invoice entry — and
+   * omitted when no independent bank figure exists.
+   */
+  settledBankSek?: number
   paymentAccount?: string
   customLines?: SupplierPaymentLine[]
   notes?: string
@@ -124,7 +135,10 @@ export async function settleSupplierInvoiceAtomic(
     }
   }
 
-  let draftJournalEntryId: string | null = null
+  // Plan the voucher without writing it. settle_supplier_invoice_v2 creates it
+  // inside the settlement transaction, so a failed settlement leaves no
+  // stranded draft to compensate for.
+  let journalPlan: CreateJournalEntryInput | null = null
   try {
     if (request.customLines) {
       const totalDebit = request.customLines.reduce((sum, line) => sum + line.debit_amount, 0)
@@ -143,45 +157,41 @@ export async function settleSupplierInvoiceAtomic(
       const description = invoice.supplier?.name
         ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
         : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
-      draftJournalEntryId = (await createDraftEntry(service, companyId, userId, {
+      journalPlan = {
         fiscal_period_id: fiscalPeriodId,
         entry_date: request.paymentDate,
         description,
         source_type: useCashEntry ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid',
         source_id: invoice.id,
         lines: request.customLines,
-      })).id
+      }
     } else if (useCashEntry) {
-      draftJournalEntryId = (await createSupplierInvoiceCashEntry(
+      journalPlan = await planSupplierInvoiceCashEntry(
         service,
         companyId,
-        userId,
         invoice,
         invoice.items ?? [],
         request.paymentDate,
         invoice.supplier?.supplier_type ?? 'swedish_business',
         invoice.supplier?.name,
         request.paymentAccount,
-        undefined,
-        { draftOnly: true },
-      ))?.id ?? null
+        request.settledBankSek,
+      )
     } else {
-      draftJournalEntryId = (await createSupplierInvoicePaymentEntry(
+      journalPlan = await planSupplierInvoicePaymentEntry(
         service,
         companyId,
-        userId,
         invoice,
         request.ledgerPaymentAmount ?? request.paymentAmount,
         request.paymentDate,
         request.exchangeRateDifference,
         invoice.supplier?.name,
         request.paymentAccount,
-        { draftOnly: true },
-      ))?.id ?? null
+      )
     }
   } catch (error) {
     if (isBookkeepingError(error)) {
-      log.warn('supplier mark-paid: typed bookkeeping failure while staging draft', {
+      log.warn('supplier mark-paid: typed bookkeeping failure while planning the voucher', {
         companyId,
         supplierInvoiceId: invoice.id,
         requestId: request.requestId,
@@ -189,7 +199,7 @@ export async function settleSupplierInvoiceAtomic(
       })
       return { ok: false, code: 'SI_PAID_FAILED', bookkeepingError: error }
     }
-    log.error('supplier mark-paid: draft journal entry creation failed', error as Error, {
+    log.error('supplier mark-paid: journal entry planning failed', error as Error, {
       companyId,
       supplierInvoiceId: invoice.id,
       requestId: request.requestId,
@@ -197,11 +207,16 @@ export async function settleSupplierInvoiceAtomic(
     return { ok: false, code: 'SI_PAID_FAILED' }
   }
 
-  if (!draftJournalEntryId) {
+  if (!journalPlan) {
     return { ok: false, code: 'INVOICE_PAID_NO_FISCAL_PERIOD' }
   }
 
-  const { data, error } = await service.rpc('settle_supplier_invoice', {
+  // Voucher series is a company setting, not a settlement decision. Resolve it
+  // here (a read) so the RPC persists the same series createDraftEntry would.
+  const voucherSeries = journalPlan.voucher_series
+    ?? await resolveSeriesFromSettings(service, companyId, journalPlan.source_type)
+
+  const { data, error } = await service.rpc('settle_supplier_invoice_v2', {
     p_company_id: companyId,
     p_supplier_invoice_id: invoice.id,
     p_actor_user_id: userId,
@@ -215,14 +230,13 @@ export async function settleSupplierInvoiceAtomic(
     p_request_id: request.requestId,
     p_payment_reference: request.paymentReference ?? null,
     p_notes: request.notes ?? null,
-    p_draft_journal_entry_id: draftJournalEntryId,
+    p_journal: { ...journalPlan, voucher_series: voucherSeries },
     p_expected_remaining_amount: invoice.remaining_amount,
   })
 
   if (error || !data) {
-    // Resolve the classic "commit succeeded, HTTP response was lost" case
-    // before cancelling anything. The idempotency row is committed atomically
-    // with the supplier settlement.
+    // Resolve the classic "commit succeeded, HTTP response was lost" case.
+    // The idempotency row is committed atomically with the supplier settlement.
     const { data: committedReplay } = await service.rpc('get_financial_operation_result', {
       p_company_id: companyId,
       p_operation_type: 'supplier_invoice_settlement',
@@ -231,19 +245,6 @@ export async function settleSupplierInvoiceAtomic(
     })
     if (committedReplay) return fromAtomic(committedReplay as AtomicSupplierSettlement)
 
-    const { error: cleanupError } = await service
-      .from('journal_entries')
-      .update({ status: 'cancelled' })
-      .eq('company_id', companyId)
-      .eq('id', draftJournalEntryId)
-      .eq('status', 'draft')
-    if (cleanupError) {
-      log.error('failed to cancel rolled-back supplier payment draft', cleanupError as Error, {
-        companyId,
-        supplierInvoiceId: invoice.id,
-        requestId: request.requestId,
-      })
-    }
     const atomicError = error ?? new Error('Atomic supplier settlement returned no result.')
     log.error('supplier mark-paid: atomic settlement failed', atomicError as Error, {
       companyId,
@@ -253,7 +254,48 @@ export async function settleSupplierInvoiceAtomic(
     return mapError(atomicError)
   }
 
-  return fromAtomic(data as AtomicSupplierSettlement)
+  const settled = data as AtomicSupplierSettlement
+  const result = fromAtomic(settled)
+
+  // supplier_invoice.paid is a delivered webhook event (lib/webhooks/event-catalog.ts)
+  // and the only signal subscribers get for an AP payment. It lives here rather
+  // than in the routes so every settlement caller emits it exactly once, and it
+  // is deliberately below the replay short-circuit above: a retried request
+  // resolves to the same committed payment and must not deliver a second event.
+  const { data: settledInvoice } = await service
+    .from('supplier_invoices')
+    .select('*, supplier:suppliers(*), items:supplier_invoice_items(*)')
+    .eq('company_id', companyId)
+    .eq('id', invoice.id)
+    .maybeSingle()
+
+  try {
+    // External fan-out is best effort: the durable outbox row was committed by
+    // the settlement RPC, so a transient bus failure cannot corrupt the payment.
+    await eventBus.emit({
+      type: 'supplier_invoice.paid',
+      payload: {
+        supplierInvoice: ((settledInvoice as LoadedSupplierInvoice | null) ?? {
+          ...invoice,
+          status: settled.status,
+          paid_amount: Number(settled.paid_amount),
+          remaining_amount: Number(settled.remaining_amount),
+        }) as SupplierInvoice,
+        paymentAmount: Number(settled.applied_amount),
+        companyId,
+        userId,
+      },
+    })
+  } catch (eventError) {
+    log.warn('supplier_invoice.paid immediate dispatch failed; durable outbox retained', {
+      companyId,
+      supplierInvoiceId: invoice.id,
+      requestId: request.requestId,
+      reason: eventError instanceof Error ? eventError.message : 'unknown',
+    })
+  }
+
+  return result
 }
 
 function fromAtomic(atomic: AtomicSupplierSettlement): SettleSupplierInvoiceResult {

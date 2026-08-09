@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **426**.
+Antal SQL-migreringar: **442**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -448,5 +448,21 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 422 | 20260730170000 | `20260730170000_canonical_year_end_staging_preview_execute.sql` | `562bcf8db66f01dd7cab4f3d173a91422e4c4a1c69af07dd80c6c394d33ffee7` |
 | 423 | 20260730213000 | `20260730213000_canonical_year_end_completion_repair.sql` | `d0ac67c118aca78761f5c9a76be48cdda94a877709518c02af15e8f74774aaee` |
 | 424 | 20260731120000 | `20260731120000_year_end_execution_contract_repair.sql` | `ad83e1cae6a6f5c4bf7a079bb9d93d80110456977e4919dda19921b9350a62d0` |
-| 425 | 20260731171000 | `20260731171000_annual_report_finalization_and_controlled_reopen.sql` | `dd8ea2fc2171653ec02e11c6ceaabc6013643bbb9f4408dbff8d026e3da1951f` |
-| 426 | 20260801140000 | `20260801140000_production_financial_atomicity_and_billing_lifecycle.sql` | `7c185ace5b4214f7f2f38b6dc0a703833b4f2bba9cc19e3d86c1b06b5ce9ad50` |
+| 425 | 20260731163000 | `20260731163000_year_end_pgcrypto_search_path_repair.sql` | `75cdc34f7fbef0c12bb3d757b5e17f5a6bdbf28e7a2dab0238d9fc623e536c38` |
+| 426 | 20260731171000 | `20260731171000_annual_report_finalization_and_controlled_reopen.sql` | `dd8ea2fc2171653ec02e11c6ceaabc6013643bbb9f4408dbff8d026e3da1951f` |
+| 427 | 20260801140000 | `20260801140000_production_financial_atomicity_and_billing_lifecycle.sql` | `7c185ace5b4214f7f2f38b6dc0a703833b4f2bba9cc19e3d86c1b06b5ce9ad50` |
+| 428 | 20260807120000 | `20260807120000_secure_migration_ledger_and_pin_search_path.sql` | `0d1702330b5ea568d4dc88c5dfbe41b034bb4395212ab397c1961113b93e32c2` |
+| 429 | 20260807130000 | `20260807130000_allow_sie_import_reversal_commit_method.sql` | `0441a84175b92fea4e9ffa2f9cdc35aa7ff133e144830fdbcf44379d7871ae3e` |
+| 430 | 20260807140000 | `20260807140000_restore_opening_balance_retag_carveout.sql` | `f9bfd0cd89f090d5aa25a20badaca1f19130b210fa41b7af053867d5816749ab` |
+| 431 | 20260807150000 | `20260807150000_restore_sie_imported_workpaper_blocker_precedence.sql` | `db93b22f52f72c6fab22cdff3c2d59a74f91dde365c87b8f9d3faa1951cc4a93` |
+| 432 | 20260807160000 | `20260807160000_bank_allocation_uniqueness_per_invoice.sql` | `03b4386744347aa23ca3be605a8856b1e0c97cb6eda8466bb55946a2b2c62758` |
+| 433 | 20260807170000 | `20260807170000_fix_null_invalidation_flags_in_open_item_reconciliation.sql` | `65612df63b3aae14dd320a114d91744321c4f53d43d0d6b5dec07353b6f55c53` |
+| 434 | 20260807180000 | `20260807180000_allow_atomic_settlement_commit_methods.sql` | `38b73e60cc1d805169e7be3485527fbfa2da663e4ed9ae3dd204c7027747afdf` |
+| 435 | 20260808120000 | `20260808120000_settlement_creates_its_own_voucher.sql` | `bbf6422cc51116b89bc3b8910dae9cf82cefe3d066a4052ed62b886d37ebaa8b` |
+| 436 | 20260808130000 | `20260808130000_pin_search_path_on_remaining_security_definer.sql` | `dd763a0e1fc1e73c9c2a588b23623a346bf4bc3e00b81cc8730069700d55c140` |
+| 437 | 20260808140000 | `20260808140000_allow_system_commit_method_for_prior_result_transfer.sql` | `e164c9bf86ca319fbae0113ee675ec23665a391ea0b26f1651b9d6990337a1d8` |
+| 438 | 20260808150000 | `20260808150000_security_invoker_on_tenant_scoped_views.sql` | `1dbb06cdd0d234767c802166e151339e5864bc6d01a21b5ffe84096e83763e38` |
+| 439 | 20260808160000 | `20260808160000_authorize_commit_journal_entry.sql` | `c816fbf1ef079b88563b8ceffe4a7917d02982a56329839f0d98d1974f6e57b7` |
+| 440 | 20260808170000 | `20260808170000_write_policies_require_write_capability.sql` | `aa8fa882ecd16423a8732fbe0b98ba191d52fbc3c81eb53edd756d3f10b9e4ad` |
+| 441 | 20260808180000 | `20260808180000_personal_assistant_rows_are_owner_scoped.sql` | `a591934fba796c6abf6351fa8c35433da45b245cbfee3dd438a166df982d1f18` |
+| 442 | 20260808190000 | `20260808190000_commit_journal_entry_is_unreachable_for_anon.sql` | `31cc30503a8c0398a1c600908f664684b90adc0b3e7b08b8ff01ff60c258b873` |

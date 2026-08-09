@@ -1,54 +1,106 @@
 # Aktiva blockerare och skuld
 
-1. `SUPABASE_DB_URL`/`DATABASE_URL` saknas. De fyra nya migrationerna kan därför
-   inte appliceras eller exekveras i detta arbetsutrymme.
-2. pg-real/RLS-testfilen finns men försöket stoppades av
-   `ECONNREFUSED 127.0.0.1:5432`; inga PostgreSQL-testresultat påstås.
-3. Mottagen baslinje innehåller två dubbla migrationsversioner:
-   `20260629120000` och `20260704120000`. De gamla migrationerna har inte
-   namnändrats eftersom applicerade migrationsfiler är immutabla.
-4. Betalning av migrerade AR/AP-poster har datamodell och dublettskydd men
-   saknar ännu en samlad produktionsroute som både länkar och vid behov bokar
-   betalningen atomiskt.
-5. Historiska banktabeller och manuell verifiering finns, men import av ett
-   äldre kontoutdrag till radnivå kräver fortsatt parser-/UI-arbete.
-6. Bolagsverket-snapshot kan användas via befintlig registerintegration, men
-   den nya bokslutsytan väljer i denna leverans profilfält och låser dem; ett
-   fullständigt fält-för-fält merge-UI mot registerkällan återstår.
-7. Produktionsbygget behöver nätåtkomst till Google Fonts. Själva bygget
-   passerade med build-only mocks, men en omockad körning i sandlådan fick
-   HTTP 502 från `fonts.gstatic.com`.
+Uppdaterad 2026-08-08, efter remediation-branchen
+`claude/nordklart-remediation-hardening-lbyqtt` (PR #7).
 
-Punkt 1–3 och 7 är miljö-/baslinjeförhållanden. Punkt 4–6 är uttryckligt kvarvarande
-produktarbete och ska inte betraktas som färdigverifierat.
+Allt nedan är verifierat i arbetspasset. Punkter som tidigare stod som
+blockerare men nu är motbevisade eller åtgärdade ligger längst ned.
 
-## Tillägg 2026-07-30
+## Blockerande före produktionsanspråk
 
-8. Migration `20260730170000_canonical_year_end_staging_preview_execute.sql`
-   är parser- och build-verifierad men inte applicerad mot en riktig databas i
-   arbetsmiljön; `SUPABASE_DB_URL`/`DATABASE_URL` saknas.
-9. De nya pg-real-scenarierna för preview-staleness, rollback och samtidighet
-   behöver köras mot den migrerade testdatabasen innan produktionsaktivering.
+1. **De sex säkerhetsfynden är fixade i repot men inte i produktion.**
+   Produktion ligger 12+ migrationer efter branchen, så #16–#21 är levande i
+   drift tills branchen är deployad. Ordning och verifieringsfrågor står i
+   `next-actions.md` — `db:migrate` får inte köras före `mark-through`.
 
-## Slutförandereparation 2026-07-30
+2. **Leaked-password protection är avstängt.** Dashboard-only. EXTERN ÅTGÄRD.
 
-10. Migration `20260730213000_canonical_year_end_completion_repair.sql` är
-    syntax-, ordnings-, unit- och buildverifierad men inte applicerad mot en
-    riktig databas här eftersom `SUPABASE_DB_URL`/`DATABASE_URL` saknas.
-11. Processorerna för återföring och outbox behöver köras i pg-real mot
-    migration 423 före produktionsaktivering för att verifiera låsning,
-    samtidighet, backoff och dead-letter i den faktiska PostgreSQL-versionen.
+3. **Branch protection går inte att konfigurera.** Privat repo på GitHub Free;
+   `/rulesets` och `/branches/main/protection` svarar 403 *"Upgrade to GitHub
+   Pro or make this repository public"*. Plangräns, inte behörighetsgräns. CI
+   kan alltså inte krävas för merge — den är rådgivande tills planen ändras.
 
-## Exekveringskontrakt 2026-07-31
+4. **GitHub Actions slutade tilldela runners 2026-08-08 ~21:47 UTC.** Varje
+   workflow i repot failar sedan dess på 2–4 sekunder med `runner_id: 0`, noll
+   steg och ingen logg — inklusive de två rådgivande workflows som körde grönt
+   några minuter tidigare på samma SHA. Sju återförsök över tolv minuter, samma
+   signatur varje gång. Det är ett kontonivåtak (Actions-minuter eller
+   spending limit), inte något i branchen; billing-endpointen är blockerad
+   härifrån så exakt orsak går inte att läsa. Sista lyckade fjärrkörning:
+   `core-only` grön på `64ce246` (typecheck, lint, build, 6175 unit-tester,
+   guards, extension-isolering).
 
-12. `npm run db:migrate:status` stoppas eftersom varken `SUPABASE_DB_URL` eller
-    `DATABASE_URL` finns i arbetsmiljön. Migration 424 är därför inte applicerad
-    mot vare sig ren eller befintlig databas här.
-13. `npm run test:pg` försöktes och stoppades av
-    `ECONNREFUSED 127.0.0.1:5432`/`::1:5432`; de 75 pg-real-filerna, inklusive
-    det utökade bokslutstestet, är inte godkända i detta pass.
-14. `npm run build` och `npm run check:feature-policy` kan inte starta `tsx` i
-    sandlådan (`listen EPERM /tmp/tsx-0/*.pipe`). Samma generatorer/kontroll
-    kördes med `node --import tsx`; därefter passerade både feature-policy och
-    det fullständiga Next-bygget. Detta är en runnerbegränsning, inte ett
-    identifierat källkodsfel.
+## Fynd från detta arbetspass (alla fixade i repot)
+
+| # | Fynd | Fix |
+|---|---|---|
+| 15 | `supplier_invoice.paid`-eventet tappades av `127bcf1` | återinfört i `mark-paid-service.ts` |
+| 16 | `commit_method='system'` förbjuden av sin egen CHECK — slår till vid *andra* bokslutet i rad för AB | `20260808140000` |
+| 17 | Fyra vyer läckte tvärs över tenants (388 / 4 433 / 22 165 / 104 främmande rader, uppmätt) | `20260808150000` |
+| 18 | `commit_journal_entry` saknade auktorisation helt | `20260808160000` |
+| 19 | 147 write-policies auktoriserade på läsnivå-medlemskap över 57 tabeller | `20260808170000` |
+| 20 | `resolveSieImportAccess` härledde skrivrätt ur `effective_role` och promoverade `active_limited` | `lib/import/access.ts` |
+| 21 | Återkallad plattformsroll auktoriserade fortfarande (`revoked_at` filtrerades inte) | två routes + permanent guard |
+
+Två av dem är värda att minnas för formen, inte bara innehållet:
+
+- **#18 var inte helt fixad förrän CI körde.** `REVOKE ... FROM PUBLIC`
+  verifierades mot en vanlig PostgreSQL, där PUBLIC är enda vägen in. Supabase
+  kör `alter default privileges ... grant all on functions to ... anon`, så
+  varje funktion i `public` får ett **eget** anon-grant som ett PUBLIC-revoke
+  inte rör. anon behöll EXECUTE — och eftersom `auth.uid()` är NULL för anon
+  hoppades hela skrivkontrollen över. `20260808190000` tar bort grantet och
+  låter kroppen avvisa anon explicit. Ingen lokal databas kunde ha hittat det;
+  repots första CI-körning gjorde det.
+
+- **#19 var för brett i tre tabeller.** `agent_conversations`, `chat_sessions`
+  och `chat_messages` är en användares egen konversation, inte bolagsdata. Krav
+  på bolagsskrivrätt låste ute viewers och auditors från assistenten.
+  `20260808180000` byter till medlemskap **och** `user_id = auth.uid()` — smalare
+  än båda tidigare versionerna, som lät vem som helst med skrivrätt redigera
+  någon annans konversation.
+
+## Testläge
+
+Uppmätt på branchens HEAD:
+
+| Svit | Antal | Not |
+|---|---:|---|
+| unit | 6182 passerade, 3 skippade (500 filer) | `origin/main` har 53 failures i 10 filer |
+| pg-real | 669 passerade (91 filer) | var 509 vid passets början |
+| lint | 0 errors, 233 warnings | ratchet-baseline 0 errors |
+
+Inget test är borttaget, skippat eller nedgraderat. Varje failure klassades
+(TEST_STALE / PRODUCT_BUG / MOCK_STALE / CONTRACT_DRIFT) och åtgärdades i den
+ände klassningen pekade på.
+
+## Kvarvarande produktarbete (oförändrat)
+
+4. Samlad produktionsroute som både länkar och vid behov bokar betalning av
+   migrerade AR/AP-poster atomiskt.
+5. Import av äldre kontoutdrag till radnivå (parser/UI).
+6. Fullständigt fält-för-fält merge-UI mot Bolagsverket-snapshot.
+
+## Miljö
+
+7. Bygget hämtar Google Fonts över nätet; hermetisk CI kan falla på det.
+8. pg-real kör Postgres som en vanlig docker-container, inte som `services:`.
+   Runnern dumpar hela service-containerns logg vid teardown, och sviten
+   provocerar fel med flit — dumpen blev ~500 kB och tryckte ut vitest-utskriften
+   ur det Actions-API:t lämnar tillbaka. Att tysta servern går inte: `postgres`
+   är inte superuser i supabase-imagen, så ALTER SYSTEM nekas.
+
+## Stängda antaganden
+
+- ~~"Unit-sviten failar."~~ 6175/6175.
+- ~~"H-03 betalningsatomicitet."~~ Settlementet skapar sitt eget verifikat inne
+  i transaktionen; den kompenserande draft-annulleringen är borttagen.
+- ~~"H-05 testmatrisen."~~ Concurrency, failure injection, Stripe-livscykel,
+  bokslut, SIE, engångsköp och tenant-isolering finns i pg-real.
+- ~~"Migrationsliggaren beskriver inte databasen."~~ Verktyget finns och är
+  verifierat i båda riktningarna; körningen mot produktion är en operatörsåtgärd.
+- ~~"`SUPABASE_DB_URL` saknas, ingen DB kan nås."~~ Live-projektet är nåbart och
+  pg-real kördes mot riktig PostgreSQL.
+- ~~"Två dubbla migrationsversioner är ett olöst problem."~~ Egen runner nycklar
+  på fullt filnamn; CI-guarden bär dem som stängd allowlist.
+- ~~"6 skills saknar proveniens."~~ Det var den härledda TSV-filen som var gammal.

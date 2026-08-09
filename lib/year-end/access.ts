@@ -156,11 +156,16 @@ export async function canUseYearEnd(
 /**
  * Resolves the product/payment source for a specific fiscal period.
  *
- * Access order is deliberately explicit:
- *   1. subscription/manual/commercial grant for year_end.projects
- *   2. optional subscription/manual/commercial grant for year_end.ixbrl
- *   3. active/paid one-time purchase for the exact fiscal period
- *   4. platform_admin bypass, audited by callers through requireYearEndAccess
+ * Authorization and entitlement are two separate gates and are evaluated in
+ * that order. The canonical database resolver — actor, company access, exact
+ * fiscal period and write capability — always runs first when both actor and
+ * period are known. A commercial entitlement can only substitute for *payment*
+ * (`YEAR_END_PERIOD_PURCHASE_REQUIRED`); it can never substitute for access.
+ *
+ * Access order is therefore:
+ *   1. canonical actor/company/period/write capability (database authority)
+ *   2. on purchase-required only: optional grant for year_end.ixbrl
+ *   3. platform_admin bypass, audited by callers through requireYearEndAccess
  */
 export async function resolveYearEndAccess(
   supabase: SupabaseClient,
@@ -169,9 +174,36 @@ export async function resolveYearEndAccess(
   userId?: string | null,
   options: RequireYearEndAccessOptions = {},
 ): Promise<YearEndAccessDecision> {
-  // iXBRL may be sold as a distinct feature. It is checked explicitly, while
-  // the normal year-end product and every exact-period one-time purchase are
-  // resolved by one database authority below.
+  if (userId && fiscalPeriodId) {
+    const canonical = await resolveCanonicalPeriodAccess(
+      userId,
+      companyId,
+      fiscalPeriodId,
+      options.requireWrite === true,
+    )
+    if (canonical.allowed || !options.allowIxbrlFeature) return canonical
+
+    // iXBRL may be sold as a distinct feature, so it can stand in for a
+    // year-end purchase. It must not stand in for company access, period
+    // binding, write capability or a failed resolver — those keep failing
+    // closed exactly as the canonical resolver decided.
+    if (canonical.reason !== 'missing_entitlement') return canonical
+
+    const ixbrlEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.ixbrl')
+    if (ixbrlEntitlement.allowed) {
+      return {
+        allowed: true,
+        source: 'ixbrl_feature_entitlement',
+        sourceId: ixbrlEntitlement.sourceId ?? null,
+      }
+    }
+    return canonical
+  }
+
+  // Pre-period screens have no actor/period pair to authorize against. The
+  // iXBRL grant is still honoured here because the caller has already passed
+  // company access in withRouteContext, but no exact-period operation can
+  // reach this branch.
   if (options.allowIxbrlFeature) {
     const ixbrlEntitlement = await checkFeatureAccess(supabase, companyId, 'year_end.ixbrl')
     if (ixbrlEntitlement.allowed) {
@@ -181,15 +213,6 @@ export async function resolveYearEndAccess(
         sourceId: ixbrlEntitlement.sourceId ?? null,
       }
     }
-  }
-
-  if (userId && fiscalPeriodId) {
-    return resolveCanonicalPeriodAccess(
-      userId,
-      companyId,
-      fiscalPeriodId,
-      options.requireWrite === true,
-    )
   }
 
   // Compatibility path for pre-period screens. Exact-period operations must
@@ -256,6 +279,21 @@ export async function requireYearEndReportAccess(
   fiscalPeriodId: string,
   options: Pick<RequireYearEndAccessOptions, 'operation' | 'requestId'> = {},
 ): Promise<YearEndAccessDecision> {
+  // Authorization first, exactly as in resolveYearEndAccess: a reports.core
+  // entitlement is company-wide and says nothing about whether this actor may
+  // read this company's period, so it must never short-circuit the canonical
+  // actor/company/period check.
+  const decision = await requireYearEndAccess(
+    supabase,
+    companyId,
+    userId,
+    fiscalPeriodId,
+    options,
+  )
+  if (decision.allowed || decision.reason !== 'missing_entitlement') return decision
+
+  // Authorized for the period but without a year-end product: a normal
+  // reports.core entitlement is sufficient for these statutory reports.
   const reportEntitlement = await checkFeatureAccess(
     supabase,
     companyId,
@@ -268,13 +306,7 @@ export async function requireYearEndReportAccess(
       sourceId: reportEntitlement.sourceId ?? null,
     }
   }
-  return requireYearEndAccess(
-    supabase,
-    companyId,
-    userId,
-    fiscalPeriodId,
-    options,
-  )
+  return decision
 }
 
 export function yearEndAccessDeniedResponse(

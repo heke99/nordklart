@@ -1,5 +1,6 @@
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
@@ -37,6 +38,7 @@ export const POST = withRouteContext(
       lines: customLines,
       manual_exchange_rate: manualExchangeRate,
       force,
+      expected_journal_entry_id: expectedJournalEntryId,
     } = validation.data
     const txLog = log.child({ transactionId, invoiceId })
 
@@ -101,11 +103,17 @@ export const POST = withRouteContext(
       : Number(transaction.amount_sek ?? transactionAmount * Number(transaction.exchange_rate ?? 1))
 
     let paymentAmount = transactionAmount
+    // Which rate settled a cross-currency payment, and where it came from, is
+    // audit-relevant: BFL requires the applied exchange rate to stay traceable.
+    // Both are recorded on the match event below.
+    let settlementRate: number | null = null
+    let settlementRateSource: 'manual' | 'riksbanken' | null = null
     if (transactionCurrency !== invoiceCurrency) {
       if (invoiceCurrency === 'SEK') {
         paymentAmount = transactionSek
       } else {
         let paymentRate = manualExchangeRate ?? null
+        settlementRateSource = paymentRate == null ? 'riksbanken' : 'manual'
         if (paymentRate == null) {
           const rateInfo = await fetchExchangeRate(invoiceCurrency, new Date(transaction.date))
           paymentRate = rateInfo?.rate ?? null
@@ -120,6 +128,7 @@ export const POST = withRouteContext(
             },
           })
         }
+        settlementRate = paymentRate
         paymentAmount = Math.round((transactionSek / paymentRate) * 10000) / 10000
       }
     }
@@ -131,6 +140,9 @@ export const POST = withRouteContext(
         details: {
           field: 'amount',
           message: 'Överbetalning i annan valuta kräver manuell granskning.',
+          // By how much, in invoice currency. Without it the caller is told to
+          // review manually but not what the discrepancy is.
+          overpayment_amount: roundOre(paymentAmount - Number(invoice.remaining_amount)),
         },
       })
     }
@@ -152,10 +164,31 @@ export const POST = withRouteContext(
           transactionDate: transaction.date,
           transactionAmount: transaction.amount,
         })
-        if (candidate) {
-          return errorResponseFromCode('MATCH_INVOICE_POSSIBLE_DUPLICATE', txLog, {
+        // The soft guard is heuristic (same amount, same date), so false
+        // positives are expected and the user must be able to proceed. The
+        // override is deliberately NOT a blind force: per MatchInvoiceSchema the
+        // caller echoes the journal_entry_id of the candidate it showed the
+        // user, the server re-detects, and the override is honoured only if the
+        // two still agree. That binds the decision to a specific, user-seen
+        // duplicate so an automation cannot sweep force=true through the guard
+        // without ever consulting a candidate.
+        if (!force) {
+          if (candidate) {
+            return errorResponseFromCode('MATCH_INVOICE_POSSIBLE_DUPLICATE', txLog, {
+              requestId,
+              details: { candidate, forceIgnored: false },
+            })
+          }
+        } else if (candidate?.journal_entry_id !== expectedJournalEntryId) {
+          // Either the duplicate vanished or a different one is detected now:
+          // the state the user confirmed no longer holds, so refuse rather than
+          // proceed on a stale confirmation.
+          return errorResponseFromCode('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH', txLog, {
             requestId,
-            details: { candidate, forceIgnored: Boolean(force) },
+            details: {
+              expected_journal_entry_id: expectedJournalEntryId ?? null,
+              detected_journal_entry_id: candidate?.journal_entry_id ?? null,
+            },
           })
         }
       } catch (error) {
@@ -206,6 +239,9 @@ export const POST = withRouteContext(
         paid_amount: result.newPaidAmount,
         remaining_amount: result.newRemaining,
         journal_entry_id: result.journalEntryId,
+        ...(settlementRate != null
+          ? { exchange_rate: settlementRate, rate_source: settlementRateSource }
+          : {}),
       },
     })
     try {

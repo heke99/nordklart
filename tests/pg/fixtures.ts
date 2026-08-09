@@ -22,14 +22,42 @@ export async function insertCompany(params: {
   createdBy: string
   name?: string
   entityType?: 'enskild_firma' | 'aktiebolag'
+  orgNumber?: string | null
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
-    `INSERT INTO public.companies (id, name, entity_type, created_by)
-     VALUES ($1, $2, $3, $4)`,
-    [id, params.name ?? 'Test AB', params.entityType ?? 'aktiebolag', params.createdBy],
+    `INSERT INTO public.companies (id, name, entity_type, org_number, created_by)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      id,
+      params.name ?? 'Test AB',
+      params.entityType ?? 'aktiebolag',
+      // An economic close requires canonical company facts (name, org number,
+      // legal form, framework) — see year_end readiness `company_details_incomplete`.
+      // Pass orgNumber: null explicitly to test the incomplete case.
+      params.orgNumber === undefined ? '5560000001' : params.orgNumber,
+      params.createdBy,
+    ],
   )
   return id
+}
+
+/**
+ * company_settings row with the canonical defaults. Year-end readiness requires
+ * an explicit accounting_method, and the column already defaults to 'accrual',
+ * so the row's existence is what matters. Idempotent: tests that insert their
+ * own settings row still work.
+ */
+export async function insertCompanySettings(params: {
+  companyId: string
+  accountingMethod?: 'accrual' | 'cash'
+}): Promise<void> {
+  await getPool().query(
+    `INSERT INTO public.company_settings (company_id, accounting_method)
+     VALUES ($1, $2)
+     ON CONFLICT (company_id) DO UPDATE SET accounting_method = EXCLUDED.accounting_method`,
+    [params.companyId, params.accountingMethod ?? 'accrual'],
+  )
 }
 
 export async function insertCompanyMember(params: {
@@ -81,6 +109,7 @@ export async function seedCompany(overrides: { isClosed?: boolean } = {}): Promi
   const userId = await insertAuthUser()
   const companyId = await insertCompany({ createdBy: userId })
   await insertCompanyMember({ companyId, userId, role: 'owner' })
+  await insertCompanySettings({ companyId })
   const fiscalPeriodId = await insertFiscalPeriod({
     userId,
     companyId,
@@ -232,4 +261,193 @@ export async function insertBalancedLines(
             ($1, '3001', 0, $2)`,
     [journalEntryId, amount],
   )
+}
+
+// ---------------------------------------------------------------------------
+// Year-end manual cash reconciliation
+// ---------------------------------------------------------------------------
+// A company without a bank connection must verify each cash account's balance
+// manually against an uploaded statement before the books can be closed
+// (`manual_cash_reconciliation_missing`). Creating a company seeds a default
+// cash account, so *every* year-end close test hits this gate.
+
+/** WORM evidence document standing in for an uploaded bank statement. */
+export async function insertEvidenceDocument(params: {
+  userId: string
+  companyId: string
+  fileName?: string
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.document_attachments
+       (id, user_id, company_id, storage_path, file_name, file_size_bytes,
+        mime_type, sha256_hash, uploaded_by, upload_source)
+     VALUES ($1, $2, $3, $4, $5, 1024,
+             'application/pdf', $6, $2, 'file_upload')`,
+    [
+      id,
+      params.userId,
+      params.companyId,
+      `documents/${params.userId}/${id}.pdf`,
+      params.fileName ?? 'kontoutdrag.pdf',
+      randomUUID().replace(/-/g, '').padEnd(64, '0').slice(0, 64),
+    ],
+  )
+  return id
+}
+
+export async function recordManualCashReconciliation(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+  /** Null when the company has no cash_accounts row for the ledger account. */
+  cashAccountId: string | null
+  statementBalance: number
+  evidenceDocumentId: string
+}): Promise<void> {
+  await getPool().query(
+    `SELECT public.record_year_end_manual_cash_reconciliation(
+       $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::numeric, $6::uuid, $7
+     )`,
+    [
+      params.companyId,
+      params.fiscalPeriodId,
+      params.userId,
+      params.cashAccountId,
+      params.statementBalance,
+      params.evidenceDocumentId,
+      `test-${randomUUID()}`,
+    ],
+  )
+}
+
+/**
+ * Clears the manual-cash-reconciliation blocker for every cash account on the
+ * company by attesting the statement balance at the account's actual posted
+ * ledger balance, so the recorded difference is zero.
+ *
+ * Call this AFTER posting the entries a test needs, otherwise the snapshot goes
+ * stale (`manual_cash_reconciliation_stale`) as soon as another line lands on
+ * the account.
+ */
+export async function satisfyManualCashReconciliation(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+}): Promise<void> {
+  // Drive off the status function, not cash_accounts: a company with no
+  // cash_accounts row still gets a synthetic manual row for its ledger cash
+  // account (e.g. 1930) with a NULL cash_account_id, and that row is what the
+  // blocker iterates. It also hands back the server-computed ledger_balance,
+  // so attesting to exactly that value yields a zero difference.
+  const { rows: accounts } = await getPool().query<{
+    cash_account_id: string | null
+    ledger_balance: string
+    reconciliation_mode: string
+    is_reconciled: boolean
+  }>(
+    `SELECT cash_account_id, ledger_balance, reconciliation_mode, is_reconciled
+     FROM public.year_end_cash_reconciliation_status($1::uuid, $2::uuid)`,
+    [params.companyId, params.fiscalPeriodId],
+  )
+
+  const pending = accounts.filter(
+    (account) => account.reconciliation_mode === 'manual' && !account.is_reconciled,
+  )
+  if (pending.length === 0) return
+
+  const evidenceDocumentId = await insertEvidenceDocument(params)
+  for (const account of pending) {
+    await recordManualCashReconciliation({
+      ...params,
+      cashAccountId: account.cash_account_id,
+      statementBalance: Number(account.ledger_balance ?? 0),
+      evidenceDocumentId,
+    })
+  }
+}
+
+/**
+ * Reverses a posted entry the way the engine does, and the only way the
+ * immutability trigger accepts: a posted storno that points back at the
+ * original via reverses_id, linked from the original via reversed_by_id.
+ *
+ * A bare `UPDATE journal_entries SET status = 'reversed'` is rejected with
+ * REVERSAL_LINK_REQUIRED — posted entries may only be reversed by a real,
+ * mutually linked correction entry.
+ *
+ * Returns the reversal entry's id.
+ */
+export async function reversePostedEntry(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+  entryId: string
+  amount?: number
+  entryDate?: string
+}): Promise<string> {
+  // Posted directly with an explicitly free voucher number rather than through
+  // commit_journal_entry(): callers of this helper often post their original
+  // entry with a hand-picked voucher_number without advancing the sequence, so
+  // letting the RPC assign one collides on uq_journal_entries_voucher_number.
+  const { rows: next } = await getPool().query<{ n: number }>(
+    `SELECT coalesce(max(voucher_number), 0) + 1 AS n
+     FROM public.journal_entries WHERE company_id = $1`,
+    [params.companyId],
+  )
+  const reversalId = await insertDraftJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    entryDate: params.entryDate,
+    description: 'Storno',
+    voucherNumber: next[0].n,
+  })
+  await getPool().query(
+    `UPDATE public.journal_entries
+     SET reverses_id = $1, source_type = 'storno'
+     WHERE id = $2`,
+    [params.entryId, reversalId],
+  )
+  await insertBalancedLines(reversalId, params.amount ?? 1000)
+  await getPool().query(
+    `UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`,
+    [reversalId],
+  )
+  await getPool().query(
+    `UPDATE public.journal_entries
+     SET status = 'reversed', reversed_by_id = $1
+     WHERE id = $2`,
+    [reversalId, params.entryId],
+  )
+  return reversalId
+}
+
+/**
+ * Minimal chart of accounts. Entries created through the engine tolerate a
+ * missing chart (account_id is nullable), but any RPC that resolves accounts
+ * itself — settle_*_v2 via create_planned_draft_entry — rejects an account the
+ * company does not have, so tests that exercise those paths need real rows.
+ */
+export async function insertChartAccounts(params: {
+  userId: string
+  companyId: string
+  accountNumbers?: string[]
+}): Promise<void> {
+  const accounts = params.accountNumbers ?? ['1510', '1930', '2440', '2611', '2641', '3001', '3960', '7960']
+  for (const accountNumber of accounts) {
+    await getPool().query(
+      `INSERT INTO public.chart_of_accounts
+         (user_id, company_id, account_number, account_name, account_class, account_type, normal_balance)
+       VALUES ($1, $2, $3, $4, $5, 'asset', 'debit')
+       ON CONFLICT (company_id, account_number) DO NOTHING`,
+      [
+        params.userId,
+        params.companyId,
+        accountNumber,
+        `Konto ${accountNumber}`,
+        Number(accountNumber[0]),
+      ],
+    )
+  }
 }

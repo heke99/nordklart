@@ -70,8 +70,35 @@ for (const file of supplierRoutes) {
   forbidText(file, 'reverseEntry(', 'implicit compensation reversal')
 }
 
-requireText('lib/invoices/mark-paid-service.ts', "rpc('settle_customer_invoice'", 'settle_customer_invoice RPC call')
-requireText('lib/supplier-invoices/mark-paid-service.ts', "rpc('settle_supplier_invoice'", 'settle_supplier_invoice RPC call')
+// H-03: the voucher is created INSIDE the settlement transaction. The
+// settlement services must therefore call the v2 RPCs and must not write a
+// journal entry of their own beforehand — a pre-created draft reintroduces the
+// stranded-voucher state that compensation could only paper over.
+const settlementMigration = 'supabase/migrations/20260808120000_settlement_creates_its_own_voucher.sql'
+for (const required of [
+  'CREATE OR REPLACE FUNCTION public.create_planned_draft_entry(',
+  'CREATE OR REPLACE FUNCTION public.settle_customer_invoice_v2(',
+  'CREATE OR REPLACE FUNCTION public.settle_supplier_invoice_v2(',
+]) requireText(settlementMigration, required)
+for (const signature of [
+  'public.create_planned_draft_entry',
+  'public.settle_customer_invoice_v2',
+  'public.settle_supplier_invoice_v2',
+]) {
+  const source = read(settlementMigration)
+  if (!source.includes(`REVOKE ALL ON FUNCTION ${signature}`)
+      || !source.includes(`GRANT EXECUTE ON FUNCTION ${signature}`)
+      || !source.includes('TO service_role;')) {
+    failures.push(`${settlementMigration}: ${signature} must be service-role-only`)
+  }
+}
+
+requireText('lib/invoices/mark-paid-service.ts', "rpc('settle_customer_invoice_v2'", 'settle_customer_invoice_v2 RPC call')
+requireText('lib/supplier-invoices/mark-paid-service.ts', "rpc('settle_supplier_invoice_v2'", 'settle_supplier_invoice_v2 RPC call')
+for (const service of ['lib/invoices/mark-paid-service.ts', 'lib/supplier-invoices/mark-paid-service.ts']) {
+  forbidText(service, 'createDraftEntry(', 'journal entry written before the settlement transaction')
+  forbidText(service, "from('journal_entries')", 'compensating journal_entries write')
+}
 requireText('lib/year-end/access.ts', "'resolve_year_end_period_capability_for_user'", 'canonical period capability RPC')
 for (const eventName of [
   'checkout.session.async_payment_succeeded',

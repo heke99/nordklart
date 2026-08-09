@@ -1,4 +1,5 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
@@ -80,19 +81,39 @@ export const POST = withRouteContext(
         details: {
           transaction_amount: paymentAmount,
           remaining_amount: Number(invoice.remaining_amount),
+          // How far over, so the caller can route the excess through the
+          // split-payment flow without recomputing it.
+          excess: roundOre(paymentAmount - Number(invoice.remaining_amount)),
         },
       })
     }
 
+    // Rate on the invoice row, if any. `?? 1` would silently treat a missing
+    // rate as parity and book a 25 USD payable as 25 SEK, so the absence is
+    // kept explicit and handled below.
+    const invoiceRate = invoice.exchange_rate != null ? Number(invoice.exchange_rate) : null
+    const bankSek = transactionCurrency === 'SEK'
+      ? transactionAmount
+      : (transaction.amount_sek != null ? Math.abs(Number(transaction.amount_sek)) : null)
     const bookedSek = invoiceCurrency === 'SEK'
       ? paymentAmount
-      : Math.round(paymentAmount * Number(invoice.exchange_rate ?? 1) * 100) / 100
-    const actualBankSek = transactionCurrency === 'SEK'
-      ? transactionAmount
-      : Number(transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : bookedSek)
-    const exchangeRateDifference = invoiceCurrency === 'SEK'
-      ? 0
-      : Math.round((bookedSek - actualBankSek) * 100) / 100
+      : invoiceRate != null
+        ? roundOre(paymentAmount * invoiceRate)
+        // No rate on file: the AP-booked SEK cannot be derived, so settle at
+        // what actually left the bank rather than inventing a parity rate.
+        : (bankSek ?? paymentAmount)
+    const actualBankSek = bankSek ?? bookedSek
+    // The residual is the difference between what the payable was booked at and
+    // what actually left the bank, in SEK. Keying it off the INVOICE currency
+    // dropped a real realised difference in the reverse case: a SEK invoice
+    // settled from a foreign-currency account, where amount_sek differs from the
+    // booked amount. Paying a 1 000 SEK payable with a card movement worth
+    // 1 063 SEK is a 63 SEK realised loss that must reach 7960/3960 rather than
+    // vanish. When both sides are SEK the two figures are equal and this is 0,
+    // and the entry builder only emits an FX line for a non-zero difference.
+    // With no rate on file the booked amount IS the bank amount, so there is no
+    // difference to attribute; every other case compares the two directly.
+    const exchangeRateDifference = roundOre(bookedSek - actualBankSek)
 
     const { data: settings } = await supabase
       .from('company_settings')
@@ -101,12 +122,29 @@ export const POST = withRouteContext(
       .maybeSingle()
     const unbookedCashInvoice = !invoice.registration_journal_entry_id
       && settings?.accounting_method === 'cash'
-    if (!customLines && unbookedCashInvoice && invoiceCurrency !== 'SEK') {
-      return errorResponseFromCode('VALIDATION_ERROR', txLog, {
+    // Kontantmetoden books the whole invoice as one verifikat at the
+    // payment-date rate (BFL 5 kap; ÅRL 4 kap 6 §). createSupplierInvoiceCashEntry
+    // derives that rate from the SEK that actually settled the invoice
+    // (settledBankSek / invoice.total), which only holds when the payment
+    // settles the invoice in FULL — a partial bank amount cannot pin a
+    // whole-invoice entry. So a full foreign settlement is allowed and pinned
+    // to the bank movement; a partial one is refused with its own code rather
+    // than blocking every foreign cash payment.
+    const isFullSettlement =
+      paymentAmount >= Number(invoice.remaining_amount) - 0.005
+    const settledBankSek = !customLines && unbookedCashInvoice && invoiceCurrency !== 'SEK'
+      // No independent bank figure (foreign transaction without amount_sek):
+      // leave it unset so the builder falls back to the invoice's stored rate
+      // instead of pinning to a bogus number.
+      ? (bankSek ?? undefined)
+      : undefined
+    if (!customLines && unbookedCashInvoice && invoiceCurrency !== 'SEK' && !isFullSettlement) {
+      return errorResponseFromCode('MATCH_SI_CASH_FX_UNSUPPORTED', txLog, {
         requestId,
         details: {
-          field: 'lines',
-          message: 'Betalning av utländsk kontantmetodsfaktura kräver balanserade SEK-rader med betalningsdagens kurs.',
+          field: 'amount',
+          payment_amount: paymentAmount,
+          remaining_amount: Number(invoice.remaining_amount),
         },
       })
     }
@@ -131,6 +169,7 @@ export const POST = withRouteContext(
         paymentAmount,
         ledgerPaymentAmount: bookedSek,
         exchangeRateDifference,
+        settledBankSek,
         customLines,
         transactionId,
         paymentReference: transaction.reference ?? null,

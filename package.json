@@ -14,9 +14,9 @@
     "prebuild": "npm run setup:extensions && node scripts/inject-public-branding.mjs",
     "build": "NODE_OPTIONS=--max-old-space-size=4096 next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "NODE_OPTIONS=--max-old-space-size=4096 tsc --noEmit",
     "lint": "eslint",
-    "check:guards": "node scripts/checks/no-new-antipatterns.mjs && node scripts/checks/migration-integrity.mjs && node scripts/checks/financial-hardening-contract.mjs",
+    "check:guards": "node scripts/checks/no-new-antipatterns.mjs && node scripts/checks/migration-integrity.mjs && node scripts/checks/migration-redefinition.mjs && node scripts/checks/financial-hardening-contract.mjs && node scripts/checks/service-role-surface.mjs && node scripts/checks/platform-role-revocation.mjs",
     "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
     "test": "vitest run --project unit",
     "test:pg": "VITEST_PG_REAL=1 vitest run --project pg-real",
@@ -26,11 +26,18 @@
     "db:migrate:list": "node scripts/supabase-migrate.cjs list supabase/migrations",
     "db:migrate:plan-after": "node scripts/supabase-migrate.cjs plan-after supabase/migrations",
     "db:migrate:mark-through": "node scripts/supabase-migrate.cjs mark-through supabase/migrations",
+    "db:ledger:reconcile": "node scripts/reconcile-migration-ledger.mjs",
+    "db:ledger:reconcile:apply": "node scripts/reconcile-migration-ledger.mjs --apply",
     "check:feature-policy": "npx tsx scripts/check-feature-policy-coverage.ts",
     "nordklart:platform-accounting-regression": "node scripts/nordklart-platform-accounting-regression.cjs",
     "check:migrations": "node scripts/checks/migration-integrity.mjs",
     "check:migrations:db": "node scripts/checks/migration-integrity.mjs --db",
-    "check:financial-hardening": "node scripts/checks/financial-hardening-contract.mjs"
+    "check:financial-hardening": "node scripts/checks/financial-hardening-contract.mjs",
+    "check:skill-provenance": "node scripts/checks/skill-provenance.mjs",
+    "verify:fast": "npm run typecheck && npm run check:lint && npm run check:guards && npm run check:feature-policy && npm run skills:check && npm run check:skill-provenance && npm test",
+    "verify:db": "npm run check:migrations:db && npm run test:pg",
+    "verify:release": "npm run verify:fast && npm run build && npm run verify:db",
+    "check:redefinition": "node scripts/checks/migration-redefinition.mjs"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.1",
@@ -103,7 +110,7 @@
     "typescript": "^5",
     "vitest": "^4.0.18"
   },
-  "description": "Nordklart — svensk bokföring, bokslut och byråplattform.",
+  "description": "Nordklart \u2014 svensk bokf\u00f6ring, bokslut och byr\u00e5plattform.",
   "overrides": {
     "next": "16.2.9",
     "postcss": "^8.5.10"

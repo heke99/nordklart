@@ -711,11 +711,40 @@ export function createQueuedMockSupabase() {
 
   const reset = () => {
     queue.length = 0
+    byName.clear()
   }
 
-  const buildChain = (): unknown => {
-    // Capture the result at chain creation (when from/rpc is called)
-    const result = queue.shift() || { data: null, error: null, count: null }
+  // Optional table/RPC-keyed responses. A purely positional FIFO queue couples
+  // every test to a route's exact query ORDER, so reordering reads inside a
+  // route silently starves later ones and the failure surfaces as a nonsense
+  // assertion far away. enqueueFor('invoices', …) says what a read of that
+  // relation returns regardless of when it happens. Positional enqueue() still
+  // works and is used as the fallback, so existing tests are unaffected.
+  const byName = new Map<string, { data: unknown; error: unknown; count?: number | null }[]>()
+
+  const enqueueFor = (
+    name: string,
+    result: { data?: unknown; error?: unknown; count?: number | null },
+  ) => {
+    const list = byName.get(name) ?? []
+    list.push({
+      data: result.data ?? null,
+      error: result.error ?? null,
+      count: result.count ?? null,
+    })
+    byName.set(name, list)
+  }
+
+  const buildChain = (name?: string): unknown => {
+    // Capture the result at chain creation (when from/rpc is called).
+    // A keyed response for this relation wins; otherwise take the next
+    // positional item. The last keyed response for a name is sticky, so a
+    // relation read more times than the test enumerated keeps returning it
+    // instead of falling through to an unrelated queue entry.
+    const keyed = name ? byName.get(name) : undefined
+    const result = (keyed && (keyed.length > 1 ? keyed.shift() : keyed[0]))
+      || queue.shift()
+      || { data: null, error: null, count: null }
 
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -760,15 +789,15 @@ export function createQueuedMockSupabase() {
   }
 
   const supabase = {
-    from: vi.fn().mockImplementation(() => buildChain()),
-    rpc: vi.fn().mockImplementation(() => buildChain()),
+    from: vi.fn().mockImplementation((name?: string) => buildChain(name)),
+    rpc: vi.fn().mockImplementation((name?: string) => buildChain(name)),
     storage: storageMock,
     auth: {
       getUser: vi.fn(),
     },
   }
 
-  return { supabase, enqueue, enqueueMany, reset }
+  return { supabase, enqueue, enqueueMany, enqueueFor, reset }
 }
 
 export function makeCategorizationTemplate(
@@ -812,4 +841,165 @@ export function makeSIEVoucher(
     ],
     ...overrides,
   }
+}
+
+/**
+ * Complete mock factory for `@/lib/supabase/server`.
+ *
+ * `vi.mock` with a factory REPLACES the module, so a factory that returns only
+ * `createClient` leaves every other export undefined. When production code
+ * later reached for `createServiceClient` — as the settlement services now do —
+ * the tests failed with:
+ *
+ *   No "createServiceClient" export is defined on the "@/lib/supabase/server" mock
+ *
+ * Declaring the mock through this helper keeps the mocked surface in step with
+ * the real module: every export is present by default, and a test overrides
+ * only the client it cares about.
+ *
+ *   vi.mock('@/lib/supabase/server', () => supabaseServerMock({
+ *     client: mockSupabase,
+ *     serviceClient: serviceMock,
+ *   }))
+ *
+ * `serviceClient` defaults to whatever `client` is, which is what a route test
+ * that does not distinguish the two wants.
+ */
+export function supabaseServerMock(clients: {
+  client?: () => unknown
+  serviceClient?: () => unknown
+} = {}) {
+  // Both accessors are thunks and are only invoked when the code under test
+  // actually asks for a client. vi.mock factories are hoisted above every
+  // top-level binding in the file, so reading a `const mockSupabase` eagerly
+  // here would throw "Cannot access 'mockSupabase' before initialization".
+  const resolveClient = () => (clients.client ?? clients.serviceClient ?? (() => createMockSupabase().supabase))()
+  const resolveService = () => (clients.serviceClient ?? clients.client ?? (() => createMockSupabase().supabase))()
+  return {
+    createClient: () => Promise.resolve(resolveClient()),
+    createServiceClient: () => resolveService(),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settlement service-client helpers
+// ---------------------------------------------------------------------------
+// Customer and supplier settlement moved into the database RPCs
+// settle_customer_invoice / settle_supplier_invoice, which the services call
+// through createServiceClient() — a DIFFERENT client from the request-scoped
+// one. Route tests therefore need two queues: the caller's reads on one, and
+// the settlement round-trip on the other.
+//
+// The service-side sequence for a successful settlement is fixed:
+//   1. rpc('get_financial_operation_result')  -> null when this is not a replay
+//   2. rpc('settle_(customer|supplier)_invoice') -> the atomic settlement row
+//   3. from('...invoices').select(...).single() -> row used to hydrate the result
+//
+// enqueueCustomerSettlement()/enqueueSupplierSettlement() encode that sequence
+// once so tests describe the outcome rather than the call order.
+
+export type AtomicCustomerSettlementRow = {
+  invoice_id: string
+  payment_id: string | null
+  journal_entry_id: string
+  customer_credit_id: string | null
+  applied_amount: number
+  overpayment_amount: number
+  paid_amount: number
+  remaining_amount: number
+  status: 'paid' | 'partially_paid'
+  paid_at: string | null
+  request_id: string
+}
+
+export function makeAtomicCustomerSettlement(
+  overrides: Partial<AtomicCustomerSettlementRow> = {},
+): AtomicCustomerSettlementRow {
+  const applied = overrides.applied_amount ?? 1000
+  return {
+    invoice_id: '00000000-0000-4000-8000-000000000001',
+    payment_id: '00000000-0000-4000-8000-000000000002',
+    journal_entry_id: 'je-1',
+    customer_credit_id: null,
+    applied_amount: applied,
+    overpayment_amount: 0,
+    paid_amount: applied,
+    remaining_amount: 0,
+    status: 'paid',
+    paid_at: '2026-06-01T00:00:00.000Z',
+    request_id: 'req_test',
+    ...overrides,
+  }
+}
+
+export type AtomicSupplierSettlementRow = {
+  supplier_invoice_id: string
+  payment_id: string | null
+  journal_entry_id: string
+  applied_amount: number
+  paid_amount: number
+  remaining_amount: number
+  status: 'paid' | 'partially_paid'
+  paid_at: string | null
+  request_id: string
+}
+
+export function makeAtomicSupplierSettlement(
+  overrides: Partial<AtomicSupplierSettlementRow> = {},
+): AtomicSupplierSettlementRow {
+  const applied = overrides.applied_amount ?? 1000
+  return {
+    supplier_invoice_id: '00000000-0000-4000-8000-000000000003',
+    payment_id: '00000000-0000-4000-8000-000000000004',
+    journal_entry_id: 'je-1',
+    applied_amount: applied,
+    paid_amount: applied,
+    remaining_amount: 0,
+    status: 'paid',
+    paid_at: '2026-06-01T00:00:00.000Z',
+    request_id: 'req_test',
+    ...overrides,
+  }
+}
+
+type QueuedMock = {
+  enqueueFor: (name: string, r: { data?: unknown; error?: unknown }) => void
+}
+
+/**
+ * Keys the service-side settlement round-trip by RPC/relation name:
+ * get_financial_operation_result (replay miss), settle_*_invoice, then the
+ * hydration read. Keyed rather than positional so a change in call order inside
+ * the service cannot silently starve a later read.
+ */
+export function enqueueCustomerSettlement(
+  service: QueuedMock,
+  options: {
+    settlement?: Partial<AtomicCustomerSettlementRow>
+    invoice?: unknown
+    replay?: unknown
+    error?: unknown
+  } = {},
+) {
+  service.enqueueFor('get_financial_operation_result', { data: options.replay ?? null })
+  service.enqueueFor('settle_customer_invoice_v2', options.error
+    ? { data: null, error: options.error }
+    : { data: makeAtomicCustomerSettlement(options.settlement) })
+  service.enqueueFor('invoices', { data: options.invoice ?? makeInvoice() })
+}
+
+export function enqueueSupplierSettlement(
+  service: QueuedMock,
+  options: {
+    settlement?: Partial<AtomicSupplierSettlementRow>
+    invoice?: unknown
+    replay?: unknown
+    error?: unknown
+  } = {},
+) {
+  service.enqueueFor('get_financial_operation_result', { data: options.replay ?? null })
+  service.enqueueFor('settle_supplier_invoice_v2', options.error
+    ? { data: null, error: options.error }
+    : { data: makeAtomicSupplierSettlement(options.settlement) })
+  service.enqueueFor('supplier_invoices', { data: options.invoice ?? makeSupplierInvoice() })
 }

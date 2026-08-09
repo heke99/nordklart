@@ -21,10 +21,10 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
-  createInvoiceCashEntry,
-  createInvoicePaymentJournalEntry,
+  planInvoiceCashEntry,
+  planInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
-import { createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, resolveSeriesFromSettings } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildInvoicePaymentWithCustomerCreditLines } from '@/lib/bookkeeping/customer-overpayment-lines'
@@ -33,6 +33,7 @@ import { eventBus } from '@/lib/events'
 import { computePreviousAttributes } from '@/lib/webhooks/diff'
 import { createLogger } from '@/lib/logger'
 import { getCompanyEntityType } from '@/lib/company/entity-type'
+import { equalOre, sumOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
 const log = createLogger('invoices/mark-paid')
@@ -172,9 +173,9 @@ export async function prepareMarkInvoicePaid(
   }
 
   if (request.customLines) {
-    const totalDebit = request.customLines.reduce((s, l) => s + l.debit_amount, 0)
-    const totalCredit = request.customLines.reduce((s, l) => s + l.credit_amount, 0)
-    if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+    const totalDebit = sumOre(request.customLines.map((l) => l.debit_amount))
+    const totalCredit = sumOre(request.customLines.map((l) => l.credit_amount))
+    if (!equalOre(totalDebit, totalCredit) || totalDebit <= 0) {
       return {
         ok: false,
         code: 'INVOICE_PAID_LINES_UNBALANCED',
@@ -329,14 +330,17 @@ export async function markInvoicePaid(
     }
   }
 
-  let draftJournalEntryId: string | null = null
+  // Plan the voucher without writing it. settle_customer_invoice_v2 creates it
+  // inside the settlement transaction, so a failed settlement leaves no
+  // stranded draft to compensate for.
+  let journalPlan: CreateJournalEntryInput | null = null
   try {
     if (request.customLines) {
       const fiscalPeriodId = await findFiscalPeriod(service, companyId, paymentDate)
       if (!fiscalPeriodId) {
         return { ok: false, code: 'INVOICE_PAID_NO_FISCAL_PERIOD', details: { payment_date: paymentDate } }
       }
-      const input: CreateJournalEntryInput = {
+      journalPlan = {
         fiscal_period_id: fiscalPeriodId,
         entry_date: paymentDate,
         description: invoice.customer?.name
@@ -351,7 +355,6 @@ export async function markInvoicePaid(
           line_description: line.line_description,
         })),
       }
-      draftJournalEntryId = (await createDraftEntry(service, companyId, userId, input)).id
     } else if (allocation.overpaymentAmount > 0) {
       const fiscalPeriodId = await findFiscalPeriod(service, companyId, paymentDate)
       if (!fiscalPeriodId) {
@@ -360,7 +363,7 @@ export async function markInvoicePaid(
       const description = invoice.customer?.name
         ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
         : `Inbetalning kundfaktura ${invoice.invoice_number}`
-      draftJournalEntryId = (await createDraftEntry(service, companyId, userId, {
+      journalPlan = {
         fiscal_period_id: fiscalPeriodId,
         entry_date: paymentDate,
         description: `${description} med överbetalning`,
@@ -372,34 +375,30 @@ export async function markInvoicePaid(
           customerCreditAmount: allocation.overpaymentAmount,
           description,
         }),
-      })).id
+      }
     } else if (useCashEntry) {
-      draftJournalEntryId = (await createInvoiceCashEntry(
+      journalPlan = await planInvoiceCashEntry(
         service,
         companyId,
-        userId,
         invoice as Invoice,
         paymentDate,
         entityType,
         invoice.customer?.name,
-        { draftOnly: true },
-      ))?.id ?? null
+      )
     } else {
-      draftJournalEntryId = (await createInvoicePaymentJournalEntry(
+      journalPlan = await planInvoicePaymentJournalEntry(
         service,
         companyId,
-        userId,
         invoice as Invoice,
         paymentDate,
         request.exchangeRateDifference,
         invoice.customer?.name,
         allocation.appliedAmount,
-        { draftOnly: true },
-      ))?.id ?? null
+      )
     }
   } catch (error) {
     if (isBookkeepingError(error)) {
-      log.warn('mark-paid: typed bookkeeping failure while staging draft', {
+      log.warn('mark-paid: typed bookkeeping failure while planning the voucher', {
         invoiceId: invoice.id,
         companyId,
         requestId: request.requestId,
@@ -411,7 +410,7 @@ export async function markInvoicePaid(
         bookkeepingError: error,
       }
     }
-    log.error('mark-paid: draft journal entry creation failed', error as Error, {
+    log.error('mark-paid: journal entry planning failed', error as Error, {
       invoiceId: invoice.id,
       companyId,
       requestId: request.requestId,
@@ -422,7 +421,7 @@ export async function markInvoicePaid(
     }
   }
 
-  if (!draftJournalEntryId) {
+  if (!journalPlan) {
     return {
       ok: false,
       code: 'INVOICE_PAID_NO_FISCAL_PERIOD',
@@ -430,7 +429,12 @@ export async function markInvoicePaid(
     }
   }
 
-  const { data, error } = await service.rpc('settle_customer_invoice', {
+  // Voucher series is a company setting, not a settlement decision. Resolve it
+  // here (a read) so the RPC persists the same series createDraftEntry would.
+  const voucherSeries = journalPlan.voucher_series
+    ?? await resolveSeriesFromSettings(service, companyId, journalPlan.source_type)
+
+  const { data, error } = await service.rpc('settle_customer_invoice_v2', {
     p_company_id: companyId,
     p_invoice_id: invoice.id,
     p_actor_user_id: userId,
@@ -444,13 +448,13 @@ export async function markInvoicePaid(
     p_request_id: request.requestId,
     p_payment_reference: request.paymentReference ?? null,
     p_notes: request.notes ?? null,
-    p_draft_journal_entry_id: draftJournalEntryId,
+    p_journal: { ...journalPlan, voucher_series: voucherSeries },
     p_expected_remaining_amount: invoice.remaining_amount ?? invoice.total,
   })
 
   if (error || !data) {
     // A transport timeout can happen after PostgreSQL committed. Resolve that
-    // ambiguity through the same idempotency record before touching the draft.
+    // ambiguity through the same idempotency record.
     const { data: committedReplay } = await service.rpc('get_financial_operation_result', {
       p_company_id: companyId,
       p_operation_type: 'customer_invoice_settlement',
@@ -465,21 +469,8 @@ export async function markInvoicePaid(
       )
     }
 
-    // Only a draft exists if the RPC rolled back. Cancelling a draft is a legal
-    // state transition and has no ledger effect.
-    const { error: cleanupError } = await service
-      .from('journal_entries')
-      .update({ status: 'cancelled' })
-      .eq('id', draftJournalEntryId)
-      .eq('company_id', companyId)
-      .eq('status', 'draft')
-    if (cleanupError) {
-      log.error('mark-paid: failed to cancel rolled-back draft', cleanupError as Error, {
-        invoiceId: invoice.id,
-        draftJournalEntryId,
-        requestId: request.requestId,
-      })
-    }
+    // Nothing to compensate: the voucher is created inside the settlement
+    // transaction, so a rollback leaves no journal entry behind.
     const atomicError = error ?? new Error('Atomic settlement returned no result.')
     log.error('mark-paid: atomic settlement failed', atomicError as Error, {
       invoiceId: invoice.id,

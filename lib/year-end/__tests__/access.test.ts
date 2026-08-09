@@ -175,8 +175,9 @@ describe('year-end period-scoped access', () => {
     }))
   })
 
-  it('still permits the explicitly requested iXBRL feature', async () => {
+  it('still permits the explicitly requested iXBRL feature, but only after canonical access', async () => {
     checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'ix-1' })
+    canonicalRow = denied('YEAR_END_PERIOD_PURCHASE_REQUIRED')
     await expect(resolveYearEndAccess(db as never, 'company-1', 'period-1', 'user-1', {
       allowIxbrlFeature: true,
     })).resolves.toMatchObject({
@@ -184,7 +185,95 @@ describe('year-end period-scoped access', () => {
       source: 'ixbrl_feature_entitlement',
       sourceId: 'ix-1',
     })
-    expect(db.rpc).not.toHaveBeenCalled()
+    // Regression: the entitlement must never be resolved *instead of* the
+    // canonical actor/company/period capability.
+    expect(db.rpc).toHaveBeenCalledWith('resolve_year_end_period_capability_for_user', expect.objectContaining({
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+      p_user_id: 'user-1',
+    }))
+  })
+
+  // R-01 regression suite. The iXBRL grant is company-wide; before this it was
+  // resolved *before* the canonical capability and returned access directly,
+  // which let it stand in for authorization rather than for payment.
+  describe('R-01 — iXBRL entitlement must not bypass authorization', () => {
+    it('does not let the iXBRL feature grant write capability to a read-only member', async () => {
+      checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'ix-1' })
+      canonicalRow = denied('YEAR_END_COMPANY_WRITE_FORBIDDEN')
+
+      await expect(resolveYearEndAccess(db as never, 'company-1', 'period-1', 'viewer-1', {
+        allowIxbrlFeature: true,
+        requireWrite: true,
+      })).resolves.toMatchObject({ allowed: false, reason: 'unauthorized' })
+
+      expect(db.rpc).toHaveBeenCalledWith('resolve_year_end_period_capability_for_user', expect.objectContaining({
+        p_require_write: true,
+      }))
+      expect(checkFeatureAccessMock).not.toHaveBeenCalled()
+    })
+
+    it('does not let the iXBRL feature grant access to another tenant', async () => {
+      checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'ix-1' })
+      canonicalRow = denied('YEAR_END_COMPANY_ACCESS_FORBIDDEN')
+
+      await expect(resolveYearEndAccess(db as never, 'company-b', 'period-b', 'user-of-company-a', {
+        allowIxbrlFeature: true,
+      })).resolves.toMatchObject({ allowed: false, reason: 'unauthorized' })
+      expect(checkFeatureAccessMock).not.toHaveBeenCalled()
+    })
+
+    it('does not let the iXBRL feature unlock a period the actor may not use', async () => {
+      checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'ix-1' })
+      canonicalRow = denied('YEAR_END_PERIOD_FORBIDDEN')
+
+      await expect(resolveYearEndAccess(db as never, 'company-1', 'other-period', 'user-1', {
+        allowIxbrlFeature: true,
+      })).resolves.toMatchObject({ allowed: false, reason: 'unauthorized' })
+      expect(checkFeatureAccessMock).not.toHaveBeenCalled()
+    })
+
+    it('fails closed on a resolver error instead of falling back to the entitlement', async () => {
+      checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'ix-1' })
+      canonicalError = { message: 'database unavailable' }
+
+      await expect(resolveYearEndAccess(db as never, 'company-1', 'period-1', 'user-1', {
+        allowIxbrlFeature: true,
+      })).resolves.toMatchObject({ allowed: false, reason: 'database_error' })
+      expect(checkFeatureAccessMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('R-01 — reports.core must not bypass authorization', () => {
+    it('denies a report for another tenant even with a reports.core entitlement', async () => {
+      checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'rep-1' })
+      canonicalRow = denied('YEAR_END_COMPANY_ACCESS_FORBIDDEN')
+
+      await expect(
+        requireYearEndReportAccess(db as never, 'company-b', 'user-of-company-a', 'period-b'),
+      ).resolves.toMatchObject({ allowed: false, reason: 'unauthorized' })
+      expect(checkFeatureAccessMock).not.toHaveBeenCalled()
+    })
+
+    it('still allows an authorized actor to read reports on reports.core alone', async () => {
+      checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'rep-1' })
+      canonicalRow = denied('YEAR_END_PERIOD_PURCHASE_REQUIRED')
+
+      await expect(
+        requireYearEndReportAccess(db as never, 'company-1', 'user-1', 'period-1'),
+      ).resolves.toMatchObject({ allowed: true, source: 'feature_entitlement', sourceId: 'rep-1' })
+      expect(checkFeatureAccessMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'reports.core')
+    })
+
+    it('fails closed on a resolver error instead of falling back to reports.core', async () => {
+      checkFeatureAccessMock.mockResolvedValue({ allowed: true, sourceId: 'rep-1' })
+      canonicalError = { message: 'database unavailable' }
+
+      await expect(
+        requireYearEndReportAccess(db as never, 'company-1', 'user-1', 'period-1'),
+      ).resolves.toMatchObject({ allowed: false, reason: 'database_error' })
+      expect(checkFeatureAccessMock).not.toHaveBeenCalled()
+    })
   })
 
   it('audits platform bypass with actor, target company and request id', async () => {

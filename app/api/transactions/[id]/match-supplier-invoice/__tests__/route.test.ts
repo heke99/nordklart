@@ -1,13 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
-  createQueuedMockSupabase,
   createMockRouteParams,
+  createQueuedMockSupabase,
+  enqueueSupplierSettlement,
   parseJsonResponse,
+  supabaseServerMock,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+const { supabase: mockSupabase, enqueue, enqueueFor, reset } = createQueuedMockSupabase()
+// settleSupplierInvoiceAtomic runs through createServiceClient(), a different
+// client from the request-scoped one, so it needs its own queue.
+const service = createQueuedMockSupabase()
+vi.mock('@/lib/supabase/server', () => supabaseServerMock({
+  client: () => mockSupabase,
+  serviceClient: () => service.supabase,
 }))
 
 vi.mock('@/lib/init', () => ({
@@ -31,11 +37,11 @@ vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: vi.fn() },
 }))
 
-const mockCreatePaymentEntry = vi.fn()
-const mockCreateCashEntry = vi.fn()
+const mockPlanPaymentEntry = vi.fn()
+const mockPlanCashEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
-  createSupplierInvoicePaymentEntry: (...args: unknown[]) => mockCreatePaymentEntry(...args),
-  createSupplierInvoiceCashEntry: (...args: unknown[]) => mockCreateCashEntry(...args),
+  planSupplierInvoicePaymentEntry: (...args: unknown[]) => mockPlanPaymentEntry(...args),
+  planSupplierInvoiceCashEntry: (...args: unknown[]) => mockPlanCashEntry(...args),
 }))
 
 import { POST } from '../route'
@@ -45,9 +51,31 @@ const mockUser = { id: 'user-1', email: 'test@test.se' }
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  service.reset()
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
-  mockCreatePaymentEntry.mockResolvedValue({ id: 'je-1' })
-  mockCreateCashEntry.mockResolvedValue({ id: 'je-1' })
+  // The service now PLANS the voucher; settle_supplier_invoice_v2 creates it.
+  mockPlanPaymentEntry.mockResolvedValue({
+    fiscal_period_id: 'fp-1',
+    entry_date: '2024-06-15',
+    description: 'Utbetalning leverantörsfaktura',
+    source_type: 'supplier_invoice_paid',
+    source_id: SI_UUID,
+    lines: [
+      { account_number: '2440', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ],
+  })
+  mockPlanCashEntry.mockResolvedValue({
+    fiscal_period_id: 'fp-1',
+    entry_date: '2024-06-15',
+    description: 'Betalning leverantörsfaktura',
+    source_type: 'supplier_invoice_cash_payment',
+    source_id: SI_UUID,
+    lines: [
+      { account_number: '4010', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ],
+  })
 })
 
 const TX_UUID = '11111111-1111-4111-8111-111111111111'
@@ -71,8 +99,9 @@ function enqueueHappyPath(opts: {
   }
   accountingMethod?: string
 }) {
-  // 1. transactions fetch
-  enqueue({
+  // Keyed so both the route and the settlement service can read the same
+  // relation without the second read being starved by a positional queue.
+  enqueueFor('transactions', {
     data: {
       id: TX_UUID,
       company_id: 'company-1',
@@ -84,8 +113,7 @@ function enqueueHappyPath(opts: {
     },
     error: null,
   })
-  // 2. supplier_invoices fetch
-  enqueue({
+  enqueueFor('supplier_invoices', {
     data: {
       id: SI_UUID,
       currency: opts.invoice.currency,
@@ -98,14 +126,20 @@ function enqueueHappyPath(opts: {
     },
     error: null,
   })
-  // 3. company_settings fetch
-  enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
-  // 4. supplier_invoices update (CAS)
-  enqueue({ data: [{ id: SI_UUID }], error: null })
-  // 5. supplier_invoice_payments insert
-  enqueue({ data: null, error: null })
-  // 6. transactions update (link)
-  enqueue({ data: null, error: null })
+  enqueueFor('company_settings', { data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
+  // 4. The CAS update, the payment insert and the transaction link now all
+  //    happen inside settle_supplier_invoice on the service client, so the
+  //    caller no longer performs them. Queue the settlement round-trip instead.
+  enqueueSupplierSettlement(service, {
+    settlement: {
+      supplier_invoice_id: SI_UUID,
+      applied_amount: opts.invoice.remaining_amount ?? 225,
+      paid_amount: opts.invoice.remaining_amount ?? 225,
+      remaining_amount: 0,
+      status: 'paid',
+    },
+    invoice: { id: SI_UUID, status: 'paid', paid_amount: opts.invoice.remaining_amount ?? 225, remaining_amount: 0 },
+  })
 }
 
 describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', () => {
@@ -115,11 +149,11 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', (
       invoice: { currency: 'SEK', remaining_amount: 2390 },
     })
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    expect(mockCreatePaymentEntry).toHaveBeenCalledTimes(1)
-    const args = mockCreatePaymentEntry.mock.calls[0]
-    // (supabase, companyId, userId, invoice, paymentAmountSek, paymentDate, exchangeRateDifference?)
-    expect(args[4]).toBe(2390) // paymentAmountSek = actual bank SEK
-    expect(args[6]).toBeUndefined() // no FX diff
+    expect(mockPlanPaymentEntry).toHaveBeenCalledTimes(1)
+    const args = mockPlanPaymentEntry.mock.calls[0]
+    // (supabase, companyId, invoice, paymentAmountSek, paymentDate, exchangeRateDifference?)
+    expect(args[3]).toBe(2390) // paymentAmountSek = actual bank SEK
+    expect(args[5]).toBe(0) // no FX diff: booked SEK equals the bank movement
   })
 
   it('computes a loss when the SEK paid exceeds the AP booked SEK (EUR invoice)', async () => {
@@ -131,9 +165,9 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', (
       invoice: { currency: 'EUR', exchange_rate: 10.6254, remaining_amount: 225 },
     })
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    const args = mockCreatePaymentEntry.mock.calls[0]
-    expect(args[4]).toBeCloseTo(2390.72, 2) // paymentAmountSek = originalBookedSek
-    expect(args[6]).toBeCloseTo(-9.28, 2) // exchangeRateDifference (loss)
+    const args = mockPlanPaymentEntry.mock.calls[0]
+    expect(args[3]).toBeCloseTo(2390.72, 2) // paymentAmountSek = originalBookedSek
+    expect(args[5]).toBeCloseTo(-9.28, 2) // exchangeRateDifference (loss)
   })
 
   it('computes a gain when the SEK paid is less than the AP booked SEK', async () => {
@@ -144,9 +178,9 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', (
       invoice: { currency: 'EUR', exchange_rate: 11, remaining_amount: 100 },
     })
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    const args = mockCreatePaymentEntry.mock.calls[0]
-    expect(args[4]).toBeCloseTo(1100, 2)
-    expect(args[6]).toBeCloseTo(20, 2)
+    const args = mockPlanPaymentEntry.mock.calls[0]
+    expect(args[3]).toBeCloseTo(1100, 2)
+    expect(args[5]).toBeCloseTo(20, 2)
   })
 
   it('uses transaction.amount_sek for a foreign-currency bank transaction', async () => {
@@ -158,10 +192,10 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', (
       invoice: { currency: 'SEK', remaining_amount: 1000 },
     })
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    const args = mockCreatePaymentEntry.mock.calls[0]
+    const args = mockPlanPaymentEntry.mock.calls[0]
     // SEK invoice: originalBookedSek = remaining = 1000, FX diff = 1000 - 1063 = -63
-    expect(args[4]).toBe(1000)
-    expect(args[6]).toBeCloseTo(-63, 2)
+    expect(args[3]).toBe(1000)
+    expect(args[5]).toBeCloseTo(-63, 2)
   })
 
   it('falls back to bank SEK when the invoice has no exchange_rate on file', async () => {
@@ -173,9 +207,10 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — FX residual', (
       invoice: { currency: 'USD', exchange_rate: null, remaining_amount: 25 },
     })
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    const args = mockCreatePaymentEntry.mock.calls[0]
-    expect(args[4]).toBe(239)
-    expect(args[6]).toBeUndefined()
+    const args = mockPlanPaymentEntry.mock.calls[0]
+    expect(args[3]).toBe(239)
+    // No rate on file: booked SEK equals the bank movement, so no FX residual.
+    expect(args[5]).toBe(0)
   })
 })
 
@@ -263,10 +298,10 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — cash method + F
     })
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
     expect(res.status).toBe(200)
-    expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
-    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockPlanCashEntry).toHaveBeenCalledTimes(1)
+    expect(mockPlanPaymentEntry).not.toHaveBeenCalled()
     // settledBankSek is the 10th positional arg (index 9).
-    expect(mockCreateCashEntry.mock.calls[0][9]).toBe(239)
+    expect(mockPlanCashEntry.mock.calls[0][8]).toBe(239)
   })
 
   it('full same-currency foreign settlement passes the actual bank SEK to the cash builder', async () => {
@@ -280,7 +315,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — cash method + F
     })
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
     expect(res.status).toBe(200)
-    expect(mockCreateCashEntry.mock.calls[0][9]).toBe(175.28)
+    expect(mockPlanCashEntry.mock.calls[0][8]).toBe(175.28)
   })
 
   it('foreign tx with no amount_sek books at the invoice rate, not the raw foreign amount', async () => {
@@ -295,9 +330,9 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — cash method + F
     })
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
     expect(res.status).toBe(200)
-    expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
+    expect(mockPlanCashEntry).toHaveBeenCalledTimes(1)
     // No bogus settledBankSek=19 override — the builder uses the invoice rate.
-    expect(mockCreateCashEntry.mock.calls[0][9]).toBeUndefined()
+    expect(mockPlanCashEntry.mock.calls[0][8]).toBeUndefined()
   })
 
   it('PARTIAL foreign payment under the cash method is still rejected', async () => {
@@ -312,6 +347,6 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — cash method + F
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
     expect(status).toBe(400)
     expect(body.error.code).toBe('MATCH_SI_CASH_FX_UNSUPPORTED')
-    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    expect(mockPlanCashEntry).not.toHaveBeenCalled()
   })
 })

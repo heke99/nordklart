@@ -4,6 +4,7 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
 import {
   insertBalancedLines,
   insertDraftJournalEntry,
+  reversePostedEntry,
   seedCompany,
 } from '@/tests/pg/fixtures'
 
@@ -205,10 +206,8 @@ describe('delete_last_voucher.pg — RPC + immutability trigger interaction', ()
     const entryId = await insertPostedEntryWithLines({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
     })
-    await getPool().query(
-      `UPDATE public.journal_entries SET status = 'reversed' WHERE id = $1`,
-      [entryId],
-    )
+    // Reach 'reversed' the only legitimate way: a posted, mutually linked storno.
+    await reversePostedEntry({ userId, companyId, fiscalPeriodId, entryId })
 
     await expect(
       getPool().query(

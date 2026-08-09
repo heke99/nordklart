@@ -1,6 +1,18 @@
 name: Core Build (no extensions)
 
-on: [pull_request]
+# Runs on pull_request AND on push to main. Deployment platforms build from
+# main directly, so a PR-only trigger meant a commit could reach production
+# without this chain ever proving typecheck/lint/unit/guards for that SHA.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Never let an older run for the same ref outlive a newer one; a stale green
+# check must not be mistaken for verification of the current SHA.
+concurrency:
+  group: core-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   core-only:
@@ -16,6 +28,12 @@ jobs:
         # seed migration (npm run skills:generate). Keeps prod skill content from
         # silently drifting out of sync. No DB needed — reads files + manifest.
         run: npm run skills:check
+      - name: Verify skill supply-chain provenance
+        # set(disk) == set(SKILLS_LOCK.sha256) == set(skills-lock.json) ==
+        # set(SKILLS_SOURCES.tsv), plus a recorded source and a matching
+        # checksum for every skill. A checksum alone proves a file did not
+        # change, not where it came from.
+        run: npm run check:skill-provenance
       - name: Verify feature-policy coverage
         # Every v1 operation / dashboard route family must have an explicit
         # entitlement mapping (or an explicit exemption) in
@@ -25,6 +43,10 @@ jobs:
       - name: Reset extensions config
         run: echo '{"extensions":[]}' > extensions.config.json
       - run: npm run setup:extensions
+      - name: Typecheck
+        # `npm run build` type-checks too, but an explicit step fails faster and
+        # keeps the CI chain identical to the local `npm run verify:fast`.
+        run: npm run typecheck
       - name: Lint ratchet (no new ESLint errors)
         # `npm run lint` was never wired into CI, so ~60 legacy errors
         # accumulated. This ratchet (sibling of check:guards) fails only when

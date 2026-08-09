@@ -1,6 +1,12 @@
 name: pg-real tests
 
-on: [pull_request]
+# Runs on pull_request AND on push to main, so the exact SHA that deploys has
+# had every migration applied to a real PostgreSQL and the pg-real suite run
+# against it. See docs/audits H-01.
+on:
+  pull_request:
+  push:
+    branches: [main]
 
 concurrency:
   group: pg-real-${{ github.ref }}
@@ -8,6 +14,10 @@ concurrency:
 
 jobs:
   coverage-gate:
+    # Diff-based gate: only meaningful against a PR base branch. On push to
+    # main there is no base_ref, so this job is skipped while pg-real below
+    # still runs the full migration + test chain.
+    if: github.event_name == 'pull_request'
     # Enforces the database.md rule: a migration touching a trigger/RPC/RLS/
     # DEFERRABLE must come with a *.pg.test.ts change. Previously instruction-
     # only. Escape hatch: `-- pg-test: covered-by <path>` / `-- pg-test: skip
@@ -29,21 +39,15 @@ jobs:
   pg-real:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        # Supabase image ships the auth schema, auth.uid(), and the extensions
-        # (uuid-ossp, pg_cron, btree_gist, vector) this repo's migrations need.
-        # Plain postgres:15 would require manual bootstrap SQL.
-        image: supabase/postgres:15.8.1.060
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+    # Postgres is started as an ordinary docker container rather than a
+    # `services:` entry. Functionally identical, with one difference that
+    # matters: the runner dumps a service container's entire log at teardown,
+    # and this suite deliberately provokes constraint/RLS/trigger errors, each
+    # of which Postgres logs with its full failing statement. That dump ran to
+    # ~500 KB and pushed the actual vitest output past the end of what the
+    # Actions log API will hand back — a failing run was undiagnosable. Setting
+    # the server's log level instead is not an option: `postgres` is not a
+    # superuser in this image, so ALTER SYSTEM is denied.
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
@@ -52,6 +56,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Start PostgreSQL
+        # Supabase image ships the auth schema, auth.uid(), and the extensions
+        # (uuid-ossp, pg_cron, btree_gist, vector) this repo's migrations need.
+        # Plain postgres:15 would require manual bootstrap SQL.
+        run: |
+          set -euo pipefail
+          # The workspace is bind-mounted so the container's own psql can read
+          # the migration files. That removes the apt-get install of
+          # postgresql-client, which stalled for 13 minutes on a runner and is
+          # a network dependency this job does not need: the image already
+          # ships a psql, and it is the one that matches the server.
+          docker run -d --name nordklart-pg \
+            -e POSTGRES_PASSWORD=postgres \
+            -v "$PWD":/workspace \
+            -p 5432:5432 \
+            supabase/postgres:15.8.1.060
+          # Probe over TCP: during initdb the server listens on the unix socket
+          # only, so a TCP probe is what distinguishes "initialising" from
+          # "ready for us".
+          for _ in $(seq 1 60); do
+            if docker exec nordklart-pg pg_isready -h localhost -U postgres >/dev/null 2>&1; then
+              echo "postgres ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres did not become ready in time" >&2
+          docker logs --tail 100 nordklart-pg >&2
+          exit 1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -59,14 +93,13 @@ jobs:
 
       - run: npm ci
 
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
-
       - name: Bootstrap storage schema
         # The supabase/postgres image ships a partial storage schema; the rest
         # is provisioned by the storage-api service at runtime, which we do
         # not run in CI. This aligns the schema with what migrations expect.
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f tests/pg/bootstrap.sql
+        run: |
+          docker exec nordklart-pg psql -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -q -f /workspace/tests/pg/bootstrap.sql
 
       - name: Apply migrations
         run: |
@@ -79,7 +112,23 @@ jobs:
           fi
           for f in "${files[@]}"; do
             echo "Applying $f"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"
+            docker exec nordklart-pg psql -U postgres -d postgres \
+              -v ON_ERROR_STOP=1 -q -f "/workspace/$f"
           done
 
-      - run: npm run test:pg
+      - name: Run pg-real suite
+        run: |
+          set -o pipefail
+          npm run test:pg 2>&1 | tee /tmp/pg-real.log
+
+      - name: Failure summary
+        # Compact, greppable restatement of what failed, emitted last so it
+        # survives log truncation.
+        if: failure()
+        run: |
+          echo '===== pg-real failure summary ====='
+          # Strip ANSI first — vitest colours the FAIL marker, so an anchored
+          # grep silently matched nothing the first time this ran.
+          sed -r 's/\x1b\[[0-9;]*m//g' /tmp/pg-real.log \
+            | grep -aE 'FAIL|AssertionError|Error:|Test Files|Tests ' \
+            | head -300 || true

@@ -366,6 +366,40 @@ export async function createInvoicePaymentJournalEntry(
   paymentAmount?: number,
   options?: { draftOnly?: boolean }
 ): Promise<JournalEntry | null> {
+  const input = await planInvoicePaymentJournalEntry(
+    supabase,
+    companyId,
+    invoice,
+    paymentDate,
+    exchangeRateDifference,
+    customerName,
+    paymentAmount,
+  )
+  if (!input) return null
+
+  return options?.draftOnly
+    ? createDraftEntry(supabase, companyId, userId, input)
+    : createJournalEntry(supabase, companyId, userId, input)
+}
+
+/**
+ * Line-building half of createInvoicePaymentJournalEntry with no writes.
+ *
+ * Settlement is committed by a single database transaction that creates the
+ * voucher itself, so the caller needs the entry as data before anything is
+ * persisted. The rules for deriving those lines are domain logic and stay in
+ * TypeScript — reimplementing them in PL/pgSQL would give the ledger two
+ * sources of truth.
+ */
+export async function planInvoicePaymentJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Invoice,
+  paymentDate: string,
+  exchangeRateDifference?: number,
+  customerName?: string,
+  paymentAmount?: number,
+): Promise<CreateJournalEntryInput | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for payment date:', paymentDate)
@@ -447,7 +481,7 @@ export async function createInvoicePaymentJournalEntry(
     )
   }
 
-  const input: CreateJournalEntryInput = {
+  return {
     fiscal_period_id: fiscalPeriodId,
     entry_date: paymentDate,
     description: desc,
@@ -455,10 +489,6 @@ export async function createInvoicePaymentJournalEntry(
     source_id: invoice.id,
     lines,
   }
-
-  return options?.draftOnly
-    ? createDraftEntry(supabase, companyId, userId, input)
-    : createJournalEntry(supabase, companyId, userId, input)
 }
 
 /**
@@ -579,6 +609,30 @@ export async function createInvoiceCashEntry(
   customerName?: string,
   options?: { draftOnly?: boolean }
 ): Promise<JournalEntry | null> {
+  const input = await planInvoiceCashEntry(
+    supabase,
+    companyId,
+    invoice,
+    paymentDate,
+    entityType,
+    customerName,
+  )
+  if (!input) return null
+
+  return options?.draftOnly
+    ? createDraftEntry(supabase, companyId, userId, input)
+    : createJournalEntry(supabase, companyId, userId, input)
+}
+
+/** Line-building half of createInvoiceCashEntry with no writes. See planInvoicePaymentJournalEntry. */
+export async function planInvoiceCashEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Invoice,
+  paymentDate: string,
+  entityType: EntityType = 'enskild_firma',
+  customerName?: string,
+): Promise<CreateJournalEntryInput | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for payment date:', paymentDate)
@@ -646,7 +700,7 @@ export async function createInvoiceCashEntry(
   lines.push(...rotRut.lines)
   lines.push(...creditLines)
 
-  const input: CreateJournalEntryInput = {
+  return {
     fiscal_period_id: fiscalPeriodId,
     entry_date: paymentDate,
     description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
@@ -654,10 +708,6 @@ export async function createInvoiceCashEntry(
     source_id: invoice.id,
     lines,
   }
-
-  return options?.draftOnly
-    ? createDraftEntry(supabase, companyId, userId, input)
-    : createJournalEntry(supabase, companyId, userId, input)
 }
 
 /**
