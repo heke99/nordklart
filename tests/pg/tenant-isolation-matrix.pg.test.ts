@@ -118,6 +118,13 @@ describe('every company-scoped table is wired for isolation', () => {
     // still forbidden there — the ownership clause is what makes it safe, and
     // it is tighter than the write-capability version, which let any writer
     // edit any other member's conversation.
+    //
+    // Every write policy is inspected, not only those on tables carrying their
+    // own company_id. That filter was here originally and is exactly why seven
+    // policies survived the first sweep: supplier_invoice_items,
+    // receipt_line_items and agent_messages reach tenancy through a parent, so
+    // a viewer could not touch a supplier invoice but could still rewrite its
+    // line items — where the amounts, VAT rates and accounts live.
     const { rows } = await getPool().query<{
       tablename: string
       cmd: string
@@ -131,11 +138,6 @@ describe('every company-scoped table is wired for isolation', () => {
       WHERE schemaname = 'public' AND cmd IN ('INSERT', 'UPDATE', 'DELETE')
         AND (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_company_ids() AS user_company_ids%'
         AND (coalesce(qual, '') || coalesce(with_check, '')) NOT LIKE '%user_can_write_company%'
-        AND EXISTS (
-          SELECT 1 FROM information_schema.columns c
-          WHERE c.table_schema = 'public' AND c.table_name = pg_policies.tablename
-            AND c.column_name = 'company_id'
-        )
       ORDER BY tablename, cmd
     `)
 
@@ -150,7 +152,12 @@ describe('every company-scoped table is wired for isolation', () => {
     // assistant tables and nothing else. A new table appearing here means
     // someone reached for the carve-out; that should be a decision, not a
     // side effect.
-    const OWNER_SCOPED_TABLES = ['agent_conversations', 'chat_messages', 'chat_sessions']
+    const OWNER_SCOPED_TABLES = [
+      'agent_conversations',
+      'agent_messages',
+      'chat_messages',
+      'chat_sessions',
+    ]
     expect(
       [...new Set(rows.filter((row) => row.owner_scoped).map((row) => row.tablename))].sort(),
     ).toEqual(OWNER_SCOPED_TABLES)
