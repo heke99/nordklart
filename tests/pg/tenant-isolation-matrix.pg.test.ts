@@ -125,6 +125,14 @@ describe('every company-scoped table is wired for isolation', () => {
     // receipt_line_items and agent_messages reach tenancy through a parent, so
     // a viewer could not touch a supplier invoice but could still rewrite its
     // line items — where the amounts, VAT rates and accounts live.
+    //
+    // BOTH read-level helpers are matched, not just one. There are two names
+    // for "is this user allowed to see this company": the user_company_ids
+    // subquery and user_can_access_company_v2(). This test originally knew only
+    // the first, so 29 write policies across 15 tables — payment_initiations,
+    // invoice financing, accrual schedules, arsredovisning_submissions — passed
+    // it while still letting a viewer write. A predicate is read-level because
+    // of what it means, not because of how it is spelled.
     const { rows } = await getPool().query<{
       tablename: string
       cmd: string
@@ -136,7 +144,10 @@ describe('every company-scoped table is wired for isolation', () => {
         (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_id = auth.uid()%' AS owner_scoped
       FROM pg_policies
       WHERE schemaname = 'public' AND cmd IN ('INSERT', 'UPDATE', 'DELETE')
-        AND (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_company_ids() AS user_company_ids%'
+        AND (
+          (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_company_ids() AS user_company_ids%'
+          OR (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_can_access_company_v2%'
+        )
         AND (coalesce(qual, '') || coalesce(with_check, '')) NOT LIKE '%user_can_write_company%'
       ORDER BY tablename, cmd
     `)
@@ -152,11 +163,21 @@ describe('every company-scoped table is wired for isolation', () => {
     // assistant tables and nothing else. A new table appearing here means
     // someone reached for the carve-out; that should be a decision, not a
     // side effect.
+    //
+    // The two consent tables are here for the same reason as the assistant
+    // tables and not by accident: a row in either records that one identified
+    // person signed something with BankID. It is attributed to the signer, and
+    // membership + ownership is already tighter than the membership-alone form
+    // it replaced. Whether signing should also require write capability is a
+    // question about who may bind the company, and it belongs in the route that
+    // requests the signature rather than in a mechanical policy sweep.
     const OWNER_SCOPED_TABLES = [
       'agent_conversations',
       'agent_messages',
+      'bolagsverket_avtal_acceptances',
       'chat_messages',
       'chat_sessions',
+      'signed_consents',
     ]
     expect(
       [...new Set(rows.filter((row) => row.owner_scoped).map((row) => row.tablename))].sort(),

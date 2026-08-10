@@ -1,79 +1,83 @@
 # Nästa exakta åtgärder
 
-Uppdaterad 2026-08-08, efter remediation-branchen
-`claude/nordklart-remediation-hardening-lbyqtt` (PR #7).
+Uppdaterad 2026-08-10, efter att produktionsdeployen slutfördes.
 
-Allt som tidigare stod här — pg-real grönt, H-03-atomiciteten,
-testmatriserna, redefinitionsgranskningen — är gjort. Det som återstår är
-deploy och två saker som kräver en människa.
+Deploykön är tom. Repot och produktion är i samma tillstånd — se
+`open-blockers.md` för den verifierade matrisen.
 
-## 1. Slutför produktionsdeployen — EXAKT ORDNING
+## 1. Historisk ledger-reconciliation (enda kvarvarande DB-arbetet)
 
-Ledger står på 360 rader. Två migrationer är deployade (se `open-blockers.md`).
-Kvarstår, i repositoryordning:
+444 filer i repot, **376** rader i liggaren. De 68 utan rad är verifierat
+applicerade sedan tidigare — fingerprint-matchade mot live med
+CHECKSUM_MISMATCH = 0 — men raderna är aldrig skrivna.
 
-| Fil | KB | Varför |
-|---|---:|---|
-| `20260807120000_secure_migration_ledger_and_pin_search_path.sql` | 3 | ledger-RLS + search_path |
-| `20260807130000_allow_sie_import_reversal_commit_method.sql` | 2 | CHECK-vokabulär |
-| `20260807140000_restore_opening_balance_retag_carveout.sql` | 6 | funktionsersättning |
-| `20260807150000_restore_sie_imported_workpaper_blocker_precedence.sql` | 5 | funktionsersättning |
-| `20260807160000_bank_allocation_uniqueness_per_invoice.sql` | 4 | PARTIAL — 2 index saknas |
-| `20260807170000_fix_null_invalidation_flags_in_open_item_reconciliation.sql` | 10 | funktionsersättning |
-| `20260807180000_allow_atomic_settlement_commit_methods.sql` | 2 | CHECK, krävs före settlement v2 |
-| `20260808120000_settlement_creates_its_own_voucher.sql` | 24 | settlement v2 |
-| `20260808130000_pin_search_path_on_remaining_security_definer.sql` | 2 | |
-| `20260808140000_allow_system_commit_method_for_prior_result_transfer.sql` | 3 | #16 |
-| `20260808160000_authorize_commit_journal_entry.sql` | 6 | **hoppa över** — helt ersatt av `20260808190000` som redan är live |
-| `20260808170000_write_policies_require_write_capability.sql` | 35 | **#19** — 152 policies |
-| `20260808180000_personal_assistant_rows_are_owner_scoped.sql` | 4 | |
-| `20260809100000_child_row_write_policies_require_write_capability.sql` | 5 | child-rows |
+**Metod:** en fil i taget, med fotavtrycket verifierat innan raden skrivs.
 
-Plus `20260712120000_invoice_financing.sql` (#387), helt oapplicerad — avgör
-först om den fortfarande hör till canonical schema.
+```
+node scripts/reconcile-via-catalog.mjs probes --ledger <ledger.json> > probes.sql
+# kör probes.sql mot produktion, spara svaret som presence.json
+node scripts/reconcile-via-catalog.mjs classify --ledger <ledger.json> --presence presence.json
+```
 
-**Metod som fungerar och som ska återanvändas** (raw connection string saknas;
-Supabase MCP `execute_sql` används som transport, semantiken är runnerns):
+**Kör ALDRIG `db:migrate:mark-through`.** Den markerar ett *intervall*, och den
+kan inte avgöra om en *ersättande* migration (`CREATE OR REPLACE FUNCTION`,
+`DROP/CREATE POLICY` med samma namn) faktiskt körts — objektet finns oavsett.
+Den sekvensen hade markerat varje säkerhetsmigration som applicerad medan
+produktionen förblev exploaterbar, och den hade svept in
+`20260712120000_invoice_financing.sql` som var helt oapplicerad.
 
-1. läs filen ur git, beräkna `sha256sum`,
-2. kör hela filens SQL i **en** transaktion tillsammans med
-   `INSERT INTO public.nordklart_schema_migrations (version, checksum, source)
-   VALUES ('<filnamn>', '<sha256>', 'mcp-deploy')`,
-3. postcheck som verifierar migrationens kritiska fotavtryck,
-4. vid fel: STOPP, kör inte nästa fil.
+## 2. Deploy av nya migrationer
 
-**Historisk ledger-reconciliation är INTE gjord.** 66 filer är verifierat
-applicerade men oregistrerade. Skriv dem fil för fil — aldrig `mark-through`,
-aldrig intervall. Se `decisions.md` och varningen nedan.
+Ingen rå connection string finns här. Använd filtransporten:
 
-## 2. EXTERNA ÅTGÄRDER (kräver en människa)
+```
+node scripts/deploy-migration-via-mcp.mjs supabase/migrations/<fil>.sql
+```
 
-1. **Leaked-password protection.** Endast via dashboarden, inte via SQL eller
-   det management-API som finns här. Supabase Dashboard → Authentication →
+Den skriver ut satserna i körordning. Kör dem i ordning genom Supabase MCP
+`execute_sql` och stanna på första som inte svarar `ok`. Databasen räknar om
+sha256 på det den tog emot och vägrar köra om något avviker från filen på disk.
+Skriv aldrig av en migration för hand utan den kontrollen.
+
+## 3. Öppen produktfråga
+
+`signed_consents_insert` och `bolagsverket_avtal_acceptances_insert` kräver
+medlemskap + `user_id = auth.uid()`, inte skrivrätt. En viewer kan alltså skapa
+ett samtycke i sitt eget namn. Det är avsiktligt lämnat: signering är en
+personlig handling, och att kräva skrivrätt på personliga rader låste ute
+revisorer från assistenten en gång redan. **Om signering ska binda bolaget bör
+kravet ligga i routen som begär signaturen**, inte i ett policysvep. Behöver ett
+produktbeslut.
+
+## 4. EXTERNA ÅTGÄRDER (kräver en människa)
+
+1. **Leaked-password protection.** Supabase Dashboard → Authentication →
    Policies → Password protection → aktivera *"Check passwords against
-   HaveIBeenPwned"* för projekt `rpajvvngvcutffwucbdy`.
+   HaveIBeenPwned"* för projekt `rpajvvngvcutffwucbdy`. Går inte via SQL eller
+   management-API:t härifrån.
 
-2. **Branch protection på `main` går inte att konfigurera.** Repot är privat på
-   GitHub Free, och både `/rulesets` och `/branches/main/protection` svarar
-   403 *"Upgrade to GitHub Pro or make this repository public to enable this
-   feature."* Det är en plangräns, inte en behörighetsgräns — ingen
-   konfiguration hjälper förrän planen ändras eller repot blir publikt. Fram
-   till dess är CI rådgivande: den kan inte krävas.
+2. **Branch protection på `main`.** Privat repo på GitHub Free; både
+   `/rulesets` och `/branches/main/protection` svarar 403 *"Upgrade to GitHub
+   Pro or make this repository public."* Plangräns, inte behörighetsgräns. Tills
+   planen ändras är CI rådgivande och kan inte krävas för merge.
 
-## 3. Kvarvarande produktarbete (oförändrat)
+3. **GitHub Actions-minuter.** Slut. Alla grindar körs lokalt
+   (`npm run verify:fast`, `npm run test:pg`) tills det ändras.
+
+## 5. Kvarvarande produktarbete (oförändrat)
 
 - Samlad produktionsroute som både länkar och vid behov bokar betalning av
   migrerade AR/AP-poster atomiskt.
 - Import av äldre kontoutdrag till radnivå (parser/UI).
 - Fullständigt fält-för-fält merge-UI mot Bolagsverket-snapshot.
 
-## 4. Skuld som är ratchetad, inte löst
+## 6. Skuld som är ratchetad, inte löst
 
-Tre kampanjer räknas ned av `npm run check:guards`; ingen av dem blockerar
-release, och ingen av dem får växa:
+Räknas ned av `npm run check:guards`; ingen blockerar release, ingen får växa.
 
 | Ratchet | Kvar |
 |---|---:|
 | `raw-route-auth` — routes som hand-rullar `getUser()` i stället för MFA-vakten | 167 |
 | `naive-ore-round` — `Math.round(x*100)/100` i stället för `roundOre()` | 637 |
-| `adhoc-error-envelope` — routes som returnerar `{ error: 'text' }` i stället för kuvertet | 208 |
+| `adhoc-error-envelope` — routes som returnerar `{ error: 'text' }` | 208 |
+| `service-role-surface` — filer som konstruerar service-role-klient | 108 |

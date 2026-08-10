@@ -1,126 +1,110 @@
 # Aktiva blockerare och skuld
 
-Uppdaterad 2026-08-08, efter remediation-branchen
-`claude/nordklart-remediation-hardening-lbyqtt` (PR #7).
+Uppdaterad 2026-08-10, efter att produktionsdeployen slutfördes från
+`claude/nordklart-remediation-hardening-lbyqtt`.
 
-Allt nedan är verifierat i arbetspasset. Punkter som tidigare stod som
-blockerare men nu är motbevisade eller åtgärdade ligger längst ned.
+Allt nedan är verifierat mot den riktiga databasen i samma arbetspass.
 
-## Blockerande före produktionsanspråk
+## Produktionsstatus
 
-0. **Produktion är DELVIS fixad. Deploy pågår.** Projekt
-   `rpajvvngvcutffwucbdy`, verifierat 2026-08-09.
+Projekt `rpajvvngvcutffwucbdy`, PostgreSQL 17.6. **Repot och produktion är i
+samma tillstånd.** Liggaren står på **376** rader, 444 filer i repot.
 
-   | Fynd | Live-status |
-   |---|---|
-   | #17 cross-tenant-vyer | **STÄNGD** — 4/4 har `security_invoker=true` |
-   | #18 `commit_journal_entry` | **STÄNGD** — anon EXECUTE false, write-authz + anon-guard i kroppen, search_path pinnad |
-   | #19 write-policies | **ÖPPEN** — 152 policies auktoriserar fortfarande på enbart medlemskap |
-   | child-row-policies | **ÖPPEN** |
-   | settlement v2 | **EJ DEPLOYAD** — 0 av 3 funktioner finns |
-   | #16 commit_method 'system' | **EJ DEPLOYAD** |
+| Fynd | Live-status |
+|---|---|
+| #17 cross-tenant-vyer | **STÄNGD** — `security_invoker=true` på de fyra som läckte |
+| #18 `commit_journal_entry` | **STÄNGD** — anon saknar EXECUTE, anon-guard och write-authz i kroppen |
+| #19 write-policies (`user_company_ids`) | **STÄNGD** — 154 → 0 |
+| child-row-policies | **STÄNGD** |
+| #22 write-policies (`user_can_access_company_v2`) | **STÄNGD** — 29 → 0 |
+| settlement v2 | **LIVE** — 3/3 funktioner, anon nekad, service_role tillåten |
+| #16 `commit_method='system'` | **LIVE** |
+| invoice financing (#387) | **LIVE** — 5 tabeller, var helt oapplicerad |
+| SECURITY DEFINER utan pinnad search_path | **0** |
+| Tabeller utan RLS i `public` | **0** |
 
-   De två som var exploaterbara utifrån är stängda. #19 kräver att angriparen
-   redan har en viewer-plats i offrets bolag, så kvarvarande exponering är
-   insider-begränsad — men den är verklig och ska stängas.
+Deployen gjordes med `scripts/deploy-migration-via-mcp.mjs`: filen delas i
+checksummade bitar, databasen räknar om sha256 på det den faktiskt tog emot,
+och ingenting körs förrän det hopsatta innehållet hashar till samma sha256 som
+filen på disk. En felskrivning kan alltså inte nå schemat — bara avbryta
+deployen. Verifierat i alla fyra lägen mot en lokal replay först: exakt
+överföring, upptäckt manipulation, atomisk applicering, vägran att köra om.
 
-   Deployade denna session, via MCP med `source='mcp-deploy'` och filens
-   sha256 som checksum, en migration per transaktion med postcheck:
-   `20260808150000` och `20260808190000`. Ledger: 358 → **360** rader.
+`20260808160000_authorize_commit_journal_entry.sql` är **registrerad som
+superseded utan att ha körts**. Den efterträds helt av `20260808190000`, som
+redan är live. Hade den fått köras efteråt hade den skrivit över funktionen
+*utan* anon-guarden och öppnat #18 igen. Raden finns just för att `db:migrate`
+aldrig ska plocka upp den.
 
-1. **Migrationsliggaren är reconcilad men inte skriven.** 443 filer, 358
-   recorded (fingerprint verifierad mot live), 0 CHECKSUM_MISMATCH. 66
-   APPLIED_BUT_UNRECORDED, 2 SUPERSEDED (orsak verifierad för hand), 14
-   AMBIGUOUS, 2 NOT_APPLIED, 1 PARTIAL. Ingen rad har skrivits.
+## Fynd i detta arbetspass
 
-2. **Leaked-password protection är avstängt.** Dashboard-only. EXTERN ÅTGÄRD.
+**#22 — den andra medlemskapsvägen.** `user_can_access_company_v2()` betyder
+samma sak som `company_id IN (SELECT user_company_ids())` men heter något annat.
+Båda tidigare svepen sökte bara efter det ena namnet, så 29 write-policies över
+15 tabeller släppte igenom en viewer — bland dem `payment_initiations` (initierar
+riktiga utbetalningar), invoice financing, periodiseringsscheman och
+`arsredovisning_submissions`. Vakten i `tenant-isolation-matrix` matchar nu båda
+hjälpfunktionerna; den kände bara till den ena, vilket är exakt därför de 29
+passerade den. Ett predikat är på läsnivå på grund av vad det betyder, inte hur
+det stavas.
 
-3. **Branch protection går inte att konfigurera.** Privat repo på GitHub Free;
+Två policies lämnades medvetet: `signed_consents_insert` och
+`bolagsverket_avtal_acceptances_insert` pinnar redan `user_id = auth.uid()` och
+registrerar att en identifierad person signerat med BankID. Att kräva skrivrätt
+på personliga rader är precis det som låste ute revisorer från assistenten i
+`20260808180000`. **Öppen produktfråga:** om signering också ska kräva
+skrivrätt hör det hemma i routen som begär signaturen, inte i ett mekaniskt
+svep.
+
+## Kvarvarande
+
+1. **Historisk ledger-reconciliation är inte gjord.** 444 filer i repot, 376
+   rader i liggaren. De 68 utan rad är verifierat applicerade sedan tidigare
+   (fingerprint-matchade, CHECKSUM_MISMATCH = 0), men raderna är inte skrivna.
+   Skriv dem fil för fil — **aldrig `mark-through`, aldrig intervall**. Se
+   varningen i `next-actions.md`.
+
+2. **`skatteverket_connections_v` saknar `security_invoker`.** Granskad, inte
+   en läcka: vyn bär sitt eget tenantfilter i kroppen
+   (`company_id IN (SELECT user_company_ids())`), så anon ser noll rader —
+   uppmätt. Den vilar dock på vyns predikat i stället för på tabellens RLS.
+   Att sätta `security_invoker` vore striktare, men tabellen är tom i
+   produktion så beteendet går inte att validera efteråt. Härdning, inte
+   incident.
+
+3. **Leaked-password protection är avstängt.** Dashboard-only. EXTERN ÅTGÄRD.
+
+4. **Branch protection går inte att konfigurera.** Privat repo på GitHub Free;
    `/rulesets` och `/branches/main/protection` svarar 403 *"Upgrade to GitHub
-   Pro or make this repository public"*. Plangräns, inte behörighetsgräns. CI
-   kan alltså inte krävas för merge — den är rådgivande tills planen ändras.
+   Pro or make this repository public"*. Plangräns, inte behörighetsgräns.
 
-4. **GitHub Actions slutade tilldela runners 2026-08-08 ~21:47 UTC.** Varje
-   workflow i repot failar sedan dess på 2–4 sekunder med `runner_id: 0`, noll
-   steg och ingen logg — inklusive de två rådgivande workflows som körde grönt
-   några minuter tidigare på samma SHA. Sju återförsök över tolv minuter, samma
-   signatur varje gång. Det är ett kontonivåtak (Actions-minuter eller
-   spending limit), inte något i branchen; billing-endpointen är blockerad
-   härifrån så exakt orsak går inte att läsa. Sista lyckade fjärrkörning:
-   `core-only` grön på `64ce246` (typecheck, lint, build, 6175 unit-tester,
-   guards, extension-isolering).
-
-## Fynd från detta arbetspass (alla fixade i repot)
-
-| # | Fynd | Fix |
-|---|---|---|
-| 15 | `supplier_invoice.paid`-eventet tappades av `127bcf1` | återinfört i `mark-paid-service.ts` |
-| 16 | `commit_method='system'` förbjuden av sin egen CHECK — slår till vid *andra* bokslutet i rad för AB | `20260808140000` |
-| 17 | Fyra vyer läckte tvärs över tenants (388 / 4 433 / 22 165 / 104 främmande rader, uppmätt) | `20260808150000` |
-| 18 | `commit_journal_entry` saknade auktorisation helt | `20260808160000` |
-| 19 | 147 write-policies auktoriserade på läsnivå-medlemskap över 57 tabeller | `20260808170000` |
-| 20 | `resolveSieImportAccess` härledde skrivrätt ur `effective_role` och promoverade `active_limited` | `lib/import/access.ts` |
-| 21 | Återkallad plattformsroll auktoriserade fortfarande (`revoked_at` filtrerades inte) | två routes + permanent guard |
-
-Två av dem är värda att minnas för formen, inte bara innehållet:
-
-- **#18 var inte helt fixad förrän CI körde.** `REVOKE ... FROM PUBLIC`
-  verifierades mot en vanlig PostgreSQL, där PUBLIC är enda vägen in. Supabase
-  kör `alter default privileges ... grant all on functions to ... anon`, så
-  varje funktion i `public` får ett **eget** anon-grant som ett PUBLIC-revoke
-  inte rör. anon behöll EXECUTE — och eftersom `auth.uid()` är NULL för anon
-  hoppades hela skrivkontrollen över. `20260808190000` tar bort grantet och
-  låter kroppen avvisa anon explicit. Ingen lokal databas kunde ha hittat det;
-  repots första CI-körning gjorde det.
-
-- **#19 var för brett i tre tabeller.** `agent_conversations`, `chat_sessions`
-  och `chat_messages` är en användares egen konversation, inte bolagsdata. Krav
-  på bolagsskrivrätt låste ute viewers och auditors från assistenten.
-  `20260808180000` byter till medlemskap **och** `user_id = auth.uid()` — smalare
-  än båda tidigare versionerna, som lät vem som helst med skrivrätt redigera
-  någon annans konversation.
+5. **GitHub Actions tilldelar inga runners.** Minuterna är slut (bekräftat av
+   användaren). Alla grindar körs lokalt tills det ändras.
 
 ## Testläge
 
-Uppmätt på branchens HEAD:
+Uppmätt på branchens HEAD, efter `npm run test:pg:reset`:
 
-| Svit | Antal | Not |
-|---|---:|---|
-| unit | 6182 passerade, 3 skippade (500 filer) | `origin/main` har 53 failures i 10 filer |
-| pg-real | 669 passerade (91 filer) | var 509 vid passets början |
-| lint | 0 errors, 233 warnings | ratchet-baseline 0 errors |
+| Svit | Resultat |
+|---|---|
+| unit | 6182 passerade, 3 skippade (500 filer) |
+| pg-real | 675 passerade (92 filer), 59 s |
+| typecheck | rent |
+| lint | 0 errors, ratchet-baseline 0 |
+| guards | 6/6 |
+| migrationsreplay | 444/444 från tom databas |
 
-Inget test är borttaget, skippat eller nedgraderat. Varje failure klassades
-(TEST_STALE / PRODUCT_BUG / MOCK_STALE / CONTRACT_DRIFT) och åtgärdades i den
-ände klassningen pekade på.
+Inget test är borttaget, skippat eller nedgraderat.
 
 ## Kvarvarande produktarbete (oförändrat)
 
-4. Samlad produktionsroute som både länkar och vid behov bokar betalning av
-   migrerade AR/AP-poster atomiskt.
-5. Import av äldre kontoutdrag till radnivå (parser/UI).
-6. Fullständigt fält-för-fält merge-UI mot Bolagsverket-snapshot.
+- Samlad produktionsroute som både länkar och vid behov bokar betalning av
+  migrerade AR/AP-poster atomiskt.
+- Import av äldre kontoutdrag till radnivå (parser/UI).
+- Fullständigt fält-för-fält merge-UI mot Bolagsverket-snapshot.
 
 ## Miljö
 
-7. Bygget hämtar Google Fonts över nätet; hermetisk CI kan falla på det.
-8. pg-real kör Postgres som en vanlig docker-container, inte som `services:`.
-   Runnern dumpar hela service-containerns logg vid teardown, och sviten
-   provocerar fel med flit — dumpen blev ~500 kB och tryckte ut vitest-utskriften
-   ur det Actions-API:t lämnar tillbaka. Att tysta servern går inte: `postgres`
-   är inte superuser i supabase-imagen, så ALTER SYSTEM nekas.
-
-## Stängda antaganden
-
-- ~~"Unit-sviten failar."~~ 6175/6175.
-- ~~"H-03 betalningsatomicitet."~~ Settlementet skapar sitt eget verifikat inne
-  i transaktionen; den kompenserande draft-annulleringen är borttagen.
-- ~~"H-05 testmatrisen."~~ Concurrency, failure injection, Stripe-livscykel,
-  bokslut, SIE, engångsköp och tenant-isolering finns i pg-real.
-- ~~"Migrationsliggaren beskriver inte databasen."~~ Verktyget finns och är
-  verifierat i båda riktningarna; körningen mot produktion är en operatörsåtgärd.
-- ~~"`SUPABASE_DB_URL` saknas, ingen DB kan nås."~~ Live-projektet är nåbart och
-  pg-real kördes mot riktig PostgreSQL.
-- ~~"Två dubbla migrationsversioner är ett olöst problem."~~ Egen runner nycklar
-  på fullt filnamn; CI-guarden bär dem som stängd allowlist.
-- ~~"6 skills saknar proveniens."~~ Det var den härledda TSV-filen som var gammal.
+- Bygget hämtar Google Fonts över nätet; hermetisk CI kan falla på det.
+- pg-real kör Postgres som vanlig docker-container, inte som `services:`.
+  `postgres` är inte superuser i supabase-imagen, så ALTER SYSTEM nekas.
