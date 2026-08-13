@@ -2231,6 +2231,26 @@
       "file": "20260811130000_restore_platform_write_policies_and_bankgiro_checks.sql",
       "version": "20260811130000",
       "sha256": "ea333082974dece92904ed98947f383e371a9c55355a047420c66217db4f2e15"
+    },
+    {
+      "file": "20260812120000_for_all_write_policies_require_write_capability.sql",
+      "version": "20260812120000",
+      "sha256": "789d00aa52f83b83e7bb10af7c24793b820989289482afc62c36c315cabb6fa8"
+    },
+    {
+      "file": "20260812130000_converge_webhook_events_catalog_shape.sql",
+      "version": "20260812130000",
+      "sha256": "4b080a64d28acd00e047aa135d3b2381a5dd46ce8eda2dba1ceb34099f2c1a48"
+    },
+    {
+      "file": "20260812140000_converge_webhook_and_feature_access_views.sql",
+      "version": "20260812140000",
+      "sha256": "c4b5506f6f64b1b6cc87cce7af4ed58b4cdc557bd781a7bdfd43e18b62bf6336"
+    },
+    {
+      "file": "20260812150000_normalize_skatteverket_settings_select_predicate.sql",
+      "version": "20260812150000",
+      "sha256": "dc6f1d273610724407471d8962f5426fd62943c7e91b92d99182f057c032e66d"
     }
   ]
 }

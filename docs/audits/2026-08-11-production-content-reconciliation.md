@@ -137,3 +137,98 @@ the repository exactly.
 
 Because items 1–3 are open, the correct status is **PRODUCTION NOT YET
 VERIFIED**.
+
+---
+
+# Closeout, 2026-08-12
+
+All four open items are closed. Production and a clean replay of `origin/main`
+now produce **identical content fingerprints across all eight object kinds**.
+
+## 1. `FOR ALL` write policies — the third shape of the same defect
+
+The guard filtered on `cmd IN ('INSERT','UPDATE','DELETE')`. A policy declared
+`FOR ALL` has `cmd = 'ALL'` and covers all three, so all three previous sweeps
+and the guard meant to stop a fourth were blind to it. Widening the guard
+surfaced 27 offenders, in three groups:
+
+| Group | Count | Shape |
+|---|---:|---|
+| plain membership | 22 | `user_can_access_company_v2(company_id)` |
+| membership OR platform | 5 | `… OR is_platform_admin()` — the membership half grants the write |
+| mixed owner/membership | 2 | owner-scoped pre-company, membership after |
+
+The last group is the subtle one. `onboarding_choices_session_access` and
+`onboarding_steps_session_access` reach their session and say
+`(company_id IS NULL AND user_id = auth.uid()) OR (company_id IS NOT NULL AND
+membership)`. The guard's owner-scoped exemption matches `user_id = auth.uid()`
+*anywhere* in the policy, so a policy that is owner-scoped in one branch and
+membership-scoped in another looked exempt while still granting the write. Only
+the company branch was changed; the pre-company branch is untouched, because at
+that point there is no company to have write capability for.
+
+What these gated: `api_client_scopes` (a viewer could widen their own API key's
+authority), `bank_accounts`, six `tax_declaration_*` tables, four `year_end_*`
+tables, `webhook_endpoints`, `tax_submissions`.
+
+Fixed by `20260812120000`; the guard now treats `'ALL'` as a write command.
+
+## 2. `webhook_events`
+
+Production's copy was built by `20260714160000`'s `create table if not exists`
+fallback — `id` as primary key, no `payload_schema`, defaults on category and
+description. A clean replay never takes that branch because `20260626120000`
+has already created the table with `code` as the key. Deploying
+`20260714160000` would therefore not have converged anything; the reshape had to
+be stated, and is, in `20260812130000`.
+
+That migration failed on its first deploy with `column "id" is in a primary
+key` — the NOT NULL was being dropped while `id` was still the key. The
+transaction rolled back with nothing applied, the statement order was corrected,
+and it went in clean. Worth recording: locally the migration was a no-op, so the
+ordering bug could only appear against the database that had actually drifted.
+
+## 3. Views and the residual policy difference
+
+`api_webhook_overview_v` aggregated `webhook_endpoints` in production and
+`webhooks` joined to `webhook_deliveries` in the chain — a different source of
+truth for the same five columns. `company_feature_access_v` reassembled
+entitlements from three LEFT JOINs instead of asking `company_feature_access()`.
+Both replaced in `20260812140000` with `CREATE OR REPLACE`, so grants survived.
+
+One policy differed only in the order of an `OR`'s operands. Semantically
+identical, and normalised anyway in `20260812150000` — a standing benign
+exception is what stops "production equals the chain" from being a statement
+that either holds or does not.
+
+## 4. Ledger reconciliation
+
+66 files, each with its own name and sha256, written in one transaction that
+asserted the count, refused to double-write anything already recorded, and
+verified the inserted row count. Recorded as
+`source = 'content-verified-reconciliation'`. No range was used.
+
+The evidence for calling them applied is the fingerprint: after items 1–3, every
+object the whole chain defines is present in production with the canonical
+definition.
+
+## Final state
+
+| Kind | Objects | Canonical = production |
+|---|---:|---|
+| column | 4332 | `52b8643f` |
+| constraint | 1843 | `4ca583ac` |
+| function | 281 | `06ba2d68` |
+| index | 929 | `64ea2c42` |
+| policy | 635 | `db58c18d` |
+| rls | 277 | `c928998a` |
+| trigger | 329 | `71660424` |
+| view | 27 | `0c1c9337` |
+
+Ledger: **450 rows, 450 repository files.** The `version=checksum` manifest
+hashes to `d9cbeb1c101aef36ae29cd7b8c51e5bb` on both sides, which is the proof
+that a normal `db:migrate` would replay nothing and that no recorded checksum
+disagrees with its file.
+
+Gates: pg-real 675/675 · unit 6182 passed, 3 skipped · typecheck clean · lint 0
+errors · guards 6/6 · 450/450 migrations replay from an empty database.

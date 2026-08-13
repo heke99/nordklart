@@ -1,7 +1,6 @@
 # Aktiva blockerare och skuld
 
-Uppdaterad 2026-08-10, efter att produktionsdeployen slutfördes från
-`claude/nordklart-remediation-hardening-lbyqtt`.
+Uppdaterad 2026-08-12, efter att ledger-reconciliationen slutfördes.
 
 Allt nedan är verifierat mot den riktiga databasen i samma arbetspass.
 
