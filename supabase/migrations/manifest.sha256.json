@@ -2221,6 +2221,16 @@
       "file": "20260810120000_access_helper_write_policies_require_write_capability.sql",
       "version": "20260810120000",
       "sha256": "3f6acaf52dbabadd05a70b6e264dad352384c146474542948febd12f28b605fa"
+    },
+    {
+      "file": "20260811120000_converge_production_to_canonical_access_contract.sql",
+      "version": "20260811120000",
+      "sha256": "41b2880d92887d6ec7a5ff1d28e477e0c8f6ad756bc098ba0fda727f6b2faa8e"
+    },
+    {
+      "file": "20260811130000_restore_platform_write_policies_and_bankgiro_checks.sql",
+      "version": "20260811130000",
+      "sha256": "ea333082974dece92904ed98947f383e371a9c55355a047420c66217db4f2e15"
     }
   ]
 }
