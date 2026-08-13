@@ -126,6 +126,13 @@ describe('every company-scoped table is wired for isolation', () => {
     // a viewer could not touch a supplier invoice but could still rewrite its
     // line items — where the amounts, VAT rates and accounts live.
     //
+    // `FOR ALL` counts as a write command. A policy declared FOR ALL has
+    // cmd = 'ALL' and covers SELECT, INSERT, UPDATE and DELETE in one row, so
+    // filtering on the three named write commands skips it entirely. That
+    // omission is why the same defect had to be found a third time: 22 FOR ALL
+    // policies — API key scopes, bank accounts, the tax declarations, the
+    // year-end close — authorized writes on membership while this test passed.
+    //
     // BOTH read-level helpers are matched, not just one. There are two names
     // for "is this user allowed to see this company": the user_company_ids
     // subquery and user_can_access_company_v2(). This test originally knew only
@@ -143,7 +150,7 @@ describe('every company-scoped table is wired for isolation', () => {
         cmd,
         (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_id = auth.uid()%' AS owner_scoped
       FROM pg_policies
-      WHERE schemaname = 'public' AND cmd IN ('INSERT', 'UPDATE', 'DELETE')
+      WHERE schemaname = 'public' AND cmd IN ('INSERT', 'UPDATE', 'DELETE', 'ALL')
         AND (
           (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_company_ids() AS user_company_ids%'
           OR (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_can_access_company_v2%'

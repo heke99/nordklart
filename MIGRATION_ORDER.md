@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **446**.
+Antal SQL-migreringar: **450**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -470,3 +470,7 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 444 | 20260810120000 | `20260810120000_access_helper_write_policies_require_write_capability.sql` | `3f6acaf52dbabadd05a70b6e264dad352384c146474542948febd12f28b605fa` |
 | 445 | 20260811120000 | `20260811120000_converge_production_to_canonical_access_contract.sql` | `41b2880d92887d6ec7a5ff1d28e477e0c8f6ad756bc098ba0fda727f6b2faa8e` |
 | 446 | 20260811130000 | `20260811130000_restore_platform_write_policies_and_bankgiro_checks.sql` | `ea333082974dece92904ed98947f383e371a9c55355a047420c66217db4f2e15` |
+| 447 | 20260812120000 | `20260812120000_for_all_write_policies_require_write_capability.sql` | `789d00aa52f83b83e7bb10af7c24793b820989289482afc62c36c315cabb6fa8` |
+| 448 | 20260812130000 | `20260812130000_converge_webhook_events_catalog_shape.sql` | `4b080a64d28acd00e047aa135d3b2381a5dd46ce8eda2dba1ceb34099f2c1a48` |
+| 449 | 20260812140000 | `20260812140000_converge_webhook_and_feature_access_views.sql` | `c4b5506f6f64b1b6cc87cce7af4ed58b4cdc557bd781a7bdfd43e18b62bf6336` |
+| 450 | 20260812150000 | `20260812150000_normalize_skatteverket_settings_select_predicate.sql` | `dc6f1d273610724407471d8962f5426fd62943c7e91b92d99182f057c032e66d` |
