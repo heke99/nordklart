@@ -118,8 +118,8 @@
       "last": "20260714120000_access_hardening_agency_status_service_resolver.sql"
     },
     "user_company_ids": {
-      "definitions": 4,
-      "last": "20260630120000_company_authorization_access_control.sql"
+      "definitions": 5,
+      "last": "20260811120000_converge_production_to_canonical_access_contract.sql"
     },
     "user_can_write_company": {
       "definitions": 1,

@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **444**.
+Antal SQL-migreringar: **446**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -468,3 +468,5 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 442 | 20260808190000 | `20260808190000_commit_journal_entry_is_unreachable_for_anon.sql` | `31cc30503a8c0398a1c600908f664684b90adc0b3e7b08b8ff01ff60c258b873` |
 | 443 | 20260809100000 | `20260809100000_child_row_write_policies_require_write_capability.sql` | `c51e4765ab13804dc49b60ace7b16597146bb90a06a477bd8ed3ce5a216bc261` |
 | 444 | 20260810120000 | `20260810120000_access_helper_write_policies_require_write_capability.sql` | `3f6acaf52dbabadd05a70b6e264dad352384c146474542948febd12f28b605fa` |
+| 445 | 20260811120000 | `20260811120000_converge_production_to_canonical_access_contract.sql` | `41b2880d92887d6ec7a5ff1d28e477e0c8f6ad756bc098ba0fda727f6b2faa8e` |
+| 446 | 20260811130000 | `20260811130000_restore_platform_write_policies_and_bankgiro_checks.sql` | `ea333082974dece92904ed98947f383e371a9c55355a047420c66217db4f2e15` |
