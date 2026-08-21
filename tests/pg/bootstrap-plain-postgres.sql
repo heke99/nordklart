@@ -46,12 +46,30 @@ GRANT USAGE ON SCHEMA extensions TO anon, authenticated, service_role;
 
 -- Migrations create objects in public and grant per-object; tests also need
 -- default access to sequences created later.
+--
+-- `anon` is included deliberately, and this is the one place where matching
+-- production matters more than looking safe. A Supabase project ships with
+--
+--   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+--     GRANT ALL ON TABLES/FUNCTIONS/SEQUENCES TO anon, authenticated, service_role
+--
+-- from both `postgres` and `supabase_admin`, so in production `anon` holds
+-- ~2000 table privileges and EXECUTE on everything in `public`. RLS is what
+-- actually stops it — that is Supabase's model, and it holds today: 0 of 280
+-- tables lack RLS, no policy names anon, and anon does not bypass RLS.
+--
+-- This bootstrap used to omit anon, which made the replay grant LESS than
+-- production. That is the dangerous direction: a table shipped without RLS, or
+-- a SECURITY DEFINER function that forgot its REVOKE, would be unreachable for
+-- anon here and wide open there — and the test suite would go green either way.
+-- Granting anon the same defaults means a test that passes locally passes for
+-- the same reason production is safe, not for a reason production does not have.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated, service_role;
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO authenticated, service_role;
+  GRANT USAGE, SELECT ON SEQUENCES TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
-  GRANT EXECUTE ON FUNCTIONS TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- auth.users — minimal shape our migrations reference (FKs + email join)

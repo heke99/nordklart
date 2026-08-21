@@ -61,6 +61,37 @@ describe('bankid_sessions for the login flow (pg-real)', () => {
     })
   })
 
+  it('does not let a user forge an unclaimed order through their own session', async () => {
+    // The nullable user_id is for the service role writing a pre-authentication
+    // record. A client must not be able to create one: the INSERT policy is
+    // `user_id = auth.uid()`, and NULL never satisfies it.
+    const someone = await insertAuthUser()
+
+    await withUserContext(someone, async (client) => {
+      await expect(
+        client.query(
+          `INSERT INTO public.bankid_sessions
+             (user_id, provider, provider_mode, provider_session_ref, purpose, status)
+           VALUES (NULL, 'mock', 'test', $1, 'auth', 'pending')`,
+          [`forged-${randomUUID()}`],
+        ),
+      ).rejects.toThrow(/row-level security/i)
+    })
+
+    // Their own row is fine — that is what the policy is for. Separate
+    // transaction: the refusal above aborts the one it happened in.
+    await withUserContext(someone, async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO public.bankid_sessions
+           (user_id, provider, provider_mode, provider_session_ref, purpose, status)
+         VALUES ($1, 'mock', 'test', $2, 'auth', 'pending')
+         RETURNING id`,
+        [someone, `own-${randomUUID()}`],
+      )
+      expect(rows).toHaveLength(1)
+    })
+  })
+
   it('refuses two live orders sharing one provider reference', async () => {
     const ref = `ref-${randomUUID()}`
     await getPool().query(
