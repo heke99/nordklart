@@ -419,3 +419,82 @@ när antalet definitioner för ett spårat objekt ändras.
 
 Samtliga läser live-katalogen, inte migrationstexten, så de bedömer den
 definition som överlevde alla senare redefinitioner.
+
+## 2026-08-21 — P0-härdning deployad till produktion
+
+unit 6193/6193, pg-real 696/696 (96 filer), typecheck/lint/7 guards/feature-policy
+gröna, 454 migrationer replayar rent från tom databas.
+
+Fyra migrationer deployade via `deploy-migration-via-mcp.mjs` + Supabase MCP,
+i versionsordning, med checksumverifiering i databasen före varje `EXECUTE`.
+Liggaren står på **454**, staging tömd.
+
+### Vad som rättades
+
+1. **MFA-bypass.** `shouldEnforceMfa` undantog varje konto med `bankid_linked`.
+   `POST /bankid/link` sätter den flaggan på ett befintligt lösenordskonto, och
+   flaggan säger ingenting om hur den *aktuella* sessionen upprättades — så att
+   länka BankID tog bort andra faktorn från lösenordsinloggningen. Undantaget
+   kräver nu också att kontot saknar eget lösenord.
+
+2. **Storno/rättelse var inte atomiska.** `reverseEntry` gjorde 5+ skrivningar,
+   allokerade verifikationsnumret i förväg (varje senare fel brände ett nummer)
+   och postade med rå `UPDATE status='posted'` — förbi `commit_journal_entry`
+   och därmed förbi anon-guarden och skrivkontrollen från 20260808190000.
+   `reverse_journal_entry_v2` gör allt i en transaktion. Planen byggs i TS.
+
+3. **Falsk betalvägg.** Vy-fallbacken i `listCompanyFeatureAccess` tappade
+   `reason`; layouten litade på `enabled === false`. Degraderade rader
+   om-verifieras nu via `checkFeatureAccess`.
+
+4. **Personnummer.** `customers.personal_number` skrevs aldrig av någon
+   kodväg — formuläret samlade in det och båda routes utelämnade det. Nu
+   inkopplat och krypterat (`_enc` + `_last4`); klartextkolumnen borttagen
+   efter att migrationen bevisat att den var tom (0 rader i produktion).
+
+5. **Signaturbevis.** `markSignatureSigned` fyllde aldrig
+   `signer_personnummer_hash`/`_encrypted`, och felet sväljdes — samtycket
+   registrerades, sessionen blev `complete`, signaturbegäran stod kvar
+   `pending`. `record_bankid_consent_v1` skriver allt i en transaktion.
+
+### Produktionsbugg som hittades på vägen
+
+`audit_annual_report_document_change` delas av tre tabeller men läste
+`NEW.created_by`, som bara en har. TG_TABLE_NAME-guarden skyddar inte:
+PL/pgSQL cachar planen på funktionen, inte per radtyp. När en backend kört
+triggern för `annual_report_presentation_reclassifications` dog nästa skrivning
+mot `arsredovisning_signature_requests` eller `arsredovisning_narratives` på
+samma connection med `record "new" has no field "created_by"`. Årsredovisnings-
+signering gick alltså sönder beroende på vad den poolade anslutningen råkat
+röra först. Testet reproducerades mot den gamla definitionen före fixen.
+
+### Verifiering mot produktion efter deploy
+
+Content-fingerprint mot ren replay: `column`, `constraint`, `index`, `policy`,
+`rls`, `trigger`, `view` identiska. `function` identisk (**283 /
+c3212a5026000b9eb0304bafd00c1061**) när extension-ägda objekt exkluderas —
+produktion installerar `btree_gist` i `public` (188 funktioner), den lokala
+bootstrappen i `extensions`. Det är miljöskillnad, inte drift.
+
+**Ny observation, ej åtgärdad:** grant-raderna skiljer sig (`table_grant`
+2 395 lokalt mot 6 198 i produktion, `function_grant` 632 mot 703). Det är
+Supabases default-grants. De är verkningslösa här — `anon` har `rolbypassrls`
+= false, 0 av 279 tabeller saknar RLS, och **0 policies nämner `anon`**, så
+anon matchar ingen policy och ser ingenting. Men det betyder att den lokala
+pg-real-replayen grantar *mindre* än produktion: ett test kan passera lokalt
+för att granten saknas, medan produktion bara har RLS som grind. Bör tas upp i
+nästa granskningspass.
+
+Nya funktioners rättigheter verifierade i produktion:
+`reverse_journal_entry_v2`, `record_bankid_consent_v1` och
+`create_planned_draft_entry` är service_role-only; `commit_journal_entry` är
+fortsatt `authenticated` (den bär sin egen anon-guard och skrivkontroll).
+
+### Nya guards
+
+- `internal-links` — failar på intern länk utan route bakom sig. Reproducerar
+  båda 404:orna (`/documents`, `/inbox`) mot den gamla koden.
+- `financial-hardening` kräver storno-RPC:n och förbjuder både postning utanför
+  `commit_journal_entry` och förhandsallokerat verifikationsnummer i motorerna.
+- Tre nya service-role-anropsställen granskade i
+  `docs/audits/2026-08-21-service-role-additions.md`.
