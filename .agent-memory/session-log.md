@@ -498,3 +498,89 @@ fortsatt `authenticated` (den bär sin egen anon-guard och skrivkontroll).
   `commit_journal_entry` och förhandsallokerat verifikationsnummer i motorerna.
 - Tre nya service-role-anropsställen granskade i
   `docs/audits/2026-08-21-service-role-additions.md`.
+
+## 2026-08-21 (forts.) — BankID-konvergens, Skatteverket-ombud, röjning
+
+Tre commits till på `claude/nordklart-production-ready-w4szxu`, fem migrationer
+deployade till produktion (ledger 454 → 459, staging-tabellen tom efteråt).
+
+### BankID (`2a428a5`, migrationer 20260821160000/170000/180000)
+
+Login var det enda BankID-flödet som inte gick via `getBankIdProvider()`.
+Konsekvenserna: `NEXT_PUBLIC_BANKID_ENABLED` stängde av samtyckessignering men
+inte inloggning; en hostad deploy med trasig provider-registrering hade inget
+skydd mot att falla igenom till mock; och det enda flöde som delar ut en
+session lämnade inget spår. Start/poll/complete/link/cancel går nu genom
+providern. `BankIdProvider` fick `result()` — en idempotent läsning av ett
+avslutat ärende, eftersom completion-steget måste härleda utfallet från
+providern i stället för att tro på webbläsaren, och `collect()` konsumerar
+progress.
+
+`bankid_sessions.user_id` är nullbar för `purpose='auth'` (CHECK), eftersom ett
+login-ärende startar innan kontot är känt. RLS behövde ingen ändring:
+`user_id = auth.uid()` är aldrig sant för NULL. Oanspråkade rader städas efter
+30 dagar från dygnscronen.
+
+`bankIdStartCooldowns` (in-memory Map, per instans, tom efter varje cold start)
+ersatt av `checkDurableRateLimit`: Upstash när det finns, annars fixed-window i
+Postgres, **fail-closed** — varje start är en debiterad TIC-session och rutten
+är oautentiserad.
+
+QR-koden räknade `setInterval`-tick sedan mount. BankID:s `time`-fält är
+sekunder sedan *ordern skapades på servern*. Skillnaden är starttiden, varje
+långsam HMAC, och tiotals sekunder i en bakgrundsflik där intervallet stryps —
+varefter varje skanning misslyckades. Nu klockbaserat mot ett serveransatt
+ankare.
+
+Borttaget: BankID-signup (ingen entry point, skapade konto utan avtal, plan
+eller bolag — CWE-287-guarden är nu strukturell i stället för en gren),
+`user_identity_verifications` (tom i både replay och produktion, aldrig
+skriven, dubblerade `bankid_sessions`).
+
+### Skatteverket (`bba74ef`, migrationer 20260821190000/200000)
+
+`skatteverket_ombud_authorizations`: `status='active'` går bara att nå genom ett
+observerat providersvar. Inga skrivgrants till anon/authenticated, RLS bara
+SELECT, skrivning via service-role-RPC som *härleder* status ur observationen,
+CHECK-villkor som binder status till bevis, och en trigger som vägrar varje
+skrivning RPC:n inte gjort — så en framtida service-role-väg kan inte heller
+sätta den för hand. Verifierat i produktion: `authenticated` kan varken köra
+RPC:n eller INSERT:a.
+
+Verdikt härleds bara ur två svar: lyckat anrop → `active`, 403 med
+behörighetstext → `denied`. En 500, en 401, en utgången session eller ett
+saknat scope säger ingenting om behörighet, och `denied` ur något av dem hade
+strandat ett giltigt ombud.
+
+Retry: `skvSysorgRequest` hade ingen alls. Nu bounded, med två regler — aldrig
+POST (Skatteverket har ingen idempotensheader; en timad POST kan redan ha
+lämnat in, och ett lyckat andra försök ger två deklarationer), och bara
+timeout/429/502/503/504 med exponentiell backoff + full jitter.
+`skatteverket_api_requests` fick `idempotency_key`, `attempt_count`,
+`next_retry_at`.
+
+Även: `getSkvSysorgAccessToken()` gate:ar nu på samma predikat som
+readiness-panelen, och de två moms-övergångarna krävde bara `if (data)` — ett
+200 med tom kropp hade flyttat en inlämning till `signed_submitted`.
+
+### Röjning
+
+Rotartefakterna borta (`nordklart-canonical-year-end.patch` — verifierat att
+den varken applicerar eller reverserar — plus `apply.sh`, som `rm -rf`:ade
+sökvägar i vilken katalog den än pekades mot). `findings.md` (116 KB, frusen
+2026-04-22) statusmärkt och flyttad till `docs/audits/`.
+
+`.env.example` fanns inte, och `docker-entrypoint.sh` hänvisade till en
+`.env.docker.example` som aldrig legat i repot. Nu finns filen, och
+`scripts/checks/env-example.mjs` failar när kod läser en variabel den inte
+nämner. Guarden ser även indirekta läsningar (`firstEnv`/`boolEnv`,
+`aliases:`-listorna, `env.NAME` i readiness-registret) — det var de ~23
+Skatteverket-variablerna en `process.env.NAME`-scan missar helt.
+
+### Kvar till nästa pass
+
+Grant-divergensen mot produktion (se ovan) är fortfarande bara antecknad.
+`enforceSkvRateLimit` i `lib/skatteverket/sysorg/client.ts` är samma
+per-instans-räknare som BankID-cooldownen var; den är en artighetsstrypning mot
+SKV, inte en säkerhetskontroll, och byts bara om granskningen visar att det
+spelar roll.
