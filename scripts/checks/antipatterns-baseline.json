@@ -1,7 +1,7 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: all reach 0 (A1 route-auth campaign, D1 rounding codemod, RLS backfill).",
   "rawRouteAuth": {
-    "count": 89,
+    "count": 83,
     "files": [
       "app/api/account/password/route.ts",
       "app/api/agency/clients/route.ts",
@@ -54,12 +54,6 @@
       "app/api/pending-operations/[id]/route.ts",
       "app/api/pending-operations/bulk-commit/route.ts",
       "app/api/pending-operations/route.ts",
-      "app/api/reconciliation/bank/link/route.ts",
-      "app/api/reconciliation/bank/mark-opening-balance/route.ts",
-      "app/api/reconciliation/bank/run/route.ts",
-      "app/api/reconciliation/bank/status/route.ts",
-      "app/api/reconciliation/bank/unlink/route.ts",
-      "app/api/reconciliation/bank/unmatched-entries/route.ts",
       "app/api/reports/kpi/route.ts",
       "app/api/salary/payroll-config/[year]/route.ts",
       "app/api/salary/runs/[id]/payslips/send/route.ts",
@@ -112,7 +106,7 @@
     ]
   },
   "adhocErrorEnvelope": {
-    "count": 171,
+    "count": 168,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -208,11 +202,8 @@
       "app/api/platform/companies/[companyId]/troubleshooting/route.ts",
       "app/api/public/company-lookup/route.ts",
       "app/api/public/price-plan/route.ts",
-      "app/api/reconciliation/bank/link/route.ts",
-      "app/api/reconciliation/bank/mark-opening-balance/route.ts",
       "app/api/reconciliation/bank/run/route.ts",
       "app/api/reconciliation/bank/status/route.ts",
-      "app/api/reconciliation/bank/unlink/route.ts",
       "app/api/reconciliation/bank/unmatched-entries/route.ts",
       "app/api/reports/ar-ledger/customer/[customerId]/invoices/route.ts",
       "app/api/reports/kpi/route.ts",
