@@ -1,5 +1,12 @@
 # Implementationsrapport
 
+> **Status: historical delivery record, archived 2026-07-30.**
+>
+> Delivery report for the canonical year-end chain, 2026-07-30.
+>
+> It lived in the repository root until 2026-08-21, where it read as current
+> guidance. Moving it here is the fix for that, not a re-endorsement.
+
 Leveransen inför en kanonisk bokslutskedja:
 
 1. Bokslutsjusteringar sparas som staging och skapar inga verifikationer.
