@@ -58,7 +58,10 @@ export const GET = withRouteContext(
             rows: customers,
             mapRow: (c) => [
               c.name,
-              c.org_number ?? c.personal_number,
+              // Masked, not decrypted. A bulk export is the last place a full
+              // personnummer should appear; the last four digits identify the
+              // customer for anyone reconciling the file.
+              c.org_number ?? (c.personal_number_last4 ? `XXXXXX-${c.personal_number_last4}` : null),
               c.customer_type,
               c.email,
               c.phone,

@@ -2251,6 +2251,26 @@
       "file": "20260812150000_normalize_skatteverket_settings_select_predicate.sql",
       "version": "20260812150000",
       "sha256": "dc6f1d273610724407471d8962f5426fd62943c7e91b92d99182f057c032e66d"
+    },
+    {
+      "file": "20260821120000_storno_and_correction_are_atomic.sql",
+      "version": "20260821120000",
+      "sha256": "2a4a143555e6da7f78baa8ae7a4a0e88a11b817b08cee37fdcb77daaa376772c"
+    },
+    {
+      "file": "20260821130000_customer_personal_number_encrypted_at_rest.sql",
+      "version": "20260821130000",
+      "sha256": "a05e2225eaeb190fb79f2e37972b4f9c144faa42449e73681e72aea720897102"
+    },
+    {
+      "file": "20260821140000_bankid_consent_and_signature_are_one_transaction.sql",
+      "version": "20260821140000",
+      "sha256": "2cf3b110c2b9544200b4df143edb9059daed5e802a85e0bb2e23500a192f3ad2"
+    },
+    {
+      "file": "20260821150000_fix_shared_annual_report_audit_trigger.sql",
+      "version": "20260821150000",
+      "sha256": "5d2fb71e4268339b816b4edbf6d05044a33e2ab011a40252f5c8d0a6c8f35951"
     }
   ]
 }

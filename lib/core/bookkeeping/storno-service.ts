@@ -5,13 +5,18 @@ import type {
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
-import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { validateBalance } from '@/lib/bookkeeping/engine'
+import { createServiceClient } from '@/lib/supabase/server'
+import {
+  planCorrectionJournal,
+  planReversalJournal,
+  translateStornoRpcError,
+} from '@/lib/bookkeeping/storno-plan'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotCorrectNonPostedError,
-  EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
   JournalEntryNotBalancedError,
@@ -73,28 +78,6 @@ function isIdenticalToOriginal(
  * 2. Create a corrected entry with the right data
  * 3. Link all three via reverses_id, reversed_by_id, correction_of_id
  */
-
-/**
- * Cancel a journal entry and delete its lines.
- * Uses status='cancelled' instead of DELETE (DB trigger blocks all DELETEs).
- * Works for both draft→cancelled and posted→cancelled transitions.
- */
-async function cancelEntry(supabase: SupabaseClient, entryId: string): Promise<void> {
-  const { error: statusErr } = await supabase
-    .from('journal_entries')
-    .update({ status: 'cancelled' })
-    .eq('id', entryId)
-  if (statusErr) {
-    console.error(`[storno] cancelEntry: failed to cancel ${entryId}:`, statusErr.message)
-  }
-  const { error: linesErr } = await supabase
-    .from('journal_entry_lines')
-    .delete()
-    .eq('journal_entry_id', entryId)
-  if (linesErr) {
-    console.error(`[storno] cancelEntry: failed to delete lines for ${entryId}:`, linesErr.message)
-  }
-}
 
 /** Journal entry row fetched together with its lines (the embedded select). */
 type OriginalWithLines = JournalEntry & { lines?: JournalEntryLine[] | null }
@@ -204,207 +187,77 @@ export async function correctEntry(
     }
   }
 
-  // ===== Step 1: Create storno (reversal) entry =====
-  const reversalVoucherNumber = await getNextVoucherNumber(
-    supabase,
-    companyId,
-    original.fiscal_period_id,
-    original.voucher_series || 'A'
+  // ===== Storno + rättelse, in one PostgreSQL transaction =====
+  //
+  // This used to be ~8 separate writes across two entries with compensating
+  // cancelEntry() calls between them, and a voucher number allocated up front
+  // for each. Both vouchers are now created, linked, committed and the original
+  // flipped to 'reversed' inside reverse_journal_entry_v2 — so a rejected
+  // rättelse leaves NO voucher behind, not even a cancelled one, and burns no
+  // number from the series.
+
+  // The corrected entry may only use accounts that are currently active. (The
+  // storno may use inactive ones — those accounts were active when the original
+  // was committed, and BFL 5 kap 5 § still requires the reversal to go through.)
+  const accountNumbers = [...new Set(correctedLines.map((l) => l.account_number))]
+  const { data: activeAccounts } = await supabase
+    .from('chart_of_accounts')
+    .select('account_number')
+    .eq('company_id', companyId)
+    .eq('is_active', true)
+    .in('account_number', accountNumbers)
+  const activeSet = new Set((activeAccounts ?? []).map((a) => a.account_number as string))
+  const missingAccounts = accountNumbers.filter((num) => !activeSet.has(num))
+  if (missingAccounts.length > 0) {
+    throw new AccountsNotInChartError(missingAccounts)
+  }
+
+  const reversalPlan = planReversalJournal(
+    original as JournalEntry,
+    originalLines,
+    original.entry_date,
+  )
+  const correctionPlan = planCorrectionJournal(
+    original as JournalEntry,
+    correctedLines,
+    correctedPeriodId,
+    correctedDate,
   )
 
-  const { data: reversalEntry, error: reversalError } = await supabase
-    .from('journal_entries')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      fiscal_period_id: original.fiscal_period_id,
-      voucher_number: reversalVoucherNumber,
-      voucher_series: original.voucher_series || 'A',
-      entry_date: original.entry_date,
-      description: `Storno: ${original.description}`,
-      source_type: 'storno',
-      reverses_id: originalEntryId,
-      status: 'draft',
-    })
-    .select()
-    .single()
+  const service = createServiceClient()
+  const { data: rpcResult, error: rpcError } = await service.rpc('reverse_journal_entry_v2', {
+    p_company_id: companyId,
+    p_actor_user_id: userId,
+    p_entry_id: originalEntryId,
+    p_reversal_journal: reversalPlan,
+    p_reversal_date: original.entry_date,
+    p_correction_journal: correctionPlan,
+    p_correction_date: correctedDate,
+  })
 
-  if (reversalError || !reversalEntry) {
-    throw new BookkeepingDatabaseError('create_reversal_entry', reversalError?.message)
+  if (rpcError) {
+    throw translateStornoRpcError(rpcError, 'create_corrected_entry')
   }
 
-  // Insert reversed lines (swap debit and credit)
-  const reversalLineInserts = originalLines.map((line, index) => ({
-    journal_entry_id: reversalEntry.id,
-    account_number: line.account_number,
-    account_id: line.account_id || null,
-    debit_amount: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
-    credit_amount: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
-    currency: line.currency || 'SEK',
-    amount_in_currency: line.amount_in_currency ? -Number(line.amount_in_currency) : null,
-    exchange_rate: line.exchange_rate || null,
-    line_description: `Storno: ${line.line_description || ''}`,
-    tax_code: line.tax_code || null,
-    cost_center: line.cost_center || null,
-    project: line.project || null,
-    sort_order: index,
-  }))
-
-  const { error: reversalLinesError } = await supabase
-    .from('journal_entry_lines')
-    .insert(reversalLineInserts)
-
-  if (reversalLinesError) {
-    await cancelEntry(supabase, reversalEntry.id)
-    throw new BookkeepingDatabaseError('create_reversal_lines', reversalLinesError.message)
-  }
-
-  // Post the reversal entry
-  const { error: postReversalError } = await supabase
-    .from('journal_entries')
-    .update({ status: 'posted' })
-    .eq('id', reversalEntry.id)
-
-  if (postReversalError) {
-    await cancelEntry(supabase, reversalEntry.id)
-    throw new BookkeepingDatabaseError('post_reversal_entry', postReversalError.message)
-  }
-
-  // NOTE: Original entry is NOT marked as 'reversed' here. We defer that
-  // until both the reversal and corrected entries are successfully posted.
-  // This avoids the impossible reversed→posted rollback if step 2 fails.
-
-  // ===== Step 2: Create corrected entry =====
-  // If anything in this step fails, cancel the reversal entry.
-  // The original entry was never modified, so no rollback needed.
-
-  let correctedEntry: typeof reversalEntry
-
-  try {
-    const correctedVoucherNumber = await getNextVoucherNumber(
-      supabase,
-      companyId,
-      correctedPeriodId,
-      original.voucher_series || 'A'
+  const ids = rpcResult as { reversal_entry_id?: string; correction_entry_id?: string } | null
+  if (!ids?.reversal_entry_id || !ids.correction_entry_id) {
+    throw new BookkeepingDatabaseError(
+      'create_corrected_entry',
+      'Rättelse-RPC returnerade inte båda verifikaten.',
     )
-
-    // Resolve account IDs for corrected lines — only active rows count
-    const accountNumbers = [...new Set(correctedLines.map((l) => l.account_number))]
-    const { data: accounts } = await supabase
-      .from('chart_of_accounts')
-      .select('id, account_number')
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .in('account_number', accountNumbers)
-
-    const accountIdMap = new Map<string, string>()
-    for (const account of accounts || []) {
-      accountIdMap.set(account.account_number, account.id)
-    }
-
-    // Validate all account numbers resolved to IDs
-    const missingAccounts = accountNumbers.filter(num => !accountIdMap.has(num))
-    if (missingAccounts.length > 0) {
-      throw new AccountsNotInChartError(missingAccounts)
-    }
-
-    const { data: newEntry, error: correctedError } = await supabase
-      .from('journal_entries')
-      .insert({
-        company_id: companyId,
-        user_id: userId,
-        fiscal_period_id: correctedPeriodId,
-        voucher_number: correctedVoucherNumber,
-        voucher_series: original.voucher_series || 'A',
-        entry_date: correctedDate,
-        description: `Rättelse: ${original.description}`,
-        source_type: 'correction',
-        correction_of_id: originalEntryId,
-        status: 'draft',
-      })
-      .select()
-      .single()
-
-    if (correctedError || !newEntry) {
-      throw new BookkeepingDatabaseError('create_corrected_entry', correctedError?.message)
-    }
-
-    correctedEntry = newEntry
-
-    // Insert corrected lines
-    const correctedLineInserts = correctedLines.map((line, index) => ({
-      journal_entry_id: correctedEntry.id,
-      account_number: line.account_number,
-      account_id: accountIdMap.get(line.account_number) || null,
-      debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
-      credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
-      currency: line.currency || 'SEK',
-      amount_in_currency: line.amount_in_currency
-        ? Math.round(line.amount_in_currency * 100) / 100
-        : null,
-      exchange_rate: line.exchange_rate || null,
-      line_description: line.line_description || null,
-      tax_code: line.tax_code || null,
-      cost_center: line.cost_center || null,
-      project: line.project || null,
-      sort_order: index,
-    }))
-
-    const { error: correctedLinesError } = await supabase
-      .from('journal_entry_lines')
-      .insert(correctedLineInserts)
-
-    if (correctedLinesError) {
-      await cancelEntry(supabase, correctedEntry.id)
-      throw new BookkeepingDatabaseError('create_corrected_lines', correctedLinesError.message)
-    }
-
-    // Post the corrected entry
-    const { error: postCorrectedError } = await supabase
-      .from('journal_entries')
-      .update({ status: 'posted' })
-      .eq('id', correctedEntry.id)
-
-    if (postCorrectedError) {
-      await cancelEntry(supabase, correctedEntry.id)
-      throw new BookkeepingDatabaseError('post_corrected_entry', postCorrectedError.message)
-    }
-  } catch (err) {
-    // Cancel the reversal entry (posted → cancelled). Original was never
-    // modified so no rollback needed — it's still 'posted'.
-    await cancelEntry(supabase, reversalEntry.id)
-    throw err
   }
 
-  // ===== Mark original as reversed (CAS guard: only if still 'posted') =====
-  const { data: updatedOriginal, error: casError } = await supabase
-    .from('journal_entries')
-    .update({
-      status: 'reversed',
-      reversed_by_id: reversalEntry.id,
-    })
-    .eq('id', originalEntryId)
-    .eq('status', 'posted')
-    .select('id')
-
-  if (casError || !updatedOriginal || updatedOriginal.length === 0) {
-    // Concurrent reversal beat us — cancel both our entries
-    await cancelEntry(supabase, reversalEntry.id)
-    await cancelEntry(supabase, correctedEntry!.id)
-    throw new EntryAlreadyReversedError()
-  }
-
-  // ===== Step 3: Fetch complete entries =====
+  // ===== Fetch complete entries =====
   const { data: finalReversal } = await supabase
     .from('journal_entries')
     .select('*, lines:journal_entry_lines(*)')
-    .eq('id', reversalEntry.id)
+    .eq('id', ids.reversal_entry_id)
     .single()
 
   const { data: finalCorrected } = await supabase
     .from('journal_entries')
     .select('*, lines:journal_entry_lines(*)')
-    .eq('id', correctedEntry.id)
+    .eq('id', ids.correction_entry_id)
     .single()
 
   const result = {

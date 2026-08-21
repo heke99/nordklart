@@ -23,6 +23,18 @@ export const NORDKLART_FEATURES = {
   yearEndProjects: 'year_end.projects',
   yearEndIxbrl: 'year_end.ixbrl',
   yearEndProduct: 'year_end.product',
+  /**
+   * Seeded in `platform_features` and granted by the `year_end_one_time` plan
+   * version, so it is a real entitlement — but deliberately NOT used as a gate
+   * in application code, and it must not become one.
+   *
+   * A company-level feature cannot express what this product actually sells:
+   * access to one specific fiscal period. Gating on it would let a company that
+   * bought year-end for 2024 open 2025. The period-bound check lives in
+   * `resolveFiscalPeriodAccess` (lib/year-end/period-access.ts), which reads
+   * `one_time_purchases` and honours `fiscal_period_id`, `access_starts_at`,
+   * `access_expires_at` and `permanent_access`.
+   */
   yearEndOneTimePurchase: 'year_end.one_time_purchase',
   bankgiroOnboarding: 'bankgiro.onboarding',
   bankgiroApplication: 'bankgiro.application',

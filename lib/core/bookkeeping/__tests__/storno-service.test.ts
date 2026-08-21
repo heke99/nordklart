@@ -5,21 +5,24 @@ import { BookkeepingDatabaseError, MeaninglessCorrectionError } from '@/lib/book
 
 // ============================================================
 // Mock — separate client (no .then) from query builder (thenable)
+//
+// correctEntry no longer writes the two vouchers itself: it reads what it
+// needs, plans both entries, and hands them to reverse_journal_entry_v2, which
+// creates, links, commits and flips the original inside ONE transaction. The
+// mock therefore models reads + one RPC, and the assertions are about the PLAN
+// that goes over the wire rather than about a sequence of inserts.
 // ============================================================
 
 let resultIdx: number
 let results: Array<{ data?: unknown; error?: unknown }>
-let inserts: Array<{ table: string; payload: unknown }>
+let rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>
+let rpcResult: { data?: unknown; error?: unknown }
 
-function makeBuilder(table: string) {
+function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'update', 'delete']) {
+  for (const m of ['select', 'eq', 'in', 'update', 'delete', 'insert']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
-  b.insert = vi.fn().mockImplementation((payload: unknown) => {
-    inserts.push({ table, payload })
-    return b
-  })
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
@@ -27,31 +30,54 @@ function makeBuilder(table: string) {
 
 function makeClient() {
   return {
-    from: vi.fn().mockImplementation((table: string) => makeBuilder(table)),
-    rpc: vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null }),
+    from: vi.fn().mockImplementation(() => makeBuilder()),
+    rpc: vi.fn().mockImplementation(async (fn: string, args: Record<string, unknown>) => {
+      rpcCalls.push({ fn, args })
+      return rpcResult
+    }),
   }
 }
 
+const serviceClient = { rpc: vi.fn() }
+
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => serviceClient,
+}))
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
   validateBalance: vi.fn().mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 }),
-  getNextVoucherNumber: vi.fn(async () => ++resultIdx), // just increment
 }))
 
 import { correctEntry } from '../storno-service'
-import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { validateBalance } from '@/lib/bookkeeping/engine'
 
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
   resultIdx = 0
   results = []
-  inserts = []
+  rpcCalls = []
+  rpcResult = { data: null, error: null }
 
-  // Reset the mock implementations after clearAllMocks
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 })
-  let voucherNum = 0
-  vi.mocked(getNextVoucherNumber).mockImplementation(async () => ++voucherNum)
+  serviceClient.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) => {
+    rpcCalls.push({ fn, args })
+    return rpcResult
+  })
 })
+
+/** The plan reverse_journal_entry_v2 was handed, by role. */
+function plans() {
+  const call = rpcCalls.find((c) => c.fn === 'reverse_journal_entry_v2')
+  return {
+    reversal: call?.args.p_reversal_journal as
+      | { source_type: string; fiscal_period_id: string; entry_date: string; lines: Array<Record<string, number | string>> }
+      | undefined,
+    correction: call?.args.p_correction_journal as
+      | { source_type: string; fiscal_period_id: string; entry_date: string; lines: Array<Record<string, number | string>> }
+      | undefined,
+  }
+}
 
 describe('correctEntry', () => {
   const originalEntry = makeJournalEntry({
@@ -78,28 +104,17 @@ describe('correctEntry', () => {
     results = [
       // 0: fetch original (.single())
       { data: originalEntry, error: null },
-      // 1: insert reversal entry (.single())
-      { data: reversalEntry, error: null },
-      // 2: insert reversal lines (thenable)
-      { data: null, error: null },
-      // 3: update reversal to posted (thenable)
-      { data: null, error: null },
-      // -- getNextVoucherNumber increments resultIdx --
-      // 4: fetch accounts for corrected lines (thenable)
-      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null },
-      // 5: insert corrected entry (.single())
-      { data: correctedEntry, error: null },
-      // 6: insert corrected lines (thenable)
-      { data: null, error: null },
-      // 7: update corrected to posted (thenable)
-      { data: null, error: null },
-      // 8: CAS update original to reversed (thenable, needs array for .length check)
-      { data: [{ id: 'orig-1' }], error: null },
-      // 9: fetch final reversal (.single())
+      // 1: active accounts for the corrected lines (thenable)
+      { data: [{ account_number: '5420' }, { account_number: '1930' }], error: null },
+      // 2: fetch final reversal (.single())
       { data: { ...reversalEntry, lines: [] }, error: null },
-      // 10: fetch final corrected (.single())
+      // 3: fetch final corrected (.single())
       { data: { ...correctedEntry, lines: correctedLines }, error: null },
     ]
+    rpcResult = {
+      data: { reversal_entry_id: 'reversal-1', correction_entry_id: 'corrected-1' },
+      error: null,
+    }
   }
 
   it('creates reversal with swapped debit/credit lines', async () => {
@@ -135,45 +150,52 @@ describe('correctEntry', () => {
     ).rejects.toThrow('not balanced')
   })
 
-  it('cancels both entries on concurrent reversal (CAS guard)', async () => {
-    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
-    const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
-
+  // The three tests this replaces asserted that a failure CANCELS the entries
+  // it had already written. There is nothing to cancel any more: the vouchers
+  // are created inside the RPC's transaction, so a rejection rolls them away.
+  // What the service must still do is translate the domain code back into the
+  // typed error the routes already handle.
+  it('surfaces a concurrent reversal as EntryAlreadyReversedError, writing nothing', async () => {
     results = [
-      { data: originalEntry, error: null },         // 0: fetch original
-      { data: reversalEntry, error: null },          // 1: insert reversal
-      { data: null, error: null },                   // 2: insert reversal lines
-      { data: null, error: null },                   // 3: post reversal
-      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 4: accounts
-      { data: correctedEntry, error: null },         // 5: insert corrected
-      { data: null, error: null },                   // 6: insert corrected lines
-      { data: null, error: null },                   // 7: post corrected
-      { data: [], error: null },                     // 8: CAS fails — empty array
-      { data: null, error: null },                   // 9: cancelEntry reversal update
-      { data: null, error: null },                   // 10: cancelEntry reversal lines delete
-      { data: null, error: null },                   // 11: cancelEntry corrected update
-      { data: null, error: null },                   // 12: cancelEntry corrected lines delete
+      { data: originalEntry, error: null },
+      { data: [{ account_number: '5420' }, { account_number: '1930' }], error: null },
     ]
+    rpcResult = {
+      data: null,
+      error: { message: 'Journal entry is already reversed.', details: '{"code":"ENTRY_ALREADY_REVERSED"}' },
+    }
 
     const supabase = makeClient()
     await expect(
       correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
     ).rejects.toThrow('already reversed')
+
+    // No compensation path exists — and none is needed.
+    expect(supabase.from).not.toHaveBeenCalledWith('journal_entry_lines')
   })
 
-  it('cancels reversal when corrected entry creation fails', async () => {
-    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
-
+  it('surfaces a locked period as TargetPeriodLockedError', async () => {
     results = [
-      { data: originalEntry, error: null },          // 0: fetch original
-      { data: reversalEntry, error: null },           // 1: insert reversal
-      { data: null, error: null },                    // 2: insert reversal lines
-      { data: null, error: null },                    // 3: post reversal
-      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 4: accounts
-      { data: null, error: { message: 'DB error' } }, // 5: insert corrected FAILS
-      { data: null, error: null },                    // 6: cancelEntry reversal update
-      { data: null, error: null },                    // 7: cancelEntry reversal lines delete
+      { data: originalEntry, error: null },
+      { data: [{ account_number: '5420' }, { account_number: '1930' }], error: null },
     ]
+    rpcResult = {
+      data: null,
+      error: { message: 'Payment period is closed or locked.', details: '{"code":"PERIOD_LOCKED"}' },
+    }
+
+    const supabase = makeClient()
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+    ).rejects.toMatchObject({ code: 'TARGET_PERIOD_LOCKED' })
+  })
+
+  it('surfaces an unmapped RPC failure as BookkeepingDatabaseError', async () => {
+    results = [
+      { data: originalEntry, error: null },
+      { data: [{ account_number: '5420' }, { account_number: '1930' }], error: null },
+    ]
+    rpcResult = { data: null, error: { message: 'connection reset' } }
 
     const supabase = makeClient()
     await expect(
@@ -181,21 +203,20 @@ describe('correctEntry', () => {
     ).rejects.toThrow(BookkeepingDatabaseError)
   })
 
-  it('cancels reversal entry when reversal lines fail', async () => {
-    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
-
+  it('rejects a corrected line on an inactive account', async () => {
     results = [
-      { data: originalEntry, error: null },           // 0: fetch original
-      { data: reversalEntry, error: null },            // 1: insert reversal
-      { data: null, error: { message: 'line error' } }, // 2: insert reversal lines FAILS
-      { data: null, error: null },                     // 3: cancelEntry update
-      { data: null, error: null },                     // 4: cancelEntry lines delete
+      { data: originalEntry, error: null },
+      // 5420 is not in the active set — the rättelse may not use it, even
+      // though the storno of an old entry still may.
+      { data: [{ account_number: '1930' }], error: null },
     ]
 
     const supabase = makeClient()
     await expect(
       correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
-    ).rejects.toThrow(BookkeepingDatabaseError)
+    ).rejects.toMatchObject({ code: 'ACCOUNTS_NOT_IN_CHART' })
+
+    expect(rpcCalls).toHaveLength(0)
   })
 
   it('mirrors original.entry_date on storno + corrected entries (rättelsen stannar i ursprungsperioden)', async () => {
@@ -203,13 +224,9 @@ describe('correctEntry', () => {
     const supabase = makeClient()
     await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
 
-    const journalEntryInserts = inserts
-      .filter((i) => i.table === 'journal_entries')
-      .map((i) => i.payload as { entry_date: string; source_type: string })
-
-    expect(journalEntryInserts).toHaveLength(2)
-    expect(journalEntryInserts[0]).toMatchObject({ source_type: 'storno', entry_date: '2024-06-15' })
-    expect(journalEntryInserts[1]).toMatchObject({ source_type: 'correction', entry_date: '2024-06-15' })
+    const { reversal, correction } = plans()
+    expect(reversal).toMatchObject({ source_type: 'storno', entry_date: '2024-06-15' })
+    expect(correction).toMatchObject({ source_type: 'correction', entry_date: '2024-06-15' })
   })
 
   it('rejects rättelse where every account nets to zero (1930 → 1930)', async () => {
@@ -301,18 +318,15 @@ describe('correctEntry', () => {
     })
 
     results = [
-      { data: correctionAsOriginal, error: null },                            // 0: fetch original (the prior correction)
-      { data: secondReversal, error: null },                                  // 1: insert reversal
-      { data: null, error: null },                                            // 2: insert reversal lines
-      { data: null, error: null },                                            // 3: post reversal
-      { data: [{ id: 'acc-5430', account_number: '5430' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 4: accounts
-      { data: secondCorrection, error: null },                                // 5: insert corrected
-      { data: null, error: null },                                            // 6: insert corrected lines
-      { data: null, error: null },                                            // 7: post corrected
-      { data: [{ id: 'correction-1' }], error: null },                        // 8: CAS update
-      { data: { ...secondReversal, lines: [] }, error: null },                // 9: fetch final reversal
-      { data: { ...secondCorrection, lines: [] }, error: null },              // 10: fetch final corrected
+      { data: correctionAsOriginal, error: null },                              // 0: fetch original (the prior correction)
+      { data: [{ account_number: '5430' }, { account_number: '1930' }], error: null }, // 1: active accounts
+      { data: { ...secondReversal, lines: [] }, error: null },                  // 2: fetch final reversal
+      { data: { ...secondCorrection, lines: [] }, error: null },                // 3: fetch final corrected
     ]
+    rpcResult = {
+      data: { reversal_entry_id: 'reversal-2', correction_entry_id: 'correction-2' },
+      error: null,
+    }
 
     const supabase = makeClient()
     const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'correction-1', [
@@ -368,17 +382,14 @@ describe('correctEntry — date/period override (recordate engine)', () => {
     results = [
       { data: originalEntry, error: null },                                                          // 0 fetch original
       { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null },  // 1 target period
-      { data: reversalEntry, error: null },                                                          // 2 insert reversal
-      { data: null, error: null },                                                                   // 3 reversal lines
-      { data: null, error: null },                                                                   // 4 post reversal
-      { data: [{ id: 'acc-5410', account_number: '5410' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 5 accounts
-      { data: correctedEntry, error: null },                                                         // 6 insert corrected
-      { data: null, error: null },                                                                   // 7 corrected lines
-      { data: null, error: null },                                                                   // 8 post corrected
-      { data: [{ id: 'orig-1' }], error: null },                                                     // 9 CAS
-      { data: { ...reversalEntry, lines: [] }, error: null },                                        // 10 final reversal
-      { data: { ...correctedEntry, lines: [] }, error: null },                                       // 11 final corrected
+      { data: [{ account_number: '5410' }, { account_number: '1930' }], error: null },                // 2 active accounts
+      { data: { ...reversalEntry, lines: [] }, error: null },                                        // 3 final reversal
+      { data: { ...correctedEntry, lines: [] }, error: null },                                       // 4 final corrected
     ]
+    rpcResult = {
+      data: { reversal_entry_id: 'reversal-1', correction_entry_id: 'corrected-1' },
+      error: null,
+    }
     const supabase = makeClient()
     const result = await correctEntry(
       supabase as never,
@@ -390,12 +401,10 @@ describe('correctEntry — date/period override (recordate engine)', () => {
     )
     expect(result.corrected).toBeDefined()
 
-    const je = inserts
-      .filter((i) => i.table === 'journal_entries')
-      .map((i) => i.payload as { source_type: string; fiscal_period_id: string; entry_date: string })
-    expect(je).toHaveLength(2)
-    expect(je[0]).toMatchObject({ source_type: 'storno', fiscal_period_id: 'fp-1', entry_date: '2024-06-15' })
-    expect(je[1]).toMatchObject({ source_type: 'correction', fiscal_period_id: 'fp-2', entry_date: '2025-06-15' })
+    // The storno stays where the original was booked; only the rättelse moves.
+    const { reversal, correction } = plans()
+    expect(reversal).toMatchObject({ source_type: 'storno', fiscal_period_id: 'fp-1', entry_date: '2024-06-15' })
+    expect(correction).toMatchObject({ source_type: 'correction', fiscal_period_id: 'fp-2', entry_date: '2025-06-15' })
   })
 
   it('rejects when the new date falls outside the target period bounds', async () => {
@@ -411,8 +420,8 @@ describe('correctEntry — date/period override (recordate engine)', () => {
       })
     ).rejects.toMatchObject({ code: 'ENTRY_DATE_OUTSIDE_FISCAL_PERIOD' })
 
-    // No storno should have been written.
-    expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(0)
+    // The guard runs before the RPC — no storno is even planned.
+    expect(rpcCalls).toHaveLength(0)
   })
 
   it('rejects when the target period cannot be found', async () => {

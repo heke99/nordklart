@@ -16,7 +16,7 @@
     "start": "next start",
     "typecheck": "NODE_OPTIONS=--max-old-space-size=4096 tsc --noEmit",
     "lint": "eslint",
-    "check:guards": "node scripts/checks/no-new-antipatterns.mjs && node scripts/checks/migration-integrity.mjs && node scripts/checks/migration-redefinition.mjs && node scripts/checks/financial-hardening-contract.mjs && node scripts/checks/service-role-surface.mjs && node scripts/checks/platform-role-revocation.mjs",
+    "check:guards": "node scripts/checks/no-new-antipatterns.mjs && node scripts/checks/migration-integrity.mjs && node scripts/checks/migration-redefinition.mjs && node scripts/checks/financial-hardening-contract.mjs && node scripts/checks/service-role-surface.mjs && node scripts/checks/platform-role-revocation.mjs && node scripts/checks/internal-links.mjs",
     "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
     "test": "vitest run --project unit",
     "test:pg": "VITEST_PG_REAL=1 vitest run --project pg-real",
@@ -38,7 +38,8 @@
     "verify:db": "npm run check:migrations:db && npm run test:pg",
     "verify:release": "npm run verify:fast && npm run build && npm run verify:db",
     "check:redefinition": "node scripts/checks/migration-redefinition.mjs",
-    "test:pg:reset": "bash scripts/pg-test-db.sh --reset"
+    "test:pg:reset": "bash scripts/pg-test-db.sh --reset",
+    "check:links": "node scripts/checks/internal-links.mjs"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "^0.29.1",

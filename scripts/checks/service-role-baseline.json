@@ -1,6 +1,6 @@
 {
-  "description": "Files allowed to construct a service-role Supabase client. A service-role client bypasses RLS, so every entry here must verify actor -> company -> resource -> permission before the privileged operation. Reviewed 2026-08-08 (see docs/audits/2026-08-08-service-role-review.md). Adding a file requires the same review; the ratchet fails otherwise.",
-  "reviewedAt": "2026-08-08",
+  "description": "Files allowed to construct a service-role Supabase client. A service-role client bypasses RLS, so every entry here must verify actor -> company -> resource -> permission before the privileged operation. Reviewed 2026-08-08 (see docs/audits/2026-08-08-service-role-review.md) and extended 2026-08-21 for the three atomicity RPC call sites (see docs/audits/2026-08-21-service-role-additions.md). Adding a file requires the same review; the ratchet fails otherwise.",
+  "reviewedAt": "2026-08-21",
   "allowed": [
     "app/(auth)/auth/callback/route.ts",
     "app/(dashboard)/platform/access/page.tsx",
@@ -91,9 +91,12 @@
     "lib/api/with-route-context.ts",
     "lib/auth/api-keys.ts",
     "lib/auth/callback-audit.ts",
+    "lib/auth/consent-service.ts",
     "lib/auth/oauth-allowlist.ts",
     "lib/bokslut/arsredovisning/version-service.ts",
+    "lib/bookkeeping/engine.ts",
     "lib/company/actions.ts",
+    "lib/core/bookkeeping/storno-service.ts",
     "lib/core/documents/document-service.ts",
     "lib/email/service.ts",
     "lib/events/handlers/event-log-handler.ts",

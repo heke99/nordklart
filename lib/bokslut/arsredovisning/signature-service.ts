@@ -68,7 +68,13 @@ export async function createSignatureRequest(
 }
 
 /**
- * Mark a request as signed. Used by the (future) BankID completion handler.
+ * Mark a request as signed WITHOUT BankID evidence.
+ *
+ * The BankID path does not come through here: record_bankid_consent_v1 flips
+ * the request in the same transaction as the consent, so the signature and its
+ * evidence can never disagree. This remains for the manual
+ * "Markera som signerad" affordance, where there is no BankID order to bind to.
+ *
  * The DB trigger blocks further edits once signed, so this is a one-way
  * transition.
  */

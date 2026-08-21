@@ -13,17 +13,14 @@ import {
 
 let resultIdx: number
 let results: Array<{ data?: unknown; error?: unknown }>
-let inserts: Array<{ table: string; payload: unknown }>
+let rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>
+let rpcResult: { data?: unknown; error?: unknown }
 
-function makeBuilder(table: string) {
+function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'update', 'delete']) {
+  for (const m of ['select', 'eq', 'in', 'update', 'delete', 'insert']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
-  b.insert = vi.fn().mockImplementation((payload: unknown) => {
-    inserts.push({ table, payload })
-    return b
-  })
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.maybeSingle = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
@@ -32,14 +29,20 @@ function makeBuilder(table: string) {
 
 function makeClient() {
   return {
-    from: vi.fn().mockImplementation((table: string) => makeBuilder(table)),
+    from: vi.fn().mockImplementation(() => makeBuilder()),
     rpc: vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null }),
   }
 }
 
+// correctEntry hands both vouchers to reverse_journal_entry_v2 through a
+// service-role client, so that is what recordate exercises now.
+const serviceClient = { rpc: vi.fn() }
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => serviceClient,
+}))
+
 vi.mock('@/lib/bookkeeping/engine', () => ({
   validateBalance: vi.fn().mockReturnValue({ valid: true, totalDebit: 1008.75, totalCredit: 1008.75 }),
-  getNextVoucherNumber: vi.fn(async () => 1),
 }))
 
 // resolvePeriodStatusForDate is the classification gate — mock it directly so
@@ -50,7 +53,7 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 }))
 
 import { recordateEntry } from '../storno-service'
-import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { validateBalance } from '@/lib/bookkeeping/engine'
 
 const original = makeJournalEntry({
   id: 'orig-1',
@@ -70,10 +73,13 @@ beforeEach(() => {
   eventBus.clear()
   resultIdx = 0
   results = []
-  inserts = []
+  rpcCalls = []
+  rpcResult = { data: null, error: null }
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1008.75, totalCredit: 1008.75 })
-  let v = 0
-  vi.mocked(getNextVoucherNumber).mockImplementation(async () => ++v)
+  serviceClient.rpc.mockImplementation(async (fn: string, args: Record<string, unknown>) => {
+    rpcCalls.push({ fn, args })
+    return rpcResult
+  })
 })
 
 describe('recordateEntry', () => {
@@ -131,27 +137,28 @@ describe('recordateEntry', () => {
     results = [
       { data: original, error: null },                                                              // 0 recordate fetch original
       { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null }, // 1 target period
-      { data: reversalEntry, error: null },                                                         // 2 insert reversal
-      { data: null, error: null },                                                                  // 3 reversal lines
-      { data: null, error: null },                                                                  // 4 post reversal
-      { data: [{ id: 'a1', account_number: '6230' }, { id: 'a2', account_number: '1930' }], error: null }, // 5 accounts
-      { data: correctedEntry, error: null },                                                        // 6 insert corrected
-      { data: null, error: null },                                                                  // 7 corrected lines
-      { data: null, error: null },                                                                  // 8 post corrected
-      { data: [{ id: 'orig-1' }], error: null },                                                    // 9 CAS
-      { data: { ...reversalEntry, lines: [] }, error: null },                                       // 10 final reversal
-      { data: { ...correctedEntry, lines: [] }, error: null },                                      // 11 final corrected
-      { data: null, error: null },                                                                  // 12 relink documents
+      { data: [{ account_number: '6230' }, { account_number: '1930' }], error: null },               // 2 active accounts
+      { data: { ...reversalEntry, lines: [] }, error: null },                                       // 3 final reversal
+      { data: { ...correctedEntry, lines: [] }, error: null },                                      // 4 final corrected
+      { data: null, error: null },                                                                  // 5 relink documents
     ]
+    rpcResult = {
+      data: { reversal_entry_id: 'reversal-1', correction_entry_id: 'corrected-1' },
+      error: null,
+    }
     const supabase = makeClient()
     const result = await recordateEntry(supabase as never, 'company-1', 'user-1', 'orig-1', '2025-07-03')
     expect(result.corrected.id).toBe('corrected-1')
 
-    const je = inserts
-      .filter((i) => i.table === 'journal_entries')
-      .map((i) => i.payload as { source_type: string; fiscal_period_id: string; entry_date: string })
-    expect(je[0]).toMatchObject({ source_type: 'storno', fiscal_period_id: 'fp-2026', entry_date: '2026-07-03' })
-    expect(je[1]).toMatchObject({ source_type: 'correction', fiscal_period_id: 'fp-2025', entry_date: '2025-07-03' })
+    // The storno stays in the year the entry was wrongly booked in; only the
+    // rättelse moves to the correct year. Both go over in one RPC call.
+    const call = rpcCalls.find((c) => c.fn === 'reverse_journal_entry_v2')!
+    expect(call.args.p_reversal_journal).toMatchObject({
+      source_type: 'storno', fiscal_period_id: 'fp-2026', entry_date: '2026-07-03',
+    })
+    expect(call.args.p_correction_journal).toMatchObject({
+      source_type: 'correction', fiscal_period_id: 'fp-2025', entry_date: '2025-07-03',
+    })
     expect(mockResolve).toHaveBeenCalledWith(expect.anything(), 'company-1', '2025-07-03')
   })
 })

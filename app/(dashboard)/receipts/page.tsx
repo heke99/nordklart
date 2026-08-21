@@ -11,10 +11,10 @@ export default function ReceiptsPage() {
       <PageHeader
         title="Kvitton"
         description="Samla kvitton, tolka dem och skapa bokföring med spårbar koppling mellan underlag och verifikation."
-        action={<Button asChild><Link href="/documents"><ReceiptText className="mr-2 h-4 w-4" />Ladda upp kvitto</Link></Button>}
+        action={<Button asChild><Link href="/import"><ReceiptText className="mr-2 h-4 w-4" />Ladda upp kvitto</Link></Button>}
       />
       <div className="grid gap-4 md:grid-cols-3">
-        <Info title="Inkorg" body="Uppladdade kvitton tolkas och hamnar i inkorgen för granskning innan bokföring." href="/documents" cta="Öppna underlag" />
+        <Info title="Inkorg" body="Uppladdade kvitton tolkas och hamnar i inkorgen för granskning innan bokföring." href="/e/general/invoice-inbox" cta="Öppna underlag" />
         <Info title="Privat betalt" body="Kvitton som betalats privat skapas som utlägg och bokförs direkt mot rätt ägarkonto." href="/expenses/new" cta="Skapa utlägg" />
         <Info title="Kontroll" body="Superadmin kan se om kvittot saknar verifikation, dokumentlänk eller bankmatchning." href="/platform/companies" cta="Öppna bolagskontroll" />
       </div>

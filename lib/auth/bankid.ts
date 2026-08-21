@@ -34,14 +34,17 @@ export function hashPersonalNumber(personalNumber: string): string {
 }
 
 function getHashSecret(): string {
-  // Dedicated secret preferred; the encryption key and the service-role key
-  // are acceptable fallbacks — all are server-only secrets, which is the
-  // property that defeats offline brute force of the ~10^10 personnummer space.
-  const secret = process.env.BANKID_HASH_SECRET
-    || process.env.BANKID_ENCRYPTION_KEY
-    || process.env.SUPABASE_SERVICE_ROLE_KEY
+  // Server-only secrecy is what defeats offline brute force of the ~10^10
+  // personnummer space, so any server-only secret would work cryptographically.
+  // STABILITY is the second requirement, and that is why SUPABASE_SERVICE_ROLE_KEY
+  // is no longer accepted: it is a credential with its own rotation lifecycle,
+  // and rotating it would silently change every hash — orphaning every
+  // bankid_identities row, with no error and no way back to the old values.
+  // Both remaining sources are dedicated BankID secrets that are only rotated
+  // deliberately, with a re-hash.
+  const secret = process.env.BANKID_HASH_SECRET || process.env.BANKID_ENCRYPTION_KEY
   if (!secret) {
-    throw new Error('BANKID_HASH_SECRET (eller BANKID_ENCRYPTION_KEY/SUPABASE_SERVICE_ROLE_KEY) krävs för att hasha personnummer.')
+    throw new Error('BANKID_HASH_SECRET (eller BANKID_ENCRYPTION_KEY) krävs för att hasha personnummer.')
   }
   return secret
 }

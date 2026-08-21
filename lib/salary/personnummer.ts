@@ -6,16 +6,24 @@ const TAG_LENGTH = 16
 
 /**
  * Get the encryption key from environment.
- * Falls back to a dev-only key for local development.
+ *
+ * The fallback is limited to the test runner. It used to apply whenever
+ * NODE_ENV was not exactly 'production', which covers preview and staging
+ * deployments — real employee personnummer encrypted under the literal string
+ * 'dev-only-key', which is in this file and therefore public. A missing key is
+ * now a hard failure everywhere a real database can be reached.
  */
 function getEncryptionKey(): Buffer {
   const envKey = process.env.PERSONNUMMER_ENCRYPTION_KEY
   if (!envKey) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('PERSONNUMMER_ENCRYPTION_KEY is required in production')
+    if (process.env.NODE_ENV === 'test') {
+      // Deterministic key for unit tests only — never reaches a real database.
+      return scryptSync('dev-only-key', 'nordklart-dev-salt', 32)
     }
-    // Dev-only deterministic key (NOT safe for production)
-    return scryptSync('dev-only-key', 'nordklart-dev-salt', 32)
+    throw new Error(
+      'PERSONNUMMER_ENCRYPTION_KEY saknas. Sätt den i miljön (Vercel/Docker secrets) '
+      + 'innan personnummer kan krypteras eller läsas.',
+    )
   }
   // Use scrypt to derive a 32-byte key from the env var
   return scryptSync(envKey, 'nordklart-pnr-salt', 32)

@@ -99,6 +99,32 @@ for (const service of ['lib/invoices/mark-paid-service.ts', 'lib/supplier-invoic
   forbidText(service, 'createDraftEntry(', 'journal entry written before the settlement transaction')
   forbidText(service, "from('journal_entries')", 'compensating journal_entries write')
 }
+// Storno and rättelse create their vouchers inside one transaction, the same
+// way settlement does. The two engines must therefore go through the RPC and
+// must not post by writing status='posted' behind commit_journal_entry's back —
+// that path skipped the anon guard and the company write check, and every
+// failure after next_voucher_number burned a number out of the series.
+const stornoMigration = 'supabase/migrations/20260821120000_storno_and_correction_are_atomic.sql'
+requireText(stornoMigration, 'CREATE OR REPLACE FUNCTION public.reverse_journal_entry_v2(')
+{
+  const source = read(stornoMigration)
+  if (!source.includes('REVOKE ALL ON FUNCTION public.reverse_journal_entry_v2')
+      || !source.includes('GRANT EXECUTE ON FUNCTION public.reverse_journal_entry_v2')
+      || !source.includes('TO service_role;')) {
+    failures.push(`${stornoMigration}: public.reverse_journal_entry_v2 must be service-role-only`)
+  }
+  for (const method of ["'atomic_storno'", "'atomic_correction'"]) {
+    if (!source.includes(method)) {
+      failures.push(`${stornoMigration}: commit_method ${method} must be allowed by the CHECK constraint`)
+    }
+  }
+}
+for (const engine of ['lib/bookkeeping/engine.ts', 'lib/core/bookkeeping/storno-service.ts']) {
+  requireText(engine, "rpc('reverse_journal_entry_v2'", 'reverse_journal_entry_v2 RPC call')
+  forbidText(engine, "update({ status: 'posted' })", "posting outside commit_journal_entry")
+}
+forbidText('lib/core/bookkeeping/storno-service.ts', 'getNextVoucherNumber', 'voucher number allocated before the storno transaction')
+
 requireText('lib/year-end/access.ts', "'resolve_year_end_period_capability_for_user'", 'canonical period capability RPC')
 for (const eventName of [
   'checkout.session.async_payment_succeeded',

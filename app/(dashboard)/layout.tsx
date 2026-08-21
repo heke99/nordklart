@@ -21,6 +21,7 @@ import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { countPendingOperations, countUnbookedTransactions } from '@/lib/worklist'
 import { PLATFORM_ROLES } from '@/lib/auth/platform'
 import { checkFeatureAccess, listCompanyFeatureAccess } from '@/lib/platform/entitlements'
+import { hasActiveOneTimePurchase, type OneTimePurchaseRow } from '@/lib/year-end/period-access'
 import { featureForDashboardPath, purchaseHrefForFeature } from '@/lib/navigation/feature-access-routing'
 import { resolveWorkspaceType } from '@/lib/workspace/resolve'
 import type { EntityType, CompanyRole, Team } from '@/types'
@@ -243,11 +244,11 @@ export default async function DashboardLayout({
   // Feature-aware navigation: enabled feature codes drive which sidebar items
   // render locked (with an upgrade CTA). Year-end additionally honours
   // fiscal-period-bound one-time purchases, which the feature view cannot see.
-  const [featureAccessList, { count: yearEndPurchaseCount }] = await Promise.all([
+  const [featureAccessList, { data: yearEndPurchaseRows }] = await Promise.all([
     listCompanyFeatureAccess(supabase, companyId),
     supabase
       .from('one_time_purchases')
-      .select('id', { count: 'exact', head: true })
+      .select('id, fiscal_period_id, permanent_access, access_starts_at, access_expires_at, status')
       .eq('company_id', companyId)
       .eq('purchase_type', 'year_end')
       .in('status', ['paid', 'active', 'fulfilled']),
@@ -255,8 +256,13 @@ export default async function DashboardLayout({
   const enabledFeatures = featureAccessList.length > 0
     ? featureAccessList.filter((f) => f.enabled).map((f) => f.feature_code)
     : null
+  // Resolved with the same predicate the API uses (isPurchaseActive), not a
+  // bare status count — a count ignores access_starts_at / access_expires_at /
+  // permanent_access, so the sidebar and the routes disagreed about whether an
+  // expired purchase still granted year-end.
   const hasYearEndAccess = Boolean(
-    (yearEndPurchaseCount ?? 0) > 0 || enabledFeatures?.includes('year_end.projects'),
+    hasActiveOneTimePurchase(yearEndPurchaseRows as OneTimePurchaseRow[] | null)
+      || enabledFeatures?.includes('year_end.projects'),
   )
 
   // Direct URL access follows the same commercial matrix as the sidebar. A
@@ -271,8 +277,15 @@ export default async function DashboardLayout({
     let hasRouteAccess = periodBoundYearEndRoute && hasYearEndAccess
     if (!hasRouteAccess) {
       const catalogFeature = featureAccessList.find((feature) => feature.feature_code === requiredRouteFeature)
-      if (catalogFeature) {
-        hasRouteAccess = catalogFeature.enabled
+      // Only a catalogue row that is BOTH enabled and non-degraded may grant
+      // access outright. Anything else — feature absent, disabled, or a row
+      // from the view fallback that cannot say why — is re-resolved through
+      // the canonical RPC, because that is the only path that separates "this
+      // company does not have the product" from "the resolver was down".
+      // Trusting a bare `enabled === false` here is what turned a transient
+      // resolver failure into a paywall for Full Access customers.
+      if (catalogFeature?.enabled && !catalogFeature.degraded) {
+        hasRouteAccess = true
       } else {
         const routeAccess = await checkFeatureAccess(supabase, companyId, requiredRouteFeature)
         if (routeAccess.reason === 'database_error') {

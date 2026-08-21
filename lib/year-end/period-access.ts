@@ -38,7 +38,7 @@ type FeatureAccessRow = {
   allowed: boolean
 }
 
-type OneTimePurchaseRow = {
+export type OneTimePurchaseRow = {
   id: string
   fiscal_period_id: string | null
   permanent_access: boolean | null
@@ -47,12 +47,32 @@ type OneTimePurchaseRow = {
   status: string
 }
 
-function isPurchaseActive(row: OneTimePurchaseRow, now: number): boolean {
+/**
+ * The single definition of "this one-off purchase currently grants access".
+ *
+ * Exported so the dashboard layout resolves a purchase exactly the way the API
+ * does. A `status IN (paid, active, fulfilled)` count alone ignores
+ * `access_starts_at` / `access_expires_at` / `permanent_access`, which made the
+ * sidebar and the routes disagree about the same purchase.
+ */
+export function isPurchaseActive(row: OneTimePurchaseRow, now: number): boolean {
   if (!['paid', 'active', 'fulfilled'].includes(row.status)) return false
   if (row.access_starts_at && new Date(row.access_starts_at).getTime() > now) return false
   if (row.permanent_access) return true
   if (!row.access_expires_at) return true
   return new Date(row.access_expires_at).getTime() >= now
+}
+
+/**
+ * True when ANY of these one-off purchases currently grants access.
+ *
+ * Lives here rather than at the call site so the dashboard layout resolves a
+ * purchase with the same predicate the API does, and so `Date.now()` is not
+ * called inside a React render (react-hooks/purity).
+ */
+export function hasActiveOneTimePurchase(rows: OneTimePurchaseRow[] | null | undefined): boolean {
+  const now = Date.now()
+  return (rows ?? []).some((row) => isPurchaseActive(row, now))
 }
 
 /**

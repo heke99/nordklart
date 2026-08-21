@@ -217,12 +217,15 @@ export async function updateSession(request: NextRequest) {
       return supabaseResponse
     }
 
+    // Enrichment lives in its own table since 20260506160000. It used to sit in
+    // extension_data, but 20260330130000 re-keyed that table on company_id —
+    // and a user with no company has no row there by definition, so this probe
+    // matched nothing and every BankID user was sent to the manual wizard
+    // instead of the company picker.
     const { data: enrichmentRow } = await supabase
-      .from('extension_data')
-      .select('id')
+      .from('bankid_enrichment')
+      .select('user_id')
       .eq('user_id', user.id)
-      .eq('extension_id', 'tic')
-      .eq('key', 'bankid_enrichment')
       .maybeSingle()
 
     const destination = enrichmentRow ? '/select-company' : '/onboarding'

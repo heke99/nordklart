@@ -3,6 +3,7 @@ import {
   computeIntegrationReadiness,
   READINESS_STATUS_LABELS_SV,
 } from '../integration-readiness'
+import { SKV_SYSORG_ENV_REQUIREMENTS } from '@/lib/skatteverket/sysorg/config'
 
 function entryFor(id: string, env: Record<string, string | undefined>) {
   const entry = computeIntegrationReadiness(env).find((e) => e.id === id)
@@ -16,7 +17,7 @@ describe('computeIntegrationReadiness', () => {
     for (const expected of [
       'bankid', 'skatteverket', 'enable_banking', 'bankgiro', 'peppol',
       'invoice_financing', 'fortnox', 'visma', 'bokio', 'briox',
-      'bjornlunden', 'bolagsverket', 'resend', 'stripe',
+      'bjornlunden', 'bolagsverket', 'resend', 'stripe', 'skatteverket_sysorg',
     ]) {
       expect(ids).toContain(expected)
     }
@@ -55,6 +56,70 @@ describe('computeIntegrationReadiness', () => {
     expect(partial.missingEnvVars.length).toBeGreaterThan(0)
 
     expect(entryFor('skatteverket', {}).status).toBe('requires_agreement')
+  })
+
+  // The go-live panel and the token call must agree about what the sysorg
+  // track needs. They did not: the panel checked five variables, the token
+  // call also requires the organisation certificate, its PIN and the
+  // filframställare identity — so a deployment could read "production_ready"
+  // while requestAccessToken() would throw. Both now derive from
+  // SKV_SYSORG_ENV_REQUIREMENTS.
+  const SYSORG_FULL = {
+    SKV_OAUTH_CLIENT_ID: 'a',
+    SKV_OAUTH_CLIENT_SECRET: 'b',
+    SKV_APIGW_CLIENT_ID: 'c',
+    SKV_APIGW_CLIENT_SECRET: 'd',
+    SKV_ORG_CERT_P12_BASE64: 'e',
+    SKV_ORG_CERT_PIN: 'f',
+    SKV_FILFRAMSTALLARE_ORGNR: '5566778899',
+    SKV_FILFRAMSTALLARE_NAME: 'Nordklart AB',
+    SKV_FILFRAMSTALLARE_CONTACT_EMAIL: 'support@example.com',
+  }
+
+  it('Skatteverket sysorg: nothing → requires_agreement (external certificate)', () => {
+    const entry = entryFor('skatteverket_sysorg', {})
+    expect(entry.status).toBe('requires_agreement')
+    expect(entry.message_sv).toMatch(/organisationscertifikat/i)
+  })
+
+  it('Skatteverket sysorg: the OAuth pair alone is NOT enough to look ready', () => {
+    // Exactly the set the old panel checked. It must not read as ready, because
+    // the certificate is missing and the token call would fail.
+    const entry = entryFor('skatteverket_sysorg', {
+      SKV_SYSORG_ENABLED: 'true',
+      SKATTEVERKET_OAUTH2_CLIENT_ID: 'a',
+      SKATTEVERKET_OAUTH2_CLIENT_SECRET: 'b',
+      SKATTEVERKET_APIGW_CLIENT_ID: 'c',
+      SKATTEVERKET_APIGW_CLIENT_SECRET: 'd',
+    })
+    expect(entry.status).toBe('misconfigured')
+    expect(entry.missingEnvVars).toContain('SKV_ORG_CERT_P12_BASE64')
+    expect(entry.missingEnvVars).toContain('SKV_ORG_CERT_PIN')
+    expect(entry.missingEnvVars).toContain('SKV_FILFRAMSTALLARE_ORGNR')
+  })
+
+  it('Skatteverket sysorg: complete but switched off → not_configured', () => {
+    expect(entryFor('skatteverket_sysorg', SYSORG_FULL).status).toBe('not_configured')
+  })
+
+  it('Skatteverket sysorg: complete + enabled → sandbox unless SKV_ENV says prod', () => {
+    const enabled = { ...SYSORG_FULL, SKV_SYSORG_ENABLED: 'true' }
+    expect(entryFor('skatteverket_sysorg', enabled).status).toBe('sandbox_ready')
+    expect(entryFor('skatteverket_sysorg', { ...enabled, SKV_ENV: 'prod' }).status).toBe('production_ready')
+  })
+
+  it('Skatteverket sysorg: every declared SKATTEVERKET_* alias resolves the same way', () => {
+    // Built from the requirement list itself, so a new variable that forgets to
+    // honour its alias fails here rather than in a deployment that set the
+    // legacy name.
+    const aliased: Record<string, string> = { SKV_SYSORG_ENABLED: 'true' }
+    for (const requirement of SKV_SYSORG_ENV_REQUIREMENTS) {
+      const alias = requirement.aliases[1] ?? requirement.aliases[0]!
+      aliased[alias] = 'x'
+    }
+    const entry = entryFor('skatteverket_sysorg', aliased)
+    expect(entry.missingEnvVars).toEqual([])
+    expect(entry.status).toBe('sandbox_ready')
   })
 
   it('Enable Banking: production vars beat sandbox vars; partial → misconfigured', () => {

@@ -44,6 +44,15 @@ export type CompanyFeatureAccess = {
   expires_at: string | null
   limit_value: number | null
   limit_unit: string | null
+  /**
+   * True when this row came from the view fallback rather than the canonical
+   * RPC. The fallback cannot report *why* a feature is off (`reason` is null by
+   * construction), so a `false` on a degraded row is not evidence that the
+   * company lacks the product. Callers that would deny access on it must
+   * re-resolve through `checkFeatureAccess`, which does distinguish
+   * `database_error` from `missing_entitlement`.
+   */
+  degraded: boolean
 }
 
 type FeatureAccessRpcRow = {
@@ -178,6 +187,7 @@ export async function listCompanyFeatureAccess(
       category: String(row.category),
       risk_level: row.risk_level as CompanyFeatureAccess['risk_level'],
       enabled: row.enabled === true,
+      degraded: true,
       reason: null,
       source_type: null,
       source_id: null,
@@ -193,6 +203,7 @@ export async function listCompanyFeatureAccess(
     category: String(row.category),
     risk_level: row.risk_level as CompanyFeatureAccess['risk_level'],
     enabled: row.enabled === true,
+    degraded: false,
     reason: typeof row.reason === 'string' ? row.reason as FeatureAccessReason : null,
     source_type: typeof row.source_type === 'string' ? row.source_type : null,
     source_id: typeof row.source_id === 'string' ? row.source_id : null,

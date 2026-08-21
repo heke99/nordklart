@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **450**.
+Antal SQL-migreringar: **454**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -474,3 +474,7 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 448 | 20260812130000 | `20260812130000_converge_webhook_events_catalog_shape.sql` | `4b080a64d28acd00e047aa135d3b2381a5dd46ce8eda2dba1ceb34099f2c1a48` |
 | 449 | 20260812140000 | `20260812140000_converge_webhook_and_feature_access_views.sql` | `c4b5506f6f64b1b6cc87cce7af4ed58b4cdc557bd781a7bdfd43e18b62bf6336` |
 | 450 | 20260812150000 | `20260812150000_normalize_skatteverket_settings_select_predicate.sql` | `dc6f1d273610724407471d8962f5426fd62943c7e91b92d99182f057c032e66d` |
+| 451 | 20260821120000 | `20260821120000_storno_and_correction_are_atomic.sql` | `2a4a143555e6da7f78baa8ae7a4a0e88a11b817b08cee37fdcb77daaa376772c` |
+| 452 | 20260821130000 | `20260821130000_customer_personal_number_encrypted_at_rest.sql` | `a05e2225eaeb190fb79f2e37972b4f9c144faa42449e73681e72aea720897102` |
+| 453 | 20260821140000 | `20260821140000_bankid_consent_and_signature_are_one_transaction.sql` | `2cf3b110c2b9544200b4df143edb9059daed5e802a85e0bb2e23500a192f3ad2` |
+| 454 | 20260821150000 | `20260821150000_fix_shared_annual_report_audit_trigger.sql` | `5d2fb71e4268339b816b4edbf6d05044a33e2ab011a40252f5c8d0a6c8f35951` |
