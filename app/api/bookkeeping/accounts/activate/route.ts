@@ -1,9 +1,6 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
-import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
 /**
@@ -15,20 +12,11 @@ import { requireWritePermission } from '@/lib/auth/require-write'
  * - Skips anything already active.
  * - Returns { activated, reactivated, skipped, unknown } so callers can react.
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const POST = withRouteContext('bookkeeping.accounts.activate', async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
   const writeCheck = await requireWritePermission(supabase, user.id)
   if (!writeCheck.ok) return writeCheck.response
 
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
 
   const body = await request.json()
   const accountNumbers: string[] = body.account_numbers
@@ -116,7 +104,7 @@ export async function POST(request: Request) {
     skipped,
     unknown,
   })
-}
+})
 
 type InsertAccountRow = NonNullable<ReturnType<typeof buildInsertRow>>
 

@@ -1,11 +1,9 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { FinancialStatementPDF, type FinancialStatementGroup, type FinancialStatementSection, type FinancialStatementSummaryRow } from '@/lib/reports/financial-statement-pdf-template'
-import { requireCompanyId } from '@/lib/company/context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
 
@@ -31,23 +29,13 @@ function sectionPrefix(section: FinancialStatementSection, prefixes: string[]): 
   return prefixes.some((p) => acc.startsWith(p))
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
-  if (featureGateResponse) return featureGateResponse
-
+export const GET = withRouteContext('reports.income_statement.pdf', async (request, ctx) => {
+  const { supabase, companyId, log, requestId } = ctx
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
 
   if (!periodId) {
-    return NextResponse.json({ error: 'period_id is required' }, { status: 400 })
+    return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, { requestId })
   }
 
   const [{ data: period }, { data: companyRow }] = await Promise.all([
@@ -65,7 +53,7 @@ export async function GET(request: Request) {
   ])
 
   if (!companyRow) {
-    return NextResponse.json({ error: 'Företagsinställningar saknas' }, { status: 404 })
+    return errorResponseFromCode('COMPANY_SETTINGS_MISSING', log, { requestId })
   }
   // An identifiable period is part of räkenskapsinformation (BFL 7 kap). Refuse
   // to render a PDF that can't be archived with the period it refers to.
@@ -225,4 +213,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

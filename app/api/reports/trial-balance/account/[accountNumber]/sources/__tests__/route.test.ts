@@ -1,18 +1,35 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { createMockRequest, createMockRouteParams } from '@/tests/helpers'
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
+// The route is wrapped in withRouteContext, which resolves auth through
+// requireAuth() (the only path that enforces MFA/AAL2 on hosted) and the active
+// company through getActiveCompanyId(). Mock those, not createClient/getUser.
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: vi.fn(),
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { GET } from '../route'
 
-const mockCreateClient = vi.mocked(createClient)
+/**
+ * Point requireAuth() at this supabase mock. A null user makes the wrapper
+ * short-circuit with its own 401, exactly as it does in production.
+ */
+function mockAuth(supabase: unknown, user: { id: string } | null) {
+  if (!user) {
+    vi.mocked(requireAuth).mockResolvedValue({
+      error: NextResponse.json({ error: { code: 'UNAUTHORIZED' } }, { status: 401 }),
+    } as never)
+    return
+  }
+  vi.mocked(requireAuth).mockResolvedValue({ user, supabase } as never)
+}
+
 
 interface AuthShape {
   auth: { getUser: ReturnType<typeof vi.fn> }
@@ -60,9 +77,7 @@ beforeEach(() => {
 
 describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () => {
   it('returns 401 when not authenticated', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase(null, null, { data: [], error: null }) as never
-    )
+    mockAuth(buildSupabase(null, null, { data: [], error: null }), null)
     const req = createMockRequest(
       '/api/reports/trial-balance/account/1930/sources',
       { searchParams: { fiscal_period_id: 'period-1' } }
@@ -72,9 +87,7 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
   })
 
   it('returns 400 when fiscal_period_id is missing', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ id: 'user-1' }, null, { data: [], error: null }) as never
-    )
+    mockAuth(buildSupabase({ id: 'user-1' }, null, { data: [], error: null }), { id: 'user-1' })
     const req = createMockRequest(
       '/api/reports/trial-balance/account/1930/sources'
     )
@@ -83,9 +96,7 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
   })
 
   it('returns 404 when account is unknown for the company', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ id: 'user-1' }, null, { data: [], error: null }) as never
-    )
+    mockAuth(buildSupabase({ id: 'user-1' }, null, { data: [], error: null }), { id: 'user-1' })
     const req = createMockRequest(
       '/api/reports/trial-balance/account/9999/sources',
       { searchParams: { fiscal_period_id: 'period-1' } }
@@ -127,13 +138,11 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
         },
       },
     ]
-    mockCreateClient.mockResolvedValue(
-      buildSupabase(
+    mockAuth(buildSupabase(
         { id: 'user-1' },
         { account_number: '1930', account_name: 'Företagskonto' },
         { data: linesData, error: null }
-      ) as never
-    )
+      ), { id: 'user-1' })
 
     const req = createMockRequest(
       '/api/reports/trial-balance/account/1930/sources',

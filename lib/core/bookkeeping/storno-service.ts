@@ -6,6 +6,7 @@ import type {
   JournalEntryLine,
 } from '@/types'
 import { validateBalance } from '@/lib/bookkeeping/engine'
+import { roundOre } from '@/lib/money'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
   planCorrectionJournal,
@@ -28,13 +29,6 @@ import {
 } from '@/lib/bookkeeping/errors'
 
 /**
- * Round to 2dp using cents-integer math to avoid 0.1+0.2 drift.
- */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
-/**
  * True when every account's (debit − credit) sum across the proposed lines is
  * zero. Such a rättelse describes no real affärshändelse and would erase the
  * original posting without representing anything in its place — disallowed by
@@ -43,7 +37,7 @@ function round2(n: number): number {
 function netsToZeroPerAccount(lines: CreateJournalEntryLineInput[]): boolean {
   const nets = new Map<string, number>()
   for (const line of lines) {
-    const delta = round2(line.debit_amount || 0) - round2(line.credit_amount || 0)
+    const delta = roundOre(line.debit_amount || 0) - roundOre(line.credit_amount || 0)
     nets.set(line.account_number, (nets.get(line.account_number) || 0) + delta)
   }
   return Array.from(nets.values()).every((n) => Math.abs(n) < 0.005)
@@ -59,7 +53,7 @@ function isIdenticalToOriginal(
 ): boolean {
   if (proposed.length !== original.length) return false
   const key = (acc: string, d: number, c: number) =>
-    `${acc}|${round2(d).toFixed(2)}|${round2(c).toFixed(2)}`
+    `${acc}|${roundOre(d).toFixed(2)}|${roundOre(c).toFixed(2)}`
   const proposedKeys = proposed
     .map((l) => key(l.account_number, l.debit_amount || 0, l.credit_amount || 0))
     .sort()

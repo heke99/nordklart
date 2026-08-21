@@ -1,8 +1,5 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
 import { validateQuery } from '@/lib/api/validate'
 import { AccountBalancesQuerySchema } from '@/lib/api/schemas'
 import { getOpeningBalances } from '@/lib/reports/opening-balances'
@@ -26,21 +23,12 @@ const log = createLogger('api.bookkeeping.account-balances')
  * companies behave identically. The opening-balance entry is excluded from
  * period activity to avoid double-counting its lines.
  */
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const GET = withRouteContext('bookkeeping.account_balances', async (request, ctx) => {
+  const { supabase, companyId, log } = ctx
   const params = validateQuery(request, AccountBalancesQuerySchema)
   if (!params.success) return params.response
   const { accounts, as_of } = params.data
 
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
 
   // Find the fiscal period containing as_of (any state — we want a reference
   // saldo even for closed/locked periods).
@@ -162,4 +150,4 @@ export async function GET(request: Request) {
       }
     }),
   })
-}
+})

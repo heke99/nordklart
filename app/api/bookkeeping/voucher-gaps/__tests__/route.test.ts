@@ -1,3 +1,4 @@
+import { emptyRouteParams } from '@/tests/helpers'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock supabase
@@ -53,7 +54,7 @@ describe('GET /api/bookkeeping/voucher-gaps', () => {
     mockAuth.mockResolvedValue({ data: { user: null } })
 
     const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=fp-1')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const body = await parseJson(response)
 
     expect(response.status).toBe(401)
@@ -64,7 +65,7 @@ describe('GET /api/bookkeeping/voucher-gaps', () => {
     mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
 
     const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
 
     expect(response.status).toBe(400)
   })
@@ -74,7 +75,7 @@ describe('GET /api/bookkeeping/voucher-gaps', () => {
     mockFrom.mockReturnValue(mockChain({ data: [], error: null }))
 
     const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=f47ac10b-58cc-4372-a567-0e02b2c3d479')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const body = await parseJson(response)
 
     expect(response.status).toBe(200)
@@ -109,7 +110,7 @@ describe('GET /api/bookkeeping/voucher-gaps', () => {
     })
 
     const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=f47ac10b-58cc-4372-a567-0e02b2c3d479')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const body = await parseJson(response)
 
     expect(response.status).toBe(200)
@@ -140,7 +141,7 @@ describe('GET /api/bookkeeping/voucher-gaps', () => {
     })
 
     const request = makeRequest('http://localhost/api/bookkeeping/voucher-gaps?fiscal_period_id=f47ac10b-58cc-4372-a567-0e02b2c3d479')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const body = await parseJson(response)
 
     expect(response.status).toBe(200)
@@ -164,7 +165,7 @@ describe('POST /api/bookkeeping/voucher-gaps', () => {
       }),
       headers: { 'Content-Type': 'application/json' },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
 
     expect(response.status).toBe(401)
   })
@@ -182,7 +183,7 @@ describe('POST /api/bookkeeping/voucher-gaps', () => {
       }),
       headers: { 'Content-Type': 'application/json' },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
 
     expect(response.status).toBe(400)
   })
@@ -215,7 +216,7 @@ describe('POST /api/bookkeeping/voucher-gaps', () => {
       }),
       headers: { 'Content-Type': 'application/json' },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const body = await parseJson(response)
 
     expect(response.status).toBe(200)
@@ -237,7 +238,7 @@ describe('POST /api/bookkeeping/voucher-gaps', () => {
       }),
       headers: { 'Content-Type': 'application/json' },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const body = await parseJson(response)
 
     expect(response.status).toBe(403)

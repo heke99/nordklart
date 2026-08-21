@@ -1,22 +1,39 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { createMockRequest, createMockRouteParams } from '@/tests/helpers'
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
+// The route is wrapped in withRouteContext, which resolves auth through
+// requireAuth() (the only path that enforces MFA/AAL2 on hosted) and the active
+// company through getActiveCompanyId(). Mock those, not createClient/getUser.
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: vi.fn(),
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 vi.mock('@/lib/bookkeeping/currency-utils', () => ({
   resolveSekAmount: vi.fn((amount: number) => amount),
 }))
 
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { GET } from '../route'
 
-const mockCreateClient = vi.mocked(createClient)
+/**
+ * Point requireAuth() at this supabase mock. A null user makes the wrapper
+ * short-circuit with its own 401, exactly as it does in production.
+ */
+function mockAuth(supabase: unknown, user: { id: string } | null) {
+  if (!user) {
+    vi.mocked(requireAuth).mockResolvedValue({
+      error: NextResponse.json({ error: { code: 'UNAUTHORIZED' } }, { status: 401 }),
+    } as never)
+    return
+  }
+  vi.mocked(requireAuth).mockResolvedValue({ user, supabase } as never)
+}
+
 
 interface QueryResult {
   data: unknown
@@ -68,9 +85,7 @@ beforeEach(() => {
 
 describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () => {
   it('returns 401 when not authenticated', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase(null, null, { data: [], error: null }, { data: [], error: null }) as never
-    )
+    mockAuth(buildSupabase(null, null, { data: [], error: null }, { data: [], error: null }), null)
     const req = createMockRequest(
       '/api/reports/supplier-ledger/supplier/sup-1/invoices'
     )
@@ -79,9 +94,7 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
   })
 
   it('returns 404 when supplier is unknown', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ id: 'user-1' }, null, { data: [], error: null }, { data: [], error: null }) as never
-    )
+    mockAuth(buildSupabase({ id: 'user-1' }, null, { data: [], error: null }, { data: [], error: null }), { id: 'user-1' })
     const req = createMockRequest(
       '/api/reports/supplier-ledger/supplier/sup-1/invoices'
     )
@@ -113,14 +126,12 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
         entry_date: '2026-05-10',
       },
     ]
-    mockCreateClient.mockResolvedValue(
-      buildSupabase(
+    mockAuth(buildSupabase(
         { id: 'user-1' },
         { id: 'sup-1', name: 'Office Supply AB' },
         { data: invoices, error: null },
         { data: entries, error: null }
-      ) as never
-    )
+      ), { id: 'user-1' })
     const req = createMockRequest(
       '/api/reports/supplier-ledger/supplier/sup-1/invoices'
     )

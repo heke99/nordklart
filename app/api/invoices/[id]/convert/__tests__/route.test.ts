@@ -17,7 +17,12 @@ vi.mock('@/lib/init', () => ({
 }))
 
 vi.mock('@/lib/company/context', () => ({
+  // The route is wrapped in withRouteContext now, which resolves the
+  // active company through getActiveCompanyId() rather than
+  // requireCompanyId(). Both are mocked so the file keeps working
+  // whichever the code under test reaches for.
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 vi.mock('@/lib/auth/require-write', () => ({

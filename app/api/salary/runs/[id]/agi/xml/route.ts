@@ -1,9 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { generateAgiDeclaration } from '@/lib/salary/agi/generate-declaration'
 import { createLogger } from '@/lib/logger'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -27,57 +24,49 @@ ensureInitialized()
  *   - Filing deadline: the 12th of the following month (17th in Jan/Aug for
  *     companies ≤ 40 MSEK turnover)
  */
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const { id } = await params
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'salary.runs.agi.xml',
+  async (_request, ctx, { params }) => {
+    const { supabase, companyId, user, requestId } = ctx
+    const { id } = await params
+    // The wrapper already resolved the user and minted the request id; a second
+    // getUser() round trip and a second id would just split the trace in two.
+    const log = ctx.log.child({ userId: user.id })
 
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
-  if (featureGate) return featureGate
-  const requestId = `req_${crypto.randomUUID()}`
-  const log = createLogger('api/salary/agi/xml', { requestId, userId: user.id })
-
-  const result = await generateAgiDeclaration({
-    supabase,
-    companyId,
-    userId: user.id,
-    userEmail: user.email ?? null,
-    salaryRunId: id,
-    log,
-    requestId,
-  })
-
-  if (!result.ok) {
-    return errorResponseFromCode(result.code, log, {
+    const result = await generateAgiDeclaration({
+      supabase,
+      companyId,
+      userId: user.id,
+      userEmail: user.email ?? null,
+      salaryRunId: id,
+      log,
       requestId,
-      details: result.details,
-      status: result.status,
     })
-  }
 
-  // OWASP V3.2 / V4 (HTTP response header injection prevention) — sanitise
-  // header-interpolated values. orgNumber comes from company_settings
-  // (user-editable) and period_* from the run's own columns, but defense
-  // in depth requires we strip anything that could be construed as a
-  // header-injection character before splicing into Content-Disposition.
-  const safeOrg = result.orgNumber.replace(/[^0-9A-Za-z-]/g, '')
-  const safePeriod = `${result.periodYear}${String(result.periodMonth).padStart(2, '0')}`.replace(
-    /[^0-9]/g,
-    '',
-  )
+    if (!result.ok) {
+      return errorResponseFromCode(result.code, log, {
+        requestId,
+        details: result.details,
+        status: result.status,
+      })
+    }
 
-  return new Response(result.xml, {
-    headers: {
-      'Content-Type': 'application/xml; charset=utf-8',
-      'Content-Disposition': `attachment; filename="AGI_${safeOrg}_${safePeriod}.xml"`,
-    },
-  })
-}
+    // OWASP V3.2 / V4 (HTTP response header injection prevention) — sanitise
+    // header-interpolated values. orgNumber comes from company_settings
+    // (user-editable) and period_* from the run's own columns, but defense
+    // in depth requires we strip anything that could be construed as a
+    // header-injection character before splicing into Content-Disposition.
+    const safeOrg = result.orgNumber.replace(/[^0-9A-Za-z-]/g, '')
+    const safePeriod = `${result.periodYear}${String(result.periodMonth).padStart(2, '0')}`.replace(
+      /[^0-9]/g,
+      '',
+    )
+
+    return new Response(result.xml, {
+      headers: {
+        'Content-Type': 'application/xml; charset=utf-8',
+        'Content-Disposition': `attachment; filename="AGI_${safeOrg}_${safePeriod}.xml"`,
+      },
+    })
+  },
+)

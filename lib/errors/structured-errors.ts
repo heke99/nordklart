@@ -2142,6 +2142,15 @@ const COMPANY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Företaget kunde inte skapas.',
     message_en: 'Failed to create company.',
   },
+  // Generic counterpart to INVOICE_SEND_COMPANY_SETTINGS_MISSING. Reports need
+  // the company's own details (name, org number, address) to produce a document
+  // that is identifiable as räkenskapsinformation; without them the right
+  // answer is to say so, not to render an anonymous PDF.
+  COMPANY_SETTINGS_MISSING: {
+    httpStatus: 404,
+    message_sv: 'Företagsinställningar saknas. Fyll i företagsuppgifterna först.',
+    message_en: 'Company settings are missing.',
+  },
 }
 
 const API_KEY: Record<string, StructuredErrorEntry> = {

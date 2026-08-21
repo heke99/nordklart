@@ -1,10 +1,7 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { NextResponse } from 'next/server'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
-import { requireCompanyId } from '@/lib/company/context'
 
 /**
  * GET /api/bookkeeping/accounts/reference
@@ -12,18 +9,8 @@ import { requireCompanyId } from '@/lib/company/context'
  * Returns the full BAS reference catalog merged with the user's activation status.
  * Each reference account includes: is_activated (exists in user's chart), is_active, is_system_account, is_custom.
  */
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
-
+export const GET = withRouteContext('bookkeeping.accounts.reference', async (_request, ctx) => {
+  const { supabase, companyId } = ctx
   // Fetch user's chart of accounts (paginated to avoid 1000-row limit)
   try {
     const userAccounts = await fetchAllRows<{ account_number: string; is_active: boolean; is_system_account: boolean }>(({ from, to }) =>
@@ -66,4 +53,4 @@ export async function GET() {
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to fetch accounts' }, { status: 500 })
   }
-}
+})
