@@ -81,3 +81,32 @@ Escalation surface: the function takes a bucket, an identifier and two integers,
 one row keyed by (bucket, identifier), and returns `{allowed, limit, remaining,
 reset_at}`. It cannot read, write or reveal anything else, and a caller who controls all
 four arguments can at most rate-limit themselves differently.
+
+## `lib/skatteverket/ombud.ts` — `recordSkvOmbudObservation`
+
+Two privileged operations, both scoped to one company id the caller already
+established:
+
+1. `SELECT org_number FROM companies WHERE id = <companyId>` — a single row,
+   filtered by the company id, returning one non-sensitive field. The company id
+   is not attacker-supplied at this call site: it comes from an
+   `ExtensionContext` / `SkvSysorgRequestOptions` whose company was already
+   resolved and access-checked by `withRouteContext` (or, for the extension
+   routes, by `requireAgiWriteRole`) before any Skatteverket call was made.
+2. `record_skv_ombud_observation(company_id, org_number, auth_flow, observation)`
+   — `REVOKE ALL … FROM PUBLIC, anon, authenticated`, so the service role is the
+   only way in. That is the point of the model rather than an accident of it: if
+   a user session could reach this function, a user could assert their own
+   Skatteverket authorisation, which is exactly the claim the table exists to
+   refuse.
+
+Escalation surface: the function derives the status from the observation rather
+than accepting one, refuses an unknown observation kind, and will not let a
+`manual_attestation` overwrite an `skv_response`. A caller who controlled every
+argument could at most record a verdict about a company they already had write
+access to — and the verdict is what the provider's own response said, since the
+only two call sites (`writeSkatteverketAudit`, `writeApiRequestEnd`) derive it
+from the HTTP outcome and pass `null` for everything that is not a verdict.
+
+No tenant boundary is crossed: both statements are keyed by the same
+`company_id`, and nothing here reads or writes another company's rows.

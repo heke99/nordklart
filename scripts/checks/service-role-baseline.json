@@ -109,6 +109,7 @@
     "lib/processing-history/append.ts",
     "lib/providers/resolve-consent.ts",
     "lib/signup/provision.ts",
+    "lib/skatteverket/ombud.ts",
     "lib/skatteverket/sysorg/client.ts",
     "lib/supabase/server.ts",
     "lib/supplier-invoices/mark-paid-service.ts",

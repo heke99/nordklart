@@ -2286,6 +2286,16 @@
       "file": "20260821180000_drop_user_identity_verifications.sql",
       "version": "20260821180000",
       "sha256": "ee3750d4c5749dda191acb8ba9600980363d5fbf1a2b16ad5b0b835fc54e37e7"
+    },
+    {
+      "file": "20260821190000_skatteverket_ombud_authorizations.sql",
+      "version": "20260821190000",
+      "sha256": "fd0a84b32890c17ffc0e651f41f9807bb89729f2532b9e6a81813dd11b72cd59"
+    },
+    {
+      "file": "20260821200000_skatteverket_request_idempotency_and_retry.sql",
+      "version": "20260821200000",
+      "sha256": "d7875d2c51161c1f398c038da9648f86458ae2cd223c6723d288cc5db41162d8"
     }
   ]
 }

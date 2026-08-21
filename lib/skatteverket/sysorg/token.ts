@@ -5,6 +5,7 @@ import { URL } from 'node:url'
 import { createLogger } from '@/lib/logger'
 import {
   assertSkvProductionSafety,
+  evaluateSkvSysorgEnv,
   getSkvOAuthClientId,
   getSkvOAuthClientSecret,
   getSkvOrgCertBase64,
@@ -57,6 +58,21 @@ export async function getSkvSysorgAccessToken(options: { forceRefresh?: boolean 
   if (!getSkvSysorgEnabled()) {
     throw new SkvConfigurationError('Skatteverket sysorg är avstängt. Sätt SKV_SYSORG_ENABLED=true först.')
   }
+
+  // Gate on exactly the predicate the readiness panel reports. requestAccessToken()
+  // below still calls requireSkvConfigValue() per variable, but that surfaces the
+  // FIRST missing one, after the enabled and production checks have passed — so an
+  // operator fixes one variable, retries, and discovers the next. Reporting the
+  // whole set here, from the same definition getSkvConfigStatus() uses, means the
+  // panel's `readyForTokenTest: false` and the runtime's refusal are the same fact.
+  const configured = evaluateSkvSysorgEnv(process.env)
+  if (!configured.complete) {
+    throw new SkvConfigurationError(
+      `Skatteverket sysorg är ofullständigt konfigurerat. Saknas: ${configured.missing.join(', ')}. `
+      + 'Token-anropet skulle misslyckas — se Inställningar → Skatteverket.',
+    )
+  }
+
   // Fail fast BEFORE any credential leaves the process: production requires
   // an explicit SKV_ENV and an explicitly configured filframställare —
   // hardcoded fallbacks no longer exist.

@@ -12,6 +12,8 @@ import {
   type SkvServiceKey,
 } from './config'
 import { getSkvSysorgAccessToken } from './token'
+import { recordSkvOmbudObservation, verdictFromResponse } from '@/lib/skatteverket/ombud'
+import { decideSkvRetry, parseRetryAfter, SKV_MAX_ATTEMPTS } from '@/lib/skatteverket/retry'
 
 const log = createLogger('skv-sysorg-client')
 let lastRequestAt = 0
@@ -29,6 +31,11 @@ export type SkvSysorgRequestOptions = {
   companyId?: string | null
   userId?: string | null
   requestId?: string | null
+  /**
+   * Groups the attempts of one logical operation in
+   * `skatteverket_api_requests`. Generated per call when omitted.
+   */
+  idempotencyKey?: string | null
 }
 
 export type SkvSysorgResponse<T = unknown> = {
@@ -47,7 +54,63 @@ async function enforceSkvRateLimit() {
   if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
 }
 
+/**
+ * One Skatteverket call, with a bounded retry around it.
+ *
+ * The retry lives here rather than in each caller so the policy is applied
+ * once and recorded once: every attempt gets its own row in
+ * `skatteverket_api_requests`, all attempts of one call share an
+ * `idempotency_key`, and a failed attempt that will be retried carries the
+ * `next_retry_at` it is waiting for. `decideSkvRetry` refuses to repeat a POST
+ * — Skatteverket has no idempotency header, so a retried filing can become two.
+ */
 export async function skvSysorgRequest<T = unknown>(options: SkvSysorgRequestOptions): Promise<SkvSysorgResponse<T>> {
+  const idempotencyKey = options.idempotencyKey ?? crypto.randomUUID()
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= SKV_MAX_ATTEMPTS; attempt += 1) {
+    let outcome: Awaited<ReturnType<typeof skvSysorgAttempt<T>>>
+    try {
+      outcome = await skvSysorgAttempt<T>(options, idempotencyKey, attempt)
+    } catch (err) {
+      lastError = err
+      // The request never produced a response — timeout or connection failure.
+      const decision = decideSkvRetry({ method: options.method, statusCode: 0, attempt })
+      if (!decision.retry) throw err
+      await markRetryPending(options, attempt, idempotencyKey, decision.delayMs)
+      await sleep(decision.delayMs)
+      continue
+    }
+
+    if (outcome.response.ok) return outcome.response
+
+    const decision = decideSkvRetry({
+      method: options.method,
+      statusCode: outcome.response.status,
+      attempt,
+      retryAfterSeconds: outcome.retryAfterSeconds,
+    })
+    if (!decision.retry) return outcome.response
+
+    await markRetryPending(options, attempt, idempotencyKey, decision.delayMs)
+    await sleep(decision.delayMs)
+  }
+
+  // Only reachable when the last attempt threw and the loop ran out.
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Skatteverket-anropet misslyckades efter alla försök.')
+}
+
+function sleep(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve()
+}
+
+async function skvSysorgAttempt<T>(
+  options: SkvSysorgRequestOptions,
+  idempotencyKey: string,
+  attempt: number,
+): Promise<{ response: SkvSysorgResponse<T>; retryAfterSeconds: number | null }> {
   const startedAt = Date.now()
   const correlationId = crypto.randomUUID()
   const accessToken = await getSkvSysorgAccessToken()
@@ -74,7 +137,7 @@ export async function skvSysorgRequest<T = unknown>(options: SkvSysorgRequestOpt
     body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body)
   }
 
-  await writeApiRequestStart(options, correlationId, url)
+  await writeApiRequestStart(options, correlationId, url, idempotencyKey, attempt)
 
   let response: Response
   try {
@@ -116,7 +179,33 @@ export async function skvSysorgRequest<T = unknown>(options: SkvSysorgRequestOpt
     })
   }
 
-  return { ok: response.ok, status: response.status, correlationId, data, text, headers: headersOut }
+  return {
+    response: { ok: response.ok, status: response.status, correlationId, data, text, headers: headersOut },
+    retryAfterSeconds: parseRetryAfter(response.headers.get('retry-after')),
+  }
+}
+
+/**
+ * Marks the attempt that just failed with when the next one is due.
+ *
+ * `next_retry_at` is on the failed attempt's own row, not on a separate queue:
+ * the row already says which operation and which attempt this was, and the
+ * CHECK constraint keeps the field meaningless on anything but a failure.
+ */
+async function markRetryPending(
+  options: SkvSysorgRequestOptions,
+  attempt: number,
+  idempotencyKey: string,
+  delayMs: number,
+) {
+  const auditClient = await resolveAuditClient(options)
+  if (!auditClient) return
+  await auditClient
+    .from('skatteverket_api_requests')
+    .update({ next_retry_at: new Date(Date.now() + delayMs).toISOString() })
+    .eq('idempotency_key', idempotencyKey)
+    .eq('attempt_count', attempt)
+    .then(() => undefined)
 }
 
 /**
@@ -136,7 +225,13 @@ async function resolveAuditClient(options: SkvSysorgRequestOptions): Promise<Sup
   }
 }
 
-async function writeApiRequestStart(options: SkvSysorgRequestOptions, correlationId: string, url: string) {
+async function writeApiRequestStart(
+  options: SkvSysorgRequestOptions,
+  correlationId: string,
+  url: string,
+  idempotencyKey: string,
+  attempt: number,
+) {
   const auditClient = await resolveAuditClient(options)
   if (!auditClient) return
   await auditClient.from('skatteverket_api_requests').insert({
@@ -153,6 +248,8 @@ async function writeApiRequestStart(options: SkvSysorgRequestOptions, correlatio
     method: options.method,
     status: 'started',
     request_id: options.requestId ?? null,
+    idempotency_key: idempotencyKey,
+    attempt_count: attempt,
   }).then(() => undefined)
 }
 
@@ -177,6 +274,24 @@ async function writeApiRequestEnd(
     })
     .eq('correlation_id', correlationId)
     .then(() => undefined)
+
+  // The organisation certificate authorises the systemorganisation, not the
+  // right to act for a given company — that still comes from the customer's
+  // ombud registration, and the only place it is observable is in what SKV
+  // answers. Same rule as the per-BankID track (lib/skatteverket/ombud.ts):
+  // a success is a yes, a behörighet refusal is a no, everything else is not a
+  // verdict.
+  const authorized = verdictFromResponse(statusCode, errorMessage)
+  if (authorized !== null && options.companyId) {
+    await recordSkvOmbudObservation({
+      companyId: options.companyId,
+      authFlow: 'ccg_sysorg',
+      authorized,
+      correlationId,
+      statusCode,
+      operation: options.operation ?? `${options.method} ${options.path}`,
+    })
+  }
 }
 
 function redactUrl(url: string): string {
