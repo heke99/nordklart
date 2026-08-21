@@ -584,3 +584,40 @@ Grant-divergensen mot produktion (se ovan) är fortfarande bara antecknad.
 per-instans-räknare som BankID-cooldownen var; den är en artighetsstrypning mot
 SKV, inte en säkerhetskontroll, och byts bara om granskningen visar att det
 spelar roll.
+
+### Andra granskningen (§90) — ett kritiskt fynd
+
+Granskningen började med att göra pg-real-replayen *trogen* i stället för
+smickrande. `tests/pg/bootstrap-plain-postgres.sql` grantade default-privilegier
+till `authenticated, service_role` och utelämnade `anon`, medan produktionen
+grantar anon allt. Replayen var alltså säkrare än produktionen — den farliga
+riktningen: en saknad kontroll var onåbar lokalt och öppen live, och sviten blev
+grön i båda fallen.
+
+Med anon tillagd syntes det direkt: **144 SECURITY DEFINER-funktioner i
+`public` kunde köras av anon**, varav 39 utan någon egen kontroll.
+Reproducerat: `SET ROLE anon; SELECT public.company_entity_type('<valfritt
+bolag>')` → `aktiebolag`. Även `check_email_exists` (användarenumerering) och
+skrivande funktioner som `seed_chart_of_accounts` och `finalize_sie_import`.
+
+Åtgärdat i `20260821210000` genom att ta bort granten i stället för att lappa 39
+funktionskroppar — inget i produkten anropar en SECURITY DEFINER-funktion som
+anon (verifierat över `app/`, `lib/`, `components/`, `extensions/`).
+Produktionen: 144 → 0. `authenticated` (160) och `service_role` (223) orörda,
+`user_company_ids` fortsatt körbar för authenticated, prisvyerna fortsatt
+läsbara för anon.
+
+Notera: `ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`
+gör **inte** vad man tror. PostgreSQL lägger sin inbyggda `GRANT EXECUTE TO
+PUBLIC` ovanpå `pg_default_acl`, så en nyskapad funktion kommer ut
+anon-körbar oavsett. Det som håller ytan stängd är
+`tests/pg/anon-security-definer-surface.pg.test.ts`, som failar så fort någon
+SECURITY DEFINER-funktion i `public` blir anon-körbar igen. Ett av testfallen
+skapar med flit en sådan funktion och verifierar att den ÄR öppen, så skälet
+till att per-funktions-REVOKE är obligatoriskt står skrivet där nästa person
+läser det.
+
+Grant-divergensen som stod som "ej åtgärdad" i förra anteckningen är därmed
+avklarad: den lokala replayen har numera produktionens grant-hållning, och de
+invarianter som gör tabellgranten verkningslös (RLS på alla tabeller, ingen
+policy nämner anon) är testade i stället för antecknade.

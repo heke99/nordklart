@@ -1,6 +1,6 @@
 # Nordklart — produktionsfärdigställande, 2026-08-21
 
-Branch: `claude/nordklart-production-ready-w4szxu`. Sju commits, tio
+Branch: `claude/nordklart-production-ready-w4szxu`. Nio commits, tio
 migrationer, samtliga deployade till produktionsprojektet
 `rpajvvngvcutffwucbdy` i versionsordning via det checksummade
 deploy-skriptet.
@@ -86,7 +86,7 @@ Tio nya migrationer, alla med `*.pg.test.ts`:
 | 20260821180000 | `user_identity_verifications` droppad (tom, oanvänd, dubblerad) |
 | 20260821190000 | `skatteverket_ombud_authorizations` + `record_skv_ombud_observation` |
 | 20260821200000 | `idempotency_key`, `attempt_count`, `next_retry_at` på `skatteverket_api_requests` |
-| 20260821210000 | Anon förlorar EXECUTE på 144 SECURITY DEFINER-funktioner |
+| 20260821210000 | Anon förlorar EXECUTE på 144 SECURITY DEFINER-funktioner (144 → 0 i produktion, verifierat efter deploy) |
 
 Regler som hållits: nullable → backfill → verify → constraint; inga ekonomiska
 rader raderas som rollback; varje SECURITY DEFINER-funktion pinnar
@@ -225,7 +225,7 @@ login-sessioner, ombudsmodellen, retry-kolumnerna och anon-ytan.
 
 ## I. Ändrade filer
 
-217 filer: 49 nya, 10 borttagna, 153 ändrade, 5 flyttade. Tyngdpunkterna är
+222 filer: 53 nya, 10 borttagna, 154 ändrade, 5 flyttade. Tyngdpunkterna är
 `app/api/**` (84 routekonverteringar), `lib/auth/**`, `lib/skatteverket/**`,
 `extensions/general/{tic,skatteverket}/**`, `supabase/migrations/**` och
 `tests/pg/**`.
