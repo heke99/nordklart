@@ -93,6 +93,11 @@ function mockServiceClient(fromResults: QueuedResult[]) {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('BANKID_ENCRYPTION_KEY', TEST_KEY)
+  // Login now resolves its provider through getBankIdProvider() like every
+  // other BankID flow, so the kill switch has to be on for the TIC provider
+  // (and therefore the mocked TIC client) to be the one that answers.
+  vi.stubEnv('NEXT_PUBLIC_BANKID_ENABLED', 'true')
+  vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
 })
 
 afterEach(() => {
@@ -100,12 +105,62 @@ afterEach(() => {
 })
 
 describe('POST /bankid/complete', () => {
-  describe('signup mode — account_exists regression (CWE-287)', () => {
-    it('returns 409 account_exists and performs NO side effects when email is already registered', async () => {
+  describe('provider convergence', () => {
+    it('refuses when BankID is switched off, instead of authenticating anyway', async () => {
+      // Login used to call the TIC client directly, so NEXT_PUBLIC_BANKID_ENABLED
+      // stopped consent signing while leaving the route that hands out a session
+      // wide open. It now resolves the provider like everything else, and with
+      // the switch off there is no TIC provider to answer.
+      vi.stubEnv('NEXT_PUBLIC_BANKID_ENABLED', 'false')
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        body: { sessionId: 'test-session', mode: 'login' },
+      })
+      const { status } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(400)
+      expect(vi.mocked(collectBankIdResult)).not.toHaveBeenCalled()
+      expect(admin.generateLink).not.toHaveBeenCalled()
+    })
+
+    it('verifies the outcome with the provider rather than trusting the browser', async () => {
+      // The browser posts sessionId and claims the order finished. The route
+      // must re-read the outcome; a session the provider does not report as
+      // complete gets no Supabase session.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession({ status: 'pending', user: undefined }))
+      const { admin } = mockServiceClient([])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        body: { sessionId: 'test-session', mode: 'login' },
+      })
+      const { status, body } = await parseJsonResponse<{ error?: string }>(
+        await findCompleteHandler()(req)
+      )
+
+      expect(status).toBe(400)
+      expect(body.error).toBe('session_invalid')
+      expect(admin.generateLink).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('signup mode — removed', () => {
+    it('refuses to create an account, whatever the payload says', async () => {
+      // This route used to accept mode: 'signup' and create a Supabase user
+      // outright. Nothing in the product ever asked for it, and the account it
+      // produced had no legal acceptance, no plan and no company — so it could
+      // not finish onboarding either. The CWE-287 guard that used to sit in
+      // that branch (refuse when the email is already registered) is now
+      // structural: there is no branch that can create an account here at all.
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin, client } = mockServiceClient([
-        { data: null }, // bankid_identities pnr lookup → not linked
-        { data: { id: 'victim-user-uuid' } }, // profiles email lookup → EXISTS
+        { data: null },
+        { data: { id: 'victim-user-uuid' } },
       ])
 
       const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
@@ -116,76 +171,30 @@ describe('POST /bankid/complete', () => {
         await findCompleteHandler()(req)
       )
 
-      expect(status).toBe(409)
-      expect(body.error).toBe('account_exists')
+      expect(status).toBe(400)
+      expect(body.error).toBe('unsupported_mode')
       expect(body.data).toBeUndefined()
 
-      // Critical: none of the account-mutation or session-issuance calls ran.
+      // No account mutation, no session issuance, and no database traffic at
+      // all — the mode is rejected before the BankID session is even read.
       expect(admin.createUser).not.toHaveBeenCalled()
       expect(admin.updateUserById).not.toHaveBeenCalled()
       expect(admin.generateLink).not.toHaveBeenCalled()
-
-      // No insert into bankid_identities. Only two from() calls should have happened
-      // (the pnr lookup and the profile lookup), neither of which is an insert.
-      const fromCalls = vi.mocked(client.from).mock.calls
-      expect(fromCalls.map((c) => c[0])).toEqual(['bankid_identities', 'profiles'])
+      expect(vi.mocked(client.from)).not.toHaveBeenCalled()
+      expect(vi.mocked(collectBankIdResult)).not.toHaveBeenCalled()
     })
-  })
 
-  describe('signup mode — happy path', () => {
-    it('creates a new user, marks bankid_linked, and returns the magic link tokenHash', async () => {
-      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
-      const { admin } = mockServiceClient([
-        { data: null }, // pnr lookup → not linked
-        { data: null }, // email lookup → not taken
-        { error: null }, // bankid_identities insert OK
-      ])
-
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
-        method: 'POST',
-        body: { sessionId: 'test-session', mode: 'signup', email: 'fresh@example.com' },
-      })
-      const { status, body } = await parseJsonResponse<{
-        data?: { tokenHash?: string; type?: string; isNewUser?: boolean }
-      }>(await findCompleteHandler()(req))
-
-      expect(status).toBe(200)
-      expect(body.data?.tokenHash).toBe('magic-token-hash')
-      expect(body.data?.type).toBe('magiclink')
-      expect(body.data?.isNewUser).toBe(true)
-
-      expect(admin.createUser).toHaveBeenCalledWith(
-        expect.objectContaining({ email: 'fresh@example.com', email_confirm: true })
-      )
-      expect(admin.updateUserById).toHaveBeenCalledWith(
-        'new-user-uuid',
-        expect.objectContaining({
-          app_metadata: { bankid_linked: true, has_password: false },
+    it('refuses any mode that is not login', async () => {
+      const { client } = mockServiceClient([])
+      for (const mode of ['link', 'verify', '']) {
+        const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+          method: 'POST',
+          body: { sessionId: 'test-session', mode },
         })
-      )
-    })
-  })
-
-  describe('signup mode — pnr already linked', () => {
-    it('returns 409 already_linked before email lookup', async () => {
-      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
-      const { admin, client } = mockServiceClient([
-        { data: { user_id: 'some-other-user' } }, // pnr lookup → LINKED
-      ])
-
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
-        method: 'POST',
-        body: { sessionId: 'test-session', mode: 'signup', email: 'x@example.com' },
-      })
-      const { status, body } = await parseJsonResponse<{ error?: string }>(
-        await findCompleteHandler()(req)
-      )
-
-      expect(status).toBe(409)
-      expect(body.error).toBe('already_linked')
-      expect(admin.createUser).not.toHaveBeenCalled()
-      // Only the pnr lookup ran — no profiles query.
-      expect(vi.mocked(client.from).mock.calls.map((c) => c[0])).toEqual(['bankid_identities'])
+        const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+        expect(status).toBe(400)
+      }
+      expect(vi.mocked(client.from)).not.toHaveBeenCalled()
     })
   })
 
@@ -254,9 +263,9 @@ describe('POST /bankid/complete', () => {
         ],
       })
       const { client } = mockServiceClient([
-        { data: null }, // pnr lookup → not linked
-        { data: null }, // email lookup → not taken
-        { error: null }, // bankid_identities insert OK
+        // pnr lookup → already linked, so this is an ordinary login. No
+        // personal_number_hash on the row means no legacy-hash upgrade write.
+        { data: { id: 'ident-1', user_id: 'existing-user' } },
       ])
 
       // Intercept the bankid_enrichment upsert so we can assert the persisted shape
@@ -274,14 +283,14 @@ describe('POST /bankid/complete', () => {
 
       const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
         method: 'POST',
-        body: { sessionId: 'test-session', mode: 'signup', email: 'fresh@example.com' },
+        body: { sessionId: 'test-session', mode: 'login' },
       })
       const { status, body } = await parseJsonResponse<{
         data?: { tokenHash?: string; isNewUser?: boolean }
       }>(await findCompleteHandler()(req))
 
       expect(status).toBe(200)
-      expect(body.data?.isNewUser).toBe(true)
+      expect(body.data?.isNewUser).toBe(false)
       expect(vi.mocked(requestEnrichment)).toHaveBeenCalledWith(
         'test-session',
         ['SPAR', 'CompanyRoles']
@@ -313,7 +322,7 @@ describe('POST /bankid/complete', () => {
 
       const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
         method: 'POST',
-        body: { sessionId: 'test-session', mode: 'signup', email: 'x@example.com' },
+        body: { sessionId: 'test-session', mode: 'login' },
       })
       const { status, body } = await parseJsonResponse<{ error?: string }>(
         await findCompleteHandler()(req)
@@ -323,12 +332,12 @@ describe('POST /bankid/complete', () => {
       expect(body.error).toBe('session_invalid')
     })
 
-    it('returns 400 when email is missing in signup mode', async () => {
+    it('returns 400 when mode is missing entirely', async () => {
       mockServiceClient([])
 
       const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
         method: 'POST',
-        body: { sessionId: 'test-session', mode: 'signup' },
+        body: { sessionId: 'test-session' },
       })
       const { status } = await parseJsonResponse(await findCompleteHandler()(req))
 

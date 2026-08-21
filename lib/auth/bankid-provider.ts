@@ -36,6 +36,11 @@ export interface BankIdSessionStart {
 export interface BankIdCollectStatus {
   status: 'pending' | 'complete' | 'failed' | 'cancelled'
   hintCode: string | null
+  /**
+   * Provider-supplied Swedish progress text for the hint code, when it has
+   * one. Purely for display — never branch on it, branch on `hintCode`.
+   */
+  message?: string | null
   /** Present when complete. */
   user?: {
     personalNumber: string
@@ -62,7 +67,21 @@ export interface BankIdProvider {
   readonly mode: 'test' | 'production'
   startAuth(args: StartArgs): Promise<BankIdSessionStart>
   startSign(args: StartArgs & { userVisibleText: string }): Promise<BankIdSessionStart>
+  /**
+   * Advance a pending order. Progress-reporting call — not necessarily
+   * repeatable once the order has finished.
+   */
   collect(sessionRef: string): Promise<BankIdCollectStatus>
+  /**
+   * Read the settled outcome of an order, idempotently.
+   *
+   * Login needs this and `collect()` is not it: the browser polls until it
+   * sees `complete`, and only then asks the server to mint a session. That
+   * second request must be able to re-verify the outcome from the provider
+   * rather than trust the browser's word for it, and it may arrive after the
+   * order has already stopped being pollable.
+   */
+  result(sessionRef: string): Promise<BankIdCollectStatus>
   cancel(sessionRef: string): Promise<void>
 }
 
@@ -185,6 +204,32 @@ export const mockBankIdProvider: BankIdProvider = {
       return { status: 'cancelled', hintCode: 'userCancel' }
     }
     session.polls += 1
+    if (session.polls < 2) {
+      return { status: 'pending', hintCode: 'outstandingTransaction' }
+    }
+    return {
+      status: 'complete',
+      hintCode: null,
+      user: {
+        personalNumber: '190001019802',
+        name: 'Test Testsson',
+        givenName: 'Test',
+        surname: 'Testsson',
+      },
+      completedAt: new Date().toISOString(),
+    }
+  },
+
+  async result(sessionRef) {
+    const session = mockSessions.get(sessionRef)
+    if (!session) {
+      return { status: 'failed', hintCode: 'notFound', error: 'Okänd session' }
+    }
+    if (session.cancelled) {
+      return { status: 'cancelled', hintCode: 'userCancel' }
+    }
+    // Idempotent by construction: reading the outcome never advances the
+    // session, so a repeated call answers the same way.
     if (session.polls < 2) {
       return { status: 'pending', hintCode: 'outstandingTransaction' }
     }

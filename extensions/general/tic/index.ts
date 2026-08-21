@@ -16,10 +16,10 @@ import {
   getBeneficialOwners,
 } from './lib/tic-client'
 import {
-  startBankIdAuth,
-  pollBankIdSession,
-  collectBankIdResult,
-  cancelBankIdSession,
+  // start/poll/collect/cancel are reached through getBankIdProvider() — the TIC
+  // implementations live behind ./lib/bankid-provider. Enrichment has no
+  // provider-level equivalent (it is a TIC product, not part of BankID) and is
+  // still called directly.
   requestEnrichment,
   fetchEnrichmentData,
 } from './lib/bankid-client'
@@ -28,10 +28,17 @@ import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-typ
 import type { BankIdCompleteRequest } from './lib/bankid-types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { hashPersonalNumberHmac, personalNumberHashCandidates, encryptPersonalNumber } from '@/lib/auth/bankid'
-import { registerBankIdProvider } from '@/lib/auth/bankid-provider'
+import { getBankIdProvider, registerBankIdProvider } from '@/lib/auth/bankid-provider'
+import {
+  claimBankIdLoginSession,
+  recordBankIdLoginProgress,
+  recordBankIdLoginStart,
+} from './lib/bankid-session-log'
 import { ticBankIdProvider } from './lib/bankid-provider'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
+import { truncateIp } from '@/lib/api/truncate-ip'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 
@@ -169,9 +176,12 @@ async function fetchAndStoreEnrichment(
   }
 }
 
-// Server-side per-IP rate limit for /bankid/start (each call = billable TIC session)
-const bankIdStartCooldowns = new Map<string, number>()
-const BANKID_START_COOLDOWN_MS = 5_000
+// Server-side per-IP rate limit for /bankid/start. Every call opens a billable
+// TIC Identity session, and the route is unauthenticated, so this is the only
+// thing standing between a script and someone else's invoice. It has to hold
+// across instances — see lib/auth/rate-limit-durable.ts for why the in-memory
+// Map that used to live here did not.
+const BANKID_START_RATE_LIMIT = { maxRequests: 3, windowMs: 15_000 } as const
 
 /**
  * Map a v2 `CompanyDocument` (financial-report subset) into the legacy
@@ -784,26 +794,52 @@ export const ticExtension: Extension = {
             || request.headers.get('x-real-ip')
             || '127.0.0.1'
 
-          // Per-IP rate limit (each start = billable TIC session)
-          const now = Date.now()
-          const lastStart = bankIdStartCooldowns.get(ip) ?? 0
-          if (now - lastStart < BANKID_START_COOLDOWN_MS) {
-            return NextResponse.json({ error: 'Too many requests' }, { status: 429 })
-          }
-          bankIdStartCooldowns.set(ip, now)
-
-          // Prevent map from growing unbounded
-          if (bankIdStartCooldowns.size > 10_000) {
-            const cutoff = now - BANKID_START_COOLDOWN_MS
-            for (const [k, v] of bankIdStartCooldowns) {
-              if (v < cutoff) bankIdStartCooldowns.delete(k)
-            }
-          }
+          // Per-IP rate limit (each start = billable TIC session). The
+          // identifier is truncated to a /24 or /48 first: it is persisted, and
+          // a full client IP is personal data we have no reason to keep. An
+          // unparseable forwarded-for collapses to one shared bucket rather
+          // than to no limit at all.
+          const rl = await checkDurableRateLimit({
+            prefix: 'bankid:start',
+            identifier: truncateIp(ip) ?? 'unparseable',
+            message: 'För många BankID-försök. Vänta en stund och försök igen.',
+            ...BANKID_START_RATE_LIMIT,
+          })
+          if (!rl.ok) return rl.response!
 
           const userAgent = request.headers.get('user-agent') || undefined
 
-          const session = await startBankIdAuth(ip, userAgent)
-          return NextResponse.json({ data: session })
+          // Through the provider registry, not the TIC client directly. Login
+          // used to be the one BankID flow that bypassed it, which meant the
+          // NEXT_PUBLIC_BANKID_ENABLED kill switch stopped consent signing but
+          // not logging in, and a hosted deployment with a broken registration
+          // had no guard against falling through to the mock.
+          const provider = getBankIdProvider()
+          const startedAt = Date.now()
+          const session = await provider.startAuth({ endUserIp: ip, userAgent })
+
+          await recordBankIdLoginStart({
+            supabase: createServiceClient(),
+            log,
+            provider,
+            sessionRef: session.sessionRef,
+            ipPrefix: truncateIp(ip) ?? null,
+            userAgent: userAgent ?? null,
+          })
+
+          return NextResponse.json({
+            data: {
+              sessionId: session.sessionRef,
+              autoStartToken: session.autoStartToken,
+              qrStartToken: session.qrStartToken,
+              qrStartSecret: session.qrStartSecret,
+              sessionExpiresAt: session.expiresAt,
+              // How old the order already is by the time we answer. The browser
+              // needs it to compute the QR `time` field against the order's
+              // creation, not against its own mount — see BankIdQrCode.
+              qrOrderAgeMs: Date.now() - startedAt,
+            },
+          })
         } catch (error) {
           if (error instanceof TICAPIError) {
             if (error.code === 'NOT_CONFIGURED') {
@@ -838,11 +874,42 @@ export const ticExtension: Extension = {
             return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
           }
 
-          const result = await pollBankIdSession(sessionId)
+          const provider = getBankIdProvider()
+          const polledAt = Date.now()
+          const result = await provider.collect(sessionId)
           if (result.status !== 'pending') {
             log.info('poll status', { status: result.status, hintCode: result.hintCode, hasUser: !!result.user?.personalNumber })
           }
-          return NextResponse.json({ data: result })
+
+          await recordBankIdLoginProgress({
+            supabase: createServiceClient(),
+            log,
+            provider,
+            sessionRef: sessionId,
+            status: result.status,
+            hintCode: result.hintCode,
+            user: result.user
+              ? { personalNumber: result.user.personalNumber, name: result.user.name }
+              : null,
+            completedAt: result.completedAt ?? null,
+          })
+
+          return NextResponse.json({
+            data: {
+              sessionId,
+              status: result.status,
+              hintCode: result.hintCode,
+              message: result.message ?? null,
+              user: result.user,
+              completedAt: result.completedAt ?? null,
+              qrStartToken: result.qrStartToken ?? null,
+              qrStartSecret: result.qrStartSecret ?? null,
+              error: result.error ?? null,
+              // A rotated order was created provider-side just before it was
+              // handed to us, so its age is the time we have held it.
+              qrOrderAgeMs: Date.now() - polledAt,
+            },
+          })
         } catch (error) {
           if (error instanceof TICAPIError) {
             if (error.code === 'RATE_LIMIT_EXCEEDED') {
@@ -868,7 +935,7 @@ export const ticExtension: Extension = {
       handler: async (request: Request) => {
         try {
           const body: BankIdCompleteRequest = await request.json()
-          const { sessionId, mode, email } = body
+          const { sessionId, mode } = body
 
           if (!sessionId || !mode) {
             return NextResponse.json(
@@ -877,17 +944,32 @@ export const ticExtension: Extension = {
             )
           }
 
-          const trimmedEmail = email?.trim().toLowerCase()
-
-          if (mode === 'signup' && !trimmedEmail) {
+          // 'login' is the only mode this route serves. It used to accept
+          // 'signup' as well and create an account outright — an
+          // unauthenticated account-creation surface with no entry point in the
+          // product (no page ever rendered BankIdAuth in signup mode) and no
+          // way to finish onboarding: it wrote an auth user with a name and
+          // nothing else, skipping the legal acceptance, plan selection and
+          // company provisioning that /register performs, and leaving the user
+          // at a company picker with no company to pick. Registration goes
+          // through /register; BankID is attached afterwards from
+          // /settings/security via /bankid/link, which proves ownership of the
+          // account first.
+          if (mode !== 'login') {
             return NextResponse.json(
-              { error: 'email is required for signup' },
+              {
+                error: 'unsupported_mode',
+                message: 'Endast inloggning stöds här. Skapa konto via registreringen och koppla BankID i inställningarna.',
+              },
               { status: 400 }
             )
           }
 
-          // Verify BankID session is complete
-          const session = await collectBankIdResult(sessionId)
+          // Verify BankID session is complete. The browser told us it saw
+          // `complete`; that claim is re-derived from the provider here, never
+          // trusted, and `result()` is the idempotent read for it.
+          const provider = getBankIdProvider()
+          const session = await provider.result(sessionId)
           if (session.status !== 'complete' || !session.user) {
             return NextResponse.json(
               { error: 'session_invalid', message: 'BankID session is not complete' },
@@ -916,150 +998,52 @@ export const ticExtension: Extension = {
               .eq('id', existing.id)
           }
 
-          if (mode === 'login') {
-            if (!existing) {
-              return NextResponse.json({
-                error: 'no_account',
-                givenName,
-                surname,
-              }, { status: 404 })
-            }
-
-            // Returning user — generate magic link
-            const { data: userData } = await supabase.auth.admin.getUserById(existing.user_id)
-            if (!userData?.user?.email) {
-              return NextResponse.json(
-                { error: 'session_invalid', message: 'User account not found' },
-                { status: 500 }
-              )
-            }
-
-            const { data: link, error: linkError } = await supabase.auth.admin.generateLink({
-              type: 'magiclink',
-              email: userData.user.email,
-            })
-
-            if (linkError || !link?.properties?.hashed_token) {
-              log.error('generateLink failed for login', { message: linkError?.message, code: linkError?.code })
-              return NextResponse.json(
-                { error: 'Failed to create session' },
-                { status: 500 }
-              )
-            }
-
-            // Refresh enrichment so /select-company sees current Bolagsverket roles.
-            await fetchAndStoreEnrichment(sessionId, existing.user_id, supabase)
-
+          if (!existing) {
             return NextResponse.json({
-              data: {
-                tokenHash: link.properties.hashed_token,
-                type: 'magiclink',
-                isNewUser: false,
-              },
-            })
-          }
-
-          // mode === 'signup'
-          if (existing) {
-            return NextResponse.json(
-              { error: 'already_linked', message: 'This BankID is already linked to an account' },
-              { status: 409 }
-            )
-          }
-
-          // If the email is already registered, refuse signup. Linking BankID to an
-          // existing account must go through the authenticated /bankid/link route so
-          // email ownership is proven by password login first. (CWE-287)
-          const { data: existingByEmail } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('email', trimmedEmail!)
-            .single()
-
-          if (existingByEmail) {
-            log.warn('bankid signup rejected — email already registered', {
-              sessionId,
-              pnrHashPrefix: pnrHash.slice(0, 8),
-            })
-            return NextResponse.json(
-              {
-                error: 'account_exists',
-                message: 'An account with this email already exists. Log in and link BankID from settings.',
-              },
-              { status: 409 }
-            )
-          }
-
-          // Create new Supabase user
-          const randomPassword = crypto.randomBytes(32).toString('base64url')
-          const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
-            email: trimmedEmail!,
-            email_confirm: true,
-            password: randomPassword,
-            user_metadata: { full_name: name },
-          })
-
-          if (createError || !newUser?.user) {
-            log.error('createUser failed', { email: trimmedEmail, status: createError?.status, code: createError?.code, message: createError?.message })
-            return NextResponse.json(
-              { error: 'Failed to create account', message: createError?.message },
-              { status: 500 }
-            )
-          }
-
-          const userId = newUser.user.id
-
-          // Mark user as BankID-linked (skips TOTP MFA) and record that they
-          // do not have a password yet — the BankID signup gave them a random
-          // server-side password they will never see. This flag gates MFA
-          // enrollment (see lib/auth/has-password.ts).
-          await supabase.auth.admin.updateUserById(userId, {
-            app_metadata: { bankid_linked: true, has_password: false },
-          })
-
-          // Store BankID identity
-          const { error: insertError } = await supabase
-            .from('bankid_identities')
-            .insert({
-              user_id: userId,
-              personal_number_hash: pnrHash,
-              personal_number_enc: encryptPersonalNumber(personalNumber),
-              given_name: givenName,
+              error: 'no_account',
+              givenName,
               surname,
-            })
+            }, { status: 404 })
+          }
 
-          if (insertError) {
-            log.error('insert bankid_identities failed', { message: insertError.message, code: insertError.code })
+          // Returning user — generate magic link
+          const { data: userData } = await supabase.auth.admin.getUserById(existing.user_id)
+          if (!userData?.user?.email) {
             return NextResponse.json(
-              { error: 'Failed to link BankID identity' },
+              { error: 'session_invalid', message: 'User account not found' },
               { status: 500 }
             )
           }
 
-          // Generate magic link for session
           const { data: link, error: linkError } = await supabase.auth.admin.generateLink({
             type: 'magiclink',
-            email: trimmedEmail!,
+            email: userData.user.email,
           })
 
           if (linkError || !link?.properties?.hashed_token) {
-            log.error('generateLink failed for signup', { message: linkError?.message, code: linkError?.code })
+            log.error('generateLink failed for login', { message: linkError?.message, code: linkError?.code })
             return NextResponse.json(
-              { error: 'Account created but failed to create session' },
+              { error: 'Failed to create session' },
               { status: 500 }
             )
           }
 
-          // Enrichment (CompanyRoles) — pre-fills /select-company picker.
-          await fetchAndStoreEnrichment(sessionId, userId, supabase)
+          // The order started before we knew whose it was; now we do.
+          await claimBankIdLoginSession({
+            supabase, log, provider, sessionRef: sessionId, userId: existing.user_id,
+          })
+
+          // Refresh enrichment so /select-company sees current Bolagsverket roles.
+          await fetchAndStoreEnrichment(sessionId, existing.user_id, supabase)
 
           return NextResponse.json({
             data: {
               tokenHash: link.properties.hashed_token,
               type: 'magiclink',
-              isNewUser: true,
+              isNewUser: false,
             },
           })
+
         } catch (error) {
           if (error instanceof TICAPIError) {
             log.error('complete failed — TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
@@ -1095,7 +1079,16 @@ export const ticExtension: Extension = {
             return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
           }
 
-          await cancelBankIdSession(sessionId)
+          const provider = getBankIdProvider()
+          await provider.cancel(sessionId)
+          await recordBankIdLoginProgress({
+            supabase: createServiceClient(),
+            log,
+            provider,
+            sessionRef: sessionId,
+            status: 'cancelled',
+            hintCode: 'userCancel',
+          })
           return NextResponse.json({ data: { cancelled: true } })
         } catch (error) {
           log.error('cancel failed', error)
@@ -1117,8 +1110,9 @@ export const ticExtension: Extension = {
             return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
           }
 
-          // Verify BankID session
-          const session = await collectBankIdResult(sessionId)
+          // Verify BankID session through the provider, same as login.
+          const provider = getBankIdProvider()
+          const session = await provider.result(sessionId)
           if (session.status !== 'complete' || !session.user) {
             return NextResponse.json(
               { error: 'session_invalid', message: 'BankID session is not complete' },

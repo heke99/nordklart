@@ -13,10 +13,11 @@ const ALGORITHM = 'aes-256-gcm'
 // Feature flag
 // ---------------------------------------------------------------------------
 
-export function isBankIdEnabled(): boolean {
-  if (process.env.NEXT_PUBLIC_SELF_HOSTED === 'true') return false
-  return process.env.NEXT_PUBLIC_BANKID_ENABLED === 'true'
-}
+// Defined in its own module so client components can read the flag without
+// pulling this file's node:crypto identity helpers into the browser bundle.
+// Re-exported here because server-side callers have always imported it from
+// '@/lib/auth/bankid'.
+export { isBankIdEnabled } from '@/lib/auth/bankid-enabled'
 
 // ---------------------------------------------------------------------------
 // Personnummer hashing (for lookup)

@@ -67,6 +67,11 @@ export interface StartConsentResult {
   qrStartSecret: string | null
   provider: string
   providerMode: string
+  /**
+   * Age of the BankID order once this call returns. The browser counts the QR
+   * `time` field from the order's creation, not from when it rendered.
+   */
+  qrOrderAgeMs: number
 }
 
 export async function startConsentSigning(
@@ -74,6 +79,7 @@ export async function startConsentSigning(
   args: StartConsentArgs,
 ): Promise<StartConsentResult> {
   const provider = getBankIdProvider()
+  const orderStartedAt = Date.now()
   const started = await provider.startSign({
     endUserIp: args.endUserIp,
     userAgent: args.userAgent,
@@ -129,6 +135,7 @@ export async function startConsentSigning(
     qrStartSecret: started.qrStartSecret,
     provider: provider.id,
     providerMode: provider.mode,
+    qrOrderAgeMs: Date.now() - orderStartedAt,
   }
 }
 
@@ -138,6 +145,8 @@ export interface PollConsentResult {
   consentId: string | null
   qrStartToken?: string | null
   qrStartSecret?: string | null
+  /** Age of a rotated order when it reached us. See StartConsentResult. */
+  qrOrderAgeMs?: number
 }
 
 export async function pollConsentSession(
@@ -200,6 +209,7 @@ export async function pollConsentSession(
   }
 
   const provider = getBankIdProvider()
+  const collectedAt = Date.now()
   const collected = await provider.collect(row.provider_session_ref)
 
   if (collected.status === 'pending') {
@@ -209,6 +219,7 @@ export async function pollConsentSession(
       consentId: null,
       qrStartToken: collected.qrStartToken ?? null,
       qrStartSecret: collected.qrStartSecret ?? null,
+      qrOrderAgeMs: Date.now() - collectedAt,
     }
   }
 

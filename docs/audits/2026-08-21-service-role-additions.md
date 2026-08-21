@@ -57,3 +57,27 @@ leaves a posted voucher with no payment, or a recorded consent with an unsigned
 signature request. Moving the sequence into one transaction is what removes that state,
 and a transaction spanning several tables with locks is not something PostgREST can
 express — hence a function, and hence the service role to reach it.
+
+## `lib/auth/rate-limit-durable.ts` — `checkDurableRateLimit`
+
+Calls **only** `consume_rate_limit` (20260821160000), and that function reads and writes
+exactly one table: `public.rate_limit_counters`.
+
+That table is deliberately outside the tenant model. It has no `company_id`, no
+`user_id`, and holds no personal data — the identifier the BankID caller passes is
+already truncated to a /24 or /48 by `truncateIp()` before it arrives. There is
+therefore no tenant boundary for this call site to cross, and "filter every query by
+`company_id`" has no referent here.
+
+The reason it needs the service role is the inverse of the usual one. The endpoint it
+guards (`POST /bankid/start`) is unauthenticated: there is no user, no company, and no
+JWT to act under. Any role that could reach the counter could also read or forge other
+callers' counters, so the table carries RLS with zero policies *and* no grants, and
+`consume_rate_limit` is `REVOKE ALL … FROM PUBLIC, anon, authenticated`. Service role is
+the only way in, and the function's whole surface is one counter increment that returns
+a boolean.
+
+Escalation surface: the function takes a bucket, an identifier and two integers, writes
+one row keyed by (bucket, identifier), and returns `{allowed, limit, remaining,
+reset_at}`. It cannot read, write or reveal anything else, and a caller who controls all
+four arguments can at most rate-limit themselves differently.

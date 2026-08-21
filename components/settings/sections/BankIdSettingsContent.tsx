@@ -92,14 +92,16 @@ export function BankIdSettingsContent() {
     <div className="space-y-8">
       <section className="space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          BankID-signerade samtycken
+          BankID-verifierade samtycken
         </h2>
         <p className="text-sm text-muted-foreground">
-          Här visas alla samtycken som signerats med BankID — t.ex. delning av
+          Här visas alla samtycken du godkänt med BankID — t.ex. delning av
           bokföringsdata med byrå, bankkoppling, fakturafinansiering och
-          underskrift av årsredovisning. Ett samtycke kan återkallas men
-          aldrig raderas (bevisvärde). Varje signering och återkallelse
-          loggas i granskningsloggen.
+          godkännande av årsredovisning. BankID verifierar vem som godkände och
+          när; texten sparas ordagrant som bevis. Det är ett BankID-verifierat
+          samtycke, inte en kvalificerad elektronisk underskrift. Ett samtycke
+          kan återkallas men aldrig raderas (bevisvärde). Varje godkännande och
+          återkallelse loggas i granskningsloggen.
         </p>
 
         <Card>
@@ -118,7 +120,7 @@ export function BankIdSettingsContent() {
               </div>
             ) : consents.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">
-                Inga BankID-signerade samtycken än. Samtycken skapas i de
+                Inga BankID-verifierade samtycken än. Samtycken skapas i de
                 flöden som kräver dem (byrådelning, fakturafinansiering,
                 Bankgiro-ansökan, årsredovisning).
               </p>
@@ -128,7 +130,7 @@ export function BankIdSettingsContent() {
                   <TableRow>
                     <TableHead>Typ</TableHead>
                     <TableHead>Titel</TableHead>
-                    <TableHead>Signerad av</TableHead>
+                    <TableHead>Godkänd av</TableHead>
                     <TableHead>Datum</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Åtgärd</TableHead>

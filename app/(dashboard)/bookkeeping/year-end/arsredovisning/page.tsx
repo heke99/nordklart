@@ -1199,11 +1199,13 @@ export default function ArsredovisningPage() {
         <CardHeader>
           <CardTitle className="text-base">Underskrifter</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Lägg till varje styrelseledamot + VD som ska skriva under. Signera
-            digitalt med BankID, eller markera som signerad om underskriften
-            gjorts på papper. Observera: digital inlämning till Bolagsverket
-            kräver deras egen signeringstjänst — BankID-signeringen här
-            dokumenterar styrelsens fastställelse i Nordklart.
+            Lägg till varje styrelseledamot + VD som ska skriva under. Godkänn
+            med BankID, eller markera som signerad om underskriften gjorts på
+            papper. Observera: BankID-godkännandet här är ett BankID-verifierat
+            godkännande — det dokumenterar styrelsens fastställelse i Nordklart
+            med verifierad identitet och tidpunkt, men är ingen kvalificerad
+            elektronisk underskrift. Digital inlämning till Bolagsverket kräver
+            deras egen signeringstjänst.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1234,7 +1236,7 @@ export default function ArsredovisningPage() {
                       onClick={() => setBankIdSignFor(sig)}
                       disabled={lifecycle?.annual_report_locked}
                     >
-                      Signera med BankID
+                      Godkänn med BankID
                     </Button>
                     <Button
                       size="sm"
@@ -1254,11 +1256,11 @@ export default function ArsredovisningPage() {
               open={!!bankIdSignFor}
               onClose={() => setBankIdSignFor(null)}
               consentType="arsredovisning_signature"
-              title={`Underskrift av årsredovisning — ${bankIdSignFor.signer_name}`}
+              title={`Godkännande av årsredovisning — ${bankIdSignFor.signer_name}`}
               consentText={
                 `Jag, ${bankIdSignFor.signer_name} (${bankIdSignFor.role}), intygar att ` +
-                `årsredovisningen har upprättats och fastställts, och skriver under den ` +
-                `digitalt via BankID i Nordklart.`
+                `årsredovisningen har upprättats och fastställts, och godkänner den med ` +
+                `BankID-verifierad identitet i Nordklart.`
               }
               context={{
                 kind: 'arsredovisning_signature',
@@ -1274,7 +1276,7 @@ export default function ArsredovisningPage() {
                       : s,
                   ),
                 )
-                toast({ title: 'Underskrift signerad med BankID' })
+                toast({ title: 'Godkänd med BankID' })
                 void refreshAnnualReportState()
               }}
             />

@@ -2271,6 +2271,21 @@
       "file": "20260821150000_fix_shared_annual_report_audit_trigger.sql",
       "version": "20260821150000",
       "sha256": "5d2fb71e4268339b816b4edbf6d05044a33e2ab011a40252f5c8d0a6c8f35951"
+    },
+    {
+      "file": "20260821160000_durable_rate_limit_counters.sql",
+      "version": "20260821160000",
+      "sha256": "2a449301e5a0333b86de2d3aa607af9f142c764b23e56670970a1eaf10b7bed6"
+    },
+    {
+      "file": "20260821170000_bankid_sessions_cover_login.sql",
+      "version": "20260821170000",
+      "sha256": "f0def9d5571280bd2069800f8af36d210b74f3fe1338145a0d57ed5bbeb3599d"
+    },
+    {
+      "file": "20260821180000_drop_user_identity_verifications.sql",
+      "version": "20260821180000",
+      "sha256": "ee3750d4c5749dda191acb8ba9600980363d5fbf1a2b16ad5b0b835fc54e37e7"
     }
   ]
 }

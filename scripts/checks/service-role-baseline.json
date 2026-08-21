@@ -93,6 +93,7 @@
     "lib/auth/callback-audit.ts",
     "lib/auth/consent-service.ts",
     "lib/auth/oauth-allowlist.ts",
+    "lib/auth/rate-limit-durable.ts",
     "lib/bokslut/arsredovisning/version-service.ts",
     "lib/bookkeeping/engine.ts",
     "lib/company/actions.ts",

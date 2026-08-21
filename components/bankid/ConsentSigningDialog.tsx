@@ -60,6 +60,9 @@ export function ConsentSigningDialog({
   const [autoStartToken, setAutoStartToken] = useState<string | null>(null)
   const [qrStartToken, setQrStartToken] = useState<string | null>(null)
   const [qrStartSecret, setQrStartSecret] = useState<string | null>(null)
+  // See BankIdQrCode: the QR time field counts from the order's creation on the
+  // server, so the server tells us how old the order already was.
+  const [qrOrderAgeMs, setQrOrderAgeMs] = useState(0)
   const [hint, setHint] = useState<string | null>(null)
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -77,6 +80,7 @@ export function ConsentSigningDialog({
     setAutoStartToken(null)
     setQrStartToken(null)
     setQrStartSecret(null)
+    setQrOrderAgeMs(0)
     setHint(null)
   }, [stopPolling])
 
@@ -96,7 +100,7 @@ export function ConsentSigningDialog({
       const json = await res.json()
       if (!res.ok) {
         toast({
-          title: 'Kunde inte starta signeringen',
+          title: 'Kunde inte starta godkännandet',
           description: json?.error?.message || json?.error || '',
           variant: 'destructive',
         })
@@ -107,9 +111,10 @@ export function ConsentSigningDialog({
       setAutoStartToken(json.data.autoStartToken)
       setQrStartToken(json.data.qrStartToken)
       setQrStartSecret(json.data.qrStartSecret)
+      setQrOrderAgeMs(json.data.qrOrderAgeMs ?? 0)
       setPhase('pending')
     } catch {
-      toast({ title: 'Kunde inte starta signeringen', variant: 'destructive' })
+      toast({ title: 'Kunde inte starta godkännandet', variant: 'destructive' })
       setPhase('failed')
     }
   }, [consentType, title, consentText, context, toast])
@@ -130,10 +135,12 @@ export function ConsentSigningDialog({
           consentId: string | null
           qrStartToken?: string | null
           qrStartSecret?: string | null
+          qrOrderAgeMs?: number
         }
         setHint(data.hintCode)
         if (data.qrStartToken) setQrStartToken(data.qrStartToken)
         if (data.qrStartSecret) setQrStartSecret(data.qrStartSecret)
+        if (data.qrStartToken) setQrOrderAgeMs(data.qrOrderAgeMs ?? 0)
         if (data.status === 'complete' && data.consentId) {
           stopPolling()
           setPhase('complete')
@@ -175,7 +182,17 @@ export function ConsentSigningDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>Signera med BankID för att bekräfta.</DialogDescription>
+          {/*
+            * Deliberately "godkänn", not "signera". The provider behind this
+            * dialog (TIC Identity) exposes BankID *authentication*: it proves
+            * who approved the text below and when, and Nordklart stores that
+            * text verbatim as consent evidence. That is not a qualified
+            * electronic signature, and calling it one in the UI would tell the
+            * user their approval carries a legal weight it does not have.
+            */}
+          <DialogDescription>
+            Godkänn med BankID. Din identitet verifieras och texten nedan sparas som bevis.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 text-sm">
@@ -183,7 +200,7 @@ export function ConsentSigningDialog({
         </div>
 
         {phase === 'idle' && (
-          <Button onClick={startSigning}>Signera med BankID</Button>
+          <Button onClick={startSigning}>Godkänn med BankID</Button>
         )}
         {phase === 'starting' && (
           <p className="text-sm text-muted-foreground">Startar BankID-session…</p>
@@ -191,7 +208,11 @@ export function ConsentSigningDialog({
         {phase === 'pending' && (
           <div className="flex flex-col items-center gap-3">
             {qrStartToken && qrStartSecret && (
-              <BankIdQrCode qrStartToken={qrStartToken} qrStartSecret={qrStartSecret} />
+              <BankIdQrCode
+                qrStartToken={qrStartToken}
+                qrStartSecret={qrStartSecret}
+                orderAgeMs={qrOrderAgeMs}
+              />
             )}
             {autoStartToken && (
               <a
@@ -209,15 +230,15 @@ export function ConsentSigningDialog({
           </div>
         )}
         {phase === 'complete' && (
-          <p className="text-sm text-success">Samtycket är signerat.</p>
+          <p className="text-sm text-success">Samtycket är godkänt och BankID-verifierat.</p>
         )}
         {phase === 'failed' && (
           <p className="text-sm text-destructive">
-            Signeringen misslyckades. Stäng dialogen och försök igen.
+            Godkännandet misslyckades. Stäng dialogen och försök igen.
           </p>
         )}
         {phase === 'cancelled' && (
-          <p className="text-sm text-muted-foreground">Signeringen avbröts.</p>
+          <p className="text-sm text-muted-foreground">Godkännandet avbröts.</p>
         )}
 
         <DialogFooter>
