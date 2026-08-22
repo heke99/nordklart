@@ -116,15 +116,24 @@ AS $$
   )
 $$;
 
+-- auth.role() reads `request.jwt.claim.role` ONLY, with no fallback to the
+-- claims blob — matching the `supabase/postgres` image CI runs against, not the
+-- more forgiving shape in Supabase's current docs.
+--
+-- Stricter on purpose. With the fallback, a test that set only
+-- `request.jwt.claims` got a working auth.role() here and NULL in CI, so
+-- `commit-journal-entry-authorization` passed locally while the anon guard it
+-- exists to prove was silently skipped on the runner — red in CI for twelve
+-- days, green on every developer machine. The replay must never be more
+-- forgiving than the environment it stands in for; that is the same lesson as
+-- the anon default-grants above, and it costs one extra set_config in
+-- `withAnonContext`.
 CREATE OR REPLACE FUNCTION auth.role()
 RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
-  SELECT COALESCE(
-    NULLIF(current_setting('request.jwt.claim.role', true), ''),
-    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'
-  )
+  SELECT NULLIF(current_setting('request.jwt.claim.role', true), '')
 $$;
 
 GRANT EXECUTE ON FUNCTION auth.uid() TO anon, authenticated, service_role;

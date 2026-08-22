@@ -83,7 +83,13 @@ jobs:
 
       - name: Scan image with Trivy
         id: trivy
-        uses: aquasecurity/trivy-action@0.30.0
+        # v-prefixed. `aquasecurity/trivy-action@0.30.0` does not exist — the
+        # action tags every release as `vX.Y.Z` and only `0.35.0` was ever
+        # published unprefixed. The workflow therefore failed at "Prepare all
+        # required actions", before checkout, on every run since it was added:
+        # the image was never built, signed or scanned. Verified against
+        # v0.36.0 that all six inputs below are still declared.
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           # HIGH is blocking for an accounting application — Trivy's CRITICAL

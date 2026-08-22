@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getClient, getPool, openUserTx, withServiceRole } from './setup'
+import { getClient, getPool, openUserTx, withAnonContext, withServiceRole } from './setup'
 import {
   insertAuthUser,
   insertCompanyMember,
@@ -189,22 +189,23 @@ describe('commit_journal_entry authorization', () => {
     const seed = await seedCompany()
     const entryId = await stageDraft(seed)
 
-    const client = await getClient()
-    try {
-      await client.query('BEGIN')
-      await client.query(
-        `SELECT set_config('request.jwt.claims', '{"role":"anon"}', true)`,
-      )
+    // withAnonContext sets both spellings of the role claim and asserts that
+    // auth.role() actually came back 'anon'. Setting only request.jwt.claims,
+    // as this test used to, left auth.role() NULL on the supabase/postgres
+    // image CI runs — the guard never fired, execution ran on, and the failure
+    // surfaced as an unrelated CHECK-constraint error much further down.
+    await withAnonContext(async (client) => {
       await expect(
         client.query(
+          // 'manual' is not in journal_entries_commit_method_check, and that is
+          // fine: the guard must refuse long before the value is ever written.
+          // If this ever fails ON the constraint rather than the guard, the
+          // guard was skipped — that is the bug, not the value.
           `SELECT public.commit_journal_entry($1::uuid, $2::uuid, 'manual')`,
           [seed.companyId, entryId],
         ),
       ).rejects.toThrow(/Anonymous callers cannot commit/i)
-    } finally {
-      await client.query('ROLLBACK').catch(() => {})
-      client.release()
-    }
+    })
 
     const state = await entryState(entryId)
     expect(state.status).toBe('draft')
