@@ -7,7 +7,14 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: nordklart/nordklart
+  # Must be the repository's own owner. GITHUB_TOKEN's packages:write scope is
+  # bound to that owner, so a hardcoded foreign namespace cannot be pushed to —
+  # this was pinned at `nordklart/nordklart`, a GitHub owner that does not
+  # exist, and every push failed with `denied: not_found: owner not found`
+  # after a full 26-minute two-architecture build. Nothing caught it because
+  # the workflow never got that far: the trivy-action pin was invalid, so every
+  # run died during *Prepare all required actions*, before checkout.
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
