@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServiceClient } from '@/lib/supabase/server'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import {
@@ -13,7 +14,6 @@ import {
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { getActor } from '@/lib/bookkeeping/actor-context'
-import { createServiceClient } from '@/lib/supabase/server'
 import { planReversalJournal, translateStornoRpcError } from '@/lib/bookkeeping/storno-plan'
 import type {
   CreateJournalEntryInput,

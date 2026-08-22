@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServiceClient } from '@/lib/supabase/server'
 import { eventBus } from '@/lib/events'
 import type {
   CreateJournalEntryLineInput,
@@ -7,7 +8,6 @@ import type {
 } from '@/types'
 import { validateBalance } from '@/lib/bookkeeping/engine'
 import { roundOre } from '@/lib/money'
-import { createServiceClient } from '@/lib/supabase/server'
 import {
   planCorrectionJournal,
   planReversalJournal,

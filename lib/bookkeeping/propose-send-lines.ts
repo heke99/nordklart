@@ -5,7 +5,7 @@
  * No DB or Supabase dependency — all inputs are plain data.
  */
 import { resolveSekAmount } from './currency-utils'
-import { getRevenueAccount, getOutputVatAccount } from './invoice-entries'
+import { getRevenueAccount, getOutputVatAccount } from './revenue-accounts'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { EntityType, InvoiceItem, VatTreatment } from '@/types'

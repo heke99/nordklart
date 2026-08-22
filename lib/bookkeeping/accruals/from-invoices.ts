@@ -18,7 +18,7 @@ import {
   itemHasAccrual,
   suggestBalanceAccount,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
-import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
+import { getRevenueAccount } from '@/lib/bookkeeping/revenue-accounts'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import type { EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
