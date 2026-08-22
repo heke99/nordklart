@@ -277,7 +277,7 @@ variabel i taget.
 | SKV-02 | Deklarationsombud ges av kunden på Mina sidor; inget API för att bevilja, och inget för att fråga | Modellen byggd; status sätts bara av observerat providersvar |
 | SUPA-01 | Leaked-password protection är Dashboard-only | Kan inte sättas från migration |
 | GH-01 | Branch protection kräver GitHub Pro på privat repo | — |
-| GH-02 | Actions-minuter slut | Grindarna körda lokalt; CI kör samma kommandon |
+| ~~GH-02~~ | ~~Actions-minuter slut~~ | **Inaktuell.** Actions kör: den schemalagda compliance-swarmen gick grönt 2026-08-22 02:44. Två workflows var däremot röda sedan 10 augusti — `Build and Push Docker Image` (ogiltig `trivy-action`-pin) och `pg-real tests` (anon-testet satte bara en JWT-claim). Båda lagade; se commit `dfad8ed`. |
 
 Inget av dessa hindrar kod från att vara färdig. Var och en är ett avtal, ett
 certifikat eller en dashboard-inställning.
