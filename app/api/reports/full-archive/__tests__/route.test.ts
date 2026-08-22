@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createMockRequest, parseJsonResponse, emptyRouteParams } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -45,7 +45,7 @@ describe('GET /api/reports/full-archive', () => {
   it('returns 401 when not authenticated', async () => {
     mockAuth(null)
     const { status, body } = await parseJsonResponse(
-      await GET(createMockRequest('/api/reports/full-archive'))
+      await GET(createMockRequest('/api/reports/full-archive'), emptyRouteParams())
     )
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
@@ -70,7 +70,7 @@ describe('GET /api/reports/full-archive', () => {
         createMockRequest('/api/reports/full-archive', {
           searchParams: { estimate: '1', scope: 'all' },
         })
-      )
+      , emptyRouteParams())
     )
 
     expect(status).toBe(200)
@@ -91,7 +91,7 @@ describe('GET /api/reports/full-archive', () => {
       createMockRequest('/api/reports/full-archive', {
         searchParams: { scope: 'all' },
       })
-    )
+    , emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       error: string
       size_bytes: number
@@ -118,7 +118,7 @@ describe('GET /api/reports/full-archive', () => {
       createMockRequest('/api/reports/full-archive', {
         searchParams: { scope: 'all', include_documents: 'false' },
       })
-    )
+    , emptyRouteParams())
 
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/zip')
@@ -138,7 +138,7 @@ describe('GET /api/reports/full-archive', () => {
     })
     mockGenerate.mockResolvedValue(new ArrayBuffer(1024))
 
-    const response = await GET(createMockRequest('/api/reports/full-archive'))
+    const response = await GET(createMockRequest('/api/reports/full-archive'), emptyRouteParams())
 
     expect(response.status).toBe(200)
     expect(mockGenerate).toHaveBeenCalledWith(
@@ -161,7 +161,7 @@ describe('GET /api/reports/full-archive', () => {
       createMockRequest('/api/reports/full-archive', {
         searchParams: { period_id: 'period-1' },
       })
-    )
+    , emptyRouteParams())
 
     expect(response.status).toBe(200)
     expect(mockGenerate).toHaveBeenCalledWith(
@@ -178,10 +178,15 @@ describe('GET /api/reports/full-archive', () => {
         createMockRequest('/api/reports/full-archive', {
           searchParams: { scope: 'period' },
         })
-      )
+      , emptyRouteParams())
     )
     expect(status).toBe(400)
-    expect(body).toEqual({ error: 'period_id is required when scope=period' })
+    // Canonical envelope now — a stable code the client can branch on, a
+    // request id to quote in support, and the specific Swedish message.
+    expect(body).toMatchObject({
+      code: 'REPORT_PERIOD_REQUIRED',
+      error: { code: 'REPORT_PERIOD_REQUIRED', message: 'period_id krävs när scope=period.' },
+    })
     expect(mockGenerate).not.toHaveBeenCalled()
     expect(mockEstimate).not.toHaveBeenCalled()
   })
@@ -200,7 +205,7 @@ describe('GET /api/reports/full-archive', () => {
         createMockRequest('/api/reports/full-archive', {
           searchParams: { scope: 'period', period_id: 'nope' },
         })
-      )
+      , emptyRouteParams())
     )
     expect(status).toBe(404)
     expect(body).toEqual({ error: 'Fiscal period not found' })

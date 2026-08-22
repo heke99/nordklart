@@ -1,8 +1,5 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
@@ -11,18 +8,8 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  *   - exclude exempted entries from the "Saknade underlag" filter
  *   - show a muted "no doc needed" indicator instead of the warning triangle
  */
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
-
+export const GET = withRouteContext('bookkeeping.no_doc_required', async (_request, ctx) => {
+  const { supabase, companyId } = ctx
   const rows = await fetchAllRows<{ journal_entry_id: string; reason: string | null }>(
     ({ from, to }) =>
       supabase
@@ -33,4 +20,4 @@ export async function GET() {
   )
 
   return NextResponse.json({ data: rows })
-}
+})

@@ -6,6 +6,7 @@ import { CreateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { maskCustomerRow, personalNumberColumns } from '@/lib/customers/personal-number'
 import type { Customer } from '@/types'
 
 ensureInitialized()
@@ -26,7 +27,9 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    return NextResponse.json({ data })
+    // The list renders every customer. Nothing on it needs a personnummer, so
+    // the ciphertext never leaves the server and the client gets the mask.
+    return NextResponse.json({ data: (data ?? []).map(maskCustomerRow) })
   },
 )
 
@@ -62,6 +65,10 @@ export const POST = withRouteContext(
         default_payment_terms: body.default_payment_terms || 30,
         peppol_id: body.peppol_id ?? null,
         notes: body.notes,
+        // Encrypted at rest. This used to be dropped silently — the form
+        // collected it, the schema validated it, and the insert never carried
+        // it, so a ROT/RUT customer's personnummer was lost on save.
+        ...personalNumberColumns(body.personal_number),
       })
       .select()
       .single()

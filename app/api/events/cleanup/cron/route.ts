@@ -15,6 +15,13 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
  *   moved failure rates.
  *
  * Retention is declared in .compliance/ropa.yaml (id: mcp.telemetry).
+ *
+ * The same pass also sweeps unclaimed BankID login orders. They live in
+ * bankid_sessions with user_id NULL — pre-authentication records that never
+ * resolved to an account, so no account's retention schedule covers them and
+ * no user can ask to have them removed. Anything unclaimed after 30 days is an
+ * abandoned scan. Piggy-backing on this daily job rather than adding a
+ * seventeenth cron entry keeps the schedule (and the Docker crontab) in step.
  */
 const DELIVERY_RETENTION_DAYS = 30
 const TELEMETRY_RETENTION_DAYS = 180
@@ -63,5 +70,24 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
     telemetryCutoff: telemetryCutoff.toISOString(),
   })
 
-  return NextResponse.json({ success: true, deleted, deletedDelivery, deletedTelemetry })
+  // Best-effort: an event_log sweep that succeeded should still report success
+  // if this one fails, so it is logged rather than returned as an error.
+  let deletedBankIdSessions = 0
+  const { data: sweptSessions, error: bankIdError } = await supabase.rpc(
+    'cleanup_unclaimed_bankid_sessions',
+  )
+  if (bankIdError) {
+    ctx.log.error('unclaimed bankid session cleanup failed', bankIdError)
+  } else {
+    deletedBankIdSessions = typeof sweptSessions === 'number' ? sweptSessions : 0
+    ctx.log.info('unclaimed bankid session cleanup summary', { deletedBankIdSessions })
+  }
+
+  return NextResponse.json({
+    success: true,
+    deleted,
+    deletedDelivery,
+    deletedTelemetry,
+    deletedBankIdSessions,
+  })
 })

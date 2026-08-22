@@ -10,6 +10,7 @@ import {
   getSkvFilframstallare,
   getSkvFilframstallareOrNull,
   isSkvEnvironmentExplicit,
+  SKV_SYSORG_ENV_REQUIREMENTS,
   SkvConfigurationError,
 } from '@/lib/skatteverket/sysorg/config'
 
@@ -104,16 +105,41 @@ describe('sysorg config production safety', () => {
     expect(() => assertSkvProductionSafety()).not.toThrow()
   })
 
-  it('getSkvConfigStatus reports the filframställare check and production safety', () => {
+  // The checks are now derived per variable from SKV_SYSORG_ENV_REQUIREMENTS
+  // rather than one aggregate 'filframstallare' row, so an operator is told
+  // WHICH of the three is missing. The same list drives the go-live readiness
+  // registry, which is the point: the panel can no longer be more optimistic
+  // than the token call.
+  const FILFRAMSTALLARE_CHECK_KEYS = [
+    'filframstallare_orgnr',
+    'filframstallare_name',
+    'filframstallare_contact_email',
+  ]
+
+  it('getSkvConfigStatus reports the filframställare checks and production safety', () => {
     const before = getSkvConfigStatus()
     expect(before.filframstallare).toBeNull()
-    expect(before.checks.find((c) => c.key === 'filframstallare')?.ok).toBe(false)
+    for (const key of FILFRAMSTALLARE_CHECK_KEYS) {
+      expect(before.checks.find((c) => c.key === key)?.ok).toBe(false)
+    }
     expect(before.productionSafe).toBe(false)
 
     configureFilframstallare()
     const after = getSkvConfigStatus()
     expect(after.filframstallare?.name).toBe('Testbyrån AB')
-    expect(after.checks.find((c) => c.key === 'filframstallare')?.ok).toBe(true)
+    for (const key of FILFRAMSTALLARE_CHECK_KEYS) {
+      expect(after.checks.find((c) => c.key === key)?.ok).toBe(true)
+    }
     expect(after.productionSafe).toBe(true)
+  })
+
+  it('getSkvConfigStatus covers every requirement the token call enforces', () => {
+    const keys = getSkvConfigStatus().checks.map((c) => c.key)
+    for (const requirement of SKV_SYSORG_ENV_REQUIREMENTS) {
+      expect(keys).toContain(requirement.key)
+    }
+    // Plus the two that are not single env vars.
+    expect(keys).toContain('enabled')
+    expect(keys).toContain('environment_explicit')
   })
 })

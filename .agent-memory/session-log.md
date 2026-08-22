@@ -419,3 +419,205 @@ när antalet definitioner för ett spårat objekt ändras.
 
 Samtliga läser live-katalogen, inte migrationstexten, så de bedömer den
 definition som överlevde alla senare redefinitioner.
+
+## 2026-08-21 — P0-härdning deployad till produktion
+
+unit 6193/6193, pg-real 696/696 (96 filer), typecheck/lint/7 guards/feature-policy
+gröna, 454 migrationer replayar rent från tom databas.
+
+Fyra migrationer deployade via `deploy-migration-via-mcp.mjs` + Supabase MCP,
+i versionsordning, med checksumverifiering i databasen före varje `EXECUTE`.
+Liggaren står på **454**, staging tömd.
+
+### Vad som rättades
+
+1. **MFA-bypass.** `shouldEnforceMfa` undantog varje konto med `bankid_linked`.
+   `POST /bankid/link` sätter den flaggan på ett befintligt lösenordskonto, och
+   flaggan säger ingenting om hur den *aktuella* sessionen upprättades — så att
+   länka BankID tog bort andra faktorn från lösenordsinloggningen. Undantaget
+   kräver nu också att kontot saknar eget lösenord.
+
+2. **Storno/rättelse var inte atomiska.** `reverseEntry` gjorde 5+ skrivningar,
+   allokerade verifikationsnumret i förväg (varje senare fel brände ett nummer)
+   och postade med rå `UPDATE status='posted'` — förbi `commit_journal_entry`
+   och därmed förbi anon-guarden och skrivkontrollen från 20260808190000.
+   `reverse_journal_entry_v2` gör allt i en transaktion. Planen byggs i TS.
+
+3. **Falsk betalvägg.** Vy-fallbacken i `listCompanyFeatureAccess` tappade
+   `reason`; layouten litade på `enabled === false`. Degraderade rader
+   om-verifieras nu via `checkFeatureAccess`.
+
+4. **Personnummer.** `customers.personal_number` skrevs aldrig av någon
+   kodväg — formuläret samlade in det och båda routes utelämnade det. Nu
+   inkopplat och krypterat (`_enc` + `_last4`); klartextkolumnen borttagen
+   efter att migrationen bevisat att den var tom (0 rader i produktion).
+
+5. **Signaturbevis.** `markSignatureSigned` fyllde aldrig
+   `signer_personnummer_hash`/`_encrypted`, och felet sväljdes — samtycket
+   registrerades, sessionen blev `complete`, signaturbegäran stod kvar
+   `pending`. `record_bankid_consent_v1` skriver allt i en transaktion.
+
+### Produktionsbugg som hittades på vägen
+
+`audit_annual_report_document_change` delas av tre tabeller men läste
+`NEW.created_by`, som bara en har. TG_TABLE_NAME-guarden skyddar inte:
+PL/pgSQL cachar planen på funktionen, inte per radtyp. När en backend kört
+triggern för `annual_report_presentation_reclassifications` dog nästa skrivning
+mot `arsredovisning_signature_requests` eller `arsredovisning_narratives` på
+samma connection med `record "new" has no field "created_by"`. Årsredovisnings-
+signering gick alltså sönder beroende på vad den poolade anslutningen råkat
+röra först. Testet reproducerades mot den gamla definitionen före fixen.
+
+### Verifiering mot produktion efter deploy
+
+Content-fingerprint mot ren replay: `column`, `constraint`, `index`, `policy`,
+`rls`, `trigger`, `view` identiska. `function` identisk (**283 /
+c3212a5026000b9eb0304bafd00c1061**) när extension-ägda objekt exkluderas —
+produktion installerar `btree_gist` i `public` (188 funktioner), den lokala
+bootstrappen i `extensions`. Det är miljöskillnad, inte drift.
+
+**Ny observation, ej åtgärdad:** grant-raderna skiljer sig (`table_grant`
+2 395 lokalt mot 6 198 i produktion, `function_grant` 632 mot 703). Det är
+Supabases default-grants. De är verkningslösa här — `anon` har `rolbypassrls`
+= false, 0 av 279 tabeller saknar RLS, och **0 policies nämner `anon`**, så
+anon matchar ingen policy och ser ingenting. Men det betyder att den lokala
+pg-real-replayen grantar *mindre* än produktion: ett test kan passera lokalt
+för att granten saknas, medan produktion bara har RLS som grind. Bör tas upp i
+nästa granskningspass.
+
+Nya funktioners rättigheter verifierade i produktion:
+`reverse_journal_entry_v2`, `record_bankid_consent_v1` och
+`create_planned_draft_entry` är service_role-only; `commit_journal_entry` är
+fortsatt `authenticated` (den bär sin egen anon-guard och skrivkontroll).
+
+### Nya guards
+
+- `internal-links` — failar på intern länk utan route bakom sig. Reproducerar
+  båda 404:orna (`/documents`, `/inbox`) mot den gamla koden.
+- `financial-hardening` kräver storno-RPC:n och förbjuder både postning utanför
+  `commit_journal_entry` och förhandsallokerat verifikationsnummer i motorerna.
+- Tre nya service-role-anropsställen granskade i
+  `docs/audits/2026-08-21-service-role-additions.md`.
+
+## 2026-08-21 (forts.) — BankID-konvergens, Skatteverket-ombud, röjning
+
+Tre commits till på `claude/nordklart-production-ready-w4szxu`, fem migrationer
+deployade till produktion (ledger 454 → 459, staging-tabellen tom efteråt).
+
+### BankID (`2a428a5`, migrationer 20260821160000/170000/180000)
+
+Login var det enda BankID-flödet som inte gick via `getBankIdProvider()`.
+Konsekvenserna: `NEXT_PUBLIC_BANKID_ENABLED` stängde av samtyckessignering men
+inte inloggning; en hostad deploy med trasig provider-registrering hade inget
+skydd mot att falla igenom till mock; och det enda flöde som delar ut en
+session lämnade inget spår. Start/poll/complete/link/cancel går nu genom
+providern. `BankIdProvider` fick `result()` — en idempotent läsning av ett
+avslutat ärende, eftersom completion-steget måste härleda utfallet från
+providern i stället för att tro på webbläsaren, och `collect()` konsumerar
+progress.
+
+`bankid_sessions.user_id` är nullbar för `purpose='auth'` (CHECK), eftersom ett
+login-ärende startar innan kontot är känt. RLS behövde ingen ändring:
+`user_id = auth.uid()` är aldrig sant för NULL. Oanspråkade rader städas efter
+30 dagar från dygnscronen.
+
+`bankIdStartCooldowns` (in-memory Map, per instans, tom efter varje cold start)
+ersatt av `checkDurableRateLimit`: Upstash när det finns, annars fixed-window i
+Postgres, **fail-closed** — varje start är en debiterad TIC-session och rutten
+är oautentiserad.
+
+QR-koden räknade `setInterval`-tick sedan mount. BankID:s `time`-fält är
+sekunder sedan *ordern skapades på servern*. Skillnaden är starttiden, varje
+långsam HMAC, och tiotals sekunder i en bakgrundsflik där intervallet stryps —
+varefter varje skanning misslyckades. Nu klockbaserat mot ett serveransatt
+ankare.
+
+Borttaget: BankID-signup (ingen entry point, skapade konto utan avtal, plan
+eller bolag — CWE-287-guarden är nu strukturell i stället för en gren),
+`user_identity_verifications` (tom i både replay och produktion, aldrig
+skriven, dubblerade `bankid_sessions`).
+
+### Skatteverket (`bba74ef`, migrationer 20260821190000/200000)
+
+`skatteverket_ombud_authorizations`: `status='active'` går bara att nå genom ett
+observerat providersvar. Inga skrivgrants till anon/authenticated, RLS bara
+SELECT, skrivning via service-role-RPC som *härleder* status ur observationen,
+CHECK-villkor som binder status till bevis, och en trigger som vägrar varje
+skrivning RPC:n inte gjort — så en framtida service-role-väg kan inte heller
+sätta den för hand. Verifierat i produktion: `authenticated` kan varken köra
+RPC:n eller INSERT:a.
+
+Verdikt härleds bara ur två svar: lyckat anrop → `active`, 403 med
+behörighetstext → `denied`. En 500, en 401, en utgången session eller ett
+saknat scope säger ingenting om behörighet, och `denied` ur något av dem hade
+strandat ett giltigt ombud.
+
+Retry: `skvSysorgRequest` hade ingen alls. Nu bounded, med två regler — aldrig
+POST (Skatteverket har ingen idempotensheader; en timad POST kan redan ha
+lämnat in, och ett lyckat andra försök ger två deklarationer), och bara
+timeout/429/502/503/504 med exponentiell backoff + full jitter.
+`skatteverket_api_requests` fick `idempotency_key`, `attempt_count`,
+`next_retry_at`.
+
+Även: `getSkvSysorgAccessToken()` gate:ar nu på samma predikat som
+readiness-panelen, och de två moms-övergångarna krävde bara `if (data)` — ett
+200 med tom kropp hade flyttat en inlämning till `signed_submitted`.
+
+### Röjning
+
+Rotartefakterna borta (`nordklart-canonical-year-end.patch` — verifierat att
+den varken applicerar eller reverserar — plus `apply.sh`, som `rm -rf`:ade
+sökvägar i vilken katalog den än pekades mot). `findings.md` (116 KB, frusen
+2026-04-22) statusmärkt och flyttad till `docs/audits/`.
+
+`.env.example` fanns inte, och `docker-entrypoint.sh` hänvisade till en
+`.env.docker.example` som aldrig legat i repot. Nu finns filen, och
+`scripts/checks/env-example.mjs` failar när kod läser en variabel den inte
+nämner. Guarden ser även indirekta läsningar (`firstEnv`/`boolEnv`,
+`aliases:`-listorna, `env.NAME` i readiness-registret) — det var de ~23
+Skatteverket-variablerna en `process.env.NAME`-scan missar helt.
+
+### Kvar till nästa pass
+
+Grant-divergensen mot produktion (se ovan) är fortfarande bara antecknad.
+`enforceSkvRateLimit` i `lib/skatteverket/sysorg/client.ts` är samma
+per-instans-räknare som BankID-cooldownen var; den är en artighetsstrypning mot
+SKV, inte en säkerhetskontroll, och byts bara om granskningen visar att det
+spelar roll.
+
+### Andra granskningen (§90) — ett kritiskt fynd
+
+Granskningen började med att göra pg-real-replayen *trogen* i stället för
+smickrande. `tests/pg/bootstrap-plain-postgres.sql` grantade default-privilegier
+till `authenticated, service_role` och utelämnade `anon`, medan produktionen
+grantar anon allt. Replayen var alltså säkrare än produktionen — den farliga
+riktningen: en saknad kontroll var onåbar lokalt och öppen live, och sviten blev
+grön i båda fallen.
+
+Med anon tillagd syntes det direkt: **144 SECURITY DEFINER-funktioner i
+`public` kunde köras av anon**, varav 39 utan någon egen kontroll.
+Reproducerat: `SET ROLE anon; SELECT public.company_entity_type('<valfritt
+bolag>')` → `aktiebolag`. Även `check_email_exists` (användarenumerering) och
+skrivande funktioner som `seed_chart_of_accounts` och `finalize_sie_import`.
+
+Åtgärdat i `20260821210000` genom att ta bort granten i stället för att lappa 39
+funktionskroppar — inget i produkten anropar en SECURITY DEFINER-funktion som
+anon (verifierat över `app/`, `lib/`, `components/`, `extensions/`).
+Produktionen: 144 → 0. `authenticated` (160) och `service_role` (223) orörda,
+`user_company_ids` fortsatt körbar för authenticated, prisvyerna fortsatt
+läsbara för anon.
+
+Notera: `ALTER DEFAULT PRIVILEGES … REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`
+gör **inte** vad man tror. PostgreSQL lägger sin inbyggda `GRANT EXECUTE TO
+PUBLIC` ovanpå `pg_default_acl`, så en nyskapad funktion kommer ut
+anon-körbar oavsett. Det som håller ytan stängd är
+`tests/pg/anon-security-definer-surface.pg.test.ts`, som failar så fort någon
+SECURITY DEFINER-funktion i `public` blir anon-körbar igen. Ett av testfallen
+skapar med flit en sådan funktion och verifierar att den ÄR öppen, så skälet
+till att per-funktions-REVOKE är obligatoriskt står skrivet där nästa person
+läser det.
+
+Grant-divergensen som stod som "ej åtgärdad" i förra anteckningen är därmed
+avklarad: den lokala replayen har numera produktionens grant-hållning, och de
+invarianter som gör tabellgranten verkningslös (RLS på alla tabeller, ingen
+policy nämner anon) är testade i stället för antecknade.

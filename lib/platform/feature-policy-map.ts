@@ -146,6 +146,11 @@ export function featureForOperation(operation: string): FeatureCode | null {
   if (normalized.startsWith('skatteverket.')) return NORDKLART_FEATURES.skatteverketSubmissions
   if (normalized.startsWith('salary_run.') || normalized.startsWith('salary.')) return NORDKLART_FEATURES.salaryRuns
   if (normalized.startsWith('report.') || normalized.startsWith('reports.') || normalized.startsWith('analytics.') || normalized.startsWith('export.')) return NORDKLART_FEATURES.reportsCore
+  // Bank reconciliation. app/api/reconciliation/** already gates on
+  // bank.matching through requireCompanyFeatureResponse; without this rule the
+  // derived operation resolves to nothing, and moving those routes onto
+  // withRouteContext would silently drop a paid gate.
+  if (normalized.startsWith('reconciliation.')) return NORDKLART_FEATURES.bankMatching
   if (normalized.startsWith('bank_file.')) return NORDKLART_FEATURES.bankTransactionIngest
   if (normalized.startsWith('bank.')) {
     if (normalized.includes('match')) return NORDKLART_FEATURES.bankMatching

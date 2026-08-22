@@ -1,18 +1,35 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { createMockRequest, createMockRouteParams } from '@/tests/helpers'
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
+// The route is wrapped in withRouteContext, which resolves auth through
+// requireAuth() (the only path that enforces MFA/AAL2 on hosted) and the active
+// company through getActiveCompanyId(). Mock those, not createClient/getUser.
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: vi.fn(),
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { GET } from '../route'
 
-const mockCreateClient = vi.mocked(createClient)
+/**
+ * Point requireAuth() at this supabase mock. A null user makes the wrapper
+ * short-circuit with its own 401, exactly as it does in production.
+ */
+function mockAuth(supabase: unknown, user: { id: string } | null) {
+  if (!user) {
+    vi.mocked(requireAuth).mockResolvedValue({
+      error: NextResponse.json({ error: { code: 'UNAUTHORIZED' } }, { status: 401 }),
+    } as never)
+    return
+  }
+  vi.mocked(requireAuth).mockResolvedValue({ user, supabase } as never)
+}
+
 
 function buildSupabase(
   user: { id: string } | null,
@@ -43,9 +60,7 @@ beforeEach(() => {
 
 describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
   it('returns 401 when not authenticated', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase(null, { data: [], error: null }) as never
-    )
+    mockAuth(buildSupabase(null, { data: [], error: null }), null)
     const req = createMockRequest(
       '/api/reports/vat-declaration/ruta/10/sources',
       { searchParams: { periodType: 'monthly', year: '2026', period: '5' } }
@@ -55,9 +70,7 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
   })
 
   it('returns 400 when period params are missing', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ id: 'user-1' }, { data: [], error: null }) as never
-    )
+    mockAuth(buildSupabase({ id: 'user-1' }, { data: [], error: null }), { id: 'user-1' })
     const req = createMockRequest(
       '/api/reports/vat-declaration/ruta/10/sources'
     )
@@ -66,9 +79,7 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
   })
 
   it('returns 404 when ruta has no underlying BAS accounts', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ id: 'user-1' }, { data: [], error: null }) as never
-    )
+    mockAuth(buildSupabase({ id: 'user-1' }, { data: [], error: null }), { id: 'user-1' })
     const req = createMockRequest(
       '/api/reports/vat-declaration/ruta/99/sources',
       { searchParams: { periodType: 'monthly', year: '2026', period: '5' } }
@@ -94,9 +105,7 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
         },
       },
     ]
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ id: 'user-1' }, { data: linesData, error: null }) as never
-    )
+    mockAuth(buildSupabase({ id: 'user-1' }, { data: linesData, error: null }), { id: 'user-1' })
 
     const req = createMockRequest(
       '/api/reports/vat-declaration/ruta/10/sources',

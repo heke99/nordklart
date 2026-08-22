@@ -17,6 +17,8 @@
  *   blocked            — explicitly disabled via kill switch
  */
 
+import { evaluateSkvSysorgEnv } from '@/lib/skatteverket/sysorg/config'
+
 export type IntegrationReadinessStatus =
   | 'production_ready'
   | 'sandbox_ready'
@@ -98,7 +100,11 @@ export function computeIntegrationReadiness(env: Env = process.env): Integration
     })
   }
 
-  // ── Skatteverket (BankID OAuth track) ─────────────────────────────────────
+  // ── Skatteverket, per-user BankID OAuth (the live track) ──────────────────
+  //
+  // This is what every UI flow uses: the user authorises with BankID and
+  // Nordklart acts in their name. It does NOT file anything by itself — the
+  // irreversible step happens in the user's browser at Skatteverket.
   {
     const keys = ['SKATTEVERKET_OAUTH2_CLIENT_ID', 'SKATTEVERKET_OAUTH2_CLIENT_SECRET', 'SKATTEVERKET_APIGW_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_SECRET', 'SKATTEVERKET_TOKEN_ENCRYPTION_KEY']
     const g = groupState(env, keys)
@@ -119,8 +125,44 @@ export function computeIntegrationReadiness(env: Env = process.env): Integration
       message = `Ofullständig konfiguration — saknar ${g.missing.join(', ')}.`
     }
     entries.push({
-      id: 'skatteverket', name: 'Skatteverket (moms/AGI/skattekonto)', responsible: 'superadmin',
+      id: 'skatteverket', name: 'Skatteverket (moms/AGI/skattekonto, BankID)', responsible: 'superadmin',
       status, message_sv: message, missingEnvVars: g.missing, docsPath: '/skatteverket',
+    })
+  }
+
+  // ── Skatteverket, systemorganisation (maskinell inlämning) ────────────────
+  //
+  // A separate track with its own credentials: client_credentials over mTLS
+  // with an organisation certificate. It is the only path that can file
+  // without a human in a browser, so an operator has to be able to see whether
+  // it is actually usable — and the answer must come from the SAME requirement
+  // list the token call enforces, not a shorter copy of it.
+  {
+    const sysorg = evaluateSkvSysorgEnv(env)
+    let status: IntegrationReadinessStatus
+    let message = ''
+    if (!sysorg.enabled && !sysorg.complete) {
+      status = 'requires_agreement'
+      message = 'Maskinell inlämning kräver organisationscertifikat (utfärdas av Expisoft) och Skatteverkets godkännande. Tills dess sker inlämning via BankID-spåret och Mina sidor.'
+    } else if (!sysorg.complete) {
+      status = 'misconfigured'
+      message = `Påslagen men ofullständig — saknar ${sysorg.missing.join(', ')}. Token-anropet skulle misslyckas.`
+    } else if (!sysorg.enabled) {
+      status = 'not_configured'
+      message = 'Alla uppgifter finns men spåret är avstängt. Sätt SKV_SYSORG_ENABLED=true för att aktivera.'
+    } else if (sysorg.isProduction) {
+      status = 'production_ready'
+      message = 'Systemorganisation konfigurerad mot Skatteverkets produktionsmiljö.'
+    } else {
+      status = 'sandbox_ready'
+      message = sysorg.environmentExplicit
+        ? 'Systemorganisation konfigurerad mot Skatteverkets testmiljö.'
+        : 'Systemorganisation konfigurerad, men SKV_ENV är inte explicit satt — går mot testmiljön.'
+    }
+    entries.push({
+      id: 'skatteverket_sysorg', name: 'Skatteverket (maskinell inlämning, systemorganisation)',
+      responsible: 'superadmin', status, message_sv: message,
+      missingEnvVars: sysorg.missing, docsPath: '/platform/skatteverket',
     })
   }
 

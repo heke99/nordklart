@@ -59,7 +59,9 @@ function getInitials(name: string): string {
 }
 
 function getIdentifier(customer: Customer): string {
-  return customer.org_number || customer.personal_number || ''
+  // The list never receives a personnummer — the API masks it. Search and
+  // display both work off the last four digits.
+  return customer.org_number || customer.personal_number_masked || ''
 }
 
 function compareStrings(a: string, b: string): number {
@@ -203,7 +205,7 @@ function CustomersPageInner() {
         c.name.toLowerCase().includes(term) ||
         c.email?.toLowerCase().includes(term) ||
         c.org_number?.includes(term) ||
-        c.personal_number?.includes(term) ||
+        c.personal_number_masked?.includes(term) ||
         c.city?.toLowerCase().includes(term) ||
         c.notes?.toLowerCase().includes(term)
       )

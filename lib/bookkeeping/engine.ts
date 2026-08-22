@@ -1,11 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServiceClient } from '@/lib/supabase/server'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotReverseNonPostedError,
-  EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
   JournalEntryNotBalancedError,
@@ -14,6 +14,7 @@ import {
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { getActor } from '@/lib/bookkeeping/actor-context'
+import { planReversalJournal, translateStornoRpcError } from '@/lib/bookkeeping/storno-plan'
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
@@ -493,111 +494,48 @@ export async function reverseEntry(
   }
 
   const lines = (original.lines as JournalEntryLine[]) || []
-
-  // Create reversed lines (swap debit and credit, preserve dimensions)
-  const reversedLines: CreateJournalEntryLineInput[] = lines.map((line) => ({
-    account_number: line.account_number,
-    debit_amount: line.credit_amount,
-    credit_amount: line.debit_amount,
-    line_description: `Reversal: ${line.line_description || ''}`,
-    currency: line.currency,
-    amount_in_currency: line.amount_in_currency
-      ? -line.amount_in_currency
-      : undefined,
-    exchange_rate: line.exchange_rate || undefined,
-    tax_code: line.tax_code || undefined,
-    cost_center: line.cost_center || undefined,
-    project: line.project || undefined,
-  }))
-
   const entryDate = reversalDate || getSwedishLocalDate()
 
-  // Get voucher number for the reversal
-  const voucherNumber = await getNextVoucherNumber(
+  // Accounts must still exist in the chart — INCLUDING inactive rows. The
+  // accounts on the original committed entry were active at commit time; if the
+  // user has since toggled one off, the storno must still go through
+  // (BFL 5 kap 5 §). Only a truly missing chart row still throws.
+  const accountIdMap = await resolveAccountIds(
     supabase,
     companyId,
-    original.fiscal_period_id,
-    original.voucher_series || 'A'
+    lines.map((line) => ({ account_number: line.account_number, debit_amount: 0, credit_amount: 0 })),
+    { includeInactive: true },
   )
-
-  // Resolve account IDs — include inactive rows. The accounts on the
-  // original committed entry were active at commit time; if the user has
-  // since toggled one off, the storno must still be allowed to go through
-  // (BFL 5 kap 5§). Only a truly missing chart row (rare: would require
-  // the row to have been deleted) still throws AccountsNotInChartError.
-  const accountIdMap = await resolveAccountIds(supabase, companyId, reversedLines, { includeInactive: true })
-
-  const reversalAccountNumbers = [...new Set(reversedLines.map(l => l.account_number))]
-  const missingReversalAccounts = reversalAccountNumbers.filter(num => !accountIdMap.has(num))
+  const missingReversalAccounts = [...new Set(lines.map((l) => l.account_number))]
+    .filter((num) => !accountIdMap.has(num))
   if (missingReversalAccounts.length > 0) {
     throw new AccountsNotInChartError(missingReversalAccounts)
   }
 
-  // Create reversal entry with reverses_id link
-  const { data: reversalEntry, error: reversalError } = await supabase
-    .from('journal_entries')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      fiscal_period_id: original.fiscal_period_id,
-      voucher_number: voucherNumber,
-      voucher_series: original.voucher_series || 'A',
-      entry_date: entryDate,
-      description: `Makulering: ${original.description}`,
-      source_type: 'storno',
-      source_id: original.source_id || null,
-      reverses_id: entryId,
-      status: 'draft',
-    })
-    .select()
-    .single()
+  const plan = planReversalJournal(original as JournalEntry, lines, entryDate)
 
-  if (reversalError || !reversalEntry) {
-    throw new BookkeepingDatabaseError('create_reversal_entry', reversalError?.message)
+  // The voucher is created, linked, committed and the original flipped to
+  // 'reversed' inside ONE transaction. Nothing here allocates a voucher number
+  // up front (a failure afterwards used to burn it) and nothing posts by
+  // writing status='posted' behind commit_journal_entry's back.
+  const service = createServiceClient()
+  const { data: rpcResult, error: rpcError } = await service.rpc('reverse_journal_entry_v2', {
+    p_company_id: companyId,
+    p_actor_user_id: userId,
+    p_entry_id: entryId,
+    p_reversal_journal: plan,
+    p_reversal_date: entryDate,
+    p_correction_journal: null,
+    p_correction_date: null,
+  })
+
+  if (rpcError) {
+    throw translateStornoRpcError(rpcError, 'create_reversal_entry')
   }
 
-  // Insert reversal lines with dimensions
-  const lineInserts = buildLineInserts(reversalEntry.id, reversedLines, accountIdMap)
-
-  const { error: linesError } = await supabase
-    .from('journal_entry_lines')
-    .insert(lineInserts)
-
-  if (linesError) {
-    await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
-    await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
-    throw new BookkeepingDatabaseError('create_reversal_lines', linesError.message)
-  }
-
-  // Post the reversal entry
-  const { error: postError } = await supabase
-    .from('journal_entries')
-    .update({ status: 'posted' })
-    .eq('id', reversalEntry.id)
-
-  if (postError) {
-    await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
-    await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
-    throw new BookkeepingDatabaseError('post_reversal_entry', postError.message)
-  }
-
-  // Mark original as reversed with reversed_by_id link (CAS guard: only if still 'posted')
-  const { data: updatedOriginal, error: casError } = await supabase
-    .from('journal_entries')
-    .update({
-      status: 'reversed',
-      reversed_by_id: reversalEntry.id,
-    })
-    .eq('id', entryId)
-    .eq('status', 'posted')
-    .select('id')
-
-  if (casError || !updatedOriginal || updatedOriginal.length === 0) {
-    // Another concurrent reversal already changed the status — mark the orphaned
-    // reversal as cancelled so it's excluded from reports but remains traceable.
-    await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
-    await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
-    throw new EntryAlreadyReversedError()
+  const reversalEntryId = (rpcResult as { reversal_entry_id?: string } | null)?.reversal_entry_id
+  if (!reversalEntryId) {
+    throw new BookkeepingDatabaseError('create_reversal_entry', 'Storno-RPC returnerade inget verifikat.')
   }
 
   // If this was a payment entry, sync the linked invoice/supplier-invoice status.
@@ -612,7 +550,7 @@ export async function reverseEntry(
   const { data: completeEntry } = await supabase
     .from('journal_entries')
     .select('*, lines:journal_entry_lines(*)')
-    .eq('id', reversalEntry.id)
+    .eq('id', reversalEntryId)
     .single()
 
   const result = completeEntry as JournalEntry

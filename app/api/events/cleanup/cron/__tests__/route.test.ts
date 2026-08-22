@@ -19,6 +19,8 @@ interface DeleteCapture {
 
 const deleteCalls: DeleteCapture[] = []
 let deleteResults: Array<{ error: unknown; count: number | null }> = []
+const rpcCalls: string[] = []
+let rpcResult: { data: unknown; error: unknown } = { data: 0, error: null }
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(() => ({
@@ -40,6 +42,10 @@ vi.mock('@/lib/supabase/server', () => ({
       chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve)
       return chain
     }),
+    rpc: vi.fn((name: string) => {
+      rpcCalls.push(name)
+      return Promise.resolve(rpcResult)
+    }),
   })),
 }))
 
@@ -57,6 +63,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   deleteCalls.length = 0
   deleteResults = []
+  rpcCalls.length = 0
+  rpcResult = { data: 0, error: null }
 })
 
 describe('GET /api/events/cleanup/cron', () => {
@@ -74,6 +82,7 @@ describe('GET /api/events/cleanup/cron', () => {
       deleted: 15,
       deletedDelivery: 12,
       deletedTelemetry: 3,
+      deletedBankIdSessions: 0,
     })
 
     expect(deleteCalls).toHaveLength(2)
@@ -104,5 +113,38 @@ describe('GET /api/events/cleanup/cron', () => {
     expect(response.status).toBeGreaterThanOrEqual(500)
     // The 180-day pass never ran.
     expect(deleteCalls).toHaveLength(1)
+  })
+})
+
+describe('unclaimed BankID login orders', () => {
+  it('sweeps them in the same daily pass', async () => {
+    deleteResults = [
+      { error: null, count: 0 },
+      { error: null, count: 0 },
+    ]
+    rpcResult = { data: 4, error: null }
+
+    const json = await (await GET(cronRequest())).json()
+
+    expect(rpcCalls).toEqual(['cleanup_unclaimed_bankid_sessions'])
+    expect(json.deletedBankIdSessions).toBe(4)
+  })
+
+  it('still reports the event_log sweep when the BankID sweep fails', async () => {
+    deleteResults = [
+      { error: null, count: 7 },
+      { error: null, count: 0 },
+    ]
+    rpcResult = { data: null, error: { message: 'boom' } }
+
+    const response = await GET(cronRequest())
+    const json = await response.json()
+
+    // The two sweeps are independent; one failing must not discard the other's
+    // result or turn a successful run into a 500.
+    expect(response.status).toBe(200)
+    expect(json.success).toBe(true)
+    expect(json.deleted).toBe(7)
+    expect(json.deletedBankIdSessions).toBe(0)
   })
 })

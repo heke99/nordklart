@@ -644,7 +644,17 @@ export interface Customer {
   vat_number: string | null
   vat_number_validated: boolean
   vat_number_validated_at: string | null
+  /**
+   * Full personnummer. Only ever populated by the SINGLE-customer read, which
+   * decrypts it so the edit form can round-trip what the user entered. List
+   * responses set it to null and carry `personal_number_masked` instead — the
+   * ciphertext (`personal_number_enc`) never leaves the server.
+   */
   personal_number: string | null
+  /** Last four digits, for display and search. `XXXXXX-1234`. */
+  personal_number_masked?: string | null
+  /** Last four digits as stored. Present on server-side rows only. */
+  personal_number_last4?: string | null
 
   // Language for customer-facing invoice PDF and email
   language: 'sv' | 'en'

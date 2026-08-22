@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **450**.
+Antal SQL-migreringar: **460**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -474,3 +474,13 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 448 | 20260812130000 | `20260812130000_converge_webhook_events_catalog_shape.sql` | `4b080a64d28acd00e047aa135d3b2381a5dd46ce8eda2dba1ceb34099f2c1a48` |
 | 449 | 20260812140000 | `20260812140000_converge_webhook_and_feature_access_views.sql` | `c4b5506f6f64b1b6cc87cce7af4ed58b4cdc557bd781a7bdfd43e18b62bf6336` |
 | 450 | 20260812150000 | `20260812150000_normalize_skatteverket_settings_select_predicate.sql` | `dc6f1d273610724407471d8962f5426fd62943c7e91b92d99182f057c032e66d` |
+| 451 | 20260821120000 | `20260821120000_storno_and_correction_are_atomic.sql` | `2a4a143555e6da7f78baa8ae7a4a0e88a11b817b08cee37fdcb77daaa376772c` |
+| 452 | 20260821130000 | `20260821130000_customer_personal_number_encrypted_at_rest.sql` | `a05e2225eaeb190fb79f2e37972b4f9c144faa42449e73681e72aea720897102` |
+| 453 | 20260821140000 | `20260821140000_bankid_consent_and_signature_are_one_transaction.sql` | `2cf3b110c2b9544200b4df143edb9059daed5e802a85e0bb2e23500a192f3ad2` |
+| 454 | 20260821150000 | `20260821150000_fix_shared_annual_report_audit_trigger.sql` | `5d2fb71e4268339b816b4edbf6d05044a33e2ab011a40252f5c8d0a6c8f35951` |
+| 455 | 20260821160000 | `20260821160000_durable_rate_limit_counters.sql` | `2a449301e5a0333b86de2d3aa607af9f142c764b23e56670970a1eaf10b7bed6` |
+| 456 | 20260821170000 | `20260821170000_bankid_sessions_cover_login.sql` | `f0def9d5571280bd2069800f8af36d210b74f3fe1338145a0d57ed5bbeb3599d` |
+| 457 | 20260821180000 | `20260821180000_drop_user_identity_verifications.sql` | `ee3750d4c5749dda191acb8ba9600980363d5fbf1a2b16ad5b0b835fc54e37e7` |
+| 458 | 20260821190000 | `20260821190000_skatteverket_ombud_authorizations.sql` | `fd0a84b32890c17ffc0e651f41f9807bb89729f2532b9e6a81813dd11b72cd59` |
+| 459 | 20260821200000 | `20260821200000_skatteverket_request_idempotency_and_retry.sql` | `d7875d2c51161c1f398c038da9648f86458ae2cd223c6723d288cc5db41162d8` |
+| 460 | 20260821210000 | `20260821210000_anon_cannot_execute_security_definer.sql` | `b48cb3d5a6d99a4037509c5228d9ffd7a6e7d189dff48a203b6e66c6a90348e7` |

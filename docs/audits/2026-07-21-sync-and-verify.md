@@ -1,5 +1,12 @@
 # Nordklart – synk och verifiering
 
+> **Status: historical delivery record, archived 2026-07-21.**
+>
+> Instructions for applying a partial patch that was shipped as a zip on 2026-07-21. The zip is gone and the patch is long since in `main`; kept only so the verification steps of that delivery are traceable.
+>
+> It lived in the repository root until 2026-08-21, where it read as current
+> guidance. Moving it here is the fix for that, not a re-endorsement.
+
 Den här zippen är en **partiell patch**. Använd inte `rsync --delete`.
 
 ## 1. Synka filerna

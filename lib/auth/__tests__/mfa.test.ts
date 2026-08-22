@@ -26,10 +26,31 @@ describe('mfa helpers', () => {
       expect(shouldEnforceMfa({ app_metadata: {} })).toBe(false)
     })
 
-    it('returns false when user has bankid_linked', () => {
+    it('returns false for a BankID-only account (linked, no password of its own)', () => {
       vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
       vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
       expect(shouldEnforceMfa({ app_metadata: { bankid_linked: true } })).toBe(false)
+      expect(
+        shouldEnforceMfa({ app_metadata: { bankid_linked: true, has_password: false } }),
+      ).toBe(false)
+    })
+
+    // POST /bankid/link sets bankid_linked on an existing email+password
+    // account. The flag says nothing about how the *current* session was
+    // established, so exempting on it alone left that account signing in with
+    // a password and no second factor.
+    it('returns true when a password account has merely linked BankID', () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(
+        shouldEnforceMfa({ app_metadata: { bankid_linked: true, has_password: true } }),
+      ).toBe(true)
+    })
+
+    it('returns true for a passwordless account that never linked BankID', () => {
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      expect(shouldEnforceMfa({ app_metadata: { has_password: false } })).toBe(true)
     })
 
     it('returns true when MFA required and no bankid', () => {

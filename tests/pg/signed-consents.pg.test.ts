@@ -101,8 +101,11 @@ describe('signed_consents + bankid_sessions RLS', () => {
     await getPool().query(
       `INSERT INTO public.bankid_sessions
          (id, user_id, company_id, provider, provider_session_ref, purpose, status)
-       VALUES ($1, $2, $3, 'mock', 'mock-ref-1', 'consent', 'pending')`,
-      [sessionA, userA, company],
+       VALUES ($1, $2, $3, 'mock', $4, 'consent', 'pending')`,
+      // Unique per run: (provider, provider_session_ref) is a unique index, so a
+      // hardcoded ref collides the second time the suite runs against a
+      // persistent database.
+      [sessionA, userA, company, `mock-ref-${sessionA}`],
     )
 
     await withUserContext(userB, async (client) => {

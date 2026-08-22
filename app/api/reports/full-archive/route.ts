@@ -1,31 +1,19 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { NextResponse } from 'next/server'
 import {
   generateFullArchive,
   estimateArchiveSize,
   type ArchiveScope,
 } from '@/lib/reports/full-archive-export'
-import { requireCompanyId } from '@/lib/company/context'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
 const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
-  if (featureGateResponse) return featureGateResponse
-
+export const GET = withRouteContext('reports.full_archive', async (request, ctx) => {
+  const { supabase, companyId, log, requestId } = ctx
   const { searchParams } = new URL(request.url)
   const scopeParam = searchParams.get('scope')
   const periodId = searchParams.get('period_id')
@@ -37,10 +25,12 @@ export async function GET(request: Request) {
     scopeParam === 'period' || (!scopeParam && periodId) ? 'period' : 'all'
 
   if (scope === 'period' && !periodId) {
-    return NextResponse.json(
-      { error: 'period_id is required when scope=period' },
-      { status: 400 }
-    )
+    return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, {
+      requestId,
+      // The generic code carries 'period_id krävs.'; say WHICH scope needs it.
+      messageSv: 'period_id krävs när scope=period.',
+      details: { scope: 'period' },
+    })
   }
 
   try {
@@ -97,7 +87,7 @@ export async function GET(request: Request) {
     const status = message.includes('not found') ? 404 : 500
     return NextResponse.json({ error: message }, { status })
   }
-}
+})
 
 function formatDateStamp(d: Date): string {
   const y = d.getUTCFullYear()

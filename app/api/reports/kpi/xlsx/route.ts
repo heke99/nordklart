@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -11,9 +11,6 @@ import {
   calculateAvgPaymentDays,
   calculateVatLiability,
 } from '@/lib/reports/kpi'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import {
   reportToWorkbook,
   textColumn,
@@ -45,17 +42,10 @@ interface SupplierRow {
   total: number
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('reports.kpi.xlsx', async (request, ctx) => {
+  const { supabase, companyId, requestId } = ctx
   // Commercial feature gate — same policy the JSON counterparts get via
   // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
-  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
-  if (featureError) return featureError
 
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
@@ -265,7 +255,7 @@ export async function GET(request: Request) {
       { status: 500 },
     )
   }
-}
+})
 
 function scaleToFraction(value: number | null): number | null {
   return value === null ? null : Math.round(value) / 100

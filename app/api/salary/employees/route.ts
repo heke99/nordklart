@@ -1,27 +1,16 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { assertCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
 import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 
 ensureInitialized()
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
-  if (featureGate) return featureGate
-
+export const GET = withRouteContext('salary.employees.get', async (request, ctx) => {
+  const { supabase, companyId } = ctx
   const { searchParams } = new URL(request.url)
   const activeOnly = searchParams.get('active') !== 'false'
 
@@ -47,20 +36,14 @@ export async function GET(request: Request) {
   }))
 
   return NextResponse.json({ data: masked })
-}
+})
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+export const POST = withRouteContext('salary.employees.post', async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
   const writeCheck = await requireWritePermission(supabase, user.id)
   if (!writeCheck.ok) return writeCheck.response
 
-  const companyId = await requireCompanyId(supabase, user.id)
 
-  const featureGate = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.salaryRuns)
-  if (featureGate) return featureGate
 
   const limitCheck = await assertCommercialLimit(
     supabase,
@@ -135,4 +118,4 @@ export async function POST(request: Request) {
       personnummer: maskPersonnummer(body.personnummer),
     },
   }, { status: 201 })
-}
+})

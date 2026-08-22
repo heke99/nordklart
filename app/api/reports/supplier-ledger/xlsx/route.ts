@@ -1,9 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import {
   reportToWorkbook,
   textColumn,
@@ -21,21 +18,8 @@ interface AgingRow {
   total_outstanding: number
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  // Commercial feature gate — same policy the JSON counterparts get via
-  // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
-  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
-  if (featureError) return featureError
-
+export const GET = withRouteContext('reports.supplier_ledger.xlsx', async (request, ctx) => {
+  const { supabase, companyId } = ctx
   const { searchParams } = new URL(request.url)
   const asOfDate = searchParams.get('as_of_date') || undefined
 
@@ -100,4 +84,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

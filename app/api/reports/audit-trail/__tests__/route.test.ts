@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createMockRequest } from '@/tests/helpers'
+import { createMockRequest, emptyRouteParams } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -67,7 +67,7 @@ describe('GET /api/reports/audit-trail', () => {
   it('returns 401 when not authenticated', async () => {
     mockAuth(null)
     const req = createMockRequest('/api/reports/audit-trail')
-    const res = await GET(req)
+    const res = await GET(req, emptyRouteParams())
     expect(res.status).toBe(401)
   })
 
@@ -79,7 +79,7 @@ describe('GET /api/reports/audit-trail', () => {
     const req = createMockRequest('/api/reports/audit-trail', {
       searchParams: { format: 'csv' },
     })
-    const res = await GET(req)
+    const res = await GET(req, emptyRouteParams())
 
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('text/csv; charset=utf-8')
@@ -101,7 +101,7 @@ describe('GET /api/reports/audit-trail', () => {
     const req = createMockRequest('/api/reports/audit-trail', {
       searchParams: { format: 'json' },
     })
-    const res = await GET(req)
+    const res = await GET(req, emptyRouteParams())
 
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('application/json')
@@ -134,7 +134,7 @@ describe('GET /api/reports/audit-trail', () => {
     const req = createMockRequest('/api/reports/audit-trail', {
       searchParams: { format: 'json' },
     })
-    const res = await GET(req)
+    const res = await GET(req, emptyRouteParams())
     const body = await res.json()
 
     expect(body.data).toHaveLength(600)

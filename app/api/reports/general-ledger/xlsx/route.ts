@@ -1,9 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import {
   reportToWorkbook,
   textColumn,
@@ -31,28 +29,15 @@ function toDate(s: string): Date | string {
   return isNaN(d.getTime()) ? s : d
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  // Commercial feature gate — same policy the JSON counterparts get via
-  // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
-  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
-  if (featureError) return featureError
-
+export const GET = withRouteContext('reports.general_ledger.xlsx', async (request, ctx) => {
+  const { supabase, companyId, log, requestId } = ctx
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
   const accountFrom = searchParams.get('account_from') || undefined
   const accountTo = searchParams.get('account_to') || undefined
 
   if (!periodId) {
-    return NextResponse.json({ error: 'period_id is required' }, { status: 400 })
+    return errorResponseFromCode('REPORT_PERIOD_REQUIRED', log, { requestId })
   }
 
   const { data: companyRow } = await supabase
@@ -148,4 +133,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

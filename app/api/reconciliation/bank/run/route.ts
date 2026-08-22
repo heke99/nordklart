@@ -1,30 +1,18 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 import { validateBody } from '@/lib/api/validate'
 import { RunReconciliationSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
 ensureInitialized()
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const POST = withRouteContext('reconciliation.bank.run', async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
   const writeCheck = await requireWritePermission(supabase, user.id)
   if (!writeCheck.ok) return writeCheck.response
 
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bankMatching)
-  if (featureGateResponse) return featureGateResponse
 
   const validation = await validateBody(request, RunReconciliationSchema)
   if (!validation.success) return validation.response
@@ -85,4 +73,4 @@ export async function POST(request: Request) {
       dry_run: dry_run ?? false,
     },
   })
-}
+})

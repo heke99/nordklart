@@ -16,6 +16,12 @@ interface BankIdSession {
   autoStartToken: string
   qrStartToken: string
   qrStartSecret: string
+  /**
+   * Age of the BankID order at the moment the browser received these tokens.
+   * The server measures it; the QR `time` field is counted from there rather
+   * than from when this component happened to render.
+   */
+  qrOrderAgeMs: number
 }
 
 export interface BankIdResult {
@@ -29,7 +35,11 @@ export interface BankIdResult {
 }
 
 interface BankIdAuthProps {
-  mode: 'login' | 'signup' | 'link'
+  /**
+   * 'login' authenticates an existing account; 'link' attaches a BankID to the
+   * signed-in account. There is no 'signup' — see BankIdCompleteRequest.
+   */
+  mode: 'login' | 'link'
   onComplete: (result: BankIdResult) => void
 }
 
@@ -102,7 +112,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
       }
 
       const { data } = await res.json()
-      const newSession: BankIdSession = data
+      const newSession: BankIdSession = { ...data, qrOrderAgeMs: data.qrOrderAgeMs ?? 0 }
       setSession(newSession)
 
       // On mobile, open BankID app — redirect=null so it doesn't open a new tab;
@@ -156,7 +166,12 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
           if (pollData.qrStartToken && pollData.qrStartSecret) {
             setSession((prev) =>
               prev
-                ? { ...prev, qrStartToken: pollData.qrStartToken, qrStartSecret: pollData.qrStartSecret }
+                ? {
+                    ...prev,
+                    qrStartToken: pollData.qrStartToken,
+                    qrStartSecret: pollData.qrStartSecret,
+                    qrOrderAgeMs: pollData.qrOrderAgeMs ?? 0,
+                  }
                 : prev
             )
           }
@@ -221,13 +236,6 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
               } catch {
                 onCompleteRef.current({ error: 'session_invalid' })
               }
-            } else {
-              // For signup, return user data + sessionId so parent can collect email
-              onCompleteRef.current({
-                givenName: pollData.user?.givenName,
-                surname: pollData.user?.surname,
-                sessionId: newSession.sessionId,
-              })
             }
           } else if (pollData.status === 'failed' || pollData.status === 'cancelled') {
             cleanup()
@@ -261,11 +269,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
   }, [session, cleanup])
 
   if (status === 'idle') {
-    const label = mode === 'login'
-      ? 'Logga in med BankID'
-      : mode === 'link'
-        ? 'Koppla BankID'
-        : 'Skapa konto med BankID'
+    const label = mode === 'login' ? 'Logga in med BankID' : 'Koppla BankID'
 
     return (
       <Button
@@ -291,9 +295,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
             <p className="text-sm text-amber-700 dark:text-amber-300">
               {mode === 'login'
                 ? 'Logga in med e-post och lösenord nedan, eller använd "Glömt lösenord?" för en inloggningslänk via e-post.'
-                : mode === 'signup'
-                  ? 'Skapa konto med e-post och lösenord nedan istället.'
-                  : 'Försök igen senare.'}
+                : 'Försök igen senare.'}
             </p>
             <Button
               onClick={startSession}
@@ -336,6 +338,7 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
           <BankIdQrCode
             qrStartToken={session.qrStartToken}
             qrStartSecret={session.qrStartSecret}
+            orderAgeMs={session.qrOrderAgeMs}
           />
           <Button
             onClick={openBankIdOnDevice}

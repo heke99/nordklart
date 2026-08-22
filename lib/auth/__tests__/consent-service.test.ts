@@ -40,9 +40,14 @@ vi.mock('@/lib/auth/bankid-provider', () => ({
   }),
 }))
 
-const markSignatureSignedMock = vi.fn()
-vi.mock('@/lib/bokslut/arsredovisning/signature-service', () => ({
-  markSignatureSigned: (...args: unknown[]) => markSignatureSignedMock(...args),
+// The consent, its audit row and (for an årsredovisning) the signature request
+// are written by one RPC, through a service-role client. The test therefore
+// asserts on the arguments that go over the wire.
+const recordConsentMock = vi.fn()
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => ({
+    rpc: (fn: string, args: Record<string, unknown>) => recordConsentMock(fn, args),
+  }),
 }))
 
 function makeSupabase() {
@@ -131,6 +136,12 @@ describe('consent-service', () => {
     state.consentInsertError = null
     state.sessionUpdates.length = 0
     state.consentInserts.length = 0
+    recordConsentMock.mockImplementation(async (_fn: string, args: Record<string, unknown>) => {
+      state.consentInserts.push(args)
+      return state.consentInsertError
+        ? { data: null, error: state.consentInsertError }
+        : { data: state.consent?.id ?? 'consent-1', error: null }
+    })
     state.auditInserts.length = 0
     state.revokeResult = null
     startSignMock.mockResolvedValue({ sessionRef: 'ref-1', autoStartToken: 'ast', qrStartToken: 'qst', qrStartSecret: 'qss', expiresAt: null })
@@ -159,7 +170,7 @@ describe('consent-service', () => {
     expect(state.sessionUpdates).toHaveLength(0)
   })
 
-  it('poll complete creates the consent BEFORE the session flips and uses the HMAC hash', async () => {
+  it('poll complete records the consent BEFORE the session flips and uses the HMAC hash', async () => {
     state.session = { ...pendingSession }
     collectMock.mockResolvedValue({
       status: 'complete',
@@ -173,9 +184,10 @@ describe('consent-service', () => {
     expect(result.status).toBe('complete')
     expect(result.consentId).toBe('consent-1')
     expect(state.consentInserts).toHaveLength(1)
+    expect(recordConsentMock).toHaveBeenCalledWith('record_bankid_consent_v1', expect.anything())
     // Keyed hash, never the plain SHA-256.
-    expect(state.consentInserts[0].personal_number_hash).toBe(hashPersonalNumberHmac('190001019802'))
-    expect(state.consentInserts[0].personal_number_hash).not.toBe(hashPersonalNumber('190001019802'))
+    expect(state.consentInserts[0].p_personal_number_hash).toBe(hashPersonalNumberHmac('190001019802'))
+    expect(state.consentInserts[0].p_personal_number_hash).not.toBe(hashPersonalNumber('190001019802'))
     // No plaintext personnummer anywhere in the stored rows.
     expect(JSON.stringify(state.consentInserts[0])).not.toContain('190001019802')
     expect(JSON.stringify(state.sessionUpdates)).not.toContain('190001019802')
@@ -197,9 +209,10 @@ describe('consent-service', () => {
     expect(state.sessionUpdates.some((u) => u.status === 'complete')).toBe(false)
   })
 
-  it('reuses the existing consent when a concurrent poll already created it (23505)', async () => {
+  it('reuses the existing consent when a concurrent poll already created it', async () => {
     state.session = { ...pendingSession }
-    state.consentInsertError = { code: '23505', message: 'duplicate key' }
+    // The RPC itself resolves the replay: it finds the consent already bound to
+    // this session and returns that id instead of inserting a second one.
     state.consent = { id: 'consent-existing' }
     collectMock.mockResolvedValue({
       status: 'complete',
@@ -209,6 +222,53 @@ describe('consent-service', () => {
 
     const result = await pollConsentSession(makeSupabase(), { sessionId: 'session-1', userId: 'user-1' })
     expect(result).toMatchObject({ status: 'complete', consentId: 'consent-existing' })
+  })
+
+  it('passes the signature request through so both are written together', async () => {
+    state.session = {
+      ...pendingSession,
+      context: {
+        consent_type: 'arsredovisning_signature',
+        title: 'Fastställelseintyg',
+        kind: 'arsredovisning_signature',
+        signature_request_id: 'sig-1',
+      },
+    }
+    collectMock.mockResolvedValue({
+      status: 'complete',
+      hintCode: null,
+      user: { personalNumber: '190001019802', name: 'Test Testsson' },
+      completedAt: '2026-07-01T10:00:00Z',
+    })
+
+    await pollConsentSession(makeSupabase(), { sessionId: 'session-1', userId: 'user-1' })
+
+    expect(state.consentInserts[0].p_signature_request_id).toBe('sig-1')
+  })
+
+  it('does not flip the session to complete when the signature write fails', async () => {
+    state.session = {
+      ...pendingSession,
+      context: {
+        consent_type: 'arsredovisning_signature',
+        title: 'Fastställelseintyg',
+        kind: 'arsredovisning_signature',
+        signature_request_id: 'sig-1',
+      },
+    }
+    // The old code caught this and only logged it: the consent was recorded,
+    // the session went 'complete', and the signature request stayed 'pending'.
+    state.consentInsertError = { message: 'signature request not found' }
+    collectMock.mockResolvedValue({
+      status: 'complete',
+      hintCode: null,
+      user: { personalNumber: '190001019802', name: 'Test Testsson' },
+    })
+
+    await expect(
+      pollConsentSession(makeSupabase(), { sessionId: 'session-1', userId: 'user-1' }),
+    ).rejects.toThrow(/samtycket kunde inte sparas/)
+    expect(state.sessionUpdates.some((u) => u.status === 'complete')).toBe(false)
   })
 
   it('self-heals a legacy complete session that lost its consent row', async () => {
@@ -226,7 +286,7 @@ describe('consent-service', () => {
     expect(result.status).toBe('complete')
     expect(result.consentId).toBe('consent-1')
     expect(state.consentInserts).toHaveLength(1)
-    expect(state.consentInserts[0].personal_number_hash).toBe('legacy-hash')
+    expect(state.consentInserts[0].p_personal_number_hash).toBe('legacy-hash')
   })
 
   it('poll of a completed session with existing consent is a pure read', async () => {

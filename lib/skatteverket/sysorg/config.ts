@@ -209,6 +209,69 @@ export type SkvConfigCheck = {
   required: boolean
 }
 
+/**
+ * What the sysorg (client-credentials + organisationscertifikat) track needs
+ * before a token call can succeed — one definition, evaluated against whatever
+ * env record the caller has.
+ *
+ * This exists because there were two: `getSkvConfigStatus()` checked the full
+ * set, while the go-live readiness registry checked a shorter, different one
+ * and therefore reported `production_ready` for a deployment where
+ * `requestAccessToken()` would throw on a missing certificate. A readiness
+ * panel that can be more optimistic than the code it describes is worse than
+ * no panel.
+ *
+ * Each entry lists its accepted aliases in priority order; the first non-empty
+ * one wins, exactly as `firstEnv` resolves them at call time.
+ */
+export const SKV_SYSORG_ENV_REQUIREMENTS: ReadonlyArray<{
+  key: string
+  aliases: readonly string[]
+}> = [
+  { key: 'oauth_client_id', aliases: ['SKV_OAUTH_CLIENT_ID', 'SKATTEVERKET_OAUTH2_CLIENT_ID'] },
+  { key: 'oauth_client_secret', aliases: ['SKV_OAUTH_CLIENT_SECRET', 'SKATTEVERKET_OAUTH2_CLIENT_SECRET'] },
+  { key: 'apigw_client_id', aliases: ['SKV_APIGW_CLIENT_ID', 'SKATTEVERKET_APIGW_CLIENT_ID'] },
+  { key: 'apigw_client_secret', aliases: ['SKV_APIGW_CLIENT_SECRET', 'SKATTEVERKET_APIGW_CLIENT_SECRET'] },
+  { key: 'org_cert', aliases: ['SKV_ORG_CERT_P12_BASE64', 'SKATTEVERKET_ORG_CERT_P12_BASE64'] },
+  { key: 'org_cert_pin', aliases: ['SKV_ORG_CERT_PIN', 'SKATTEVERKET_ORG_CERT_PIN'] },
+  { key: 'filframstallare_orgnr', aliases: ['SKV_FILFRAMSTALLARE_ORGNR', 'SKATTEVERKET_FILFRAMSTALLARE_ORGNR'] },
+  { key: 'filframstallare_name', aliases: ['SKV_FILFRAMSTALLARE_NAME', 'SKATTEVERKET_FILFRAMSTALLARE_NAME'] },
+  { key: 'filframstallare_contact_email', aliases: ['SKV_FILFRAMSTALLARE_CONTACT_EMAIL', 'SKATTEVERKET_FILFRAMSTALLARE_CONTACT_EMAIL'] },
+]
+
+/** Pure evaluation of the requirement list against an env record. */
+export function evaluateSkvSysorgEnv(env: Record<string, string | undefined>): {
+  enabled: boolean
+  environmentExplicit: boolean
+  isProduction: boolean
+  missing: string[]
+  complete: boolean
+} {
+  const pick = (...names: string[]) => {
+    for (const name of names) {
+      const value = env[name]
+      if (typeof value === 'string' && value.trim() !== '') return value.trim()
+    }
+    return undefined
+  }
+  const missing = SKV_SYSORG_ENV_REQUIREMENTS
+    .filter((requirement) => !pick(...requirement.aliases))
+    // Report the canonical name; the alias is a compatibility path, not the
+    // thing an operator should be told to set.
+    .map((requirement) => requirement.aliases[0]!)
+
+  const enabledRaw = pick('SKV_SYSORG_ENABLED', 'SKV_ENABLED')?.toLowerCase()
+  const environmentRaw = pick('SKV_ENV', 'SKATTEVERKET_ENV')?.toLowerCase()
+
+  return {
+    enabled: enabledRaw === 'true' || enabledRaw === '1' || enabledRaw === 'yes' || enabledRaw === 'on',
+    environmentExplicit: Boolean(environmentRaw),
+    isProduction: environmentRaw === 'prod' || environmentRaw === 'production',
+    missing,
+    complete: missing.length === 0,
+  }
+}
+
 export function getSkvConfigStatus(): {
   environment: SkvEnvironment
   environmentExplicit: boolean
@@ -229,15 +292,22 @@ export function getSkvConfigStatus(): {
     inkForetag: getSkvServiceBaseUrl('inkForetag'),
   }
   const filframstallare = getSkvFilframstallareOrNull()
+  const evaluated = evaluateSkvSysorgEnv(process.env)
+  const missingKeys = new Set(
+    SKV_SYSORG_ENV_REQUIREMENTS
+      .filter((requirement) => evaluated.missing.includes(requirement.aliases[0]!))
+      .map((requirement) => requirement.key),
+  )
+  // Derived from SKV_SYSORG_ENV_REQUIREMENTS so this panel and the go-live
+  // readiness registry can never again disagree about what sysorg needs.
   const checks: SkvConfigCheck[] = [
-    { key: 'enabled', label: 'SKV_SYSORG_ENABLED/SKV_ENABLED', ok: getSkvSysorgEnabled(), required: true },
-    { key: 'oauth_client_id', label: 'SKV_OAUTH_CLIENT_ID', ok: Boolean(getSkvOAuthClientId()), required: true },
-    { key: 'oauth_client_secret', label: 'SKV_OAUTH_CLIENT_SECRET', ok: Boolean(getSkvOAuthClientSecret()), required: true },
-    { key: 'apigw_client_id', label: 'SKV_APIGW_CLIENT_ID', ok: Boolean(getSkvApiGwClientId()), required: true },
-    { key: 'apigw_client_secret', label: 'SKV_APIGW_CLIENT_SECRET', ok: Boolean(getSkvApiGwClientSecret()), required: true },
-    { key: 'org_cert', label: 'SKV_ORG_CERT_P12_BASE64', ok: Boolean(getSkvOrgCertBase64()), required: true },
-    { key: 'org_cert_pin', label: 'SKV_ORG_CERT_PIN', ok: Boolean(getSkvOrgCertPin()), required: true },
-    { key: 'filframstallare', label: 'SKV_FILFRAMSTALLARE_ORGNR/_NAME/_CONTACT_EMAIL', ok: Boolean(filframstallare), required: true },
+    { key: 'enabled', label: 'SKV_SYSORG_ENABLED/SKV_ENABLED', ok: evaluated.enabled, required: true },
+    ...SKV_SYSORG_ENV_REQUIREMENTS.map((requirement) => ({
+      key: requirement.key,
+      label: requirement.aliases[0]!,
+      ok: !missingKeys.has(requirement.key),
+      required: true,
+    })),
     { key: 'environment_explicit', label: 'SKV_ENV explicit satt', ok: isSkvEnvironmentExplicit(), required: process.env.NODE_ENV === 'production' },
   ]
 

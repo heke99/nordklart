@@ -2,6 +2,7 @@ import type { BankIdProvider, BankIdSessionStart, BankIdCollectStatus, StartArgs
 import {
   startBankIdAuth,
   pollBankIdSession,
+  collectBankIdResult,
   cancelBankIdSession,
 } from './bankid-client'
 
@@ -49,6 +50,7 @@ export const ticBankIdProvider: BankIdProvider = {
     return {
       status: polled.status,
       hintCode: polled.hintCode ?? null,
+      message: polled.message ?? null,
       user: polled.user
         ? {
             personalNumber: polled.user.personalNumber,
@@ -61,6 +63,30 @@ export const ticBankIdProvider: BankIdProvider = {
       qrStartToken: polled.qrStartToken ?? null,
       qrStartSecret: polled.qrStartSecret ?? null,
       error: polled.error ?? null,
+    }
+  },
+
+  /**
+   * TIC's `/collect` returns the cached session record rather than advancing
+   * the order, which is exactly the idempotent read the login completion step
+   * needs. `/poll` would consume progress and can answer `pending` for an
+   * order that has already finished.
+   */
+  async result(sessionRef: string): Promise<BankIdCollectStatus> {
+    const collected = await collectBankIdResult(sessionRef)
+    return {
+      status: collected.status,
+      hintCode: collected.hintCode ?? null,
+      user: collected.user
+        ? {
+            personalNumber: collected.user.personalNumber,
+            name: collected.user.name,
+            givenName: collected.user.givenName,
+            surname: collected.user.surname,
+          }
+        : undefined,
+      completedAt: collected.completedAt ?? null,
+      error: null,
     }
   },
 

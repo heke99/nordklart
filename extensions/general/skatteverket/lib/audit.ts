@@ -1,4 +1,5 @@
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { recordSkvOmbudObservation } from '@/lib/skatteverket/ombud'
 
 /**
  * Append an immutable row to skatteverket_api_audit_log. Errors are
@@ -25,6 +26,12 @@ export async function writeSkatteverketAudit(
     requestSizeBytes?: number | null
     correlationId?: string | null
     errorMessage?: string | null
+    /**
+     * The `SkatteverketAuthError` code when this outcome came from one, so the
+     * ombud verdict below can tell "Skatteverket says you are not authorised
+     * for this company" apart from every other auth failure.
+     */
+    skvAuthCode?: string | null
   },
 ): Promise<void> {
   try {
@@ -55,5 +62,37 @@ export async function writeSkatteverketAudit(
       endpoint: fields.endpoint,
       error: err instanceof Error ? err.message : String(err),
     })
+  }
+
+  // Every SKV call carries an implicit answer about whether this company may be
+  // acted for. A call that succeeded is a yes; a BEHORIGHET_SAKNAS refusal is a
+  // no. Nothing else is a verdict, so nothing else is recorded — see
+  // lib/skatteverket/ombud.ts.
+  const authorized = fields.outcome === 'ok'
+    ? true
+    : fields.skvAuthCode === 'BEHORIGHET_SAKNAS'
+      ? false
+      : null
+
+  if (authorized !== null && ctx.companyId) {
+    // Same contract as the audit insert above: this is derived bookkeeping, and
+    // it must not be able to fail the caller's flow. recordSkvOmbudObservation
+    // already swallows its own errors; this is the belt for its braces.
+    try {
+      await recordSkvOmbudObservation({
+        companyId: ctx.companyId,
+        authFlow: 'per_bankid',
+        authorized,
+        correlationId: fields.correlationId ?? null,
+        statusCode: fields.responseStatus ?? (authorized ? null : 403),
+        skvErrorCode: fields.skvAuthCode ?? null,
+        operation: fields.endpoint,
+      })
+    } catch (err) {
+      ctx.log.error('ombud observation threw out of writeSkatteverketAudit', {
+        endpoint: fields.endpoint,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
 }

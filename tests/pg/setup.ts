@@ -121,6 +121,55 @@ afterAll(async () => {
 })
 
 /**
+ * Runs `fn` with auth.role() = 'anon' for the duration of one transaction,
+ * without switching the database role.
+ *
+ * That split is the point. A real unauthenticated PostgREST request arrives as
+ * BOTH the `anon` database role AND an anon JWT claim, and either one alone is
+ * enough to stop it. Tests that exist to prove the *in-function* guard fires
+ * must therefore keep the privileged connection and change only the claim —
+ * otherwise the grant refuses first and the guard is never exercised.
+ *
+ * Both spellings of the claim are set, and the result is asserted. Setting only
+ * `request.jwt.claims` is what broke `pg-real` in CI for twelve days: the
+ * bootstrap shim in this repo reads the claims blob as a fallback, but the
+ * `supabase/postgres` image CI runs reads `request.jwt.claim.role` and nothing
+ * else. `auth.role()` came back NULL there, the anon guard was skipped, and the
+ * test failed much later with an unrelated CHECK-constraint error — green
+ * locally, red in CI, for a reason neither message named. The assertion below
+ * turns that into an immediate, self-describing failure wherever it happens.
+ */
+export async function withAnonContext<T>(
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    await client.query(`SELECT set_config('request.jwt.claims', '{"role":"anon"}', true)`)
+    await client.query(`SELECT set_config('request.jwt.claim.role', 'anon', true)`)
+
+    const check = await client.query<{ role: string | null }>(
+      `SELECT auth.role() AS role`,
+    )
+    if (check.rows[0]?.role !== 'anon') {
+      throw new Error(
+        `withAnonContext: auth.role() resolved to ${check.rows[0]?.role ?? 'NULL'}, ` +
+          'expected anon. The anon guard under test would not have fired.',
+      )
+    }
+
+    const result = await fn(client)
+    await client.query('ROLLBACK')
+    return result
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+/**
  * Runs `fn` with auth.role() = 'service_role' for the duration of one
  * transaction.
  *

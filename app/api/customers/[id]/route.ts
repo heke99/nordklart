@@ -4,6 +4,7 @@ import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { hydrateCustomerRow, personalNumberColumns } from '@/lib/customers/personal-number'
 
 export const GET = withRouteContext(
   'customer.get',
@@ -37,7 +38,11 @@ export const GET = withRouteContext(
       .eq('company_id', companyId)
       .order('invoice_date', { ascending: false })
 
-    return NextResponse.json({ data: { ...data, invoices: invoices || [] } })
+    // The single-customer read is the only surface that decrypts: the edit form
+    // has to round-trip the value the user themselves entered.
+    return NextResponse.json({
+      data: { ...hydrateCustomerRow(data), invoices: invoices || [] },
+    })
   },
 )
 
@@ -71,6 +76,9 @@ export const PATCH = withRouteContext(
     if (body.default_payment_terms !== undefined) updateData.default_payment_terms = body.default_payment_terms
     if (body.peppol_id !== undefined) updateData.peppol_id = body.peppol_id
     if (body.notes !== undefined) updateData.notes = body.notes
+    if (body.personal_number !== undefined) {
+      Object.assign(updateData, personalNumberColumns(body.personal_number))
+    }
 
     const { data, error } = await supabase
       .from('customers')

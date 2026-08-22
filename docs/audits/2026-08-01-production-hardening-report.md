@@ -1,5 +1,12 @@
 # Implementationsrapport – produktionshärdning 2026-08-01
 
+> **Status: historical delivery record, archived 2026-08-01.**
+>
+> Delivery report for the production-hardening patch of 2026-08-01. Its "not yet finished" list has been overtaken by later work — read it as a record of that delivery, not as a statement about the current system.
+>
+> It lived in the repository root until 2026-08-21, where it read as current
+> guidance. Moving it here is the fix for that, not a re-endorsement.
+
 ## Leveransstatus
 
 Den här leveransen implementerar en kritisk härdningspatch för atomiska kund- och leverantörsbetalningar, bankmatchning, verifikationsimmutabilitet, Stripe-livscykel, periodbunden bokslutsåtkomst, migreringsintegritet, felkontrakt och discrepancy/repair-stöd.

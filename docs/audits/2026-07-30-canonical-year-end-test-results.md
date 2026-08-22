@@ -1,5 +1,12 @@
 # Testresultat
 
+> **Status: historical delivery record, archived 2026-07-30.**
+>
+> Test counts as of 2026-07-30. **The numbers below are not current** — the unit suite has grown by roughly a hundred files since. Run `npm run verify:fast` for the live figures.
+>
+> It lived in the repository root until 2026-08-21, where it read as current
+> guidance. Moving it here is the fix for that, not a re-endorsement.
+
 | Kontroll | Resultat |
 |---|---|
 | TypeScript | PASS, 0 fel |

@@ -851,7 +851,7 @@ export const skatteverketExtension: Extension = {
           const data = await response.json()
 
           // Unified pipeline: SKV bekräftar att deklarationen är inlämnad.
-          if (data) {
+          if (hasSkvRecord(data)) {
             await transitionTaxSubmission(ctx.supabase, {
               companyId: ctx.companyId,
               userId: ctx.userId,
@@ -906,7 +906,7 @@ export const skatteverketExtension: Extension = {
           const data = await response.json()
 
           // Unified pipeline: beslut hämtat — kvittens/decision received.
-          if (data) {
+          if (hasSkvRecord(data)) {
             await transitionTaxSubmission(ctx.supabase, {
               companyId: ctx.companyId,
               userId: ctx.userId,
@@ -2166,6 +2166,23 @@ export const skatteverketExtension: Extension = {
 // write-capable company role.
 
 /** Safe upstream error: never forward Skatteverket's raw response body to end users. */
+/**
+ * Does this Skatteverket response actually carry a filing record?
+ *
+ * The two moms lifecycle transitions below used `if (data)`, which is true for
+ * `{}` — so a 200 with an empty body would have moved the submission to
+ * "signed_submitted" or "receipt_received" on the strength of the status code
+ * alone. A submission state is a claim about what Skatteverket holds; it must
+ * come from something Skatteverket actually said, not from the absence of an
+ * error.
+ */
+function hasSkvRecord(data: unknown): boolean {
+  if (data === null || data === undefined) return false
+  if (Array.isArray(data)) return data.length > 0
+  if (typeof data !== 'object') return false
+  return Object.keys(data as Record<string, unknown>).length > 0
+}
+
 function sanitizeSkvUpstreamError(status: number): string {
   if (status === 401 || status === 403) {
     return 'Skatteverket nekade begäran. Koppla om anslutningen under Inställningar → Moms & skatt och försök igen.'
@@ -2374,7 +2391,14 @@ async function mapServiceError(
 ): Promise<Extract<SkvSubmitResult, { ok: false }>> {
   if (err instanceof SkatteverketAuthError) {
     const mapped = skvAuthCodeToStructured(err.code)
-    await writeSkatteverketAudit(ctx, { endpoint, outcome: 'auth_error', errorMessage: err.message })
+    await writeSkatteverketAudit(ctx, {
+      endpoint,
+      outcome: 'auth_error',
+      errorMessage: err.message,
+      // BEHORIGHET_SAKNAS is Skatteverket saying this actor may not act for the
+      // company; the ombud record is derived from it.
+      skvAuthCode: err.code,
+    })
     return { ok: false, code: mapped.code, http_status: mapped.httpStatus, recoverable: true, error: err.message }
   }
   await writeSkatteverketAudit(ctx, {

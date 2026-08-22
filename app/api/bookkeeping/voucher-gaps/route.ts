@@ -1,24 +1,11 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { VoucherGapQuerySchema, SaveGapExplanationSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
-
+export const GET = withRouteContext('bookkeeping.voucher_gaps.get', async (request, ctx) => {
+  const { supabase, companyId } = ctx
   const validation = validateQuery(request, VoucherGapQuerySchema)
   if (!validation.success) return validation.response
   const { fiscal_period_id, voucher_series } = validation.data
@@ -106,22 +93,13 @@ export async function GET(request: Request) {
       unexplainedGaps: unexplained,
     },
   })
-}
+})
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const POST = withRouteContext('bookkeeping.voucher_gaps.post', async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
   const writeCheck = await requireWritePermission(supabase, user.id)
   if (!writeCheck.ok) return writeCheck.response
 
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
 
   const validation = await validateBody(request, SaveGapExplanationSchema)
   if (!validation.success) return validation.response
@@ -156,4 +134,4 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ data })
-}
+})

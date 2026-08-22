@@ -141,8 +141,13 @@ export interface EnrichmentData {
 
 export interface BankIdCompleteRequest {
   sessionId: string
-  mode: 'login' | 'signup'
-  email?: string
+  /**
+   * Login only. BankID signup was removed: it created accounts without legal
+   * acceptance, plan or company, and no page in the product ever asked for it.
+   * New accounts go through /register; BankID is attached afterwards via
+   * /bankid/link.
+   */
+  mode: 'login'
 }
 
 export interface BankIdCompleteResponse {

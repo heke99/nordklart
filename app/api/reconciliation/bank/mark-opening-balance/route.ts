@@ -1,11 +1,8 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { MarkOpeningBalanceSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 
 ensureInitialized()
@@ -17,20 +14,11 @@ ensureInitialized()
  * enforces owner/admin role, the manual/import precondition, a bank-line check,
  * and the period lock. We only translate its errors to Swedish here.
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+export const POST = withRouteContext('reconciliation.bank.mark_opening_balance', async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
   const writeCheck = await requireWritePermission(supabase, user.id)
   if (!writeCheck.ok) return writeCheck.response
 
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bankMatching)
-  if (featureGateResponse) return featureGateResponse
 
   const validation = await validateBody(request, MarkOpeningBalanceSchema)
   if (!validation.success) return validation.response
@@ -63,4 +51,4 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ data })
-}
+})

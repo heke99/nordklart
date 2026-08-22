@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getRevenueAccount, getOutputVatAccount } from '../invoice-entries'
+import { getRevenueAccount, getOutputVatAccount } from '../revenue-accounts'
 import type { Invoice, InvoiceItem, CreateJournalEntryInput } from '@/types'
 
 // Mock the engine so we can capture the input passed to createJournalEntry

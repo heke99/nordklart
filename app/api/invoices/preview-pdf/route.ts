@@ -1,12 +1,9 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 import { getVatRules } from '@/lib/invoices/vat-rules'
-import { requireCompanyId } from '@/lib/company/context'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 
 /**
@@ -15,19 +12,8 @@ import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentTy
  * Generates a preview PDF from form data without creating an invoice.
  * Returns the PDF as an inline blob for display in a new browser tab.
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.invoicingCore)
-  if (featureGateResponse) return featureGateResponse
-
+export const POST = withRouteContext('invoices.preview_pdf', async (request, ctx) => {
+  const { supabase, companyId, user } = ctx
   const body = await request.json()
   const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number } = body
 
@@ -201,4 +187,4 @@ export async function POST(request: Request) {
       { status: 500 }
     )
   }
-}
+})

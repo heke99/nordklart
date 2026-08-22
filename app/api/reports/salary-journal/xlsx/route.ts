@@ -1,8 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
 import { generateSalaryJournal } from '@/lib/reports/salary-journal'
 import {
   reportToWorkbook,
@@ -19,21 +16,8 @@ function toDate(s: string): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  // Commercial feature gate — same policy the JSON counterparts get via
-  // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
-  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
-  if (featureError) return featureError
-
+export const GET = withRouteContext('reports.salary_journal.xlsx', async (request, ctx) => {
+  const { supabase, companyId } = ctx
   const { searchParams } = new URL(request.url)
   const year = parseInt(searchParams.get('year') || new Date().getFullYear().toString())
   const monthFrom = searchParams.get('month_from') ? parseInt(searchParams.get('month_from')!) : undefined
@@ -117,4 +101,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

@@ -85,7 +85,7 @@ export default async function AutomationCenterPage() {
     actions.push({ label: `Bekräfta ${suggested} bokföringsförslag`, href: '/transactions', tone: 'default' })
   }
   if ((pendingInbox ?? 0) > 0) {
-    actions.push({ label: `Hantera ${pendingInbox} dokument i inkorgen`, href: '/inbox', tone: 'default' })
+    actions.push({ label: `Hantera ${pendingInbox} dokument i inkorgen`, href: '/e/general/invoice-inbox', tone: 'default' })
   }
   if ((failedOperations ?? 0) > 0) {
     actions.push({ label: `${failedOperations} bakgrundsjobb misslyckades — kontrollera och kör om`, href: '/settings/api', tone: 'warning' })

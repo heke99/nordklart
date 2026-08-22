@@ -11,15 +11,18 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, ShieldOff, KeyRound } from 'lucide-react'
 import { isMfaRequired } from '@/lib/auth/mfa'
-import { isBankIdEnabled } from '@/lib/auth/bankid'
+import { isBankIdEnabled } from '@/lib/auth/bankid-enabled'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
 import { userHasPassword } from '@/lib/auth/has-password'
 
 const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
 const mfaRequired = isMfaRequired()
-const bankIdEnabled = isBankIdEnabled()
 
 export function SecuritySettings() {
+  // Read inside the component, not at module scope: module-scope evaluation
+  // freezes the answer at import time, which is the wrong moment in a Docker
+  // image whose entrypoint rewrites NEXT_PUBLIC_ placeholders on boot.
+  const bankIdEnabled = isBankIdEnabled()
   const t = useTranslations('settings_security')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBankIdProvider } from '@/lib/auth/bankid-provider'
 import { hashPersonalNumberHmac, maskPersonalNumber } from '@/lib/auth/bankid'
-import { markSignatureSigned } from '@/lib/bokslut/arsredovisning/signature-service'
+import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('consent-service')
@@ -13,10 +13,13 @@ const log = createLogger('consent-service')
  *   1. startConsentSigning() — creates a bankid_sessions row + starts the
  *      provider sign session. The exact consent text is stored verbatim.
  *   2. pollConsentSession() — collects provider status; on completion the
- *      signed_consents row (immutable, DB-enforced) is created BEFORE the
- *      session is marked complete, so a "complete" session always has its
- *      consent evidence. Replays are idempotent (unique consent per
- *      session), and legacy complete-without-consent sessions self-heal.
+ *      signed_consents row, its audit row and (for an årsredovisning) the
+ *      signature request are written in ONE transaction by
+ *      record_bankid_consent_v1, before the session is marked complete. So a
+ *      "complete" session always has its consent evidence, and a recorded
+ *      consent always has the signature it completed. Replays are idempotent
+ *      (unique consent per session), and legacy complete-without-consent
+ *      sessions self-heal.
  *   3. cancelConsentSession() — user-initiated cancel of a pending session.
  *   4. revokeConsent() — status flip + audit (the row itself is immutable).
  *
@@ -64,6 +67,11 @@ export interface StartConsentResult {
   qrStartSecret: string | null
   provider: string
   providerMode: string
+  /**
+   * Age of the BankID order once this call returns. The browser counts the QR
+   * `time` field from the order's creation, not from when it rendered.
+   */
+  qrOrderAgeMs: number
 }
 
 export async function startConsentSigning(
@@ -71,6 +79,7 @@ export async function startConsentSigning(
   args: StartConsentArgs,
 ): Promise<StartConsentResult> {
   const provider = getBankIdProvider()
+  const orderStartedAt = Date.now()
   const started = await provider.startSign({
     endUserIp: args.endUserIp,
     userAgent: args.userAgent,
@@ -126,6 +135,7 @@ export async function startConsentSigning(
     qrStartSecret: started.qrStartSecret,
     provider: provider.id,
     providerMode: provider.mode,
+    qrOrderAgeMs: Date.now() - orderStartedAt,
   }
 }
 
@@ -135,6 +145,8 @@ export interface PollConsentResult {
   consentId: string | null
   qrStartToken?: string | null
   qrStartSecret?: string | null
+  /** Age of a rotated order when it reached us. See StartConsentResult. */
+  qrOrderAgeMs?: number
 }
 
 export async function pollConsentSession(
@@ -197,6 +209,7 @@ export async function pollConsentSession(
   }
 
   const provider = getBankIdProvider()
+  const collectedAt = Date.now()
   const collected = await provider.collect(row.provider_session_ref)
 
   if (collected.status === 'pending') {
@@ -206,6 +219,7 @@ export async function pollConsentSession(
       consentId: null,
       qrStartToken: collected.qrStartToken ?? null,
       qrStartSecret: collected.qrStartSecret ?? null,
+      qrOrderAgeMs: Date.now() - collectedAt,
     }
   }
 
@@ -281,76 +295,43 @@ async function createConsentForSession(
   const title = (context.title as string | undefined)
     ?? CONSENT_TYPE_LABELS_SV[consentType]
 
-  const { data: consent, error: consentErr } = await supabase
-    .from('signed_consents')
-    .insert({
-      company_id: row.company_id,
-      user_id: row.user_id,
-      consent_type: consentType,
-      title,
-      consent_text: row.sign_text ?? '',
-      signed_via: 'bankid',
-      bankid_session_id: row.id,
-      personal_number_hash: identity.pnHash,
-      personal_number_masked: identity.pnMasked,
-      signer_name: identity.signerName,
-      status: 'active',
-      context,
-    })
-    .select('id')
-    .single()
+  // The consent, its audit row and — when this signature completes an
+  // årsredovisning — the signature request are ONE transaction.
+  //
+  // They used to be three separate writes with the third wrapped in a
+  // try/catch that only logged. A failure there recorded the consent, flipped
+  // the session to 'complete', showed the user a successful BankID signature,
+  // and left the signature request 'pending'. The årsredovisning was not
+  // signed off and nothing said so.
+  const signatureRequestId =
+    context.kind === 'arsredovisning_signature'
+      && typeof context.signature_request_id === 'string'
+      && row.company_id
+      ? context.signature_request_id
+      : null
 
-  if (consentErr || !consent) {
-    // Unique violation on bankid_session_id → a concurrent poll already
-    // created the consent. Reuse it instead of failing.
-    if ((consentErr as { code?: string } | null)?.code === '23505') {
-      const { data: existing } = await supabase
-        .from('signed_consents')
-        .select('id')
-        .eq('bankid_session_id', row.id)
-        .maybeSingle()
-      const existingId = (existing as { id: string } | null)?.id
-      if (existingId) return existingId
-    }
-    log.error('signed_consents insert failed for BankID session', consentErr ?? undefined, {
-      sessionId: row.id,
-    })
+  const service = createServiceClient()
+  const { data, error } = await service.rpc('record_bankid_consent_v1', {
+    p_session_id: row.id,
+    p_actor_user_id: row.user_id,
+    p_consent_type: consentType,
+    p_title: title,
+    p_consent_text: row.sign_text ?? '',
+    p_personal_number_hash: identity.pnHash,
+    p_personal_number_masked: identity.pnMasked,
+    p_signer_name: identity.signerName,
+    p_context: context,
+    p_completed_at: identity.completedAt,
+    p_signature_request_id: signatureRequestId,
+    p_signer_personnummer_encrypted: null,
+  })
+
+  if (error || !data) {
+    log.error('recording BankID consent failed', error ?? undefined, { sessionId: row.id })
     throw new Error('Signeringen slutfördes men samtycket kunde inte sparas. Försök igen.')
   }
 
-  const consentId = (consent as { id: string }).id
-
-  // Audit trail (login/signing events are security-relevant).
-  await supabase.from('audit_log').insert({
-    user_id: row.user_id,
-    company_id: row.company_id,
-    action: 'SECURITY_EVENT',
-    table_name: 'signed_consents',
-    record_id: consentId,
-    actor_id: row.user_id,
-    description: `BankID-signerat samtycke: ${title} (${consentType}), signerat av ${identity.signerName ?? 'okänd'} ${identity.pnMasked ?? ''}`,
-    new_state: { consent_type: consentType, signer_name: identity.signerName, personal_number_masked: identity.pnMasked },
-  })
-
-  // Flow side effects.
-  if (context.kind === 'arsredovisning_signature' && typeof context.signature_request_id === 'string' && row.company_id) {
-    try {
-      await markSignatureSigned(supabase, row.company_id, context.signature_request_id, {
-        bankidSignatureData: {
-          consent_id: consentId,
-          bankid_session_id: row.id,
-          signer_name: identity.signerName,
-          personal_number_masked: identity.pnMasked,
-          signed_at: identity.completedAt,
-        },
-      })
-    } catch (err) {
-      log.error('failed to mark arsredovisning signature signed', err as Error, {
-        signatureRequestId: context.signature_request_id,
-      })
-    }
-  }
-
+  const consentId = data as string
   return consentId
 }
 
