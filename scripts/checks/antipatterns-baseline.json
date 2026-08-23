@@ -1,13 +1,12 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: all reach 0 (A1 route-auth campaign, D1 rounding codemod, RLS backfill).",
   "rawRouteAuth": {
-    "count": 48,
+    "count": 46,
     "files": [
       "app/api/agency/clients/route.ts",
       "app/api/agency/staff/invite/route.ts",
       "app/api/agent/composer/route.ts",
       "app/api/agent/conversations/[id]/route.ts",
-      "app/api/agent/conversations/route.ts",
       "app/api/agent/faq/route.ts",
       "app/api/agent/invoke/route.ts",
       "app/api/agent/memory/[id]/route.ts",
@@ -15,7 +14,6 @@
       "app/api/agent/onboarding/stream/route.ts",
       "app/api/agent/profile/route.ts",
       "app/api/agent/profile/verify/route.ts",
-      "app/api/agent/skills/route.ts",
       "app/api/audit-trail/route.ts",
       "app/api/bookkeeping/accounts/bas-lookup/route.ts",
       "app/api/bookkeeping/fiscal-periods/route.ts",
@@ -71,7 +69,7 @@
     ]
   },
   "adhocErrorEnvelope": {
-    "count": 160,
+    "count": 159,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -79,7 +77,6 @@
       "app/api/agency/staff/invite/route.ts",
       "app/api/agent/composer/route.ts",
       "app/api/agent/conversations/[id]/route.ts",
-      "app/api/agent/conversations/route.ts",
       "app/api/agent/faq/route.ts",
       "app/api/agent/invoke/route.ts",
       "app/api/agent/memory/[id]/route.ts",

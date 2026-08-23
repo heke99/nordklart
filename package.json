@@ -74,7 +74,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^0.563.0",
     "mailparser": "^3.9.15",
-    "next": "16.2.9",
+    "next": "16.3.2",
     "next-intl": "^4.12.0",
     "next-themes": "^0.4.6",
     "pdf-lib": "^1.17.1",
@@ -88,7 +88,7 @@
     "remark-gfm": "^4.0.1",
     "resend": "^6.9.1",
     "server-only": "^0.0.1",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "svix": "^1.85.0",
     "tailwind-merge": "^3.4.0",
     "web-push": "^3.6.7",
@@ -118,7 +118,7 @@
     "brace-expansion": "^2.1.4",
     "html-to-text": "^10.0.1",
     "nanoid": "^3.3.18",
-    "next": "16.2.9",
+    "next": "16.3.2",
     "postcss": "^8.5.26"
   }
 }

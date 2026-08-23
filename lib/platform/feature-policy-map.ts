@@ -46,6 +46,15 @@ export const CORE_OPERATION_PREFIXES: ReadonlyArray<{ prefix: string; reason: st
     reason: 'Statusöversikt över bolagets kopplingar (läs-endast).',
   },
   {
+    prefix: 'agent.',
+    // The in-app assistant surface: conversations, memory, profile, the skill
+    // catalogue. What the assistant DOES is gated where it executes — a
+    // bookkeeping action it proposes still goes through the bookkeeping gate
+    // when committed (see bookkeeping.pending_operation.*). Gating the
+    // assistant itself would gate the explanation rather than the action.
+    reason: 'Assistentyta; det den utför gates där det utförs.',
+  },
+  {
     prefix: 'settings.',
     // The company's own configuration surface. The features these settings
     // configure are gated where they execute, not where they are typed in —
