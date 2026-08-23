@@ -117,6 +117,23 @@ export const CORE_OPERATION_PREFIXES: ReadonlyArray<{ prefix: string; reason: st
     reason: 'Räkenskapsinformation enligt BFL 7 kap; åtkomlig i sju år oavsett plan.',
   },
   {
+    prefix: 'company.',
+    // The tenant's own company record: its name and org number, its
+    // accounting framework (K2/K3), who its members are. This is the
+    // subscriber's identity and administration, not a metered feature — the
+    // same reasoning as `settings.`, applied to the columns that live on
+    // `companies` rather than `company_settings`.
+    //
+    // Nothing is loosened by this entry: every company.* operation already
+    // resolved to null before it existed (verified with featureForOperation).
+    // What it adds is the documented reason check:feature-policy asks for.
+    //
+    // What the framework choice ENABLES is gated where it executes — a K3
+    // latent-tax posting still goes through bookkeeping.core when the voucher
+    // is written, and year-end keeps its own entitlement.
+    reason: 'Bolagets egen post och administration; det den möjliggör gates vid körning.',
+  },
+  {
     prefix: 'user_account.',
     // The user-account surface (password, email, locale, MFA, account
     // deletion) belongs to the person, not the company, and must keep working
