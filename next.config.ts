@@ -34,7 +34,22 @@ const cspDirectives = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
+  // `standalone` exists solely for the Docker image: the Dockerfile copies
+  // .next/standalone/{server.js,node_modules,package.json,.next}. Vercel has
+  // its own output pipeline and explicitly does not want it.
+  //
+  // It was set unconditionally and survived on Next 16.2.9. On 16.3.2 it makes
+  // the Vercel build fail outright:
+  //
+  //   Error: ENOENT: no such file or directory, open
+  //   '/vercel/path0/.next/next-server.js.nft.json'
+  //
+  // — a node-file-tracing artifact that standalone output produces and that
+  // Vercel's builder then trips over. Scoping it to non-Vercel builds is the
+  // configuration that was always correct; the framework bump only made the
+  // mistake load-bearing. Docker and the CI core-only build set no VERCEL
+  // variable, so both keep standalone.
+  ...(process.env.VERCEL ? {} : { output: 'standalone' as const }),
   async redirects() {
     return [
       {
