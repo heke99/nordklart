@@ -1,7 +1,7 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolveCompanyAccess } from '@/lib/access/company'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getEmailService } from '@/lib/email/service'
@@ -22,13 +22,15 @@ ensureInitialized()
  * POST /api/company/members/invite
  * Invite a user to the current company (e.g., a client as viewer).
  * Only company owners and admins can invite.
+ *
+ * The wrapper resolves companyId through the same validated path this route
+ * used by hand, and adds requireAuth's AAL2 check. canManageCompany below is
+ * what authorizes the action; requireWrite is deliberately not set for the
+ * same reason as the access-request routes — it authorizes on direct
+ * membership and would exclude the platform-admin path canManageCompany
+ * admits. The service client and its company_id scoping are untouched.
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const POST = withRouteContext('company.members.invite', async (request, { supabase, user, companyId }) => {
   const access = await resolveCompanyAccess(supabase, companyId)
   if (!access?.canManageCompany) {
     return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
@@ -194,4 +196,4 @@ export async function POST(request: Request) {
   return NextResponse.json({
     data: { email, status: 'pending', ...(isDev && { inviteUrl: devInviteUrl }) },
   })
-}
+})
