@@ -1,10 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { roundOre } from '@/lib/money'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
@@ -21,10 +18,9 @@ ensureInitialized()
  * Per BFL: Generated payment file is räkenskapsinformation linked to the
  * salary journal entry. Subject to 7-year retention.
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ period: string }> }
-) {
+export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
+  'bookkeeping.tax_payments.payment_file',
+  async (request, { supabase, companyId }, { params }) => {
   const { period } = await params
   const periodMatch = /^(\d{4})-(\d{2})$/.exec(period)
   if (!periodMatch) {
@@ -35,20 +31,6 @@ export async function GET(
   }
   const periodYear = parseInt(periodMatch[1], 10)
   const periodMonth = parseInt(periodMatch[2], 10)
-
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  // Commercial feature gate — same policy the JSON counterparts get via
-  // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
-  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureError) return featureError
 
   const { data: agi } = await supabase
     .from('agi_declarations')
@@ -65,7 +47,7 @@ export async function GET(
     )
   }
 
-  const totalAmount = Math.round((agi.total_tax + agi.total_avgifter) * 100) / 100
+  const totalAmount = roundOre(agi.total_tax + agi.total_avgifter)
   if (totalAmount <= 0) {
     return NextResponse.json(
       { error: `Inget belopp att betala för perioden ${period}.` },
@@ -152,7 +134,9 @@ export async function GET(
       'Content-Disposition': `attachment; filename="${result.filename}"`,
     },
   })
-}
+},
+  { requireWrite: true },
+)
 
 /**
  * Tax payment deadline = the 12th of the month *following* the AGI period.

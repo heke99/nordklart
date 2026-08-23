@@ -1,18 +1,18 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolveCompanyAccess } from '@/lib/access/company'
 
 /**
  * GET /api/company/members
  * Returns active/limited members, pending invitations and pending access requests for the current company.
+ *
+ * The wrapper resolves companyId through the same validated path this route
+ * used by hand. resolveCompanyAccess stays: the wrapper establishes that the
+ * caller may READ the company, while canManageCompany is what decides whether
+ * invitations and pending access requests are returned at all.
  */
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const GET = withRouteContext('company.members.list', async (_request, { supabase, user, companyId }) => {
   const access = await resolveCompanyAccess(supabase, companyId)
   if (!access?.canRead) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
 
@@ -79,4 +79,4 @@ export async function GET() {
       canManage,
     },
   })
-}
+})

@@ -1,5 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 
 /**
  * GET /api/company?owned=true&archived=false
@@ -10,11 +10,18 @@ import { NextResponse } from 'next/server'
  *
  * Used by the account danger zone to show a blockers list before
  * allowing account deletion.
+ *
+ * requireAuth() rather than withRouteContext: this route enumerates the
+ * caller's companies, so it cannot presuppose one. The wrapper resolves an
+ * ACTIVE company and short-circuits without one — which is exactly the user
+ * the danger zone needs to serve, and an empty list is the correct answer for
+ * them, not an error. What requireAuth() adds over the bare getUser() it
+ * replaced is the AAL2/MFA check.
  */
 export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { supabase, user } = auth
 
   const url = new URL(request.url)
   const ownedOnly = url.searchParams.get('owned') === 'true'

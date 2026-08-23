@@ -1,17 +1,29 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolveCompanyAccess } from '@/lib/access/company'
 
-export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
+/**
+ * POST /api/company/access-requests/[id]/reject
+ *
+ * The wrapper resolves companyId through the same validated path this route
+ * used by hand, and adds requireAuth's AAL2 check. The canManageCompany check
+ * below stays and is what authorizes the action.
+ *
+ * requireWrite is deliberately NOT set. It delegates to requireWritePermission,
+ * which authorizes on DIRECT membership in the active company, whereas
+ * canManageCompany also admits platform-admin access. Turning it on would
+ * therefore narrow who can approve a request, not harden the route — and the
+ * membership case it covers is already subsumed by canManageCompany. The
+ * consequence to be explicit about: these routes are not covered by the
+ * read-only maintenance kill switch, which the wrapper only applies under
+ * requireWrite. That matches the behaviour they had before this conversion.
+ *
+ * The service client and its company_id scoping are untouched.
+ */
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'company.access_requests.reject',
+  async (_request, { supabase, user, companyId }, { params }) => {
   const access = await resolveCompanyAccess(supabase, companyId)
   if (!access?.canManageCompany) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
 
@@ -43,4 +55,5 @@ export async function POST(
   }).then(() => undefined, () => undefined)
 
   return NextResponse.json({ data: { id: accessRequest.id, rejected: true } })
-}
+},
+)

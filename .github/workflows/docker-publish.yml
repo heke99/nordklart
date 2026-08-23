@@ -88,14 +88,23 @@ jobs:
         run: |
           cosign sign --yes "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
 
-      - name: Scan image with Trivy
+      # The scan is deliberately TWO steps. A single step with
+      # `format: sarif` cannot also be the gate: the action overrides the
+      # severity filter when it builds a SARIF report — it says so itself in
+      # the run log, "Building SARIF report with all severities" — so
+      # `severity: CRITICAL,HIGH` was silently ignored and `exit-code: '1'`
+      # then tripped on any fixable finding of ANY severity, a LOW included.
+      # The first run to get this far failed exactly that way, with the gate's
+      # own comment claiming HIGH was what blocked. Splitting the steps makes
+      # the gate assert what it says and keeps the Security tab complete.
+      - name: Scan image with Trivy (gate)
         id: trivy
         # v-prefixed. `aquasecurity/trivy-action@0.30.0` does not exist — the
         # action tags every release as `vX.Y.Z` and only `0.35.0` was ever
         # published unprefixed. The workflow therefore failed at "Prepare all
         # required actions", before checkout, on every run since it was added:
         # the image was never built, signed or scanned. Verified against
-        # v0.36.0 that all six inputs below are still declared.
+        # v0.36.0 that all inputs below are still declared.
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
@@ -107,12 +116,28 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '1'
           ignore-unfixed: true
+          # `table` rather than `sarif` so the severity filter is honoured AND
+          # the findings are legible in the run log. A failing gate that prints
+          # nothing is what made the previous failure impossible to diagnose
+          # without downloading the SARIF.
+          format: table
+
+      # Runs regardless of the gate, and never fails the build itself — its job
+      # is to populate the Security tab, not to decide anything. No severity
+      # filter, so MEDIUM and LOW stay visible there.
+      - name: Build Trivy SARIF report
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          ignore-unfixed: true
+          exit-code: '0'
           format: sarif
           output: trivy-results.sarif
 
       - name: Upload Trivy results to GitHub Security tab
         # if:always() so a CRITICAL finding still ends up in the Security tab
-        # even though the Trivy step above failed the workflow.
+        # even though the gate above failed the workflow.
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:

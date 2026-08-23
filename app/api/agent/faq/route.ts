@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { retrieveFaq, FAQ_HIGH_CONFIDENCE_THRESHOLD } from '@/lib/agent/faq/retriever'
 import { getFaqEntries, FAQ_TOTAL_ENTRIES } from '@/lib/agent/faq/dataset'
 import { validateBody } from '@/lib/api/validate'
@@ -17,13 +17,18 @@ import { z } from 'zod'
 // The FAQ is global knowledge (no company data), but the routes still require
 // an authenticated session — the knowledge base is a product surface, not a
 // public API.
+//
+// requireAuth() rather than withRouteContext: the wrapper resolves an active
+// company and short-circuits without one, and this surface genuinely has no
+// company scope — nothing it reads or returns is tenant data. Imposing a
+// company precondition here would invent a requirement the route does not
+// have. What requireAuth() adds over the bare getUser() it replaced is the
+// AAL2/MFA check.
 
 export async function GET() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { supabase } = auth
 
   // Prefer DB truth (seeded rows carry seeded_at); fall back to the bundled
   // dataset when the seed migration hasn't run in this environment yet.
@@ -69,11 +74,9 @@ const testQuestionSchema = z.object({
 })
 
 export async function POST(request: Request) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { supabase } = auth
 
   const validation = await validateBody(request, testQuestionSchema)
   if (!validation.success) return validation.response

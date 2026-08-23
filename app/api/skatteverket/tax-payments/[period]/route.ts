@@ -1,9 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 ensureInitialized()
 
@@ -14,10 +11,9 @@ ensureInitialized()
  * paid at, totals) so the UI can render the TaxPaymentPanel without
  * round-tripping to load the full declaration.
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ period: string }> }
-) {
+export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
+  'bookkeeping.tax_payments.get',
+  async (request, { supabase, companyId }, { params }) => {
   const { period } = await params
   const periodMatch = /^(\d{4})-(\d{2})$/.exec(period)
   if (!periodMatch) {
@@ -28,17 +24,6 @@ export async function GET(
   }
   const periodYear = parseInt(periodMatch[1], 10)
   const periodMonth = parseInt(periodMatch[2], 10)
-
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  // Commercial feature gate — same policy the JSON counterparts get via
-  // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
-  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureError) return featureError
 
   const { data: agi } = await supabase
     .from('agi_declarations')
@@ -53,4 +38,5 @@ export async function GET(
   }
 
   return NextResponse.json({ data: agi })
-}
+},
+)

@@ -1,6 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
-import { getActiveCompanyId, requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { getActiveCompanyId } from '@/lib/company/context'
 import { validateBody } from '@/lib/api/validate'
 import { AccountingFrameworkSchema } from '@/lib/api/schemas'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -29,18 +29,19 @@ const K3_LATENT_TAX_ACCOUNTS = ['2240', '8940'] as const
  * authoritative value in user_preferences.
  */
 export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json(
-      { error: 'Unauthorized' },
-      {
-        status: 401,
-        headers: { 'Cache-Control': 'private, no-store' },
-      },
-    )
-  }
+  // requireAuth() rather than withRouteContext: the wrapper short-circuits
+  // with COMPANY_CONTEXT_MISSING when no company resolves, and `companyId:
+  // null` is a MEANINGFUL answer here, not an error. CompanyTabSync compares
+  // the value against the company the tab is rendering and hard-reloads on a
+  // mismatch; if access to that company was revoked in another tab, null is
+  // exactly the mismatch that must trigger the reload. The wrapper would turn
+  // that into a non-2xx, which the client treats as "network trouble, do
+  // nothing" — leaving the tab open on a company the user can no longer read.
+  // What requireAuth() adds over the bare getUser() this replaced is the
+  // AAL2/MFA check.
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { supabase, user } = auth
 
   const companyId = await getActiveCompanyId(supabase, user.id)
 
@@ -72,17 +73,8 @@ const PatchBodySchema = z.object({
  * entity_type='aktiebolag'. The handler rejects K3 for non-AB to prevent
  * impossible chart-of-accounts states downstream.
  */
-export async function PATCH(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const PATCH = withRouteContext('company.current.update', async (request, ctx) => {
+  const { supabase, user, companyId } = ctx
 
   const validation = await validateBody(request, PatchBodySchema)
   if (!validation.success) return validation.response
@@ -188,4 +180,4 @@ export async function PATCH(request: Request) {
   }
 
   return NextResponse.json({ data })
-}
+}, { requireWrite: true })

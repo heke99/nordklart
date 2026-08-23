@@ -1,7 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { getCompanyWriteAccess } from '@/lib/access/route-guards'
 
 // PATCH /api/agent/memory/[id]
@@ -19,6 +18,12 @@ import { getCompanyWriteAccess } from '@/lib/access/route-guards'
 //
 // RLS scopes to user_company_ids(); we ALSO re-verify membership for the
 // row's company_id as defense in depth before mutating.
+//
+// The wrapper's requireWrite is the ACTIVE company's write check (the same
+// requireWritePermission this route called by hand); getCompanyWriteAccess
+// below is the ROW's. Both are kept — ctx.companyId is deliberately unused
+// here, because the row decides which company is being written to, not the
+// caller's current tab.
 
 const PatchSchema = z
   .object({
@@ -31,17 +36,9 @@ const PatchSchema = z
     { message: 'Nothing to update' },
   )
 
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
+export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'agent.memory.update',
+  async (request, { supabase }, { params }) => {
   const { id } = await params
 
   let body: z.infer<typeof PatchSchema>
@@ -83,4 +80,6 @@ export async function PATCH(
   if (!data) return NextResponse.json({ error: 'Memory not found' }, { status: 404 })
 
   return NextResponse.json({ data })
-}
+},
+  { requireWrite: true },
+)

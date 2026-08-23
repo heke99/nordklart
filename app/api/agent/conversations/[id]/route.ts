@@ -1,6 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { getCompanyReadAccess } from '@/lib/access/route-guards'
 
 // GET /api/agent/conversations/[id]
@@ -12,6 +12,14 @@ import { getCompanyReadAccess } from '@/lib/access/route-guards'
 // PATCH /api/agent/conversations/[id]
 //
 // Updates pin/archive state or title. The chat list relies on these.
+//
+// Neither handler uses ctx.companyId: a conversation carries its own
+// company_id and is additionally user-scoped, so the row decides. PATCH is
+// deliberately NOT requireWrite — a conversation belongs to the person who
+// held it, and a viewer renaming or pinning their own chat writes nothing
+// about the company's books. That matches how personal rows are treated
+// elsewhere (signed_consents), and it is the behaviour this route already
+// had; adding the check here would take a working affordance away.
 
 const PatchSchema = z.object({
   pinned: z.boolean().nullable().optional(),
@@ -19,14 +27,9 @@ const PatchSchema = z.object({
   title: z.string().min(1).max(200).nullable().optional(),
 })
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'agent.conversation.get',
+  async (_request, { supabase, user }, { params }) => {
   const { id } = await params
 
   const { data: conv, error: convErr } = await supabase
@@ -58,16 +61,12 @@ export async function GET(
   if (msgErr) return NextResponse.json({ error: msgErr.message }, { status: 500 })
 
   return NextResponse.json({ data: { conversation: conv, messages: messages ?? [] } })
-}
+},
+)
 
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'agent.conversation.update',
+  async (request, { supabase, user }, { params }) => {
   const { id } = await params
   let body: z.infer<typeof PatchSchema>
   try {
@@ -108,4 +107,5 @@ export async function PATCH(
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ data })
-}
+},
+)
