@@ -1,31 +1,15 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import type { Transaction } from '@/types'
 
 /**
  * POST /api/transactions/batch-match-invoices
  * Run invoice matching for all uncategorized income transactions without potential_invoice_id
  */
-export async function POST() {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
+export const POST = withRouteContext(
+  'transaction.batch_match_invoices',
+  async (_request, { supabase, companyId, user }) => {
 
   // Fetch uncategorized income transactions without a potential match
   const { data: transactions, error: txError } = await supabase
@@ -73,4 +57,6 @@ export async function POST() {
     processed: transactions.length,
     matched,
   })
-}
+  },
+  { requireWrite: true },
+)

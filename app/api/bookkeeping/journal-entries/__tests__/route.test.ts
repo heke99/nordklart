@@ -4,6 +4,7 @@ import {
   parseJsonResponse,
   createQueuedMockSupabase,
   makeJournalEntry,
+  emptyRouteParams,
 } from '@/tests/helpers'
 
 // Mock dependencies
@@ -45,7 +46,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -57,7 +58,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     enqueue({ data: entries, error: null, count: 2 })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(response)
 
     expect(status).toBe(200)
@@ -80,7 +81,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
         include_related: 'false',
       },
     })
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -103,7 +104,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     const request = createMockRequest('/api/bookkeeping/journal-entries', {
       searchParams: { period_id: 'period-1' },
     })
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: Array<{ id: string; out_of_period?: boolean }>
       count: number
@@ -129,7 +130,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     const request = createMockRequest('/api/bookkeeping/journal-entries', {
       searchParams: { period_id: 'period-1', status: 'cancelled' },
     })
-    await GET(request)
+    await GET(request, emptyRouteParams())
 
     // The RPC itself hides cancelled entries unless p_status='cancelled' is
     // passed explicitly (see migration 20260428153500). The behavior of the
@@ -144,7 +145,7 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     enqueue({ data: null, error: { message: 'DB error' } })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)
@@ -170,7 +171,7 @@ describe('POST /api/bookkeeping/journal-entries', () => {
       method: 'POST',
       body: {},
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -196,7 +197,7 @@ describe('POST /api/bookkeeping/journal-entries', () => {
       method: 'POST',
       body: input,
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ data: unknown }>(response)
 
     expect(status).toBe(200)
@@ -220,7 +221,7 @@ describe('POST /api/bookkeeping/journal-entries', () => {
         ],
       },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)

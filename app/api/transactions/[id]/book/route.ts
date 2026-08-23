@@ -1,38 +1,23 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import type { Transaction } from '@/types'
 
 ensureInitialized()
 
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const POST = withRouteContext(
+  'transaction.book',
+  async (
+    request,
+    { supabase, companyId, user },
+    { params }: { params: Promise<{ id: string }> },
+  ) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
 
   const validation = await validateBody(request, BookTransactionSchema)
   if (!validation.success) return validation.response
@@ -116,4 +101,6 @@ export async function POST(
     journal_entry_id: journalEntry.id,
     success: true,
   })
-}
+  },
+  { requireWrite: true },
+)
