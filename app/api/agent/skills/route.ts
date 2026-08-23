@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 // GET /api/agent/skills
 //
@@ -32,14 +31,9 @@ interface AtomMeta {
   active: boolean
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await getActiveCompanyId(supabase, user.id)
-  if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
-
+export const GET = withRouteContext(
+  'agent.skills.list',
+  async (request, { supabase, companyId, user }) => {
   const url = new URL(request.url)
   const slug = url.searchParams.get('slug')
 
@@ -89,4 +83,5 @@ export async function GET(request: Request) {
   })
 
   return NextResponse.json({ data: result })
-}
+  },
+)

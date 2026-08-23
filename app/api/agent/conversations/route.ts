@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 // GET /api/agent/conversations
 //
@@ -16,14 +15,9 @@ import { getActiveCompanyId } from '@/lib/company/context'
 //
 // Ordered: pinned first (within archived bucket), then last_message_at desc.
 // Used by the /chat sidebar and "resume conversation" UI in the sheet.
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await getActiveCompanyId(supabase, user.id)
-  if (!companyId) return NextResponse.json({ error: 'No active company' }, { status: 400 })
-
+export const GET = withRouteContext(
+  'agent.conversations.list',
+  async (request, { supabase, companyId, user }) => {
   const url = new URL(request.url)
   const archived = url.searchParams.get('archived') === 'true'
   const pinnedOnly = url.searchParams.get('pinned') === 'true'
@@ -57,4 +51,5 @@ export async function GET(request: Request) {
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ data: data ?? [] })
-}
+  },
+)
