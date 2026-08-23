@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse, emptyRouteParams } from '@/tests/helpers'
 
 // Mock Supabase
 vi.mock('@/lib/supabase/server', () => ({
@@ -40,7 +40,7 @@ describe('POST /api/vat/validate', () => {
       body: { vat_number: 'DE123456789' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, emptyRouteParams())
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(401)
@@ -60,7 +60,7 @@ describe('POST /api/vat/validate', () => {
       body: {},
     })
 
-    const res = await POST(req)
+    const res = await POST(req, emptyRouteParams())
     const { status } = await parseJsonResponse(res)
 
     expect(status).toBe(400)
@@ -79,7 +79,7 @@ describe('POST /api/vat/validate', () => {
       body: { vat_number: 'DE' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, emptyRouteParams())
     const { status } = await parseJsonResponse(res)
 
     expect(status).toBe(400)
@@ -105,7 +105,7 @@ describe('POST /api/vat/validate', () => {
       body: { vat_number: 'DE123456789' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, emptyRouteParams())
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -136,7 +136,7 @@ describe('POST /api/vat/validate', () => {
       body: { vat_number: 'DE000000000' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, emptyRouteParams())
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -165,7 +165,7 @@ describe('POST /api/vat/validate', () => {
       },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, emptyRouteParams())
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -192,7 +192,7 @@ describe('POST /api/vat/validate', () => {
       },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, emptyRouteParams())
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -216,7 +216,7 @@ describe('POST /api/vat/validate', () => {
       body: { vat_number: 'DE123456789' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, emptyRouteParams())
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
