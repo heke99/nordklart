@@ -1,9 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { ensureInitialized } from '@/lib/init'
 import { verifyIntegrity } from '@/lib/core/documents/document-service'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 
 ensureInitialized()
 
@@ -11,23 +9,9 @@ ensureInitialized()
  * POST /api/documents/:id/verify
  * Verify document integrity by re-computing SHA-256 and comparing
  */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'document.verify',
+  async (request, { supabase, companyId }, { params }) => {
   const { id } = await params
 
   try {
@@ -41,4 +25,6 @@ export async function POST(
       { status: 500 }
     )
   }
-}
+  },
+  { requireWrite: true },
+)

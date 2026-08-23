@@ -1,23 +1,14 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * GET /api/documents/counts?journal_entry_ids=id1,id2,...
  * Returns attachment counts per journal entry ID.
  * Max 50 IDs per request.
  */
-export async function GET(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext(
+  'document.counts',
+  async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const idsParam = searchParams.get('journal_entry_ids')
 
@@ -55,4 +46,5 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ data: counts })
-}
+  },
+)

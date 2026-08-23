@@ -46,6 +46,26 @@ export const CORE_OPERATION_PREFIXES: ReadonlyArray<{ prefix: string; reason: st
     reason: 'Statusöversikt över bolagets kopplingar (läs-endast).',
   },
   {
+    prefix: 'document.',
+    // Räkenskapsinformation. BFL 7 kap requires the company to be able to
+    // reach its own verifikationsunderlag for seven years, and that duty does
+    // not lapse when a subscription does — the customer whose plan ended is
+    // exactly the one who still has to produce receipts for Skatteverket.
+    //
+    // This entry DELIBERATELY LOOSENS four routes that were gated on
+    // bookkeeping.core before it: document.upload, document.list,
+    // document.link and document.inbox_available. That was not a considered
+    // policy — the surface had simply been converted piecemeal, leaving a
+    // split where a customer could not LIST their own documents but could
+    // still fetch one by id. Freeing the whole surface is the coherent
+    // resolution and was signed off as a commercial decision, not a security
+    // one. Do not "fix" this back to a gate without revisiting that call.
+    //
+    // Scope is the dashboard only: featureForApiV1Operation() does not consult
+    // CORE_OPERATION_PREFIXES, so the paid v1 API keeps its own gating.
+    reason: 'Räkenskapsinformation enligt BFL 7 kap; åtkomlig i sju år oavsett plan.',
+  },
+  {
     prefix: 'user_account.',
     // The user-account surface (password, email, locale, MFA, account
     // deletion) belongs to the person, not the company, and must keep working
