@@ -44,7 +44,37 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Same false-green guard as compliance-pr.yml: without Bedrock
+      # credentials the action runs zero checks and still reports a clean
+      # result. Here it fires nightly with nobody watching, so a green run
+      # that audited nothing is even easier to mistake for coverage.
+      - name: Check for Bedrock credentials
+        id: creds
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Announce that the audit did not run
+        if: steps.creds.outputs.available != 'true'
+        env:
+          REASON: 'AWS Bedrock credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) are not set on this repository.'
+        run: |
+          echo "::warning title=Full compliance audit did not run::${REASON}"
+          {
+            echo "### ⚠️ Full hybrid audit did not run"
+            echo
+            echo "${REASON}"
+            echo
+            echo "No compliance audit was performed. This run proves nothing about the repository's compliance posture."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: erp-mafia/compliancemaxx@v2
+        if: steps.creds.outputs.available == 'true'
         with:
           mode: audit                    # v2 name; was `swarm` in v1
           llm-provider: bedrock

@@ -27,7 +27,27 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The action is LLM-driven and needs Bedrock credentials. Without them it
+      # runs zero checks and posts "✅ No active findings. 0 check(s) ran; 0
+      # passed" — a green tick and a clean bill of health for an audit that
+      # never happened. That is the same false-green defect already fixed in
+      # swedish-compliance-review.yml, and on an accounting product a
+      # compliance check nobody can tell didn't run is worse than no check at
+      # all. The action is third-party, so the fix is to not invoke it without
+      # credentials and to say so instead.
+      - name: Check for Bedrock credentials
+        id: creds
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        run: |
+          if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: erp-mafia/compliancemaxx@v2
+        if: steps.creds.outputs.available == 'true'
         with:
           base: ${{ github.event.pull_request.base.sha }}
           fail-on-findings: false           # advisory while bedding in
@@ -35,3 +55,48 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: eu-north-1
+
+      # Mirrors announceSkip() in scripts/swedish-compliance-review.mjs: a
+      # warning annotation, a step summary, and a PR comment that says plainly
+      # that nothing was analysed. The job still succeeds — it is advisory —
+      # but nobody can now read that success as compliance approval.
+      - name: Announce that the review did not run
+        if: steps.creds.outputs.available != 'true'
+        env:
+          REASON: 'AWS Bedrock credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) are not set on this repository.'
+        run: |
+          echo "::warning title=Compliance review did not run::${REASON}"
+          {
+            echo "### ⚠️ Compliance review (advisory) did not run"
+            echo
+            echo "${REASON}"
+            echo
+            echo "This check is advisory and therefore still reports success. It did **not** analyse this diff."
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "<!-- compliancemaxx-review-bot -->"
+            echo
+            echo "## Compliance Review (advisory)"
+            echo
+            echo "⚠️ **Did not run.** ${REASON}"
+            echo
+            echo "No compliance analysis was performed on this diff."
+          } > compliance-skip.md
+
+      - name: Find previous compliance comment
+        if: steps.creds.outputs.available != 'true'
+        uses: peter-evans/find-comment@v3
+        id: find-comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- compliancemaxx-review-bot -->'
+
+      - name: Post or update the did-not-run comment
+        if: steps.creds.outputs.available != 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          body-path: compliance-skip.md
+          edit-mode: replace
