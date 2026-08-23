@@ -161,7 +161,7 @@ Tool authoring conventions, the staged-operation completion-signal pattern, and 
 **CI**:
 - `.github/workflows/core-build.yml` — resets extensions to empty, runs build + test, verifies no core code imports from `@/extensions/` directly.
 - `.github/workflows/swedish-compliance-review.yml` — Swedish accounting compliance review on PRs touching bookkeeping/reports/tax logic.
-- `.github/workflows/docker-publish.yml` — pushes images to GHCR (`erp-mafia/nordklart`) on main.
+- `.github/workflows/docker-publish.yml` — pushes images to GHCR (`ghcr.io/heke99/nordklart`) on main.
 
 ---
 
