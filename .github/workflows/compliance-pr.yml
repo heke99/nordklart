@@ -83,7 +83,26 @@ jobs:
             echo "No compliance analysis was performed on this diff."
           } > compliance-skip.md
 
-      - name: Find previous compliance comment
+      # Two finders, in this order, because the action leaves a comment behind.
+      # Any PR that ran before this fix carries its "✅ No active findings.
+      # 0 check(s) ran" text, and now that the action is no longer invoked
+      # nothing will ever update that comment again — it is frozen as a
+      # permanent false green. Posting the truth *underneath* it would leave
+      # the lie standing, so the did-not-run text REPLACES it when it exists.
+      #
+      # `compliance-swarm — fail` is the action's own footer. After a replace
+      # the body carries our marker instead, so this finder stops matching and
+      # the one below takes over: the two comments converge into one.
+      - name: Find the action's leftover comment
+        if: steps.creds.outputs.available != 'true'
+        uses: peter-evans/find-comment@v3
+        id: find-legacy
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: 'compliance-swarm — fail'
+
+      - name: Find previous did-not-run comment
         if: steps.creds.outputs.available != 'true'
         uses: peter-evans/find-comment@v3
         id: find-comment
@@ -97,6 +116,6 @@ jobs:
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
-          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          comment-id: ${{ steps.find-legacy.outputs.comment-id || steps.find-comment.outputs.comment-id }}
           body-path: compliance-skip.md
           edit-mode: replace
