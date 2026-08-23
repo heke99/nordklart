@@ -17,6 +17,8 @@ type AuthMetadata = Record<string, unknown>
 function mockUserClient(opts: {
   user: { id: string; app_metadata?: AuthMetadata } | null
   updateUserError?: { message: string; status?: number; code?: string } | null
+  aal?: { currentLevel: string; nextLevel: string }
+  aalError?: { message: string } | null
 }) {
   const updateUser = vi.fn().mockResolvedValue({
     data: {},
@@ -27,6 +29,15 @@ function mockUserClient(opts: {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: opts.user } }),
       updateUser,
+      // requireAuth() probes the assurance level whenever MFA is enforced.
+      // Default to a session that needs no step-up so the existing cases are
+      // unaffected; the MFA tests below override it.
+      mfa: {
+        getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({
+          data: opts.aal ?? { currentLevel: 'aal1', nextLevel: 'aal1' },
+          error: opts.aalError ?? null,
+        }),
+      },
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any)
@@ -297,6 +308,59 @@ describe('POST /api/account/password', () => {
 
       expect(status).toBe(400)
       expect(body.error).toContain('AAL2')
+    })
+  })
+
+  describe('MFA enforcement (hosted)', () => {
+    // The route sets a password without asking for the current one. For an
+    // account that already has one, Supabase's own updateUser() refuses at
+    // AAL1 — the test above pins that. The gap was the FIRST-TIME path: it
+    // goes through the service-role admin API, which has no AAL check at all.
+    //
+    // A magic-link account (no password) that has enrolled TOTP is exactly
+    // that case: shouldEnforceMfa() returns true because it is not
+    // BankID-only, yet nothing in the route or in the admin API stopped an
+    // AAL1 session from setting a password.
+    it('refuses the first-time-set path from an AAL1 session', async () => {
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+      const { updateUserById } = mockService({ priorAppMetadata: {} })
+      mockUserClient({
+        // has_password absent => isFirstTimeSet => service-role admin path
+        user: { id: 'user-1', app_metadata: {} },
+        aal: { currentLevel: 'aal1', nextLevel: 'aal2' },
+      })
+
+      const req = createMockRequest('/api/account/password', {
+        method: 'POST',
+        body: { password: STRONG_PASSWORD },
+      })
+      const { status } = await parseJsonResponse(await POST(req))
+
+      expect(status).toBe(403)
+      // The point of the fix: the admin API is never reached.
+      expect(updateUserById).not.toHaveBeenCalled()
+    })
+
+    it('still lets a BankID-only account set its first password', async () => {
+      // shouldEnforceMfa() exempts bankid_linked accounts with no password of
+      // their own, so onboarding is not broken by the guard above.
+      vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+      vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+      const { updateUserById } = mockService({ priorAppMetadata: { bankid_linked: true } })
+      mockUserClient({
+        user: { id: 'user-1', app_metadata: { bankid_linked: true } },
+        aal: { currentLevel: 'aal1', nextLevel: 'aal2' },
+      })
+
+      const req = createMockRequest('/api/account/password', {
+        method: 'POST',
+        body: { password: STRONG_PASSWORD },
+      })
+      const { status } = await parseJsonResponse(await POST(req))
+
+      expect(status).not.toBe(403)
+      expect(updateUserById).toHaveBeenCalled()
     })
   })
 })

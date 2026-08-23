@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { parseJsonResponse, createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
+import { parseJsonResponse, createQueuedMockSupabase, makeTransaction, createMockRequest, emptyRouteParams } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
@@ -13,6 +13,7 @@ vi.mock('@/lib/invoices/invoice-matching', () => ({
 
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 vi.mock('@/lib/auth/require-write', () => ({
@@ -33,7 +34,7 @@ describe('POST /api/transactions/batch-match-invoices', () => {
   it('returns 401 when not authenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
 
-    const response = await POST()
+    const response = await POST(createMockRequest('http://localhost/api/transactions/batch-match-invoices', { method: 'POST' }), emptyRouteParams())
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -47,7 +48,7 @@ describe('POST /api/transactions/batch-match-invoices', () => {
 
     mockGetBestInvoiceMatch.mockResolvedValue({ invoice: { id: 'inv-1' }, confidence: 0.9 })
 
-    const response = await POST()
+    const response = await POST(createMockRequest('http://localhost/api/transactions/batch-match-invoices', { method: 'POST' }), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ processed: number; matched: number }>(response)
 
     expect(status).toBe(200)
@@ -75,7 +76,7 @@ describe('POST /api/transactions/batch-match-invoices', () => {
 
     mockGetBestInvoiceMatch.mockResolvedValue(null)
 
-    const response = await POST()
+    const response = await POST(createMockRequest('http://localhost/api/transactions/batch-match-invoices', { method: 'POST' }), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ processed: number; matched: number }>(response)
 
     expect(status).toBe(200)
@@ -85,7 +86,7 @@ describe('POST /api/transactions/batch-match-invoices', () => {
   it('returns 500 when the transaction fetch fails', async () => {
     enqueue({ data: null, error: { message: 'boom' } })
 
-    const response = await POST()
+    const response = await POST(createMockRequest('http://localhost/api/transactions/batch-match-invoices', { method: 'POST' }), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)

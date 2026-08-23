@@ -1,28 +1,18 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { createDraftEntry, createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
-import { checkFeatureAccess, featureAccessError, NORDKLART_FEATURES } from '@/lib/platform/entitlements'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 ensureInitialized()
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const access = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (!access.allowed) return featureAccessError(NORDKLART_FEATURES.bookkeepingCore, access.reason)
-
+// `journal_entry.*` resolves to bookkeeping.core through the feature-policy
+// prefix map, which is the same gate these handlers applied by hand.
+export const GET = withRouteContext(
+  'journal_entry.list',
+  async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
   const status = searchParams.get('status')
@@ -143,24 +133,18 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ data, count })
-}
+  },
+)
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const access = await checkFeatureAccess(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (!access.allowed) return featureAccessError(NORDKLART_FEATURES.bookkeepingCore, access.reason)
-
-  const validation = await validateBody(request, CreateJournalEntrySchema)
+// requireWrite mirrors the requireWritePermission() call this handler used to
+// make; the wrapper rejects viewers before the handler body runs.
+export const POST = withRouteContext(
+  'journal_entry.create',
+  async (request, { supabase, companyId, user, log }) => {
+  const validation = await validateBody(request, CreateJournalEntrySchema, {
+    log,
+    operation: 'journal_entry.create',
+  })
   if (!validation.success) return validation.response
   const body = validation.data
 
@@ -180,4 +164,6 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
-}
+  },
+  { requireWrite: true },
+)

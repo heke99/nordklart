@@ -1,12 +1,8 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { AttachDocumentSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 
 ensureInitialized()
@@ -21,22 +17,14 @@ ensureInitialized()
  *
  * Idempotent — overwrites any existing link.
  */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const POST = withRouteContext(
+  'transaction.attach_document',
+  async (
+    request,
+    { supabase, companyId, user },
+    { params }: { params: Promise<{ id: string }> },
+  ) => {
   const { id: transactionId } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
 
   const validation = await validateBody(request, AttachDocumentSchema)
   if (!validation.success) return validation.response
@@ -132,7 +120,9 @@ export async function POST(
   return NextResponse.json({
     data: { transaction_id: transactionId, document_id, previous_document_id: previousDocumentId },
   })
-}
+  },
+  { requireWrite: true },
+)
 
 /**
  * DELETE /api/transactions/[id]/attach-document
@@ -143,22 +133,14 @@ export async function POST(
  * räkenskapsinformation immutability) — at that point the doc is the
  * verifikation's underlag and can only be undone by reversing the entry.
  */
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const DELETE = withRouteContext(
+  'transaction.detach_document',
+  async (
+    _request,
+    { supabase, companyId, user },
+    { params }: { params: Promise<{ id: string }> },
+  ) => {
   const { id: transactionId } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
 
   const { data: tx, error: fetchError } = await supabase
     .from('transactions')
@@ -216,4 +198,6 @@ export async function DELETE(
   }
 
   return NextResponse.json({ data: { transaction_id: transactionId, document_id: null } })
-}
+  },
+  { requireWrite: true },
+)

@@ -45,6 +45,24 @@ export const CORE_OPERATION_PREFIXES: ReadonlyArray<{ prefix: string; reason: st
     prefix: 'integrations.',
     reason: 'Statusöversikt över bolagets kopplingar (läs-endast).',
   },
+  {
+    prefix: 'user_account.',
+    // The user-account surface (password, email, locale, MFA, account
+    // deletion) belongs to the person, not the company, and must keep working
+    // on any plan — including a lapsed or downgraded one. Locking someone out
+    // of their own password change because their bookkeeping entitlement
+    // expired is the false-paywall defect class, applied to account recovery.
+    //
+    // The prefix is `user_account.`, NOT `account.`, and that is deliberate:
+    // `account.` is already claimed by the bookkeeping prefix list below,
+    // where it means a chart-of-accounts account (BAS 1930 etc.). The two
+    // senses of the word collide, and the bookkeeping one got there first.
+    // Naming a route in app/api/account/ `account.password` resolves to
+    // bookkeeping.core — verified — and the `normalized.includes('account')`
+    // fallback catches it too, so both paths must be bypassed. This entry is
+    // read before either.
+    reason: 'Användarens eget konto; måste fungera oavsett bolagets plan.',
+  },
 ]
 
 /**

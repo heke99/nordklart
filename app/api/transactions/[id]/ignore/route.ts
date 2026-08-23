@@ -1,9 +1,5 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * POST /api/transactions/[id]/ignore
@@ -17,24 +13,14 @@ import { requireWritePermission } from '@/lib/auth/require-write'
  * Refuses when the transaction is already booked; once a verifikation exists,
  * the proper way to revisit it is /uncategorize (storno).
  */
-export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const POST = withRouteContext(
+  'transaction.ignore',
+  async (
+    _request,
+    { supabase, companyId },
+    { params }: { params: Promise<{ id: string }> },
+  ) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
 
   const { data: transaction, error: fetchError } = await supabase
     .from('transactions')
@@ -69,7 +55,9 @@ export async function POST(
   }
 
   return NextResponse.json({ success: true })
-}
+  },
+  { requireWrite: true },
+)
 
 /**
  * DELETE /api/transactions/[id]/ignore
@@ -78,24 +66,14 @@ export async function POST(
  * no further side effects — we never created a verifikation, so there's
  * nothing to storno.
  */
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const DELETE = withRouteContext(
+  'transaction.unignore',
+  async (
+    _request,
+    { supabase, companyId },
+    { params }: { params: Promise<{ id: string }> },
+  ) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
 
   const { error: updateError } = await supabase
     .from('transactions')
@@ -108,4 +86,6 @@ export async function DELETE(
   }
 
   return NextResponse.json({ success: true })
-}
+  },
+  { requireWrite: true },
+)

@@ -1,7 +1,6 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
@@ -13,18 +12,13 @@ import {
   calculateAvgPaymentDays,
 } from '@/lib/reports/kpi'
 import { mergeWithDefaults } from '@/lib/reports/kpi-definitions'
-import { requireCompanyId } from '@/lib/company/context'
 import type { KPIReport, KPIPreferences } from '@/types'
 
-async function getKpiReport(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.reportsCore)
-  if (featureGateResponse) return featureGateResponse
-
+async function getKpiReport(
+  request: Request,
+  supabase: SupabaseClient,
+  companyId: string,
+) {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
   if (!periodId) {
@@ -207,10 +201,15 @@ async function getKpiReport(request: Request) {
 }
 
 
-export async function GET(request: Request) {
-  const requestId = crypto.randomUUID()
+// `report.kpi` resolves to reports.core, the gate getKpiReport applied by hand.
+// The try/catch stays inside the handler rather than being left to the
+// wrapper's envelope: MonthlyBreakdownDataError carries a specific code and a
+// Swedish message the report UI renders, and a generic 500 would lose both.
+export const GET = withRouteContext(
+  'report.kpi',
+  async (request, { supabase, companyId, requestId }) => {
   try {
-    return await getKpiReport(request)
+    return await getKpiReport(request, supabase, companyId)
   } catch (error) {
     const code = error instanceof MonthlyBreakdownDataError
       ? error.code
@@ -225,4 +224,5 @@ export async function GET(request: Request) {
       { status: 500 },
     )
   }
-}
+  },
+)

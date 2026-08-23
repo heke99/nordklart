@@ -34,25 +34,10 @@ const log = createLogger('api.invoices.cancel')
  * Only drafts may be removed either way. Sent / paid invoices are immutable per
  * BFL and must be reversed via a credit note instead.
  */
-export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'invoice.delete',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.invoicingCore)
-  if (featureGateResponse) return featureGateResponse
 
   const { data: invoice, error: fetchError } = await supabase
     .from('invoices')
@@ -130,7 +115,9 @@ export async function DELETE(
   }
 
   return NextResponse.json({ data: { cancelled: true, invoice_number: invoice.invoice_number } })
-}
+  },
+  { requireWrite: true },
+)
 
 /**
  * PATCH /api/invoices/[id]

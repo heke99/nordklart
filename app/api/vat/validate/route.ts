@@ -1,29 +1,15 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { validateBody } from '@/lib/api/validate'
 import { ValidateVatNumberSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { guardSandbox } from '@/lib/sandbox/guard'
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  // Commercial feature gate — same policy the JSON counterparts get via
-  // withRouteContext (scripts/check-feature-policy-coverage.ts enforces it).
-  const featureError = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureError) return featureError
-
+// The gate this handler applied by hand is now the wrapper's: `vat.validate`
+// resolves to bookkeeping.core.
+export const POST = withRouteContext(
+  'vat.validate',
+  async (request, { supabase, companyId }) => {
   // VIES is a live external call to the EU Commission — block in the sandbox
   // so the demo can't generate background traffic against it.
   const blocked = await guardSandbox(supabase, companyId)
@@ -49,4 +35,5 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json(validation)
-}
+  },
+)

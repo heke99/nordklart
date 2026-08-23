@@ -1,12 +1,8 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateTransactionFromDocumentSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 ensureInitialized()
 
@@ -22,20 +18,13 @@ ensureInitialized()
  * Use case: receipt in the inbox has no matching bank transaction
  * (cash purchase, personal-card expense, missed sync).
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
-
-  const validation = await validateBody(request, CreateTransactionFromDocumentSchema)
+export const POST = withRouteContext(
+  'transaction.create_from_document',
+  async (request, { supabase, companyId, user, log }) => {
+  const validation = await validateBody(request, CreateTransactionFromDocumentSchema, {
+    log,
+    operation: 'transaction.create_from_document',
+  })
   if (!validation.success) return validation.response
   const { inbox_item_id, amount, transaction_date, description } = validation.data
 
@@ -140,4 +129,6 @@ export async function POST(request: Request) {
   return NextResponse.json({
     data: { transaction_id: newTx.id, inbox_item_id, document_id: item.document_id },
   })
-}
+  },
+  { requireWrite: true },
+)

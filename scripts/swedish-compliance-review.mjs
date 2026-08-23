@@ -4,7 +4,7 @@
 // feedback to review.md for the workflow to post as a PR comment.
 
 import AnthropicBedrock from '@anthropic-ai/bedrock-sdk';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -127,13 +127,41 @@ ${diff}
 \`\`\`${note}`;
 }
 
+/**
+ * Surface a skip in the Actions UI, not only in the PR comment.
+ *
+ * This review is advisory, so a missing credential must not fail the build —
+ * but exiting 0 silently made the check render as a green "success" tick that
+ * reads exactly like "compliance review passed". It had in fact never run: the
+ * AWS Bedrock secrets are not configured on this repository, so every PR since
+ * the workflow was added got a green tick over zero analysis, on the one class
+ * of logic (Swedish accounting law) that §92 ranks first for correctness.
+ *
+ * A `::warning::` annotation and a job summary make the skip visible on the run
+ * page and in the checks tab, so "green" stops meaning two different things.
+ */
+function announceSkip(reason) {
+  console.log(`::warning title=Swedish compliance review did not run::${reason}`);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### ⚠️ Swedish Accounting Compliance Review did not run\n\n${reason}\n\n` +
+        'This check is advisory and therefore still reports success. It did **not** ' +
+        'analyse this diff.\n',
+    );
+  }
+}
+
 async function main() {
   if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
+    const reason =
+      'AWS Bedrock credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) are not set on this repository.';
     writeFileSync(
       OUTPUT_FILE,
-      `${COMMENT_MARKER}\n\n## Swedish Accounting Compliance Review\n\nSkipped: AWS Bedrock credentials (\`AWS_ACCESS_KEY_ID\` / \`AWS_SECRET_ACCESS_KEY\`) are not set.\n`,
+      `${COMMENT_MARKER}\n\n## Swedish Accounting Compliance Review\n\n` +
+        `⚠️ **Did not run.** ${reason}\n\nNo compliance analysis was performed on this diff.\n`,
     );
-    console.warn('AWS credentials missing — wrote skip notice and exiting 0.');
+    announceSkip(reason);
     return;
   }
 

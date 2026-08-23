@@ -127,6 +127,32 @@ describe('featureForOperation', () => {
   it('returns null for unknown operations', () => {
     expect(featureForOperation('totally.unknown.operation')).toBeNull()
   })
+
+  it('never gates the user-account surface on a company entitlement', () => {
+    // The person's own account must keep working on any plan, including a
+    // lapsed one — locking someone out of their own password change because
+    // the company's bookkeeping entitlement expired is the false-paywall
+    // defect applied to account recovery.
+    for (const op of [
+      'user_account.password',
+      'user_account.email',
+      'user_account.locale',
+      'user_account.delete',
+      'user_account.mfa.enroll',
+    ]) {
+      expect(featureForOperation(op)).toBeNull()
+    }
+  })
+
+  it('still resolves chart-of-accounts operations to bookkeeping.core', () => {
+    // `account.` means a BAS account here and is claimed by the bookkeeping
+    // prefix list. That collision is the reason the user-account surface is
+    // spelled `user_account.` — this pins that the bookkeeping sense is
+    // unaffected, so the exemption above cannot silently widen.
+    expect(featureForOperation('account.list')).toBe(NORDKLART_FEATURES.bookkeepingCore)
+    expect(featureForOperation('accounts.activate')).toBe(NORDKLART_FEATURES.bookkeepingCore)
+    expect(featureForOperation('account.password')).toBe(NORDKLART_FEATURES.bookkeepingCore)
+  })
 })
 
 describe('featureForApiV1Operation', () => {

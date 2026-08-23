@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
+import { parseJsonResponse, createQueuedMockSupabase, emptyRouteParams } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
@@ -57,27 +57,27 @@ function validBody(overrides: Partial<{
 describe('POST /api/transactions/create-from-document', () => {
   it('returns 401 when not authenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status, body } = await parseJsonResponse(res)
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
   })
 
   it('returns 400 when the body is invalid', async () => {
-    const res = await POST(makeReq({ inbox_item_id: 'not-a-uuid', amount: 0 }))
+    const res = await POST(makeReq({ inbox_item_id: 'not-a-uuid', amount: 0 }), emptyRouteParams())
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(400)
   })
 
   it('returns 400 when amount is zero (schema refine)', async () => {
-    const res = await POST(makeReq(validBody({ amount: 0 })))
+    const res = await POST(makeReq(validBody({ amount: 0 })), emptyRouteParams())
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(400)
   })
 
   it('returns 404 when the inbox item is not in the user company', async () => {
     enqueue({ data: null, error: null }) // inbox item lookup misses
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(404)
     expect(body.error).toBe('Inbox item not found')
@@ -94,7 +94,7 @@ describe('POST /api/transactions/create-from-document', () => {
       },
       error: null,
     })
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(409)
     expect(body.error).toMatch(/redan kopplad/)
@@ -111,7 +111,7 @@ describe('POST /api/transactions/create-from-document', () => {
       },
       error: null,
     })
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(409)
     expect(body.error).toMatch(/redan bokförd/)
@@ -131,7 +131,7 @@ describe('POST /api/transactions/create-from-document', () => {
     enqueue({ data: { id: 'new-tx-1' }, error: null }) // insert
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // inbox update — one row affected
 
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: { transaction_id: string; inbox_item_id: string; document_id: string }
     }>(res)
@@ -159,7 +159,7 @@ describe('POST /api/transactions/create-from-document', () => {
     enqueue({ data: [], error: null }) // inbox update affects zero rows — lost the race
     enqueue({ data: null, error: null }) // rollback delete of the orphan
 
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(409)
     expect(body.error).toMatch(/parallell begäran/)
@@ -182,7 +182,7 @@ describe('POST /api/transactions/create-from-document', () => {
     enqueue({ data: { id: 'new-tx-3' }, error: null })
     enqueue({ data: [{ id: VALID_UUID }], error: null })
 
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(200)
   })
@@ -201,7 +201,7 @@ describe('POST /api/transactions/create-from-document', () => {
     enqueue({ data: null, error: { message: 'db down' } }) // insert fails
     // Silence the console.error
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(500)
     expect(body.error).toMatch(/Kunde inte skapa transaktion/)
@@ -222,7 +222,7 @@ describe('POST /api/transactions/create-from-document', () => {
     enqueue({ data: { id: 'new-tx-2' }, error: null }) // insert ok
     enqueue({ data: null, error: { message: 'rls' } }) // link update fails
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const res = await POST(makeReq(validBody()))
+    const res = await POST(makeReq(validBody()), emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: { transaction_id: string; inbox_link_failed?: boolean }
     }>(res)

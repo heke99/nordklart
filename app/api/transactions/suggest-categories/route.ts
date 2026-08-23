@@ -1,28 +1,16 @@
-import { requireCompanyFeatureResponse } from '@/lib/platform/feature-policy'
-import { NORDKLART_FEATURES } from '@/lib/platform/entitlements'
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { getSuggestedCategories, getSuggestedTemplates, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName, toCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
-import { requireCompanyId } from '@/lib/company/context'
 import type { Transaction, EntityType } from '@/types'
 
 /**
  * POST /api/transactions/suggest-categories
  * Batch endpoint for getting category suggestions for multiple transactions
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const featureGateResponse = await requireCompanyFeatureResponse(supabase, companyId, NORDKLART_FEATURES.bookkeepingCore)
-  if (featureGateResponse) return featureGateResponse
+export const POST = withRouteContext(
+  'transaction.suggest_categories',
+  async (request, { supabase, companyId, user }) => {
 
   const { transaction_ids } = await request.json()
 
@@ -117,6 +105,6 @@ export async function POST(request: Request) {
     template_suggestions[tx.id] = [cpSuggestion, ...existing]
   }
 
-
   return NextResponse.json({ suggestions, template_suggestions })
-}
+  },
+)

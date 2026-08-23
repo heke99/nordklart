@@ -1,9 +1,8 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: all reach 0 (A1 route-auth campaign, D1 rounding codemod, RLS backfill).",
   "rawRouteAuth": {
-    "count": 83,
+    "count": 70,
     "files": [
-      "app/api/account/password/route.ts",
       "app/api/agency/clients/route.ts",
       "app/api/agency/staff/invite/route.ts",
       "app/api/agent/composer/route.ts",
@@ -20,7 +19,6 @@
       "app/api/audit-trail/route.ts",
       "app/api/bookkeeping/accounts/bas-lookup/route.ts",
       "app/api/bookkeeping/fiscal-periods/route.ts",
-      "app/api/bookkeeping/journal-entries/route.ts",
       "app/api/calendar/feed/route.ts",
       "app/api/cash-accounts/route.ts",
       "app/api/company/access-requests/[id]/approve/route.ts",
@@ -54,7 +52,6 @@
       "app/api/pending-operations/[id]/route.ts",
       "app/api/pending-operations/bulk-commit/route.ts",
       "app/api/pending-operations/route.ts",
-      "app/api/reports/kpi/route.ts",
       "app/api/salary/payroll-config/[year]/route.ts",
       "app/api/salary/runs/[id]/payslips/send/route.ts",
       "app/api/salary/tax-tables/lookup/route.ts",
@@ -73,19 +70,9 @@
       "app/api/skatteverket/tax-payments/[period]/mark-paid/route.ts",
       "app/api/skatteverket/tax-payments/[period]/payment-file/route.ts",
       "app/api/skatteverket/tax-payments/[period]/route.ts",
-      "app/api/supplier-invoices/[id]/route.ts",
-      "app/api/supplier-invoices/[id]/uncredit/route.ts",
       "app/api/support/contact/route.ts",
       "app/api/tax-deadlines/generate/route.ts",
-      "app/api/team/members/route.ts",
-      "app/api/transactions/[id]/attach-document/route.ts",
-      "app/api/transactions/[id]/book/route.ts",
-      "app/api/transactions/[id]/ignore/route.ts",
-      "app/api/transactions/[id]/uncategorize/route.ts",
-      "app/api/transactions/batch-match-invoices/route.ts",
-      "app/api/transactions/create-from-document/route.ts",
-      "app/api/transactions/suggest-categories/route.ts",
-      "app/api/vat/validate/route.ts"
+      "app/api/team/members/route.ts"
     ]
   },
   "naiveOreRound": {
@@ -106,7 +93,7 @@
     ]
   },
   "adhocErrorEnvelope": {
-    "count": 168,
+    "count": 166,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -140,7 +127,6 @@
       "app/api/bookkeeping/fiscal-periods/period-status/route.ts",
       "app/api/bookkeeping/journal-entries/[id]/chain/route.ts",
       "app/api/bookkeeping/journal-entries/[id]/no-document-required/route.ts",
-      "app/api/bookkeeping/journal-entries/route.ts",
       "app/api/bookkeeping/mapping-rules/evaluate/route.ts",
       "app/api/bookkeeping/voucher-gaps/route.ts",
       "app/api/calendar/feed/route.ts",
@@ -274,8 +260,7 @@
       "app/api/transactions/create-from-document/route.ts",
       "app/api/transactions/route.ts",
       "app/api/transactions/suggest-categories/route.ts",
-      "app/api/user/locale/route.ts",
-      "app/api/vat/validate/route.ts"
+      "app/api/user/locale/route.ts"
     ]
   }
 }
