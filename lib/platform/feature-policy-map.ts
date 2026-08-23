@@ -46,6 +46,28 @@ export const CORE_OPERATION_PREFIXES: ReadonlyArray<{ prefix: string; reason: st
     reason: 'Statusöversikt över bolagets kopplingar (läs-endast).',
   },
   {
+    prefix: 'deadline.',
+    // The company's calendar of statutory due dates (momsdeklaration, AGI,
+    // årsredovisning). Gating it would mean a customer whose plan lapsed stops
+    // being told that a Skatteverket deadline is approaching — the obligation
+    // does not lapse with the subscription, so neither should the reminder.
+    reason: 'Lagstadgade förfallodatum; skyldigheten kvarstår oavsett plan.',
+  },
+  {
+    prefix: 'pending_operation.',
+    // Staging surface for operations awaiting confirmation: list, inspect,
+    // amend the preview, discard. None of these touch the ledger.
+    //
+    // Committing DOES touch the ledger, and is deliberately NOT covered by
+    // this prefix — `bookkeeping.pending_operation.commit` and `.bulk_commit`
+    // resolve to bookkeeping.core through the `bookkeeping.` prefix instead.
+    // commitPendingOperation() calls createJournalEntry(), so a commit is a
+    // journal entry by another name; leaving it free would let a customer
+    // without bookkeeping.core write vouchers through the side door while
+    // POST /api/bookkeeping/journal-entries refuses them at the front.
+    reason: 'Staging-yta utan huvudboksskrivning; commit gates separat på bookkeeping.core.',
+  },
+  {
     prefix: 'document.',
     // Räkenskapsinformation. BFL 7 kap requires the company to be able to
     // reach its own verifikationsunderlag for seven years, and that duty does

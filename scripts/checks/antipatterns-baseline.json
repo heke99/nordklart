@@ -1,7 +1,7 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: all reach 0 (A1 route-auth campaign, D1 rounding codemod, RLS backfill).",
   "rawRouteAuth": {
-    "count": 65,
+    "count": 56,
     "files": [
       "app/api/agency/clients/route.ts",
       "app/api/agency/staff/invite/route.ts",
@@ -31,10 +31,6 @@
       "app/api/company/members/route.ts",
       "app/api/company/route.ts",
       "app/api/currency/rate/route.ts",
-      "app/api/deadlines/[id]/complete/route.ts",
-      "app/api/deadlines/[id]/route.ts",
-      "app/api/deadlines/[id]/status/route.ts",
-      "app/api/deadlines/route.ts",
       "app/api/events/route.ts",
       "app/api/extensions/[sector]/[slug]/data/route.ts",
       "app/api/extensions/[sector]/[slug]/settings/route.ts",
@@ -42,11 +38,6 @@
       "app/api/extensions/skatteverket/skattekonto/drift/route.ts",
       "app/api/kpi/preferences/route.ts",
       "app/api/mcp-oauth/authorize/route.ts",
-      "app/api/pending-operations/[id]/commit/route.ts",
-      "app/api/pending-operations/[id]/reject/route.ts",
-      "app/api/pending-operations/[id]/route.ts",
-      "app/api/pending-operations/bulk-commit/route.ts",
-      "app/api/pending-operations/route.ts",
       "app/api/salary/payroll-config/[year]/route.ts",
       "app/api/salary/runs/[id]/payslips/send/route.ts",
       "app/api/salary/tax-tables/lookup/route.ts",
@@ -88,7 +79,7 @@
     ]
   },
   "adhocErrorEnvelope": {
-    "count": 165,
+    "count": 162,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -146,7 +137,6 @@
       "app/api/deadlines/[id]/complete/route.ts",
       "app/api/deadlines/[id]/route.ts",
       "app/api/deadlines/[id]/status/route.ts",
-      "app/api/deadlines/route.ts",
       "app/api/documents/[id]/extraction-status/route.ts",
       "app/api/documents/[id]/inline/route.ts",
       "app/api/documents/[id]/integrity/route.ts",
@@ -176,8 +166,6 @@
       "app/api/pending-operations/[id]/commit/route.ts",
       "app/api/pending-operations/[id]/reject/route.ts",
       "app/api/pending-operations/[id]/route.ts",
-      "app/api/pending-operations/bulk-commit/route.ts",
-      "app/api/pending-operations/route.ts",
       "app/api/peppol/inbound/route.ts",
       "app/api/platform/companies/[companyId]/troubleshooting/route.ts",
       "app/api/public/company-lookup/route.ts",

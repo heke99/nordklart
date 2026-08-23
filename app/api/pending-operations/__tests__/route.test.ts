@@ -2,8 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   createMockRequest,
   parseJsonResponse,
-  createQueuedMockSupabase,
-} from '@/tests/helpers'
+  createQueuedMockSupabase, emptyRouteParams } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
@@ -55,7 +54,7 @@ describe('GET /api/pending-operations', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
 
     const request = createMockRequest('/api/pending-operations')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -66,7 +65,7 @@ describe('GET /api/pending-operations', () => {
     enqueue({ data: sampleOps, count: 2 })
 
     const request = createMockRequest('/api/pending-operations')
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: typeof sampleOps
       count: number
@@ -83,7 +82,7 @@ describe('GET /api/pending-operations', () => {
     const request = createMockRequest('/api/pending-operations', {
       searchParams: { status: 'committed' },
     })
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
@@ -93,7 +92,7 @@ describe('GET /api/pending-operations', () => {
     const request = createMockRequest('/api/pending-operations', {
       searchParams: { status: 'invalid' },
     })
-    const response = await GET(request)
+    const response = await GET(request, emptyRouteParams())
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)

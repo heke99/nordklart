@@ -1,32 +1,14 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * POST /api/deadlines/[id]/complete
  * Toggle completion status of a deadline
  */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.complete',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
   // First, get current deadline state
   const { data: existing, error: fetchError } = await supabase
     .from('deadlines')
@@ -60,4 +42,6 @@ export async function POST(
   }
 
   return NextResponse.json({ data })
-}
+  },
+  { requireWrite: true },
+)

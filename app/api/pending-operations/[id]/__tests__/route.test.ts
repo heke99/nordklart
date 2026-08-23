@@ -14,6 +14,9 @@ vi.mock('@/lib/supabase/server', () => ({
 const requireCompanyIdMock = vi.fn()
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: (...args: unknown[]) => requireCompanyIdMock(...args),
+  // withRouteContext resolves the company through getActiveCompanyId, not
+  // requireCompanyId, so the wrapper needs its own entry here.
+  getActiveCompanyId: (...args: unknown[]) => requireCompanyIdMock(...args),
 }))
 
 const requireWritePermissionMock = vi.fn()
