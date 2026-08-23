@@ -1,9 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import type { EntityType, Transaction, TransactionCategory, VatTreatment } from '@/types'
 
@@ -44,20 +42,10 @@ const PatchSchema = z
     { message: 'Nothing to update' },
   )
 
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'pending_operation.update',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
   let body: z.infer<typeof PatchSchema>
   try {
     body = PatchSchema.parse(await request.json())
@@ -174,4 +162,6 @@ export async function PATCH(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   return NextResponse.json({ data: updated })
-}
+  },
+  { requireWrite: true },
+)

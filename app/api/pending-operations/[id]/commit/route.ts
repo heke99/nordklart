@@ -1,31 +1,16 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { bookkeepingErrorResponse, AccountsNotInChartError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import type { PendingOperation } from '@/types'
 
 ensureInitialized()
 
-export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'bookkeeping.pending_operation.commit',
+  async (_request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
   const { data: op, error: fetchError } = await supabase
     .from('pending_operations')
     .select('*')
@@ -71,4 +56,6 @@ export async function POST(
     if (typed) return typed
     throw err
   }
-}
+  },
+  { requireWrite: true },
+)

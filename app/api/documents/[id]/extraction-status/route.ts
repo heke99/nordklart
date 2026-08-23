@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 // GET /api/documents/:id/extraction-status
 //
@@ -18,15 +17,9 @@ import { requireCompanyId } from '@/lib/company/context'
 //                 stays untouched indefinitely). Client times out and shows
 //                 a quiet fallback. We don't distinguish this from running
 //                 server-side — the client decides based on elapsed time.
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'document.extraction_status',
+  async (_request, { supabase, companyId }, { params }) => {
   const { id } = await params
 
   const { data, error } = await supabase
@@ -62,4 +55,5 @@ export async function GET(
       extraction_model: model,
     },
   })
-}
+  },
+)

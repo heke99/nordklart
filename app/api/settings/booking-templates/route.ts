@@ -1,7 +1,8 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 
@@ -42,13 +43,9 @@ const CreateBookingTemplateSchema = z.object({
  * and name for never-used templates. Usage is tracked in
  * booking_template_usage via POST /[id]/touch.
  */
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext(
+  'booking_template.list',
+  async (request, { supabase, companyId, user }) => {
   // Resolve the team this company belongs to (if any) so team-shared
   // templates stay visible while this company is selected.
   const { data: company } = await supabase
@@ -125,12 +122,22 @@ export async function GET() {
   })
 
   return NextResponse.json({ data: decorated })
-}
+  },
+)
 
 /**
  * POST /api/settings/booking-templates
  * Create a company-scoped or team-scoped template.
  */
+// NOT converted to withRouteContext, deliberately. This handler treats
+// companyId as nullable: `body.team_id ? null : await requireCompanyId(...)`
+// stores a team-scoped template with company_id NULL, and only resolves a
+// company for the company-scoped case. The wrapper always resolves a company
+// and short-circuits with COMPANY_CONTEXT_MISSING when there is none, so
+// wrapping this would both flatten the null and require a company context for
+// a team-scoped create. Whether a user can hold a team without an active
+// company is not something I could establish from the code, and guessing is
+// how a working flow gets broken.
 export async function POST(request: Request) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -170,14 +177,9 @@ export async function POST(request: Request) {
  * DELETE /api/settings/booking-templates
  * Soft-delete a template by id (company or team scope only, never system).
  */
-export async function DELETE(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
+export const DELETE = withRouteContext(
+  'booking_template.delete',
+  async (request, { supabase, companyId, user }) => {
   let id: string | undefined
   try {
     const body = await request.json()
@@ -196,4 +198,6 @@ export async function DELETE(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   return NextResponse.json({ data: { success: true } })
-}
+  },
+  { requireWrite: true },
+)

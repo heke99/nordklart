@@ -46,6 +46,68 @@ export const CORE_OPERATION_PREFIXES: ReadonlyArray<{ prefix: string; reason: st
     reason: 'Statusöversikt över bolagets kopplingar (läs-endast).',
   },
   {
+    prefix: 'settings.',
+    // The company's own configuration surface. The features these settings
+    // configure are gated where they execute, not where they are typed in —
+    // the same reasoning the existing `automation.settings.` entry records.
+    // A customer on a reduced plan must still be able to see and correct their
+    // own company details, logo and invoicing defaults.
+    reason: 'Inställningsyta; funktionerna den konfigurerar gates vid körning.',
+  },
+  {
+    prefix: 'booking_template.',
+    // Saved posting templates, company- or team-scoped. They are a
+    // convenience over the chart of accounts, not a separate product: the
+    // bookkeeping they shortcut is gated at the point a voucher is written.
+    reason: 'Sparade konteringsmallar; bokföringen de förkortar gates vid bokning.',
+  },
+  {
+    prefix: 'counterparty_template.',
+    reason: 'Motpartsmallar; samma resonemang som konteringsmallar.',
+  },
+  {
+    prefix: 'deadline.',
+    // The company's calendar of statutory due dates (momsdeklaration, AGI,
+    // årsredovisning). Gating it would mean a customer whose plan lapsed stops
+    // being told that a Skatteverket deadline is approaching — the obligation
+    // does not lapse with the subscription, so neither should the reminder.
+    reason: 'Lagstadgade förfallodatum; skyldigheten kvarstår oavsett plan.',
+  },
+  {
+    prefix: 'pending_operation.',
+    // Staging surface for operations awaiting confirmation: list, inspect,
+    // amend the preview, discard. None of these touch the ledger.
+    //
+    // Committing DOES touch the ledger, and is deliberately NOT covered by
+    // this prefix — `bookkeeping.pending_operation.commit` and `.bulk_commit`
+    // resolve to bookkeeping.core through the `bookkeeping.` prefix instead.
+    // commitPendingOperation() calls createJournalEntry(), so a commit is a
+    // journal entry by another name; leaving it free would let a customer
+    // without bookkeeping.core write vouchers through the side door while
+    // POST /api/bookkeeping/journal-entries refuses them at the front.
+    reason: 'Staging-yta utan huvudboksskrivning; commit gates separat på bookkeeping.core.',
+  },
+  {
+    prefix: 'document.',
+    // Räkenskapsinformation. BFL 7 kap requires the company to be able to
+    // reach its own verifikationsunderlag for seven years, and that duty does
+    // not lapse when a subscription does — the customer whose plan ended is
+    // exactly the one who still has to produce receipts for Skatteverket.
+    //
+    // This entry DELIBERATELY LOOSENS four routes that were gated on
+    // bookkeeping.core before it: document.upload, document.list,
+    // document.link and document.inbox_available. That was not a considered
+    // policy — the surface had simply been converted piecemeal, leaving a
+    // split where a customer could not LIST their own documents but could
+    // still fetch one by id. Freeing the whole surface is the coherent
+    // resolution and was signed off as a commercial decision, not a security
+    // one. Do not "fix" this back to a gate without revisiting that call.
+    //
+    // Scope is the dashboard only: featureForApiV1Operation() does not consult
+    // CORE_OPERATION_PREFIXES, so the paid v1 API keeps its own gating.
+    reason: 'Räkenskapsinformation enligt BFL 7 kap; åtkomlig i sju år oavsett plan.',
+  },
+  {
     prefix: 'user_account.',
     // The user-account surface (password, email, locale, MFA, account
     // deletion) belongs to the person, not the company, and must keep working

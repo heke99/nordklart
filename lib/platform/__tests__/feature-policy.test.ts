@@ -56,8 +56,12 @@ describe('featureForOperation', () => {
     expect(featureForOperation('voucher_sequence.next')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('register_import.customers.parse')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('opening_balance.execute')).toBe(NORDKLART_FEATURES.bookkeepingCore)
-    expect(featureForOperation('document.upload')).toBe(NORDKLART_FEATURES.bookkeepingCore)
     expect(featureForOperation('period.lock')).toBe(NORDKLART_FEATURES.bookkeepingCore)
+    // `document.upload` used to be asserted here. It is now core — see
+    // 'never gates the document archive on a company entitlement' below.
+    // The document surface is räkenskapsinformation under BFL 7 kap and was
+    // deliberately freed; this line is left as a pointer so the removal reads
+    // as a decision rather than an accident.
   })
 
   it('keeps SIE operations null because the dedicated resolver supports bookkeeping and one-off year-end access', () => {
@@ -142,6 +146,61 @@ describe('featureForOperation', () => {
     ]) {
       expect(featureForOperation(op)).toBeNull()
     }
+  })
+
+  it('gates a pending-operation COMMIT on bookkeeping.core but not the staging surface', () => {
+    // commitPendingOperation() calls createJournalEntry(), so a commit is a
+    // journal entry by another name. Leaving it free would let a customer
+    // without bookkeeping.core write vouchers through the side door while
+    // POST /api/bookkeeping/journal-entries refuses them at the front.
+    expect(featureForOperation('bookkeeping.pending_operation.commit')).toBe(
+      NORDKLART_FEATURES.bookkeepingCore,
+    )
+    expect(featureForOperation('bookkeeping.pending_operation.bulk_commit')).toBe(
+      NORDKLART_FEATURES.bookkeepingCore,
+    )
+    // Reading, amending and discarding a staged operation touch no ledger.
+    for (const op of [
+      'pending_operation.list',
+      'pending_operation.update',
+      'pending_operation.reject',
+    ]) {
+      expect(featureForOperation(op)).toBeNull()
+    }
+  })
+
+  it('never gates the statutory deadline calendar', () => {
+    for (const op of ['deadline.list', 'deadline.create', 'deadline.complete']) {
+      expect(featureForOperation(op)).toBeNull()
+    }
+  })
+
+  it('never gates the document archive on a company entitlement', () => {
+    // BFL 7 kap: the company must reach its own verifikationsunderlag for
+    // seven years, including after a plan lapses. The first four below were
+    // gated on bookkeeping.core before the `document.` core prefix existed —
+    // they are listed explicitly so this test fails if that loosening is
+    // silently reverted.
+    for (const op of [
+      'document.upload',
+      'document.list',
+      'document.link',
+      'document.inbox_available',
+      'document.get',
+      'document.verify',
+      'document.versions',
+      'document.counts',
+    ]) {
+      expect(featureForOperation(op)).toBeNull()
+    }
+  })
+
+  it('leaves the paid v1 document API gated when the dashboard surface is free', () => {
+    // featureForApiV1Operation has its own resolution chain and does NOT read
+    // CORE_OPERATION_PREFIXES. That separation is what keeps the BFL exemption
+    // scoped to the dashboard instead of quietly ungating the paid API.
+    expect(featureForApiV1Operation('documents.list')).toBe(NORDKLART_FEATURES.bookkeepingCore)
+    expect(featureForApiV1Operation('documents.download')).toBe(NORDKLART_FEATURES.bookkeepingCore)
   })
 
   it('still resolves chart-of-accounts operations to bookkeeping.core', () => {

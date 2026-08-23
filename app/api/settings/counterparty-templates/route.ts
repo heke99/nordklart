@@ -1,15 +1,9 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext(
+  'counterparty_template.list',
+  async (request, { supabase, companyId, user }) => {
   const { data, error } = await supabase
     .from('categorization_templates')
     .select('*')
@@ -20,18 +14,12 @@ export async function GET() {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   return NextResponse.json({ data })
-}
+  },
+)
 
-export async function DELETE(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const DELETE = withRouteContext(
+  'counterparty_template.delete',
+  async (request, { supabase, companyId, user }) => {
   let id: string | undefined
   try {
     const body = await request.json()
@@ -50,4 +38,6 @@ export async function DELETE(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   return NextResponse.json({ data: { success: true } })
-}
+  },
+  { requireWrite: true },
+)

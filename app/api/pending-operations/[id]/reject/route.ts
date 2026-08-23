@@ -1,8 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 
 const RejectBodySchema = z.object({
   rejection_category: z
@@ -20,23 +18,10 @@ const RejectBodySchema = z.object({
  * and learn from "no". The body is optional — bodyless POSTs from older
  * clients still mark the op rejected with NULL category/reason.
  */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'pending_operation.reject',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
   // Body is optional — accept empty/missing body without rejecting the request.
   // Old clients posted no body; the UI dialog will now post a body, but we
   // keep accepting both shapes to avoid coupling the API to the UI version.
@@ -94,4 +79,6 @@ export async function POST(
   }
 
   return NextResponse.json({ data: { id, status: 'rejected' } })
-}
+  },
+  { requireWrite: true },
+)

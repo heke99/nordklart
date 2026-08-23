@@ -2,8 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   createMockRequest,
   parseJsonResponse,
-  createQueuedMockSupabase,
-} from '@/tests/helpers'
+  createQueuedMockSupabase, emptyRouteParams } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
@@ -66,7 +65,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: [VALID_ID_1] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -78,7 +77,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: [] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
@@ -90,7 +89,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: ['not-a-uuid'] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
@@ -106,7 +105,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
@@ -120,7 +119,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: [VALID_ID_1] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)
@@ -134,7 +133,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: [VALID_ID_1] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: {
         results: Array<{ id: string; status: string; error?: string }>
@@ -168,7 +167,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: [VALID_ID_1, VALID_ID_2] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: {
         results: Array<{ id: string; status: string; error?: string }>
@@ -209,7 +208,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: [VALID_ID_1, VALID_ID_2] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: {
         results: Array<{ id: string; status: string }>
@@ -261,7 +260,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: [VALID_ID_1] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: {
         results: Array<{ id: string; status: string; error?: string }>
@@ -306,7 +305,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       method: 'POST',
       body: { ids: [VALID_ID_1, VALID_ID_2, VALID_ID_3, VALID_ID_4, VALID_ID_5] },
     })
-    const response = await POST(request)
+    const response = await POST(request, emptyRouteParams())
     const { status, body } = await parseJsonResponse<{
       data: {
         results: Array<{ id: string; status: string; error?: string }>

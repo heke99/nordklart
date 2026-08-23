@@ -1,8 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { validateBody } from '@/lib/api/validate'
 import { PendingOperationsBulkSchema } from '@/lib/api/schemas'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
@@ -16,22 +14,12 @@ interface BulkCommitItemResult {
   error?: string
 }
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
+export const POST = withRouteContext(
+  'bookkeeping.pending_operation.bulk_commit',
+  async (request, { supabase, companyId, user }) => {
   const validated = await validateBody(request, PendingOperationsBulkSchema)
   if (!validated.success) return validated.response
   const { ids } = validated.data
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   const { data: ops, error: fetchError } = await supabase
     .from('pending_operations')
@@ -88,4 +76,6 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ data: { results, summary } })
-}
+  },
+  { requireWrite: true },
+)

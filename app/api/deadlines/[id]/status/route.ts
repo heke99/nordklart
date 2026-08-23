@@ -1,33 +1,16 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { updateDeadlineStatus, isValidTransition } from '@/lib/deadlines/status-engine'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import type { DeadlineStatus } from '@/types'
 
 /**
  * PATCH /api/deadlines/[id]/status
  * Manually update a deadline's status
  */
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.status_update',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
   const body = await request.json()
   const newStatus = body.status as DeadlineStatus
 
@@ -55,28 +38,18 @@ export async function PATCH(
   }
 
   return NextResponse.json({ success: true })
-}
+  },
+  { requireWrite: true },
+)
 
 /**
  * GET /api/deadlines/[id]/status
  * Get current status and valid transitions
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.status_get',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
   const { data: deadline, error } = await supabase
     .from('deadlines')
     .select('status, is_completed, due_date')
@@ -111,4 +84,5 @@ export async function GET(
     dueDate: deadline.due_date,
     validTransitions,
   })
-}
+  },
+)

@@ -1,7 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 
 const ImportLineSchema = z.object({
@@ -35,16 +33,9 @@ const ImportPayloadSchema = z.object({
  * Import templates from JSON (exported from another company).
  * Creates company-scoped templates for the active company.
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const POST = withRouteContext(
+  'booking_template.import',
+  async (request, { supabase, companyId, user }) => {
   let body: unknown
   try {
     body = await request.json()
@@ -80,4 +71,6 @@ export async function POST(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   return NextResponse.json({ data, imported: data?.length ?? 0 }, { status: 201 })
-}
+  },
+  { requireWrite: true },
+)

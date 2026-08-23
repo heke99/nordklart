@@ -1,8 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { deleteDocument } from '@/lib/core/documents/document-service'
 import { eventBus } from '@/lib/events'
 
@@ -12,20 +10,9 @@ ensureInitialized()
  * GET /api/documents/:id
  * Fetch document metadata + signed download URL (60 min expiry)
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'document.get',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
 
   // Fetch document record
@@ -67,7 +54,8 @@ export async function GET(
       download_url: signedUrl.signedUrl,
     },
   })
-}
+  },
+)
 
 /**
  * DELETE /api/documents/:id
@@ -76,22 +64,9 @@ export async function GET(
  * BFL 7 kap 2§ and must be retained for 7 years. For linked docs the caller
  * should use POST /api/documents/:id/versions to supersede via a new version.
  */
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'document.delete',
+  async (_request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
 
   try {
@@ -109,4 +84,6 @@ export async function DELETE(
       { status: 500 }
     )
   }
-}
+  },
+  { requireWrite: true },
+)

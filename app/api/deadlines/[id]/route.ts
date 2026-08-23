@@ -1,30 +1,15 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import type { CreateDeadlineInput } from '@/types'
 
 /**
  * GET /api/deadlines/[id]
  * Get a single deadline by ID
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.get',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
   const { data, error } = await supabase
     .from('deadlines')
     .select('*, customer:customers(id, name)')
@@ -40,32 +25,17 @@ export async function GET(
   }
 
   return NextResponse.json({ data })
-}
+  },
+)
 
 /**
  * PUT /api/deadlines/[id]
  * Update a deadline
  */
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.update',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
   const body: Partial<CreateDeadlineInput> = await request.json()
 
   // First, get existing deadline to verify ownership
@@ -107,32 +77,18 @@ export async function PUT(
   }
 
   return NextResponse.json({ data })
-}
+  },
+  { requireWrite: true },
+)
 
 /**
  * DELETE /api/deadlines/[id]
  * Delete a deadline
  */
-export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.delete',
+  async (request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
   const { error } = await supabase
     .from('deadlines')
     .delete()
@@ -144,4 +100,6 @@ export async function DELETE(
   }
 
   return NextResponse.json({ success: true })
-}
+  },
+  { requireWrite: true },
+)
