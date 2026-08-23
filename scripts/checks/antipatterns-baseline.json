@@ -1,9 +1,8 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: all reach 0 (A1 route-auth campaign, D1 rounding codemod, RLS backfill).",
   "rawRouteAuth": {
-    "count": 71,
+    "count": 70,
     "files": [
-      "app/api/account/password/route.ts",
       "app/api/agency/clients/route.ts",
       "app/api/agency/staff/invite/route.ts",
       "app/api/agent/composer/route.ts",

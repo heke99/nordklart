@@ -1,4 +1,5 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
@@ -55,14 +56,31 @@ function requestIp(request: Request): string | null {
 }
 
 export async function POST(request: Request) {
-  const supabase = await createClient()
+  // requireAuth(), not a bare getUser(): this route sets a password without
+  // asking for the current one, and the bare call enforced no second factor.
+  //
+  // MFA is enforced application-side in exactly two places — the proxy
+  // middleware and requireAuth() — and the middleware's matcher excludes
+  // `/api` ("API routes handle their own auth"). So on a hosted deployment
+  // with NEXT_PUBLIC_REQUIRE_MFA=true, a session that had completed the
+  // password step but not TOTP was redirected away from every UI page and
+  // could still POST here to set a new password. Its sibling
+  // app/api/account/delete/route.ts already used requireAuth(); this one was
+  // the outlier, which is what marks it an oversight rather than a decision.
+  //
+  // requireAuth() is the right tool here and withRouteContext is not: the
+  // wrapper resolves an active company and short-circuits without one, but a
+  // password belongs to the person, not the company — a BankID user setting
+  // their first password during onboarding may not have a company yet.
+  //
+  // The first-time-set path below is unaffected: shouldEnforceMfa() exempts
+  // BankID-only accounts (bankid_linked && !has_password), so they still pass.
+  // A password account that has not yet enrolled TOTP also still passes,
+  // because Supabase reports nextLevel 'aal1' when no verified factor exists.
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const { supabase, user } = auth
 
   const result = await validateBody(request, SetPasswordSchema)
   if (!result.success) return result.response
