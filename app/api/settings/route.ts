@@ -1,22 +1,12 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { didTaxFieldsChange, regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 
-export async function GET() {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext(
+  'settings.get',
+  async (request, { supabase, companyId, user }) => {
   const { data, error } = await supabase
     .from('company_settings')
     .select('*')
@@ -41,22 +31,12 @@ export async function GET() {
   }
 
   return NextResponse.json({ data: responseData })
-}
+  },
+)
 
-export async function PUT(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const PUT = withRouteContext(
+  'settings.update',
+  async (request, { supabase, companyId, user }) => {
   // Fetch current settings to check for tax-relevant changes
   const { data: oldSettings } = await supabase
     .from('company_settings')
@@ -134,4 +114,6 @@ export async function PUT(request: Request) {
   }
 
   return NextResponse.json({ data })
-}
+  },
+  { requireWrite: true },
+)

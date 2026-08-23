@@ -1,7 +1,7 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: all reach 0 (A1 route-auth campaign, D1 rounding codemod, RLS backfill).",
   "rawRouteAuth": {
-    "count": 56,
+    "count": 48,
     "files": [
       "app/api/agency/clients/route.ts",
       "app/api/agency/staff/invite/route.ts",
@@ -43,16 +43,8 @@
       "app/api/salary/tax-tables/lookup/route.ts",
       "app/api/salary/tax-tables/status/route.ts",
       "app/api/settings/api-keys/[id]/route.ts",
-      "app/api/settings/booking-templates/[id]/route.ts",
-      "app/api/settings/booking-templates/[id]/touch/route.ts",
-      "app/api/settings/booking-templates/export/route.ts",
-      "app/api/settings/booking-templates/import/route.ts",
-      "app/api/settings/booking-templates/route.ts",
-      "app/api/settings/counterparty-templates/route.ts",
-      "app/api/settings/logo/route.ts",
       "app/api/settings/oauth-clients/[id]/route.ts",
       "app/api/settings/oauth-clients/route.ts",
-      "app/api/settings/route.ts",
       "app/api/skatteverket/tax-payments/[period]/mark-paid/route.ts",
       "app/api/skatteverket/tax-payments/[period]/payment-file/route.ts",
       "app/api/skatteverket/tax-payments/[period]/route.ts",
@@ -79,7 +71,7 @@
     ]
   },
   "adhocErrorEnvelope": {
-    "count": 162,
+    "count": 160,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -209,8 +201,6 @@
       "app/api/sandbox/seed/route.ts",
       "app/api/settings/api-keys/[id]/route.ts",
       "app/api/settings/booking-templates/[id]/route.ts",
-      "app/api/settings/booking-templates/[id]/touch/route.ts",
-      "app/api/settings/booking-templates/export/route.ts",
       "app/api/settings/booking-templates/import/route.ts",
       "app/api/settings/booking-templates/route.ts",
       "app/api/settings/counterparty-templates/route.ts",

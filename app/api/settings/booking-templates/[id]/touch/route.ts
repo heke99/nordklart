@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * POST /api/settings/booking-templates/[id]/touch
@@ -11,17 +10,10 @@ import { requireCompanyId } from '@/lib/company/context'
  *
  * Fire-and-forget from the client — errors are non-fatal.
  */
-export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'booking_template.touch',
+  async (_request, { supabase, companyId, user }, { params }) => {
   const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
   const { error } = await supabase
     .from('booking_template_usage')
     .upsert(
@@ -38,4 +30,5 @@ export async function POST(
   }
 
   return NextResponse.json({ data: { success: true } })
-}
+  },
+)

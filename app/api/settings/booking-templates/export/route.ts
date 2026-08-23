@@ -1,19 +1,14 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * GET /api/settings/booking-templates/export
  * Export company + team templates as JSON (excludes system templates).
  * Useful for sharing templates between unrelated companies.
  */
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext(
+  'booking_template.export',
+  async (request, { supabase, companyId, user }) => {
   const { data, error } = await supabase
     .from('booking_template_library')
     .select('name, description, category, entity_type, lines')
@@ -31,4 +26,5 @@ export async function GET() {
       'Content-Disposition': 'attachment; filename="bokforingsmallar.json"',
     },
   })
-}
+  },
+)

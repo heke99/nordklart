@@ -46,6 +46,26 @@ export const CORE_OPERATION_PREFIXES: ReadonlyArray<{ prefix: string; reason: st
     reason: 'Statusöversikt över bolagets kopplingar (läs-endast).',
   },
   {
+    prefix: 'settings.',
+    // The company's own configuration surface. The features these settings
+    // configure are gated where they execute, not where they are typed in —
+    // the same reasoning the existing `automation.settings.` entry records.
+    // A customer on a reduced plan must still be able to see and correct their
+    // own company details, logo and invoicing defaults.
+    reason: 'Inställningsyta; funktionerna den konfigurerar gates vid körning.',
+  },
+  {
+    prefix: 'booking_template.',
+    // Saved posting templates, company- or team-scoped. They are a
+    // convenience over the chart of accounts, not a separate product: the
+    // bookkeeping they shortcut is gated at the point a voucher is written.
+    reason: 'Sparade konteringsmallar; bokföringen de förkortar gates vid bokning.',
+  },
+  {
+    prefix: 'counterparty_template.',
+    reason: 'Motpartsmallar; samma resonemang som konteringsmallar.',
+  },
+  {
     prefix: 'deadline.',
     // The company's calendar of statutory due dates (momsdeklaration, AGI,
     // årsredovisning). Gating it would mean a customer whose plan lapsed stops
