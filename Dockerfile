@@ -1,5 +1,11 @@
 # ── Stage 1: Base ──
-FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS base
+# Digest-pinned for reproducibility, which also means it goes stale silently:
+# a pinned base keeps shipping whatever CVEs it had on the day it was pinned.
+# Refresh this pin (both occurrences) whenever the Trivy gate in
+# .github/workflows/docker-publish.yml reports fixable findings in OS packages;
+# `ignore-unfixed: true` means everything it reports has a fix available
+# upstream, and for base-layer CVEs that fix is a newer base image.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS base
 RUN apk add --no-cache libc6-compat
 
 # ── Stage 2: Dependencies ──
@@ -39,7 +45,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ── Stage 4: Runner ──
-FROM node:22-alpine@sha256:968df39aedcea65eeb078fb336ed7191baf48f972b4479711397108be0966920 AS runner
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS runner
 WORKDIR /app
 
 # su-exec drops privileges in the entrypoint after the placeholder-substitution
