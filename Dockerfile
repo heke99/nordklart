@@ -52,6 +52,32 @@ WORKDIR /app
 # step. Healthcheck uses BusyBox wget (already present in alpine), so no curl.
 RUN apk add --no-cache su-exec
 
+# Drop the npm CLI from the runtime image.
+#
+# This stage runs `node server.js` and never invokes a package manager —
+# nothing in docker-entrypoint.sh, docker-compose.yml, docker/crontab.hosted
+# or docker/crontab.self-hosted calls npm or npx. But node:22-alpine ships the
+# full npm CLI, and npm's OWN vendored dependencies are where every one of
+# Trivy's nine CRITICAL/HIGH findings lives — verified by scanning this exact
+# pinned digest with Trivy 0.70.0 (the version CI runs) and reading the
+# package paths: all of them under usr/local/lib/node_modules/npm/node_modules/.
+#   tar 7.5.11        CVE-2026-59873 (CRITICAL), -59874, -73566
+#   brace-expansion   CVE-2026-13149, -14257, -69152
+#   ip-address 10.1.0 CVE-2026-69192 (SSRF)
+#   picomatch 4.0.3   CVE-2026-33671
+#   sigstore 3.1.0    CVE-2026-48815
+#
+# None of them are Nordklart dependencies, which is why `npm audit --omit=dev`
+# reports 0 — the two tools were never measuring the same thing.
+#
+# Removing it is hardening, not suppression: the vulnerable code leaves the
+# image instead of being hidden in a .trivyignore, and a production container
+# has no business carrying a package manager it never runs. Both binaries must
+# go — /usr/local/bin/npx is a symlink into npm's directory and would dangle.
+# The deps and builder stages keep npm; they need `npm ci` and `npm run build`,
+# and they are not shipped.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
