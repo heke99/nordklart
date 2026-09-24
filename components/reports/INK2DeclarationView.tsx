@@ -285,10 +285,10 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 <tfoot>
                   <tr className="border-t-2 font-semibold">
                     <td className="py-2">
-                      {data.ink2s['8020'] > 0 ? 'Överskott (punkt 1.1)' : 'Underskott (punkt 1.2)'}
+                      {data.ink2s['7670'] > 0 ? 'Överskott (punkt 1.1)' : 'Underskott (punkt 1.2)'}
                     </td>
-                    <td className={`py-2 text-right ${data.ink2s['8020'] > 0 ? 'text-success' : 'text-destructive'}`}>
-                      {formatCurrency(data.ink2s['8020'] > 0 ? data.ink2s['8020'] : data.ink2s['8021'])}
+                    <td className={`py-2 text-right ${data.ink2s['7670'] > 0 ? 'text-success' : 'text-destructive'}`}>
+                      {formatCurrency(data.ink2s['7670'] > 0 ? data.ink2s['7670'] : data.ink2s['7770'])}
                     </td>
                   </tr>
                 </tfoot>

@@ -33,6 +33,42 @@ function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
 }
 
 describe('generateIncomeStatement', () => {
+  it('includes every class 4–7 account, also groups without a label (48, 53, 67, 71)', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '3001', account_class: 3, closing_credit: 100000 }),
+        makeRow({ account_number: '4810', account_name: 'Kostnader för energi', account_class: 4, closing_debit: 1000 }),
+        makeRow({ account_number: '5310', account_name: 'El för drift', account_class: 5, closing_debit: 2000 }),
+        makeRow({ account_number: '6710', account_name: 'Lämnade bidrag', account_class: 6, closing_debit: 3000 }),
+        makeRow({ account_number: '7110', account_name: 'Egen kontogrupp', account_class: 7, closing_debit: 4000 }),
+      ],
+      totalDebit: 10000,
+      totalCredit: 100000,
+      isBalanced: false,
+    })
+
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+
+    expect(report.total_expenses).toBe(10000)
+    expect(report.net_result).toBe(90000)
+    const accounts = report.expense_sections.flatMap((s) => s.rows.map((r) => r.account_number))
+    expect(accounts).toEqual(['4810', '5310', '6710', '7110'])
+  })
+
+  it('keeps every 899x closing account out of the result', async () => {
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '3001', account_class: 3, closing_credit: 1000 }),
+        makeRow({ account_number: '8990', account_class: 8, closing_debit: 1000 }),
+      ],
+      totalDebit: 1000,
+      totalCredit: 1000,
+      isBalanced: true,
+    })
+    const report = await generateIncomeStatement(supabase, 'company-1', 'period-1')
+    expect(report.net_result).toBe(1000)
+  })
+
   it('returns empty report when no rows', async () => {
     mockTrialBalance.mockResolvedValue({
       rows: [],

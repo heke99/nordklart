@@ -24,6 +24,10 @@ export interface EgenKapitalRow {
   amount: number
   /** Optional component columns used by the K2 equity roll-forward table. */
   aktiekapital?: number
+  /** Bundna fonder: reservfond, uppskrivningsfond, bunden överkursfond m.m. */
+  bundna_fonder?: number
+  /** Fri överkursfond (2097). */
+  overkursfond?: number
   balanserat_resultat?: number
   arets_resultat?: number
   row_kind?: 'opening' | 'movement' | 'result' | 'closing'
@@ -198,6 +202,7 @@ export interface KassaflodesAnalysisSummary {
     delta_lan: number
     utdelningar: number
     nyemission: number
+    ovriga_finansiering?: number
     total: number
   }
   total_cash_flow: number

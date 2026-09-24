@@ -80,7 +80,7 @@ export async function generateVacationLiability(
       .eq('company_id', companyId)
       .eq('salary_runs.period_year', year)
       .eq('salary_runs.status', 'booked')
-      .range(from, to)
+      .order('id', { ascending: true }).range(from, to)
   )
 
   // Client-side safety check: ensure server-side !inner filter was applied

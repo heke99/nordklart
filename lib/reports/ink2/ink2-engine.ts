@@ -1,10 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import type {
-  FiscalPeriod,
-  JournalEntry,
-  JournalEntryLine,
-} from '@/types'
+import type { FiscalPeriod } from '@/types'
+import { fetchPeriodAccountNets } from '@/lib/reports/period-account-nets'
 import type {
   INK2Declaration,
   INK2RRutor,
@@ -16,6 +13,10 @@ import type {
 import {
   INK2R_ASSET_CODES,
   INK2R_EQUITY_LIABILITY_CODES,
+  INK2S_ADDITION_CODES,
+  INK2S_ADJUSTABLE_CODES,
+  INK2S_DEDUCTION_CODES,
+  INK2S_NUMERIC_CODES,
 } from './types'
 import {
   approvedAdjustmentAmount,
@@ -34,613 +35,14 @@ import { buildDeclarationReadiness, issue } from '@/lib/tax-declaration/readines
  * bas.se/kontoplaner/sru/ and Skatteverket field code spec.
  *
  * INK2R contains the full balance sheet + income statement.
- * INK2S auto-derives basic fields (result + tax → taxable result), as well as
- * periodiseringsfond and överavskrivningar when those have been posted via the
- * bokslut-dispositions calculators in lib/bokslut/.
+ * INK2S derives the result (4.1/4.2), the booked tax (4.3a), a default for
+ * non-deductible costs (4.3c) and schablonintäkt på periodiseringsfonder
+ * (4.6a); every other field comes from approved tax_declaration_adjustments.
+ * Field codes follow Skatteverket's 2025P4 tables (lib/reports/sru).
  */
 
-/**
- * BAS-to-SRU account mappings for INK2R
- * Source: bas.se/kontoplaner/sru/ (stable since 2017)
- */
-export const INK2R_ACCOUNT_MAPPINGS: INK2AccountMapping[] = [
-  // ---- Balance sheet: Assets ----
-  {
-    sruCode: '7201',
-    description: 'Koncessioner, patent, licenser, varumärken, goodwill',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [
-      { start: '1010', end: '1079' },
-      { start: '1090', end: '1099' },
-    ],
-  },
-  {
-    sruCode: '7202',
-    description: 'Förskott immateriella anläggningstillgångar',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1080', end: '1089' }],
-  },
-  {
-    sruCode: '7214',
-    description: 'Byggnader och mark',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [
-      { start: '1100', end: '1119' },
-      { start: '1130', end: '1179' },
-      { start: '1190', end: '1199' },
-    ],
-  },
-  {
-    sruCode: '7215',
-    description: 'Maskiner, inventarier, övriga materiella',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1200', end: '1299' }],
-  },
-  {
-    sruCode: '7216',
-    description: 'Förbättringsutgifter på annans fastighet',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1120', end: '1129' }],
-  },
-  {
-    sruCode: '7217',
-    description: 'Pågående nyanläggningar, förskott materiella',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1180', end: '1189' }],
-  },
-  {
-    sruCode: '7230',
-    description: 'Andelar i koncernföretag',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1311', end: '1316' }],
-  },
-  {
-    sruCode: '7231',
-    description: 'Andelar i intresseföretag',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1330', end: '1338' }],
-  },
-  {
-    sruCode: '7233',
-    description: 'Ägarintressen övriga företag + långfristiga värdepapper',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [
-      { start: '1350', end: '1359' },
-      { start: '1380', end: '1389' },
-    ],
-  },
-  {
-    sruCode: '7232',
-    description: 'Fordringar koncern/intresse',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [
-      { start: '1320', end: '1329' },
-      { start: '1340', end: '1349' },
-    ],
-  },
-  {
-    sruCode: '7234',
-    description: 'Lån till delägare eller närstående',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1360', end: '1369' }],
-  },
-  {
-    sruCode: '7235',
-    description: 'Övriga långfristiga fordringar',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [
-      { start: '1370', end: '1379' },
-      { start: '1390', end: '1399' },
-    ],
-  },
-  {
-    sruCode: '7241',
-    description: 'Råvaror och förnödenheter',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1410', end: '1419' }],
-  },
-  {
-    sruCode: '7242',
-    description: 'Varor under tillverkning',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1440', end: '1449' }],
-  },
-  {
-    sruCode: '7243',
-    description: 'Färdiga varor och handelsvaror',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1450', end: '1469' }],
-  },
-  {
-    sruCode: '7244',
-    description: 'Övriga lagertillgångar',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1470', end: '1489' }],
-  },
-  {
-    sruCode: '7245',
-    description: 'Pågående arbeten för annans räkning',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1490', end: '1499' }],
-  },
-  {
-    sruCode: '7246',
-    description: 'Förskott till leverantörer',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1400', end: '1409' }],
-  },
-  {
-    sruCode: '7251',
-    description: 'Kundfordringar',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1500', end: '1519' }],
-  },
-  {
-    sruCode: '7252',
-    description: 'Fordringar koncern/intresse (kortfristiga)',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1560', end: '1579' }],
-  },
-  {
-    sruCode: '7261',
-    description: 'Övriga fordringar',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [
-      { start: '1520', end: '1559' },
-      { start: '1580', end: '1599' },
-      { start: '1600', end: '1619' },
-      { start: '1621', end: '1699' },
-    ],
-  },
-  {
-    sruCode: '7262',
-    description: 'Upparbetad men ej fakturerad intäkt',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1620', end: '1620' }],
-  },
-  {
-    sruCode: '7263',
-    description: 'Förutbetalda kostnader och upplupna intäkter',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1700', end: '1799' }],
-  },
-  {
-    sruCode: '7270',
-    description: 'Andelar i koncernföretag (kortfristiga)',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1860', end: '1869' }],
-  },
-  {
-    sruCode: '7271',
-    description: 'Övriga kortfristiga placeringar',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [
-      { start: '1800', end: '1859' },
-      { start: '1870', end: '1899' },
-    ],
-  },
-  {
-    sruCode: '7281',
-    description: 'Kassa, bank och redovisningsmedel',
-    section: 'assets',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '1900', end: '1999' }],
-  },
-
-  // ---- Balance sheet: Equity & Liabilities ----
-  {
-    sruCode: '7301',
-    description: 'Bundet eget kapital',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2010', end: '2089' }],
-  },
-  {
-    sruCode: '7302',
-    description: 'Fritt eget kapital',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2090', end: '2099' }],
-  },
-  {
-    sruCode: '7321',
-    description: 'Periodiseringsfonder',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [
-      { start: '2100', end: '2109' },
-      { start: '2110', end: '2129' },
-    ],
-  },
-  {
-    sruCode: '7322',
-    description: 'Ackumulerade överavskrivningar',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2150', end: '2159' }],
-  },
-  {
-    sruCode: '7323',
-    description: 'Övriga obeskattade reserver',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [
-      { start: '2130', end: '2149' },
-      { start: '2160', end: '2199' },
-    ],
-  },
-  {
-    sruCode: '7331',
-    description: 'Pensionsavsättningar tryggandelagen',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2210', end: '2219' }],
-  },
-  {
-    sruCode: '7332',
-    description: 'Övriga pensionsavsättningar',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2220', end: '2229' }],
-  },
-  {
-    sruCode: '7333',
-    description: 'Övriga avsättningar',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2230', end: '2299' }],
-  },
-  {
-    sruCode: '7350',
-    description: 'Obligationslån',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [
-      { start: '2300', end: '2319' },
-      { start: '2320', end: '2329' },
-    ],
-  },
-  {
-    sruCode: '7351',
-    description: 'Checkräkningskredit (långfristig)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2330', end: '2339' }],
-  },
-  {
-    sruCode: '7352',
-    description: 'Övriga skulder kreditinstitut (långfristiga)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2340', end: '2359' }],
-  },
-  {
-    sruCode: '7353',
-    description: 'Skulder koncern/intresse (långfristiga)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2360', end: '2379' }],
-  },
-  {
-    sruCode: '7354',
-    description: 'Övriga skulder (långfristiga)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2380', end: '2399' }],
-  },
-  {
-    sruCode: '7360',
-    description: 'Checkräkningskredit (kortfristig)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2410', end: '2419' }],
-  },
-  {
-    sruCode: '7361',
-    description: 'Övriga skulder kreditinstitut (kortfristiga)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2420', end: '2439' }],
-  },
-  {
-    sruCode: '7362',
-    description: 'Förskott från kunder',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2400', end: '2409' }],
-  },
-  {
-    sruCode: '7363',
-    description: 'Pågående arbeten (skuldsida)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2450', end: '2459' }],
-  },
-  {
-    sruCode: '7364',
-    description: 'Fakturerad men ej upparbetad intäkt',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2460', end: '2469' }],
-  },
-  {
-    sruCode: '7365',
-    description: 'Leverantörsskulder',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2440', end: '2449' }],
-  },
-  {
-    sruCode: '7366',
-    description: 'Växelskulder',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2490', end: '2490' }],
-  },
-  {
-    sruCode: '7367',
-    description: 'Skulder koncern/intresse (kortfristiga)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2470', end: '2479' }],
-  },
-  {
-    sruCode: '7369',
-    description: 'Övriga skulder (kortfristiga)',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [
-      { start: '2480', end: '2489' },
-      { start: '2491', end: '2499' },
-      { start: '2600', end: '2799' },
-      { start: '2800', end: '2899' },
-    ],
-  },
-  {
-    sruCode: '7368',
-    description: 'Skatteskulder',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2500', end: '2599' }],
-  },
-  {
-    sruCode: '7370',
-    description: 'Upplupna kostnader och förutbetalda intäkter',
-    section: 'equity_liabilities',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '2900', end: '2999' }],
-  },
-
-  // ---- Income statement ----
-  {
-    sruCode: '7410',
-    description: 'Nettoomsättning',
-    section: 'income_statement',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '3000', end: '3799' }],
-  },
-  {
-    sruCode: '7412',
-    description: 'Aktiverat arbete för egen räkning',
-    section: 'income_statement',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '3800', end: '3899' }],
-  },
-  {
-    sruCode: '7413',
-    description: 'Övriga rörelseintäkter',
-    section: 'income_statement',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '3900', end: '3999' }],
-  },
-  {
-    sruCode: '7411',
-    description: 'Förändring av lager',
-    section: 'income_statement',
-    normalBalance: 'net',
-    accountRanges: [{ start: '4900', end: '4999' }],
-  },
-  {
-    sruCode: '7511',
-    description: 'Råvaror och förnödenheter',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [
-      { start: '4000', end: '4499' },
-      { start: '4500', end: '4599' },
-      { start: '4700', end: '4899' },
-    ],
-  },
-  {
-    sruCode: '7512',
-    description: 'Handelsvaror',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '4600', end: '4699' }],
-  },
-  // CRITICAL: BAS 5000-6999 ALL map to SRU 7513
-  {
-    sruCode: '7513',
-    description: 'Övriga externa kostnader',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '5000', end: '6999' }],
-  },
-  {
-    sruCode: '7514',
-    description: 'Personalkostnader',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '7000', end: '7699' }],
-  },
-  {
-    sruCode: '7515',
-    description: 'Av- och nedskrivningar materiella/immateriella',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '7800', end: '7899' }],
-  },
-  {
-    sruCode: '7516',
-    description: 'Nedskrivningar omsättningstillgångar',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '7700', end: '7799' }],
-  },
-  {
-    sruCode: '7517',
-    description: 'Övriga rörelsekostnader',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '7900', end: '7999' }],
-  },
-  {
-    sruCode: '7414',
-    description: 'Resultat från andelar i koncernföretag',
-    section: 'income_statement',
-    normalBalance: 'net',
-    accountRanges: [{ start: '8000', end: '8099' }],
-  },
-  {
-    sruCode: '7415',
-    description: 'Resultat från andelar i intresseföretag',
-    section: 'income_statement',
-    normalBalance: 'net',
-    accountRanges: [{ start: '8100', end: '8199' }],
-  },
-  {
-    sruCode: '7423',
-    description: 'Resultat från övriga företag med ägarintresse',
-    section: 'income_statement',
-    normalBalance: 'net',
-    accountRanges: [{ start: '8200', end: '8269' }],
-  },
-  {
-    sruCode: '7416',
-    description: 'Resultat från övriga finansiella anläggningstillgångar',
-    section: 'income_statement',
-    normalBalance: 'net',
-    accountRanges: [{ start: '8270', end: '8299' }],
-  },
-  {
-    sruCode: '7417',
-    description: 'Övriga ränteintäkter och liknande',
-    section: 'income_statement',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '8300', end: '8399' }],
-  },
-  {
-    sruCode: '7522',
-    description: 'Räntekostnader och liknande',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '8400', end: '8499' }],
-  },
-  {
-    sruCode: '7521',
-    description: 'Nedskrivningar finansiella anläggningstillgångar',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '8500', end: '8599' }],
-  },
-  // Bokslutsdispositioner — account numbers per BAS 2020 (verified against
-  // lib/bookkeeping/bas-data/class-8-financial.ts).
-  {
-    sruCode: '7525',
-    description: 'Avsättning till periodiseringsfond',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '8811', end: '8811' }],
-  },
-  {
-    sruCode: '7420',
-    description: 'Återföring av periodiseringsfond',
-    section: 'income_statement',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '8819', end: '8819' }],
-  },
-  {
-    sruCode: '7419',
-    description: 'Mottagna koncernbidrag',
-    section: 'income_statement',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '8820', end: '8820' }],
-  },
-  {
-    sruCode: '7524',
-    description: 'Lämnade koncernbidrag',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '8830', end: '8830' }],
-  },
-  {
-    sruCode: '7421',
-    description: 'Förändring av överavskrivningar',
-    section: 'income_statement',
-    normalBalance: 'net',
-    // 8850 = grupp, 8851-8853 = per kategori (immateriella, byggnader, M&I)
-    accountRanges: [{ start: '8850', end: '8859' }],
-  },
-  {
-    sruCode: '7422',
-    description: 'Övriga bokslutsdispositioner',
-    section: 'income_statement',
-    normalBalance: 'net',
-    // 8840 = Lämnade gottgörelser, 8860-8899 = övriga
-    accountRanges: [
-      { start: '8840', end: '8840' },
-      { start: '8860', end: '8899' },
-    ],
-  },
-  {
-    sruCode: '7528',
-    description: 'Skatt på årets resultat',
-    section: 'income_statement',
-    normalBalance: 'debit',
-    accountRanges: [{ start: '8900', end: '8989' }],
-  },
-  // 7450/7550 (årets resultat vinst/förlust) are calculated, not mapped from accounts
-]
-
-/**
- * Check if an account number falls within a mapping's ranges
- */
-export function isAccountInMapping(accountNumber: string, mapping: INK2AccountMapping): boolean {
-  for (const range of mapping.accountRanges) {
-    if (accountNumber >= range.start && accountNumber <= range.end) {
-      if (range.exclude && range.exclude.includes(accountNumber)) {
-        continue
-      }
-      return true
-    }
-  }
-  return false
-}
+export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
+import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
 
 /**
  * Truncate to nearest krona (drop öre) per SFL 22 kap. 1 §
@@ -657,11 +59,109 @@ function sumAccountRange(accountBalances: Map<string, number>, start: string, en
   return truncateToKrona(Math.abs(total))
 }
 
-function sumInk2SFields(ink2s: INK2SRutor, codes: (keyof INK2SRutor)[]): number {
+function sumInk2SFields(ink2s: INK2SRutor, codes: readonly (keyof INK2SRutor)[]): number {
   return codes.reduce((sum, code) => {
     const value = ink2s[code]
     return typeof value === 'number' ? sum + value : sum
   }, 0)
+}
+
+/**
+ * BAS accounts that are non-deductible by definition (the account name says
+ * so), plus 8423 kostnadsränta for skatter och avgifter (IL 9 kap. 8 §).
+ * Their debit balance is the default for INK2S 4.3c when no manual
+ * adjustment has been recorded.
+ */
+export const NON_DEDUCTIBLE_COST_ACCOUNTS = [
+  '5982', '6072', '6342', '6392', '6982', '6992', '7622', '7623', '7632', '8423',
+] as const
+
+export function sumNonDeductibleCosts(accountBalances: Map<string, number>): number {
+  let total = 0
+  for (const account of NON_DEDUCTIBLE_COST_ACCOUNTS) {
+    total += accountBalances.get(account) ?? 0
+  }
+  return total > 0 ? truncateToKrona(total) : 0
+}
+
+/**
+ * Schablonintäkt på periodiseringsfonder (IL 30 kap. 6 a §, INK2S 4.6a):
+ * the funds at the START of the tax year times statslåneräntan at the end of
+ * November the year before the tax year ends (floor 0,5 %). The rate lives in
+ * year_end_rulesets keyed on the year the fiscal year ends.
+ */
+export async function estimatePeriodiseringsfondSchablon(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<{ amount: number; openingFunds: number; rate: number | null }> {
+  const lines = await fetchAllRows<{
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+  }>(({ from, to }) =>
+    supabase
+      .from('journal_entry_lines')
+      .select('debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status, source_type)')
+      .eq('journal_entries.company_id', companyId)
+      .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
+      .eq('journal_entries.source_type', 'opening_balance')
+      .in('journal_entries.status', ['posted', 'reversed'])
+      .gte('account_number', '2110')
+      .lte('account_number', '2139')
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+
+  let openingFunds = lines.reduce(
+    (sum, l) => sum + (Number(l.credit_amount) || 0) - (Number(l.debit_amount) || 0),
+    0,
+  )
+
+  // No opening-balance voucher in this period (first year in Nordklart with
+  // history in earlier periods): take the ledger balance before the start.
+  if (lines.length === 0) {
+    const prior = await fetchAllRows<{
+      debit_amount: number | string | null
+      credit_amount: number | string | null
+    }>(({ from, to }) =>
+      supabase
+        .from('journal_entry_lines')
+        .select('debit_amount, credit_amount, journal_entries!inner(company_id, status, entry_date)')
+        .eq('journal_entries.company_id', companyId)
+        .in('journal_entries.status', ['posted', 'reversed'])
+        .lt('journal_entries.entry_date', periodStart)
+        .gte('account_number', '2110')
+        .lte('account_number', '2139')
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    openingFunds = prior.reduce(
+      (sum, l) => sum + (Number(l.credit_amount) || 0) - (Number(l.debit_amount) || 0),
+      0,
+    )
+  }
+
+  if (openingFunds <= 0) return { amount: 0, openingFunds: 0, rate: null }
+
+  const { data: ruleset } = await supabase
+    .from('year_end_rulesets')
+    .select('schablonintakt_rate')
+    .eq('tax_year', Number(periodEnd.slice(0, 4)))
+    .maybeSingle()
+  const rate = ruleset ? Number(ruleset.schablonintakt_rate) : null
+  if (rate === null || !Number.isFinite(rate)) return { amount: 0, openingFunds, rate: null }
+
+  return { amount: truncateToKrona(openingFunds * rate), openingFunds, rate }
+}
+
+function createEmptyINK2SRutor(fyStart: string, fyEnd: string): INK2SRutor {
+  const ink2s = { '7011': fyStart, '7012': fyEnd } as INK2SRutor
+  for (const code of INK2S_NUMERIC_CODES) {
+    ink2s[code] = 0
+  }
+  return ink2s
 }
 
 /**
@@ -690,11 +190,12 @@ function createEmptyINK2RRutor(): INK2RRutor {
     '7350': 0, '7351': 0, '7352': 0, '7353': 0, '7354': 0,
     '7360': 0, '7361': 0, '7362': 0, '7363': 0, '7364': 0,
     '7365': 0, '7366': 0, '7367': 0, '7369': 0, '7368': 0, '7370': 0,
-    '7410': 0, '7411': 0, '7412': 0, '7413': 0,
+    '7410': 0, '7411': 0, '7510': 0, '7412': 0, '7413': 0,
     '7511': 0, '7512': 0, '7513': 0, '7514': 0, '7515': 0, '7516': 0, '7517': 0,
-    '7414': 0, '7415': 0, '7423': 0, '7416': 0, '7417': 0,
+    '7414': 0, '7518': 0, '7415': 0, '7519': 0, '7423': 0, '7530': 0,
+    '7416': 0, '7520': 0, '7417': 0,
     '7521': 0, '7522': 0,
-    '7524': 0, '7419': 0, '7420': 0, '7525': 0, '7421': 0, '7422': 0,
+    '7524': 0, '7419': 0, '7420': 0, '7525': 0, '7421': 0, '7526': 0, '7422': 0, '7527': 0,
     '7528': 0,
     '7450': 0, '7550': 0,
   }
@@ -748,17 +249,15 @@ export async function generateINK2Declaration(
     throw new Error('INK2 declaration is only for aktiebolag (limited company)')
   }
 
-  // Fetch all posted journal entries with lines for this period
-  const { data: entries, error: entriesError } = await supabase
-    .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-    .in('status', ['posted', 'reversed'])
-
-  if (entriesError) {
-    throw new Error(`Failed to fetch journal entries: ${entriesError.message}`)
-  }
+  // Net per account for the period, EXCLUDING the year-end closing vouchers.
+  // After the close every class 3–8 account nets to zero inside the period;
+  // counting the closing voucher made INK2R's income statement, the result
+  // and the taxable surplus all come out as 0 exactly when the declaration is
+  // allowed to be exported. The result is instead derived from the accounts
+  // and added to fritt eget kapital below, so open and closed years agree.
+  const accountBalances = await fetchPeriodAccountNets(supabase, companyId, fiscalPeriodId, {
+    excludeYearEndClosing: true,
+  })
 
   // Fetch chart of accounts for account names
   const accounts = await fetchAllRows<{ account_number: string; account_name: string }>(({ from, to }) =>
@@ -766,24 +265,13 @@ export async function generateINK2Declaration(
       .from('chart_of_accounts')
       .select('account_number, account_name')
       .eq('company_id', companyId)
+      .order('account_number', { ascending: true })
       .range(from, to)
   )
 
   const accountNameMap = new Map<string, string>()
   for (const acc of accounts) {
     accountNameMap.set(acc.account_number, acc.account_name)
-  }
-
-  // Calculate balances per account (debit - credit)
-  const accountBalances = new Map<string, number>()
-
-  for (const entry of (entries as JournalEntry[]) || []) {
-    const lines = (entry.lines as JournalEntryLine[]) || []
-    for (const line of lines) {
-      const current = accountBalances.get(line.account_number) || 0
-      const netAmount = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
-      accountBalances.set(line.account_number, current + netAmount)
-    }
   }
 
   // Initialize INK2R rutor and breakdown
@@ -796,63 +284,53 @@ export async function generateINK2Declaration(
 
   const warnings: string[] = []
 
-  // Process each account balance against INK2R mappings
+  // Sign-split groups ("Om netto +/−") are decided on the group's net, so they
+  // are collected first and placed after the loop.
+  const signSplitGroups = new Map<INK2AccountMapping, Array<{ accountNumber: string; income: number }>>()
+
   for (const [accountNumber, balance] of accountBalances) {
     if (Math.abs(balance) < 0.01) continue
 
-    // Skip account 8999 — årets resultat is calculated
-    if (accountNumber === '8999') continue
+    // 899x — årets resultat is calculated, never read from the ledger.
+    if (accountNumber >= '8990' && accountNumber <= '8999') continue
 
-    let mapped = false
-    for (const mapping of INK2R_ACCOUNT_MAPPINGS) {
-      if (isAccountInMapping(accountNumber, mapping)) {
-        let amount: number
-
-        if (mapping.section === 'income_statement') {
-          // Income statement sign convention per Skatteverket INK2R:
-          // All amounts are reported as positive values on the form.
-          // Revenue (credit normal): balance is negative in ledger, negate → positive
-          // Cost (debit normal): balance is positive in ledger, keep → positive
-          // Net: negate so positive = income, negative = cost
-          if (mapping.normalBalance === 'credit') {
-            amount = -balance
-          } else if (mapping.normalBalance === 'debit') {
-            // Costs: debit balance is positive in ledger, keep positive (Skatteverket convention)
-            amount = balance
-          } else {
-            // Net: negate to match accounting convention
-            amount = -balance
-          }
-        } else {
-          // Balance sheet: all amounts reported as positive
-          if (mapping.normalBalance === 'debit') {
-            amount = balance
-          } else {
-            amount = -balance
-          }
-        }
-
-        ink2r[mapping.sruCode] += amount
-
-        breakdown[mapping.sruCode].accounts.push({
-          accountNumber,
-          accountName: accountNameMap.get(accountNumber) || `Konto ${accountNumber}`,
-          amount: truncateToKrona(amount),
-        })
-
-        mapped = true
-        break
-      }
-    }
-
-    if (!mapped) {
-      // BAS accounts 4500-4599, 4700-4899, and 1300-1310 have no standard SRU mapping
-      // These are unusual and may indicate custom accounts
-      const classChar = accountNumber.charAt(0)
-      if (classChar >= '1' && classChar <= '8') {
-        // Only warn for standard BAS range accounts that weren't mapped
+    const mapping = INK2R_ACCOUNT_MAPPINGS.find((m) => isAccountInMapping(accountNumber, m))
+    if (!mapping) {
+      if (accountNumber.charAt(0) >= '1' && accountNumber.charAt(0) <= '8') {
         warnings.push(`Konto ${accountNumber} (${accountNameMap.get(accountNumber) || 'okänt'}) kunde inte mappas till ett SRU-fält.`)
       }
+      continue
+    }
+
+    if (mapping.negativeSruCode) {
+      const group = signSplitGroups.get(mapping) ?? []
+      group.push({ accountNumber, income: -balance })
+      signSplitGroups.set(mapping, group)
+      continue
+    }
+
+    // Skatteverket convention: amounts are reported as positive values;
+    // revenue and credit-normal balance-sheet items are negated.
+    const amount = mapping.normalBalance === 'debit' ? balance : -balance
+    ink2r[mapping.sruCode] += amount
+    breakdown[mapping.sruCode].accounts.push({
+      accountNumber,
+      accountName: accountNameMap.get(accountNumber) || `Konto ${accountNumber}`,
+      amount: truncateToKrona(amount),
+    })
+  }
+
+  for (const [mapping, members] of signSplitGroups) {
+    const net = members.reduce((sum, m) => sum + m.income, 0)
+    const code = net >= 0 ? mapping.sruCode : mapping.negativeSruCode!
+    const sign = net >= 0 ? 1 : -1
+    ink2r[code] += sign * net
+    for (const member of members) {
+      breakdown[code].accounts.push({
+        accountNumber: member.accountNumber,
+        accountName: accountNameMap.get(member.accountNumber) || `Konto ${member.accountNumber}`,
+        amount: truncateToKrona(sign * member.income),
+      })
     }
   }
 
@@ -862,45 +340,43 @@ export async function generateINK2Declaration(
     breakdown[code].total = ink2r[code]
   }
 
-  // Calculate totals
-  const totalAssets = ASSET_CODES.reduce((sum, code) => sum + ink2r[code], 0)
-  const totalEquityLiabilities = EQUITY_LIABILITY_CODES.reduce((sum, code) => sum + ink2r[code], 0)
+  if (ink2r['7511'] !== 0 && ink2r['7512'] !== 0) {
+    warnings.push('Både råvaror (7511) och handelsvaror (7512) har belopp. Kontrollera att inköpskontona är fördelade rätt för verksamheten.')
+  }
 
-  // Operating result: revenue minus costs (costs are positive per Skatteverket convention)
+  // Operating result per INK2R 3.1–3.11 (costs are positive on the form).
   const operatingResult =
-    ink2r['7410'] + ink2r['7411'] + ink2r['7412'] + ink2r['7413']
+    ink2r['7410'] + ink2r['7411'] - ink2r['7510'] + ink2r['7412'] + ink2r['7413']
     - ink2r['7511'] - ink2r['7512'] - ink2r['7513'] - ink2r['7514']
     - ink2r['7515'] - ink2r['7516'] - ink2r['7517']
 
-  // Financial items: income minus costs
+  // Financial items 3.12–3.18.
   const financialItems =
-    ink2r['7414'] + ink2r['7415'] + ink2r['7423'] + ink2r['7416'] + ink2r['7417']
-    - ink2r['7521'] - ink2r['7522']
+    ink2r['7414'] - ink2r['7518'] + ink2r['7415'] - ink2r['7519']
+    + ink2r['7423'] - ink2r['7530'] + ink2r['7416'] - ink2r['7520']
+    + ink2r['7417'] - ink2r['7521'] - ink2r['7522']
 
-  // Bokslutsdispositioner: subtract debit-normal, add credit-normal and net
+  // Bokslutsdispositioner 3.19–3.24.
   const bokslutsdispositioner =
     - ink2r['7524'] + ink2r['7419'] + ink2r['7420'] - ink2r['7525']
-    + ink2r['7421'] + ink2r['7422']
+    + ink2r['7421'] - ink2r['7526'] + ink2r['7422'] - ink2r['7527']
 
-  // Result before tax
   const resultBeforeTax = operatingResult + financialItems + bokslutsdispositioner
 
-  // Result after tax (7528 is positive, subtract it)
+  // 3.26/3.27 Årets resultat (after 3.25 skatt).
   const resultAfterFinancial = resultBeforeTax - ink2r['7528']
+  ink2r['7450'] = resultAfterFinancial >= 0 ? resultAfterFinancial : 0
+  ink2r['7550'] = resultAfterFinancial < 0 ? Math.abs(resultAfterFinancial) : 0
 
-  // Set årets resultat: vinst (7450) or förlust (7550)
-  if (resultAfterFinancial >= 0) {
-    ink2r['7450'] = resultAfterFinancial
-    ink2r['7550'] = 0
-  } else {
-    ink2r['7450'] = 0
-    ink2r['7550'] = Math.abs(resultAfterFinancial)
-  }
+  // Fritt eget kapital (2.28) includes årets resultat. The closing vouchers are
+  // excluded above, so add the computed result here.
+  ink2r['7302'] += resultAfterFinancial
+  breakdown['7302'].accounts.push({ accountNumber: '2099', accountName: 'Årets resultat (beräknat)', amount: resultAfterFinancial })
+  breakdown['7302'].total = ink2r['7302']
 
-  // Add calculated result to fritt eget kapital for balance
-  // During open fiscal year, 2099 may have no balance — the result only exists
-  // as net of income statement accounts. Adding it here handles both cases.
-  const adjustedEquityLiabilities = totalEquityLiabilities + resultAfterFinancial
+  const totalAssets = ASSET_CODES.reduce((sum, code) => sum + ink2r[code], 0)
+  const totalEquityLiabilities = EQUITY_LIABILITY_CODES.reduce((sum, code) => sum + ink2r[code], 0)
+  const adjustedEquityLiabilities = totalEquityLiabilities
 
   // Fiscal year dates as YYYYMMDD
   const fyStart = (period.period_start as string).replace(/-/g, '')
@@ -909,44 +385,44 @@ export async function generateINK2Declaration(
   const adjustments = await listTaxDeclarationAdjustments(supabase, companyId, fiscalPeriodId, 'INK2')
   const pendingAdjustmentMessages = pendingAdjustmentWarnings(adjustments)
 
-  // Build INK2S from the posted result, booked tax, and approved tax adjustments.
-  // SIE/bookkeeping can derive the accounting result; tax-specific fields that
-  // cannot be safely inferred are persisted as tax_declaration_adjustments and
-  // only included when approved or explicitly marked as not requiring review.
-  const taxAmount = ink2r['7528']
-  const ink2s: INK2SRutor = {
-    '7011': fyStart,
-    '7012': fyEnd,
-    '7650': resultAfterFinancial >= 0 ? resultAfterFinancial : 0,
-    '7750': resultAfterFinancial < 0 ? Math.abs(resultAfterFinancial) : 0,
-    '7651': taxAmount,
-    '7652': approvedAdjustmentAmount(adjustments, '7652'),
-    '7653': approvedAdjustmentAmount(adjustments, '7653'),
-    '7654': approvedAdjustmentAmount(adjustments, '7654'),
-    '7655': approvedAdjustmentAmount(adjustments, '7655'),
-    '7656': approvedAdjustmentAmount(adjustments, '7656'),
-    '7751': approvedAdjustmentAmount(adjustments, '7751'),
-    '7752': approvedAdjustmentAmount(adjustments, '7752'),
-    '7753': approvedAdjustmentAmount(adjustments, '7753'),
-    '7754': approvedAdjustmentAmount(adjustments, '7754'),
-    '7763': approvedAdjustmentAmount(adjustments, '7763'),
-    '7664': approvedAdjustmentAmount(adjustments, '7664'),
-    '7670': approvedAdjustmentAmount(adjustments, '7670'),
-    '8020': 0,
-    '8021': 0,
+  // INK2S. Derived where the ledger decides it (4.1/4.2 result, 4.3a tax);
+  // everything else comes from approved tax_declaration_adjustments. Two
+  // additions have a safe default when no adjustment exists: 4.3c from the BAS
+  // accounts that are by definition non-deductible, and 4.6a schablonintäkt
+  // from the periodiseringsfonder at the start of the year.
+  const ink2s = createEmptyINK2SRutor(fyStart, fyEnd)
+  ink2s['7650'] = resultAfterFinancial >= 0 ? resultAfterFinancial : 0
+  ink2s['7750'] = resultAfterFinancial < 0 ? Math.abs(resultAfterFinancial) : 0
+  ink2s['7651'] = ink2r['7528']
+
+  for (const code of INK2S_ADJUSTABLE_CODES) {
+    if (code === '7651') continue
+    ink2s[code] = truncateToKrona(approvedAdjustmentAmount(adjustments, code))
   }
 
-  const additions = sumInk2SFields(ink2s, ['7651', '7652', '7653', '7654', '7655', '7656', '7664', '7670'])
-  const deductions = sumInk2SFields(ink2s, ['7751', '7752', '7753', '7754', '7763'])
+  const hasAdjustment = (code: string) => adjustments.some((row) => row.field_code === code)
+
+  const nonDeductible = sumNonDeductibleCosts(accountBalances)
+  if (!hasAdjustment('7653') && nonDeductible > 0) {
+    ink2s['7653'] = nonDeductible
+  }
+
+  const schablon = await estimatePeriodiseringsfondSchablon(supabase, companyId, fiscalPeriodId, period.period_start, period.period_end)
+  if (!hasAdjustment('7654') && schablon.amount > 0) {
+    ink2s['7654'] = schablon.amount
+  }
+
+  const additions = sumInk2SFields(ink2s, INK2S_ADDITION_CODES)
+  const deductions = sumInk2SFields(ink2s, INK2S_DEDUCTION_CODES)
   const taxableResult = resultAfterFinancial + additions - deductions
-  ink2s['8020'] = taxableResult >= 0 ? truncateToKrona(taxableResult) : 0
-  ink2s['8021'] = taxableResult < 0 ? truncateToKrona(Math.abs(taxableResult)) : 0
+  ink2s['7670'] = taxableResult >= 0 ? truncateToKrona(taxableResult) : 0
+  ink2s['7770'] = taxableResult < 0 ? truncateToKrona(Math.abs(taxableResult)) : 0
 
   const ink2: INK2Rutor = {
     '7011': fyStart,
     '7012': fyEnd,
-    '7113': ink2s['8020'],
-    '7114': ink2s['8021'],
+    '7104': ink2s['7670'],
+    '7114': ink2s['7770'],
   }
 
   const readinessIssues = [
@@ -977,20 +453,16 @@ export async function generateINK2Declaration(
     readinessIssues.push(issue('tax_adjustment_needs_review', 'warning', message, 'tax_declaration_adjustments'))
   }
 
-  const possibleNonDeductible =
-    sumAccountRange(accountBalances, '6072', '6073')
-    + sumAccountRange(accountBalances, '6342', '6342')
-    + sumAccountRange(accountBalances, '6992', '6993')
-  if (possibleNonDeductible > 0 && ink2s['7653'] === 0) {
-    const message = `Möjliga ej avdragsgilla kostnader på ${possibleNonDeductible} kr hittades. Bekräfta eller justera ruta 7653.`
+  if (nonDeductible > 0 && hasAdjustment('7653')) {
+    const message = `Ej avdragsgilla kostnader på ${nonDeductible} kr finns i bokföringen; ruta 7653 styrs av en manuell justering. Kontrollera att den täcker dem.`
     warnings.push(message)
     readinessIssues.push(issue('possible_non_deductible_expenses', 'warning', message, 'account_rules'))
   }
 
-  if (ink2r['7321'] > 0 && ink2s['7654'] === 0) {
-    const message = 'Periodiseringsfond finns i balansräkningen men schablonintäkt på periodiseringsfond saknar godkänd justering.'
+  if (ink2r['7321'] > 0 && !hasAdjustment('7654') && schablon.rate === null) {
+    const message = 'Periodiseringsfond finns men statslåneräntan för året saknas, så schablonintäkten (ruta 7654) kunde inte beräknas.'
     warnings.push(message)
-    readinessIssues.push(issue('periodiseringsfond_schablon_missing', 'warning', message, 'ink2s'))
+    readinessIssues.push(issue('periodiseringsfond_schablon_missing', 'blocker', message, 'ink2s'))
   }
 
   if (ink2r['7522'] >= 5_000_000) {

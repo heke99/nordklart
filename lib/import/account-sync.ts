@@ -154,7 +154,7 @@ export async function syncMappedAccounts(
           .from('chart_of_accounts')
           .select('account_number, account_name')
           .eq('company_id', companyId)
-          .range(from, to)
+          .order('id', { ascending: true }).range(from, to)
     )
     existingByNumber = new Map(
       allAccounts

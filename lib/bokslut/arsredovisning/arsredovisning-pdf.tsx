@@ -164,11 +164,54 @@ function PageChrome({
   )
 }
 
+/**
+ * ÅRL 8 kap. 3 §: the certificate on the copy filed with Bolagsverket states
+ * that the income statement and balance sheet have been adopted, on which
+ * date, and that the copy matches the original (Bolagsverket's own template:
+ * "…intygar att den här kopian av årsredovisningen överensstämmer med
+ * originalet, och att resultaträkningen och balansräkningen har fastställts
+ * vid den ordinarie bolagsstämman…"). Until adoption is recorded the text says
+ * so instead of asserting it.
+ */
+export function FaststallelseText({ data }: { data: ArsredovisningData }) {
+  const role = clean(data.forvaltningsberattelse.certificate_signer_role) || 'styrelseledamot'
+  const company = clean(data.company.name)
+  const date = data.forvaltningsberattelse.agm_date ?? '____________________'
+  if (data.forvaltningsberattelse.agm_accounts_adopted !== true) {
+    return (
+      <>
+        Fastställelse på årsstämma har ännu inte registrerats. Intyget kan undertecknas
+        först när årsstämman har fastställt resultaträkningen och balansräkningen.
+      </>
+    )
+  }
+  return (
+    <>
+      Undertecknad {role} i {company} intygar att den här kopian av årsredovisningen
+      överensstämmer med originalet, och att resultaträkningen och balansräkningen har
+      fastställts på årsstämma den {date}.
+    </>
+  )
+}
+
+interface EquityColumns {
+  bundnaFonder: boolean
+  overkursfond: boolean
+}
+
+/** Show the bundna fonder / överkursfond columns only when a row uses them. */
+function equityColumns(rows: EgenKapitalRow[]): EquityColumns {
+  return {
+    bundnaFonder: rows.some((r) => Math.abs(r.bundna_fonder ?? 0) >= 0.01),
+    overkursfond: rows.some((r) => Math.abs(r.overkursfond ?? 0) >= 0.01),
+  }
+}
+
 function EquityCell({ value }: { value: number | undefined }) {
   return <Text style={styles.equityAmount}>{value === undefined ? '—' : fmt(value)}</Text>
 }
 
-function EquityRow({ row }: { row: EgenKapitalRow }) {
+function EquityRow({ row, columns }: { row: EgenKapitalRow; columns: EquityColumns }) {
   const rowStyle = row.row_kind === 'opening' || row.row_kind === 'closing'
     ? styles.tableRowTotal
     : styles.tableRow
@@ -176,6 +219,8 @@ function EquityRow({ row }: { row: EgenKapitalRow }) {
     <View style={rowStyle}>
       <Text style={styles.equityLabel}>{clean(row.label)}</Text>
       <EquityCell value={row.aktiekapital} />
+      {columns.bundnaFonder ? <EquityCell value={row.bundna_fonder} /> : null}
+      {columns.overkursfond ? <EquityCell value={row.overkursfond} /> : null}
       <EquityCell value={row.balanserat_resultat} />
       <EquityCell value={row.arets_resultat} />
       <Text style={styles.equityAmount}>{fmt(row.amount)}</Text>
@@ -193,6 +238,7 @@ export function ArsredovisningPDF({
   draftBlockers?: string[]
 }) {
   const comparison = comparisonSource(data)
+  const equityCols = equityColumns(data.forvaltningsberattelse.egen_kapital_changes)
   const signedDates = data.signatures
     .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
     .filter((value): value is string => Boolean(value))
@@ -270,12 +316,14 @@ export function ArsredovisningPDF({
         <View style={styles.tableHeader}>
           <Text style={styles.equityLabel}>Förändring</Text>
           <Text style={styles.equityAmount}>Aktiekapital</Text>
+          {equityCols.bundnaFonder ? <Text style={styles.equityAmount}>Bundna fonder</Text> : null}
+          {equityCols.overkursfond ? <Text style={styles.equityAmount}>Överkursfond</Text> : null}
           <Text style={styles.equityAmount}>Balanserat</Text>
           <Text style={styles.equityAmount}>Årets resultat</Text>
           <Text style={styles.equityAmount}>Summa</Text>
         </View>
         {data.forvaltningsberattelse.egen_kapital_changes.map((row, index) => (
-          <EquityRow key={`${row.label}-${index}`} row={row} />
+          <EquityRow key={`${row.label}-${index}`} row={row} columns={equityCols} />
         ))}
 
         <Text style={styles.sectionTitle}>Styrelsens förslag till resultatdisposition</Text>
@@ -396,10 +444,7 @@ export function ArsredovisningPDF({
         <PageChrome data={data} isDraft={isDraft} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
         <Text style={styles.paragraph}>
-          Undertecknad {clean(data.forvaltningsberattelse.certificate_signer_role) || 'styrelseledamot'},
-          närvarande vid årsstämman, intygar att resultaträkningen och balansräkningen
-          {data.forvaltningsberattelse.agm_accounts_adopted === true ? ' har fastställts' : ' ännu inte har bekräftats som fastställda'}
-          {' '}på årsstämma den {data.forvaltningsberattelse.agm_date ?? '____________________'}.
+          <FaststallelseText data={data} />
         </Text>
         <Text style={styles.sectionTitle}>Årsstämmans beslut om resultatdisposition</Text>
         <Text style={styles.paragraph}>

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 
 export interface ARInvoiceDetail {
   invoice_id: string
@@ -80,7 +81,7 @@ export async function generateARLedger(
       .select('*, customer:customers(id, name)')
       .eq('company_id', companyId)
       .in('status', ['sent', 'partially_paid', 'overdue', 'disputed', 'collection_ready', 'credited'])
-      .range(from, to)
+      .order('id', { ascending: true }).range(from, to)
   ).catch((err: Error) => {
     throw new Error(`Kundreskontran kunde inte läsas: ${err.message}`)
   })
@@ -112,7 +113,7 @@ export async function generateARLedger(
     const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
     const paidAmount = Number(inv.paid_amount) || 0
     const total = Number(inv.total) || 0
-    const outstanding = Math.round(Number(inv.remaining_amount ?? (total - paidAmount)) * 100) / 100
+    const outstanding = roundOre(Number(inv.remaining_amount ?? (total - paidAmount)))
 
     // Aging buckets and totals must be in SEK so they reconcile with account 1510.
     // Foreign-currency invoices without an exchange_rate cannot be converted —
@@ -169,12 +170,12 @@ export async function generateARLedger(
     .map((entry) => ({
       ...entry,
       invoices: entry.invoices.sort((a, b) => a.due_date.localeCompare(b.due_date)),
-      current: Math.round(entry.current * 100) / 100,
-      days_1_30: Math.round(entry.days_1_30 * 100) / 100,
-      days_31_60: Math.round(entry.days_31_60 * 100) / 100,
-      days_61_90: Math.round(entry.days_61_90 * 100) / 100,
-      days_90_plus: Math.round(entry.days_90_plus * 100) / 100,
-      total_outstanding: Math.round(entry.total_outstanding * 100) / 100,
+      current: roundOre(entry.current),
+      days_1_30: roundOre(entry.days_1_30),
+      days_31_60: roundOre(entry.days_31_60),
+      days_61_90: roundOre(entry.days_61_90),
+      days_90_plus: roundOre(entry.days_90_plus),
+      total_outstanding: roundOre(entry.total_outstanding),
     }))
     .filter((entry) => entry.total_outstanding !== 0)
 
@@ -191,9 +192,9 @@ export async function generateARLedger(
 
   return {
     entries,
-    total_outstanding: Math.round(total_outstanding * 100) / 100,
-    total_current: Math.round(total_current * 100) / 100,
-    total_overdue: Math.round(total_overdue * 100) / 100,
+    total_outstanding: roundOre(total_outstanding),
+    total_current: roundOre(total_current),
+    total_overdue: roundOre(total_overdue),
     unpaid_count,
     unconverted_fx_count: unconvertedFxCount,
   }
@@ -221,7 +222,7 @@ async function generateHistoricalARLedger(
         .select('id, name')
         .eq('company_id', companyId)
         .in('id', customerIds)
-        .range(from, to)
+        .order('id', { ascending: true }).range(from, to)
     ).catch((err: Error) => {
       throw new Error(`Kundregistret kunde inte läsas: ${err.message}`)
     })
@@ -255,7 +256,7 @@ async function generateHistoricalARLedger(
     const hasRate = item.exchange_rate != null && item.exchange_rate > 0
     const outstandingSek = isFx
       ? hasRate
-        ? Math.round(item.open_amount * (item.exchange_rate as number) * 100) / 100
+        ? roundOre(item.open_amount * (item.exchange_rate as number))
         : null
       : item.open_amount
     if (outstandingSek === null) unconvertedFxCount += 1
@@ -266,7 +267,7 @@ async function generateHistoricalARLedger(
       invoice_date: item.invoice_date,
       due_date: item.due_date ?? '',
       total: item.total,
-      paid_amount: Math.round((item.total - item.open_amount) * 100) / 100,
+      paid_amount: roundOre((item.total - item.open_amount)),
       outstanding: item.open_amount,
       outstanding_sek: outstandingSek,
       days_overdue: Math.max(0, daysOverdue),
@@ -288,12 +289,12 @@ async function generateHistoricalARLedger(
     .map((entry) => ({
       ...entry,
       invoices: entry.invoices.sort((a, b) => a.due_date.localeCompare(b.due_date)),
-      current: Math.round(entry.current * 100) / 100,
-      days_1_30: Math.round(entry.days_1_30 * 100) / 100,
-      days_31_60: Math.round(entry.days_31_60 * 100) / 100,
-      days_61_90: Math.round(entry.days_61_90 * 100) / 100,
-      days_90_plus: Math.round(entry.days_90_plus * 100) / 100,
-      total_outstanding: Math.round(entry.total_outstanding * 100) / 100,
+      current: roundOre(entry.current),
+      days_1_30: roundOre(entry.days_1_30),
+      days_31_60: roundOre(entry.days_31_60),
+      days_61_90: roundOre(entry.days_61_90),
+      days_90_plus: roundOre(entry.days_90_plus),
+      total_outstanding: roundOre(entry.total_outstanding),
     }))
     .filter((entry) => entry.total_outstanding !== 0)
 
@@ -309,9 +310,9 @@ async function generateHistoricalARLedger(
 
   return {
     entries,
-    total_outstanding: Math.round(total_outstanding * 100) / 100,
-    total_current: Math.round(total_current * 100) / 100,
-    total_overdue: Math.round(total_overdue * 100) / 100,
+    total_outstanding: roundOre(total_outstanding),
+    total_current: roundOre(total_current),
+    total_overdue: roundOre(total_overdue),
     unpaid_count,
     unconverted_fx_count: unconvertedFxCount,
   }

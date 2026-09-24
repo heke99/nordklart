@@ -144,10 +144,12 @@ describe('generateSIEExport', () => {
     const output = await generateSIEExport(supabase, 'company-1', baseOptions)
 
     expect(output).toContain('#KONTO 1930 "Företagskonto"')
-    expect(output).toContain('#SRU 1930 7301')
+    // #SRU is derived from the INK2R mapping: 1930 → 7281 (kassa och bank),
+    // regardless of the stale 7301 stored on the chart row.
+    expect(output).toContain('#SRU 1930 7281')
     expect(output).toContain('#KONTO 3001 "Försäljning"')
-    // No SRU for 3001 since sru_code is null
-    expect(output).not.toContain('#SRU 3001')
+    // Nettoomsättning → 7410 even though no code was stored.
+    expect(output).toContain('#SRU 3001 7410')
   })
 
   it('generates #VER and #TRANS for journal entries', async () => {

@@ -57,7 +57,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const { data: company, error: companyErr } = await ctx.supabase
       .from('company_settings')
-      .select('company_name, org_number')
+      .select('company_name, org_number, entity_type')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
     if (companyErr) {
@@ -73,6 +73,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           fiscal_period_id: period.period.id,
           company_name: (company as { company_name: string | null }).company_name || 'Unknown',
           org_number: (company as { org_number: string | null }).org_number,
+          entity_type: (company as { entity_type?: string | null }).entity_type,
           exclude_year_end_closing: excludeClosing,
         }),
       { log: ctx.log, requestId: ctx.requestId, reportName: 'sie-export' },

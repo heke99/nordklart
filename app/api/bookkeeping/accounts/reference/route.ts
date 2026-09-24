@@ -18,7 +18,7 @@ export const GET = withRouteContext('bookkeeping.accounts.reference', async (_re
         .from('chart_of_accounts')
         .select('account_number, is_active, is_system_account')
         .eq('company_id', companyId)
-        .range(from, to)
+        .order('id', { ascending: true }).range(from, to)
     )
 
     // Build lookup map

@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **463**.
+Antal SQL-migreringar: **465**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -487,3 +487,5 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 461 | 20260924100000 | `20260924100000_security_definer_authenticated_surface.sql` | `d293aab4d42786c14530ef9f21bc31cfc3486cdbd546c8188d7a9d5a7f6d9209` |
 | 462 | 20260924101000 | `20260924101000_company_and_agency_membership_integrity.sql` | `256eaedc1fe63dd9ebfc95bc88a67482f3f227f9709e3a3b09383e6034122324` |
 | 463 | 20260924102000 | `20260924102000_bankid_session_single_use.sql` | `519a9225f42b184cd21b8b9720b7346d061b95fe911ccc9dda1fdc6fcc5016a5` |
+| 464 | 20260924103000 | `20260924103000_year_end_ruleset_schablonintakt_rates.sql` | `c85175dbe50632a200ffbde9384c6023a01e1a2c181fdd290cf0b4f809f2edd1` |
+| 465 | 20260924104000 | `20260924104000_bas_sru_codes_from_declaration_mapping.sql` | `1676350352cd8b6517d70162d5b3006ab571bcc3ec86f135104fcc3f3e034d72` |

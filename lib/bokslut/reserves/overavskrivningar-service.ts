@@ -1,15 +1,20 @@
+import { roundOre } from '@/lib/money'
 import type { ProposedDisposition } from '../types'
 
 /** 30-rule (huvudregel, IL 18 kap 13 §): restvärde minst 70 % av (ingående
  *  bokfört värde + årets anskaffningar − årets försäljningar och utrangeringar). */
 export const OVERAVSKRIVNING_30_RULE = 0.7
 
-/** 20-rule (kompletteringsregel, IL 18 kap 17 §): restvärde minst 0 % efter
- *  5 år (20 % avskrivning per år, raklinje). */
+/** 20-rule (kompletteringsregel, IL 18 kap 17 §): lägsta restvärde är 80 %
+ *  av anskaffningsvärdet för inventarier anskaffade under beskattningsåret,
+ *  60 % för året före, 40 % och 20 % för de två åren därefter, 0 % därefter. */
 export const OVERAVSKRIVNING_20_RULE_YEARS = 5
 
 export interface Compute30RuleInput {
-  /** IB bokfört värde maskiner & inventarier (12xx netto). */
+  /**
+   * Ingående SKATTEMÄSSIGT restvärde (IL 18 kap. 13 §): bokfört värde minus
+   * ackumulerade överavskrivningar vid årets ingång — not the book value alone.
+   */
   openingBookValue: number
   /** Årets anskaffningar (debet på anskaffningskonto, t.ex. 1220). */
   additions: number
@@ -33,18 +38,18 @@ export function compute30Rule(input: Compute30RuleInput): {
   maxAllowedAccumulated: number
 } {
   const base = input.openingBookValue + input.additions - input.disposals
-  const minimumResidual = Math.round(base * OVERAVSKRIVNING_30_RULE * 100) / 100
+  const minimumResidual = roundOre(base * OVERAVSKRIVNING_30_RULE)
   return {
     base,
     minimumResidual,
-    maxAllowedAccumulated: Math.round((base - minimumResidual) * 100) / 100,
+    maxAllowedAccumulated: roundOre(base - minimumResidual),
   }
 }
 
 /**
- * 20-regeln: varje årsanskaffning får skrivas av med 20 % under 5 år. Lägsta
- * skattemässigt restvärde är summan av 20 % × ((5 − offset) / 5) × anskaffningar
- * från år (innevarande − offset).
+ * 20-regeln (IL 18 kap. 17 §): lägsta skattemässiga restvärde är summan av
+ * anskaffningsvärdet × (4 − offset) / 5 per anskaffningsår — 80 % för
+ * innevarande år, sedan 60, 40, 20 och 0 %.
  *
  * Returns the allowed depreciation if 20-rule is used as the sole basis,
  * computed against ALL still-active 20-rule cohorts.
@@ -52,15 +57,15 @@ export function compute30Rule(input: Compute30RuleInput): {
 export function compute20Rule(input: Compute20RuleInput): {
   minimumResidual: number
 } {
-  // Residual per cohort = anskaffningskostnad × (5 − ageInYears) / 5.
-  // ageInYears 0 = current year (residual 100 %), 4 = oldest still-live (20 %).
+  // Residual per cohort = anskaffningskostnad × (4 − ageInYears) / 5:
+  // ageInYears 0 = current year (80 %), 3 = 20 %, 4 = fully written off (0 %).
   let residual = 0
   for (let offset = 0; offset < OVERAVSKRIVNING_20_RULE_YEARS; offset++) {
     const cost = input.acquisitionCostByYearOffset[offset] ?? 0
-    const remainingFraction = (OVERAVSKRIVNING_20_RULE_YEARS - offset) / OVERAVSKRIVNING_20_RULE_YEARS
+    const remainingFraction = (OVERAVSKRIVNING_20_RULE_YEARS - 1 - offset) / OVERAVSKRIVNING_20_RULE_YEARS
     residual += cost * remainingFraction
   }
-  return { minimumResidual: Math.round(residual * 100) / 100 }
+  return { minimumResidual: roundOre(residual) }
 }
 
 /**

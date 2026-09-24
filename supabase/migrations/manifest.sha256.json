@@ -2316,6 +2316,16 @@
       "file": "20260924102000_bankid_session_single_use.sql",
       "version": "20260924102000",
       "sha256": "519a9225f42b184cd21b8b9720b7346d061b95fe911ccc9dda1fdc6fcc5016a5"
+    },
+    {
+      "file": "20260924103000_year_end_ruleset_schablonintakt_rates.sql",
+      "version": "20260924103000",
+      "sha256": "c85175dbe50632a200ffbde9384c6023a01e1a2c181fdd290cf0b4f809f2edd1"
+    },
+    {
+      "file": "20260924104000_bas_sru_codes_from_declaration_mapping.sql",
+      "version": "20260924104000",
+      "sha256": "1676350352cd8b6517d70162d5b3006ab571bcc3ec86f135104fcc3f3e034d72"
     }
   ]
 }

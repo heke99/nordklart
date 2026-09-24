@@ -186,7 +186,7 @@ export async function reconcileSupplierInvoiceVouchers(
       .select('journal_entry_id')
       .eq('company_id', companyId)
       .not('journal_entry_id', 'is', null)
-      .range(from, to),
+      .order('id', { ascending: true }).range(from, to),
   )
   const consumedVouchers = new Set(
     existingPayments

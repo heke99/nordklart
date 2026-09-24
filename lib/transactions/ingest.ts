@@ -238,7 +238,7 @@ export async function ingestTransactions(
         .eq('company_id', companyId)
         .in('status', ['registered', 'approved'])
         .gt('remaining_amount', 0)
-        .range(from, to)
+        .order('id', { ascending: true }).range(from, to)
     )
   } catch {
     // Non-critical — supplier invoice matching will be skipped

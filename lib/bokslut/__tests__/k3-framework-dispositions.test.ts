@@ -39,24 +39,16 @@ function makeSupabase(opts: {
   // The builder makes several .from(...) queries. We respond per-table.
   const from = vi.fn((table: string) => {
     if (table === 'fiscal_periods') {
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              single: () =>
-                Promise.resolve({
-                  data: {
-                    id: 'fp1',
-                    name: '2026',
-                    period_start: '2026-01-01',
-                    period_end: periodEnd,
-                  },
-                  error: null,
-                }),
-            }),
-          }),
-        }),
-      }
+      // Current-period reads resolve to fp1; the previous-period lookup
+      // (a `.lt('period_end', …)` query) finds none.
+      const period = { id: 'fp1', name: '2026', period_start: '2026-01-01', period_end: periodEnd }
+      let isPreviousLookup = false
+      const chain: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'order', 'limit']) chain[m] = () => chain
+      chain.lt = () => { isPreviousLookup = true; return chain }
+      chain.single = () => Promise.resolve({ data: period, error: null })
+      chain.maybeSingle = () => Promise.resolve({ data: isPreviousLookup ? null : period, error: null })
+      return chain
     }
     if (table === 'companies') {
       // The builder hits `companies` twice: the canonical entity_type read

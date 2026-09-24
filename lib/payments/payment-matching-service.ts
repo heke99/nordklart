@@ -234,7 +234,7 @@ export async function matchTransactionToPayments(
             .eq('company_id', companyId)
             .in('status', ['registered', 'approved'])
             .gt('remaining_amount', 0)
-            .range(from, to),
+            .order('id', { ascending: true }).range(from, to),
         )
       }
       const matches = findSupplierInvoiceMatches(transaction, pool)

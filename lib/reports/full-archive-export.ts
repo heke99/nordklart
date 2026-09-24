@@ -49,6 +49,7 @@ interface CompanyInfo {
   company_name: string | null
   org_number: string | null
   moms_period: string | null
+  entity_type?: string | null
 }
 
 interface DocumentRow {
@@ -128,6 +129,7 @@ export async function generateFullArchive(
             fiscal_period_id: period.id,
             company_name: company.company_name || 'Unknown',
             org_number: company.org_number,
+            entity_type: company.entity_type,
           })
           sieFolder.file(`${periodLabel(period)}.se`, sie)
 
@@ -143,6 +145,7 @@ export async function generateFullArchive(
       fiscal_period_id: period.id,
       company_name: company.company_name || 'Unknown',
       org_number: company.org_number,
+      entity_type: company.entity_type,
     })
     zip.file('bokforing.se', sie)
 
@@ -209,7 +212,7 @@ export async function estimateArchiveSize(
         .eq('company_id', companyId)
         .eq('fiscal_period_id', periodId)
         .in('status', ['posted', 'reversed'])
-        .range(from, to)
+        .order('id', { ascending: true }).range(from, to)
     )
     const ids = periodEntryIds.map((e) => e.id)
     if (ids.length === 0) {
@@ -236,7 +239,7 @@ export async function estimateArchiveSize(
 async function fetchCompany(supabase: SupabaseClient, companyId: string): Promise<CompanyInfo> {
   const { data } = await supabase
     .from('company_settings')
-    .select('company_name, org_number, moms_period')
+    .select('company_name, org_number, moms_period, entity_type')
     .eq('company_id', companyId)
     .single()
 
@@ -345,7 +348,7 @@ async function writeDocuments(
         )
         .eq('company_id', companyId)
         .not('journal_entry_id', 'is', null)
-        .range(from, to)
+        .order('id', { ascending: true }).range(from, to)
     )
 
     if (documents.length > 0) {
@@ -731,7 +734,7 @@ async function buildEntryToPeriodMap(
   }
 
   const entries = await fetchAllRows<{ id: string; fiscal_period_id: string }>(({ from, to }) =>
-    query.range(from, to)
+    query.order('id', { ascending: true }).range(from, to)
   )
 
   for (const entry of entries) {

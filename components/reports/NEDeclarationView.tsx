@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Download, AlertCircle } from 'lucide-react'
 import { AccountNumber } from '@/components/ui/account-number'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
+import { NE_RUTA_LABELS } from '@/lib/reports/ne-bilaga/types'
 import { formatCurrency } from '@/lib/utils'
 
 export function NEDeclarationView({ periodId }: { periodId: string }) {
@@ -36,20 +37,8 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
     window.open(`/api/reports/ne-bilaga?period_id=${periodId}&format=sru`, '_blank')
   }
 
-  // NE ruta labels
-  const rutaLabels: Record<string, string> = {
-    R1: 'Försäljning med moms (25%)',
-    R2: 'Momsfria intäkter',
-    R3: 'Bil/bostadsförmån',
-    R4: 'Ränteintäkter',
-    R5: 'Varuinköp',
-    R6: 'Övriga kostnader',
-    R7: 'Lönekostnader',
-    R8: 'Räntekostnader',
-    R9: 'Avskrivningar fastighet',
-    R10: 'Avskrivningar övriga tillgångar',
-    R11: 'Årets resultat',
-  }
+  // NE ruta labels (Skatteverket SKV 2161)
+  const rutaLabels: Record<string, string> = NE_RUTA_LABELS
 
   // Categorize rutor
   const revenueRutor = ['R1', 'R2', 'R3', 'R4'] as const

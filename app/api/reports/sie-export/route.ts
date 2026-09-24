@@ -20,7 +20,7 @@ export const GET = withRouteContext(
 
     const { data: company } = await supabase
       .from('company_settings')
-      .select('company_name, org_number')
+      .select('company_name, org_number, entity_type')
       .eq('company_id', companyId)
       .single()
 
@@ -33,6 +33,7 @@ export const GET = withRouteContext(
         fiscal_period_id: periodId,
         company_name: company.company_name || 'Unknown',
         org_number: company.org_number,
+        entity_type: company.entity_type,
         exclude_year_end_closing: excludeClosing,
       })
 

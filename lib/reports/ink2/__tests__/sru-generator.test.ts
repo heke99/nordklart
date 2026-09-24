@@ -5,6 +5,13 @@ import {
   getZipFilename,
 } from '../sru-generator'
 import type { INK2Declaration } from '../types'
+import { INK2S_NUMERIC_CODES } from '../types'
+
+function makeInk2s(values: Partial<Record<(typeof INK2S_NUMERIC_CODES)[number], number>>): INK2Declaration['ink2s'] {
+  const ink2s = { '7011': '20250101', '7012': '20251231' } as INK2Declaration['ink2s']
+  for (const code of INK2S_NUMERIC_CODES) ink2s[code] = values[code] ?? 0
+  return ink2s
+}
 
 function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration {
   const defaultInk2r = {
@@ -19,11 +26,11 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
     '7350': 0, '7351': 0, '7352': 0, '7353': 0, '7354': 0,
     '7360': 0, '7361': 0, '7362': 0, '7363': 0, '7364': 0,
     '7365': 30000, '7366': 0, '7367': 0, '7369': 70000, '7368': 0, '7370': 0,
-    '7410': 500000, '7411': 0, '7412': 0, '7413': 0,
+    '7410': 500000, '7411': 0, '7510': 0, '7412': 0, '7413': 0,
     '7511': 0, '7512': 0, '7513': 100000, '7514': 80000, '7515': 10000, '7516': 0, '7517': 5000,
-    '7414': 0, '7415': 0, '7423': 0, '7416': 0, '7417': 0,
+    '7414': 0, '7518': 0, '7415': 0, '7519': 0, '7423': 0, '7530': 0, '7416': 0, '7520': 0, '7417': 0,
     '7521': 0, '7522': 3000,
-    '7524': 0, '7419': 0, '7420': 0, '7525': 0, '7421': 0, '7422': 0,
+    '7524': 0, '7419': 0, '7420': 0, '7525': 0, '7421': 0, '7526': 0, '7422': 0, '7527': 0,
     '7528': 0,
     '7450': 302000, '7550': 0,
   } as INK2Declaration['ink2r']
@@ -39,31 +46,11 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
     ink2: {
       '7011': '20250101',
       '7012': '20251231',
-      '7113': 302000,
+      '7104': 302000,
       '7114': 0,
     },
     ink2r: defaultInk2r,
-    ink2s: {
-      '7011': '20250101',
-      '7012': '20251231',
-      '7650': 302000,
-      '7750': 0,
-      '7651': 0,
-      '7652': 0,
-      '7653': 0,
-      '7654': 0,
-      '7655': 0,
-      '7656': 0,
-      '7751': 0,
-      '7752': 0,
-      '7753': 0,
-      '7754': 0,
-      '7763': 0,
-      '7664': 0,
-      '7670': 0,
-      '8020': 302000,
-      '8021': 0,
-    },
+    ink2s: makeInk2s({ '7650': 302000, '7670': 302000 }),
     breakdown: {} as INK2Declaration['breakdown'],
     totals: {
       totalAssets: 175000,
@@ -254,10 +241,11 @@ describe('INK2 SRU Generator', () => {
 
       const ink2sBlock = extractBlock(submission.blanketterSru, 'INK2S')
       expect(ink2sBlock).toContain('#UPPGIFT 7650 302000')
-      expect(ink2sBlock).toContain('#UPPGIFT 8020 302000')
-      // 7750 and 8021 are 0, should not appear
+      // 4.15 Överskott is 7670 (8020 is värdeminskningsavdrag byggnader).
+      expect(ink2sBlock).toContain('#UPPGIFT 7670 302000')
+      expect(ink2sBlock).not.toContain('#UPPGIFT 8020')
       expect(ink2sBlock).not.toContain('#UPPGIFT 7750')
-      expect(ink2sBlock).not.toContain('#UPPGIFT 8021')
+      expect(ink2sBlock).not.toContain('#UPPGIFT 7770')
     })
 
     it('INK2 block includes överskott', () => {
@@ -265,7 +253,8 @@ describe('INK2 SRU Generator', () => {
       const submission = generateSRUSubmission(declaration)
 
       const ink2Block = extractBlock(submission.blanketterSru, 'INK2-')
-      expect(ink2Block).toContain('#UPPGIFT 7113 302000')
+      // 1.1 Överskott av näringsverksamhet is 7104 on INK2 2025P4.
+      expect(ink2Block).toContain('#UPPGIFT 7104 302000')
       // 7114 (underskott) is 0, should not appear
       expect(ink2Block).not.toContain('#UPPGIFT 7114')
     })

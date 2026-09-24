@@ -83,7 +83,7 @@ export async function generateJournalRegister(
       .eq('journal_entries.fiscal_period_id', periodId)
       .in('journal_entries.status', ['posted', 'reversed'])
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .range(from, to) as any
+      .order('id', { ascending: true }).range(from, to) as any
   )
 
   if (rawLines.length === 0) {
@@ -96,7 +96,7 @@ export async function generateJournalRegister(
       .from('chart_of_accounts')
       .select('account_number, account_name')
       .eq('company_id', companyId)
-      .range(from, to)
+      .order('id', { ascending: true }).range(from, to)
   )
 
   const accountNameMap = new Map<string, string>()

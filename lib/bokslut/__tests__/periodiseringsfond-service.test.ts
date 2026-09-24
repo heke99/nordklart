@@ -3,6 +3,7 @@ import {
   proposeAvsattning,
   proposeAteforing,
   getPeriodiseringsfondCohortAccount,
+  cohortYearFromAccount,
   PFOND_AB_RATE,
   PFOND_MAX_HOLD_YEARS,
   type ExistingFond,
@@ -18,6 +19,27 @@ describe('getPeriodiseringsfondCohortAccount', () => {
 
   it('returns 2129 for 2019 per BAS collision rule', () => {
     expect(getPeriodiseringsfondCohortAccount(2019)).toBe('2129')
+  })
+})
+
+describe('cohortYearFromAccount', () => {
+  it('reads the year digit from 212X and 213X (nr 2)', () => {
+    expect(cohortYearFromAccount('2125', 2026)).toBe(2025)
+    expect(cohortYearFromAccount('2135', 2026)).toBe(2025)
+    expect(cohortYearFromAccount('2126', 2026)).toBe(2026)
+  })
+
+  it('does not wrap into the wrong decade', () => {
+    // 2129 is 2019 while closing 2025, but 2029 once the 2029 fund is set aside.
+    expect(cohortYearFromAccount('2129', 2025)).toBe(2019)
+    expect(cohortYearFromAccount('2129', 2029)).toBe(2029)
+    // A 2030 fund on 2120 is not mistaken for 2020 (which would force its return).
+    expect(cohortYearFromAccount('2120', 2030)).toBe(2030)
+    expect(cohortYearFromAccount('2120', 2031)).toBe(2030)
+  })
+
+  it('has no year for the 2110 grouping account', () => {
+    expect(cohortYearFromAccount('2110', 2026)).toBeNull()
   })
 })
 
@@ -102,16 +124,17 @@ describe('proposeAteforing', () => {
         account_number: '2120',
         cohort_year: 2020,
         balance: 50_000,
+        opening_balance: 50_000,
         must_return_this_year: true,
       },
     ]
-    const result = proposeAteforing(fonder, { schablonintaktRate: 0.03 })
+    const result = proposeAteforing(fonder, { schablonintaktRate: 0.0196 })
     expect(result.proposals).toHaveLength(1)
     expect(result.proposals[0].amount).toBe(50_000)
     expect(result.proposals[0].required).toBe(true)
     expect(result.proposals[0].warnings[0]).toContain('6-årsgränsen')
-    // 50_000 × 0.03 = 1500
-    expect(result.schablonintaktAmount).toBe(1_500)
+    // 50_000 × 1,96 % = 980
+    expect(result.schablonintaktAmount).toBe(980)
   })
 
   it('skips non-mandatory fonder when no return amount requested', () => {
@@ -120,6 +143,7 @@ describe('proposeAteforing', () => {
         account_number: '2122',
         cohort_year: 2022,
         balance: 100_000,
+        opening_balance: 100_000,
         must_return_this_year: false,
       },
     ]
@@ -129,12 +153,25 @@ describe('proposeAteforing', () => {
     expect(result.schablonintaktAmount).toBe(3_000)
   })
 
+  it('computes schablonintäkt on the OPENING balance (Skatteverket example)', () => {
+    // Skatteverket: 400 000 kr i periodiseringsfonder vid årets ingång, 2025:
+    // 1,96 % × 400 000 = 7 840 kr. A fund set aside this year has no opening
+    // balance and adds nothing.
+    const fonder: ExistingFond[] = [
+      { account_number: '2122', cohort_year: 2022, opening_balance: 400_000, balance: 400_000, must_return_this_year: false },
+      { account_number: '2125', cohort_year: 2025, opening_balance: 0, balance: 100_000, must_return_this_year: false },
+    ]
+    const result = proposeAteforing(fonder, { schablonintaktRate: 0.0196 })
+    expect(result.schablonintaktAmount).toBe(7_840)
+  })
+
   it('returns the requested optional amount when user opts in', () => {
     const fonder: ExistingFond[] = [
       {
         account_number: '2123',
         cohort_year: 2023,
         balance: 80_000,
+        opening_balance: 80_000,
         must_return_this_year: false,
       },
     ]
@@ -153,6 +190,7 @@ describe('proposeAteforing', () => {
         account_number: '2124',
         cohort_year: 2024,
         balance: 30_000,
+        opening_balance: 30_000,
         must_return_this_year: false,
       },
     ]
@@ -169,6 +207,7 @@ describe('proposeAteforing', () => {
         account_number: '2120',
         cohort_year: 2020,
         balance: 50_000,
+        opening_balance: 50_000,
         must_return_this_year: true,
       },
     ]

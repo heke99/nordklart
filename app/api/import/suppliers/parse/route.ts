@@ -61,7 +61,7 @@ export const POST = withRouteContext(
           .from('suppliers')
           .select('id, name, org_number, email')
           .eq('company_id', companyId)
-          .range(from, to),
+          .order('id', { ascending: true }).range(from, to),
       )
 
       const byOrg = new Map<string, { id: string; name: string }>()

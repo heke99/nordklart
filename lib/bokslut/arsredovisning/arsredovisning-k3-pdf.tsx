@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData } from './types'
 import { formatAnnualReportAmount, normalizeAnnualReportText } from './format'
+import { FaststallelseText } from './arsredovisning-pdf'
 
 /**
  * K3 årsredovisning PDF template (BFNAR 2012:1).
@@ -443,13 +444,13 @@ export function ArsredovisningK3PDF({
 
           <Text style={styles.sectionTitle}>Finansieringsverksamheten</Text>
           <View style={styles.tableRow}>
-            <Text style={styles.colLabel}>Förändring av lån (långfristiga skulder)</Text>
+            <Text style={styles.colLabel}>Förändring av lån</Text>
             <Text style={styles.colAmount}>
               {fmt(data.kassaflodesanalys.finansierings.delta_lan)}
             </Text>
           </View>
           <View style={styles.tableRow}>
-            <Text style={styles.colLabel}>Utdelningar till ägare</Text>
+            <Text style={styles.colLabel}>Utbetald utdelning</Text>
             <Text style={styles.colAmount}>
               {fmt(data.kassaflodesanalys.finansierings.utdelningar)}
             </Text>
@@ -460,6 +461,14 @@ export function ArsredovisningK3PDF({
               {fmt(data.kassaflodesanalys.finansierings.nyemission)}
             </Text>
           </View>
+          {data.kassaflodesanalys.finansierings.ovriga_finansiering ? (
+            <View style={styles.tableRow}>
+              <Text style={styles.colLabel}>Övriga förändringar av eget kapital och koncernbidrag</Text>
+              <Text style={styles.colAmount}>
+                {fmt(data.kassaflodesanalys.finansierings.ovriga_finansiering)}
+              </Text>
+            </View>
+          ) : null}
           <View style={styles.tableRowSubtotal}>
             <Text style={styles.colLabel}>Kassaflöde från finansieringsverksamheten</Text>
             <Text style={styles.colAmount}>
@@ -584,17 +593,7 @@ export function ArsredovisningK3PDF({
         <PageChrome data={data} isDraft={isDraft} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
         <Text style={styles.paragraph}>
-          Undertecknad styrelseledamot, närvarande vid årsstämman, intygar härmed
-          att resultaträkningen och balansräkningen har fastställts på årsstämma
-          den {data.forvaltningsberattelse.agm_date ?? '____________________'} och
-          att årsstämman beslutade om disposition av bolagets resultat i enlighet
-          med vad som anges nedan.
-        </Text>
-        <Text style={styles.paragraph}>
-          Jag intygar också att årsredovisningen ger en rättvisande bild av
-          företagets ställning och resultat samt att förvaltningsberättelsen ger
-          en rättvisande översikt över utvecklingen av företagets verksamhet,
-          ställning och resultat.
+          <FaststallelseText data={data} />
         </Text>
         <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
         <Text style={styles.paragraph}>

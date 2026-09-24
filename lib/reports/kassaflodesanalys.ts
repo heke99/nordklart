@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
-import { generateIncomeStatement } from './income-statement'
 import type { TrialBalanceRow } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
  * Kassaflödesanalys (Cash Flow Statement) — indirect method per BFNAR 2012:1 ch 7.
@@ -61,6 +61,8 @@ export type KassaflodesanalysReport = {
     delta_lan: number
     utdelningar: number
     nyemission: number
+    /** Koncernbidrag, aktieägartillskott, egna uttag/insättningar (EF) m.m. */
+    ovriga_finansiering: number
     total: number
   }
   total_cash_flow: number
@@ -75,10 +77,10 @@ export type KassaflodesanalysReport = {
 }
 
 // Normalize -0 → 0 so callers (and tests) never observe a signed zero.
-// Math.round(0 * 100) / 100 happens to be 0, but Math.round(-0.001 * 100) / 100
+// roundOre(0) happens to be 0, but roundOre(-0.001)
 // returns -0 because Math.round preserves the sign of zero.
 const r2 = (n: number) => {
-  const rounded = Math.round(n * 100) / 100
+  const rounded = roundOre(n)
   return rounded === 0 ? 0 : rounded
 }
 
@@ -96,28 +98,6 @@ function debitSideDelta(row: TrialBalanceRow): number {
   const opening = (row.opening_debit || 0) - (row.opening_credit || 0)
   const closing = (row.closing_debit || 0) - (row.closing_credit || 0)
   return closing - opening
-}
-
-/**
- * Sum the debit-side delta for all accounts whose number starts with one of
- * the given prefixes. Useful for grouping by BAS account class/range.
- */
-function sumDeltaByPrefix(rows: TrialBalanceRow[], prefixes: string[]): number {
-  return rows
-    .filter((r) => prefixes.some((p) => r.account_number.startsWith(p)))
-    .reduce((sum, r) => sum + debitSideDelta(r), 0)
-}
-
-/**
- * Sum *period activity* (not delta) on the debit side for the given account
- * prefixes. Used for avskrivningar where the depreciation expense for the
- * period is the relevant figure, not the cumulative change in the contra
- * account (which would also reflect disposals).
- */
-function sumPeriodDebitByPrefix(rows: TrialBalanceRow[], prefixes: string[]): number {
-  return rows
-    .filter((r) => prefixes.some((p) => r.account_number.startsWith(p)))
-    .reduce((sum, r) => sum + ((r.period_debit || 0) - (r.period_credit || 0)), 0)
 }
 
 export async function generateKassaflodesanalys(
@@ -146,76 +126,64 @@ export async function generateKassaflodesanalys(
     excludeYearEndClosing: true,
   })
 
-  // Net result before tax (resultat efter finansiella poster) comes from the
-  // P&L generator, which already excludes 8999 (year-end closing account)
-  // and applies the K2/K3 sign convention. We then subtract any tax expense
-  // (8910, periodiseringsfond moves, etc.) to land at *before-tax* result.
-  const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
-
-  // Resultat efter finansiella poster = total_revenue - total_expenses + total_financial
-  // EXCEPT we want to keep tax (89xx) out — net_result already nets tax in.
-  // Use the same formula as net_result but without subtracting 89xx items:
-  // net_result = revenue - expenses + financial (where financial includes 89xx)
-  // We want: revenue - expenses + (financial - tax_portion)
+  // ── Classification ─────────────────────────────────────────────────────
+  // Indirect method (K3 kap. 7; BFNAR 2012:1). Every balance-sheet account
+  // belongs to exactly one bucket below, and every income-statement account
+  // is either in the result or paired with a balance-sheet bucket that is
+  // left out — so Δ cash reconciles by construction and a mismatch means data
+  // the classification does not know, not an arithmetic slip.
   //
-  // To keep this simple: scan financial_sections, separate tax (89xx) from
-  // rest, and assemble resultat efter finansiella poster.
-  // Filter ROWS by 89xx prefix (not just the section's first row) — a single
-  // section can mix tax and non-tax accounts, and the old first-row heuristic
-  // silently misclassified the rest.
-  const taxAmount = incomeStatement.financial_sections.reduce((sum, s) => {
-    const sectionTax = s.rows
-      .filter((r) => r.account_number.startsWith('89'))
-      .reduce((acc, r) => acc + r.amount, 0)
-    return sum + sectionTax
-  }, 0)
-  const nonTaxFinancial = incomeStatement.total_financial - taxAmount
+  //   19xx                      cash (reconciled against)
+  //   10–13xx, 18xx             investing (incl. accumulated depreciation)
+  //   14xx / 15–17xx            working capital: varulager / fordringar
+  //   22xx                      avsättningar — non-cash adjustment
+  //   21xx ↔ 88xx (ex 882–883)  bokslutsdispositioner — non-cash, both out
+  //   25xx ↔ 89xx               tax: expense out of result, cash via liability
+  //   23xx, 2410–2419,
+  //   2480–2489, 2893           financing: loans
+  //   2898                      financing: decided dividends
+  //   20xx                      financing: equity
+  //   882x–883x                 financing: koncernbidrag
+  //   other 24xx, 26–29xx       working capital: kortfristiga skulder
+  const inPrefixes = (account: string, prefixes: string[]) => prefixes.some((p) => account.startsWith(p))
+  const between = (account: string, from: string, to: string) => account >= from && account <= to
+  const isShortTermLoan = (a: string) => between(a, '2410', '2419') || between(a, '2480', '2489') || a === '2893'
 
+  const periodNet = (predicate: (account: string) => boolean) =>
+    rows
+      .filter((r) => predicate(r.account_number))
+      .reduce((sum, r) => sum + ((r.period_debit || 0) - (r.period_credit || 0)), 0)
+  const deltaOf = (predicate: (account: string) => boolean) =>
+    rows.filter((r) => predicate(r.account_number)).reduce((sum, r) => sum + debitSideDelta(r), 0)
+
+  // Resultat efter finansiella poster: classes 3–8 excluding bokslutsdispositioner
+  // (88xx) and skatt/årets resultat (89xx). Income is negative on the debit side.
   const resultatEfterFinansiella = r2(
-    incomeStatement.total_revenue - incomeStatement.total_expenses + nonTaxFinancial
+    -periodNet((a) => a >= '3000' && a <= '8799'),
   )
 
   // ─── Löpande verksamhet ────────────────────────────────────────────────
-  // Avskrivningar (depreciation): 78xx debit movements in the period.
-  // Sign convention: depreciation is an expense that reduced result but did
-  // not consume cash, so we add it BACK to result. period_debit on 78xx is
-  // positive; we report it as a positive number to be added.
-  const avskrivningar = r2(sumPeriodDebitByPrefix(rows, ['78']))
+  // Av- och nedskrivningar (77xx–78xx) reduced the result without moving cash.
+  const avskrivningar = r2(periodNet((a) => between(a, '7700', '7899')))
 
-  // Övriga ej-kassaflödesposter: this category is used for non-cash items
-  // beyond depreciation (e.g., reversals of provisions, unrealized FX).
-  // v1 places it at 0 — extensions can compute it from specific account
-  // patterns. Kept in the type so the structure is stable.
-  const ovrigaEjKassaflodesposter = 0
+  // Avsättningar (22xx): an increase was expensed but not paid.
+  const ovrigaEjKassaflodesposter = r2(-deltaOf((a) => a.startsWith('22')))
 
-  // Δ Kortfristiga fordringar (15xx). Increase in receivables = cash NOT
-  // received yet → cash outflow → NEGATE the debit-side delta.
-  // Positive delta on a debit-normal account means asset grew → subtract.
-  const deltaKortfristigaFordringar = r2(-sumDeltaByPrefix(rows, ['15']))
-
-  // Δ Varulager (14xx). Same sign as receivables: stock grew → cash out.
-  const deltaVarulager = r2(-sumDeltaByPrefix(rows, ['14']))
-
-  // Δ Kortfristiga skulder (24xx, 26xx, 29xx) EXCLUDING tax skulder (2510).
-  // 24xx = leverantörsskulder; 26xx = moms; 29xx = upplupna kostnader.
-  // These are credit-normal accounts: increase → cash retained → ADD the
-  // credit-side delta. debitSideDelta returns the *debit*-side delta which
-  // is the inverse, so we negate.
-  //
-  // 25xx is excluded because we handle skatt separately (line below).
+  // Working capital. Asset growth consumes cash; liability growth retains it.
+  const deltaKortfristigaFordringar = r2(-deltaOf((a) => inPrefixes(a, ['15', '16', '17'])))
+  const deltaVarulager = r2(-deltaOf((a) => a.startsWith('14')))
   const deltaKortfristigaSkulder = r2(
-    -sumDeltaByPrefix(rows, ['24', '26', '29'])
+    -deltaOf(
+      (a) =>
+        (a.startsWith('24') || inPrefixes(a, ['26', '27', '28', '29'])) &&
+        !isShortTermLoan(a) &&
+        a !== '2898',
+    ),
   )
 
-  // Skatt betald: actual cash tax outflow over the period. Approximated as
-  // the negative of the change in 2510 (income tax payable). If 2510 went
-  // down, tax was paid → negative cash flow. The current-year tax expense
-  // (8910) was already netted into resultat efter finansiella; here we only
-  // capture the cash side.
-  // Sign: 2510 is credit-normal. Decrease in liability = cash outflow.
-  // debitSideDelta(2510): if liability dropped (UB credit < IB credit),
-  // delta is positive. We want that as a negative cash flow.
-  const skattBetald = r2(-sumDeltaByPrefix(rows, ['2510']))
+  // Betald skatt = −(årets skattekostnad 89xx ex 899x) + ökning av skatteskulder (25xx).
+  const taxExpense = periodNet((a) => between(a, '8900', '8989'))
+  const skattBetald = r2(-taxExpense - deltaOf((a) => a.startsWith('25')))
 
   const totalLopande = r2(
     resultatEfterFinansiella +
@@ -228,65 +196,41 @@ export async function generateKassaflodesanalys(
   )
 
   // ─── Investeringsverksamhet ────────────────────────────────────────────
-  // Förvärv av anläggningstillgångar: net debit movement on 10xx-13xx.
-  // An increase in fixed assets (positive debit-side delta) is a cash
-  // outflow → negate to surface as negative.
-  //
-  // We exclude accumulated-depreciation contra-asset accounts because their
-  // movement is non-cash (it's already added back to löpande as avskrivningar).
-  // Without this filter, depreciation would show up twice — once as an
-  // add-back in löpande and once as a phantom "avyttring" in investeringar —
-  // breaking the reconciliation against 19xx.
-  //
-  // Note: this naive netting can blend purchases with disposals when a
-  // disposal credits the same account. Item #2 in the plan (asset disposal)
-  // will refine this by linking disposal proceeds to specific entries; for
-  // now, the net figure is the best we can derive from balances alone.
-  const ACCUMULATED_DEPRECIATION_ACCOUNTS = [
-    '1119', // ack avskr balanserade utgifter
-    '1129', // ack avskr koncessioner
-    '1139', // ack avskr hyresrätter
-    '1149', // ack avskr goodwill
-    '1159', // ack avskr förskott immateriella
-    '1219', // ack avskr maskiner och inventarier
-    '1229', // ack avskr inventarier och verktyg
-    '1239', // ack avskr installationer
-    '1249', // ack avskr bilar
-    '1259', // ack avskr datorer
-    '1269', // ack avskr leasade tillgångar
-    '1279', // ack avskr byggn. inventarier
-    '1289', // ack avskr övriga maskiner
-  ]
-  const fixedAssetDelta = rows
-    .filter((r) => {
-      if (!['10', '11', '12', '13'].some((p) => r.account_number.startsWith(p))) return false
-      return !ACCUMULATED_DEPRECIATION_ACCOUNTS.includes(r.account_number)
-    })
-    .reduce((sum, r) => sum + debitSideDelta(r), 0)
-  const forvarv = r2(fixedAssetDelta > 0 ? -fixedAssetDelta : 0)
-  const avyttring = r2(fixedAssetDelta < 0 ? -fixedAssetDelta : 0)
+  // Change in the NET carrying amount of 10–13xx (accumulated depreciation
+  // included, whatever its account number) plus this year's depreciation is
+  // the net investment. 18xx kortfristiga placeringar are investing too.
+  const fixedAssetNetInvestment = deltaOf((a) => inPrefixes(a, ['10', '11', '12', '13'])) + avskrivningar
+  const placeringar = deltaOf((a) => a.startsWith('18'))
+  const netInvestment = fixedAssetNetInvestment + placeringar
+  const forvarv = r2(netInvestment > 0 ? -netInvestment : 0)
+  const avyttring = r2(netInvestment < 0 ? -netInvestment : 0)
 
   const totalInvesterings = r2(forvarv + avyttring)
 
   // ─── Finansieringsverksamhet ───────────────────────────────────────────
-  // Δ Lån (23xx — långfristiga skulder). Credit-normal: increase in loan
-  // = cash inflow → ADD credit-side delta = negate debit-side delta.
-  const deltaLan = r2(-sumDeltaByPrefix(rows, ['23']))
+  const deltaLan = r2(-deltaOf((a) => a.startsWith('23') || isShortTermLoan(a)))
 
-  // Utdelningar: capture as the debit movements on 2898 (decided dividends)
-  // and 8910 isn't a dividend (it's tax). Better marker is 2091 / 2898.
-  // v1: scan for 2898 period_debit. Conservative — better to under-report
-  // than to mis-classify. Report as negative cash flow.
-  const utdelningar = r2(-sumPeriodDebitByPrefix(rows, ['2898']))
+  // Decided dividends are credited to 2898 (against equity) and paid from it:
+  // the cash paid is the debit movement on 2898.
+  const dividendRows = rows.filter((r) => r.account_number === '2898')
+  const dividendsPaid = dividendRows.reduce((sum, r) => sum + (r.period_debit || 0), 0)
+  const dividendsDecided = dividendRows.reduce((sum, r) => sum + (r.period_credit || 0), 0)
+  const utdelningar = r2(-dividendsPaid)
 
-  // Nyemission: increase in 20xx equity (excluding result-of-the-year and
-  // dividends). Credit-normal: positive credit-side delta = cash inflow.
-  // We sum 2081 (share capital) + 2082 (premium) deltas specifically to
-  // avoid double-counting 2099 (årets resultat is non-cash).
-  const nyemissionDebit = sumDeltaByPrefix(rows, ['2081', '2082', '2083', '2087'])
-  const nyemission = r2(-nyemissionDebit)
+  // Nyemission: aktiekapital, ej registrerat aktiekapital, överkursfond.
+  const nyemission = r2(-deltaOf((a) => inPrefixes(a, ['2081', '2082', '2087', '2097'])))
 
-  const totalFinansierings = r2(deltaLan + utdelningar + nyemission)
+  // Remaining equity movements (aktieägartillskott, egna uttag/insättningar in
+  // enskild firma, the equity side of dividends) and koncernbidrag.
+  const otherEquity = -deltaOf(
+    (a) => a.startsWith('20') && !inPrefixes(a, ['2081', '2082', '2087', '2097']),
+  )
+  const koncernbidrag = -periodNet((a) => between(a, '8820', '8839'))
+  // The equity debit of a decided dividend is matched by its 2898 credit —
+  // neither is cash until 2898 is paid, which utdelningar already shows.
+  const ovrigaFinansiering = r2(otherEquity + dividendsDecided + koncernbidrag)
+
+  const totalFinansierings = r2(deltaLan + utdelningar + nyemission + ovrigaFinansiering)
 
   // ─── Total cash flow ───────────────────────────────────────────────────
   const totalCashFlow = r2(totalLopande + totalInvesterings + totalFinansierings)
@@ -332,6 +276,7 @@ export async function generateKassaflodesanalys(
       delta_lan: deltaLan,
       utdelningar,
       nyemission,
+      ovriga_finansiering: ovrigaFinansiering,
       total: totalFinansierings,
     },
     total_cash_flow: totalCashFlow,

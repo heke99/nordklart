@@ -1,3 +1,4 @@
+import { isValidSruCode, sruCodeForAccount, type SruEntityType } from '@/lib/reports/sru/account-sru'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
@@ -102,6 +103,8 @@ export async function generateSIEExport(
     .eq('is_active', true)
     .order('code')
 
+  const sruEntity: SruEntityType = options.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag'
+
   const lines: string[] = []
   const now = new Date()
 
@@ -187,9 +190,13 @@ export async function generateSIEExport(
       lines.push(`#KTYP ${account.account_number} ${ktyp}`)
     }
 
-    // #SRU records from chart_of_accounts.sru_code
-    if (account.sru_code) {
-      lines.push(`#SRU ${account.account_number} ${account.sru_code}`)
+    // #SRU: the code this account reports to on the company's own form
+    // (INK2R or NE). A stored code is kept only when it is a real field on
+    // that form — older charts were seeded with codes that exist on neither.
+    const sru = sruCodeForAccount(account.account_number, sruEntity)
+      ?? (isValidSruCode(account.sru_code, sruEntity) ? account.sru_code : null)
+    if (sru) {
+      lines.push(`#SRU ${account.account_number} ${sru}`)
     }
   }
 

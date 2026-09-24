@@ -1,4 +1,5 @@
 import type { PayrollConfig } from './payroll-config'
+import { roundOre } from '@/lib/money'
 
 /**
  * Traktamente (per diem) and milersättning (mileage) calculations.
@@ -35,7 +36,7 @@ export function calculateTraktamente(params: {
   consecutiveMonths: number // 0 = no reduction
   config: PayrollConfig
 }): { taxFree: number; taxable: number; totalPaid: number; steps: TraktamenteStep[] } {
-  const r = (x: number) => Math.round(x * 100) / 100
+  const r = (x: number) => roundOre(x)
   const steps: TraktamenteStep[] = []
 
   // Base rate
@@ -130,7 +131,7 @@ export function calculateMileageAllowance(params: {
   paidPerMil: number // What employer actually pays per mil
   config: PayrollConfig
 }): { taxFree: number; taxable: number; steps: TraktamenteStep[] } {
-  const r = (x: number) => Math.round(x * 100) / 100
+  const r = (x: number) => roundOre(x)
 
   let taxFreeRate: number
   switch (params.vehicleType) {

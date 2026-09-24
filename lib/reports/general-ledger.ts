@@ -107,7 +107,7 @@ export async function generateGeneralLedger(
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return query.range(from, to) as any
+    return query.order('id', { ascending: true }).range(from, to) as any
   })
 
   if (rawLines.length === 0 && openingBalances.size === 0) {
@@ -120,7 +120,7 @@ export async function generateGeneralLedger(
       .from('chart_of_accounts')
       .select('account_number, account_name')
       .eq('company_id', companyId)
-      .range(from, to)
+      .order('id', { ascending: true }).range(from, to)
   )
 
   const accountNameMap = new Map<string, string>()

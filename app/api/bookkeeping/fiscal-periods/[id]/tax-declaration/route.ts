@@ -7,6 +7,18 @@ import { generateINK2Declaration } from '@/lib/reports/ink2/ink2-engine'
 import { generateNEDeclaration } from '@/lib/reports/ne-bilaga/ne-engine'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { listTaxDeclarationAdjustments, upsertTaxDeclarationProject } from '@/lib/tax-declaration/adjustments'
+import { INK2S_ADJUSTABLE_CODES } from '@/lib/reports/ink2/types'
+import { SKV_FIELD_CODES } from '@/lib/reports/sru/skv-field-codes'
+
+/**
+ * An adjustment must target a field that exists on the form it names, per
+ * Skatteverket's field tables — otherwise it is stored, counted in the
+ * readiness score, and silently never reaches the SRU file.
+ */
+const ADJUSTABLE_FIELDS: Record<string, ReadonlySet<string>> = {
+  INK2S: new Set<string>(INK2S_ADJUSTABLE_CODES),
+  NE: SKV_FIELD_CODES.NE,
+}
 
 const AdjustmentSchema = z.object({
   declaration_type: z.enum(['INK2', 'NE']).default('INK2'),
@@ -18,7 +30,10 @@ const AdjustmentSchema = z.object({
   confidence: z.number().min(0).max(1).nullable().optional(),
   requires_review: z.boolean().default(false),
   approved: z.boolean().default(true),
-})
+}).refine(
+  (item) => ADJUSTABLE_FIELDS[item.form]?.has(item.field_code) ?? false,
+  { message: 'Fältkoden finns inte på blanketten.', path: ['field_code'] },
+)
 
 const AnswerSchema = z.object({
   declaration_type: z.enum(['INK2', 'NE']).default('INK2'),

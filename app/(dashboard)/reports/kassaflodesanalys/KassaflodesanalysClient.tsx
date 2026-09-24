@@ -252,11 +252,15 @@ export function KassaflodesanalysClient() {
             </CardHeader>
             <CardContent className="space-y-1">
               <CashRow
-                label="Förändring av lån (långfristiga skulder)"
+                label="Förändring av lån"
                 amount={report.finansierings.delta_lan}
               />
-              <CashRow label="Utdelningar" amount={report.finansierings.utdelningar} />
+              <CashRow label="Utbetald utdelning" amount={report.finansierings.utdelningar} />
               <CashRow label="Nyemission" amount={report.finansierings.nyemission} />
+              <CashRow
+                label="Övriga förändringar av eget kapital och koncernbidrag"
+                amount={report.finansierings.ovriga_finansiering}
+              />
               <SubtotalRow
                 label="Summa kassaflöde finansieringsverksamhet"
                 amount={report.finansierings.total}

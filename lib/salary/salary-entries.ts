@@ -8,6 +8,7 @@ import type {
   CreateJournalEntryLineInput,
   JournalEntry,
 } from '@/types'
+import { roundOre } from '@/lib/money'
 
 const log = createLogger('salary-entries')
 
@@ -158,7 +159,7 @@ async function createSalaryEntry(
     // full gross amount, book the remainder to the default salary account so the
     // entry balances. Without this, an employee with overtime line items but no
     // base-salary line item would fail the check_journal_entry_balance() trigger.
-    const baseRemainder = Math.round((emp.gross_salary - lineItemTotal) * 100) / 100
+    const baseRemainder = roundOre((emp.gross_salary - lineItemTotal))
     if (baseRemainder !== 0) {
       const current = expenseByAccount.get(salaryAccount) || 0
       expenseByAccount.set(salaryAccount, current + baseRemainder)
@@ -171,7 +172,7 @@ async function createSalaryEntry(
     if (amount > 0) {
       lines.push({
         account_number: account,
-        debit_amount: Math.round(amount * 100) / 100,
+        debit_amount: roundOre(amount),
         credit_amount: 0,
         line_description: `${desc} — ${accountLabel(account)}`,
       })
@@ -180,7 +181,7 @@ async function createSalaryEntry(
       lines.push({
         account_number: account,
         debit_amount: 0,
-        credit_amount: Math.round(Math.abs(amount) * 100) / 100,
+        credit_amount: roundOre(Math.abs(amount)),
         line_description: `${desc} — ${accountLabel(account)}`,
       })
     }
@@ -192,7 +193,7 @@ async function createSalaryEntry(
     lines.push({
       account_number: SALARY_ACCOUNTS.TAX_WITHHELD,
       debit_amount: 0,
-      credit_amount: Math.round(totalTax * 100) / 100,
+      credit_amount: roundOre(totalTax),
       line_description: `${desc} — Personalskatt`,
     })
   }
@@ -203,7 +204,7 @@ async function createSalaryEntry(
     lines.push({
       account_number: SALARY_ACCOUNTS.BANK,
       debit_amount: 0,
-      credit_amount: Math.round(totalNet * 100) / 100,
+      credit_amount: roundOre(totalNet),
       line_description: `${desc} — Nettolön`,
     })
   }
@@ -237,7 +238,7 @@ async function createAvgifterEntry(
   desc: string
 ): Promise<JournalEntry> {
   const totalAvgifter = run.employees.reduce((sum, e) => sum + e.avgifter_amount, 0)
-  const roundedAvgifter = Math.round(totalAvgifter * 100) / 100
+  const roundedAvgifter = roundOre(totalAvgifter)
 
   const lines: CreateJournalEntryLineInput[] = [
     {
@@ -286,8 +287,8 @@ async function createVacationEntry(
   totalVacation: number,
   totalVacationAvgifter: number
 ): Promise<JournalEntry> {
-  const roundedVacation = Math.round(totalVacation * 100) / 100
-  const roundedAvgifter = Math.round(totalVacationAvgifter * 100) / 100
+  const roundedVacation = roundOre(totalVacation)
+  const roundedAvgifter = roundOre(totalVacationAvgifter)
 
   const lines: CreateJournalEntryLineInput[] = []
 
@@ -359,8 +360,8 @@ async function createPensionEntry(
   totalPension: number,
   totalSlp: number
 ): Promise<JournalEntry> {
-  const roundedPension = Math.round(totalPension * 100) / 100
-  const roundedSlp = Math.round(totalSlp * 100) / 100
+  const roundedPension = roundOre(totalPension)
+  const roundedSlp = roundOre(totalSlp)
 
   const lines: CreateJournalEntryLineInput[] = [
     {

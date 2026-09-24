@@ -9,10 +9,23 @@ export interface EquityRollforwardResult {
   reconciled: boolean
 }
 
+/**
+ * One column per equity post in the balance sheet (ÅRL 5 kap. 14 §: the
+ * förvaltningsberättelse shows the change in each eget-kapital post), so
+ * bundna fonder and överkursfond are no longer folded into "balanserat".
+ */
 interface EquityComponents {
   aktiekapital: number
+  bundnaFonder: number
+  overkursfond: number
   balanserat: number
   aretsResultat: number
+}
+
+const ZERO: EquityComponents = { aktiekapital: 0, bundnaFonder: 0, overkursfond: 0, balanserat: 0, aretsResultat: 0 }
+
+function sum(values: EquityComponents): number {
+  return roundOre(values.aktiekapital + values.bundnaFonder + values.overkursfond + values.balanserat + values.aretsResultat)
 }
 
 function components(
@@ -24,12 +37,18 @@ function components(
     return value == null ? null : Number(value)
   }
   const total = model.totals.egetKapital[side]
-  const aktiekapital = amount('Aktiekapital')
+  const aktiekapitalRaw = amount('Aktiekapital')
   const aretsResultat = amount('AretsResultatEgetKapital')
-  if (total == null || aktiekapital == null || aretsResultat == null) return null
+  if (total == null || aktiekapitalRaw == null || aretsResultat == null) return null
+  const aktiekapital = aktiekapitalRaw + (amount('EjRegistreratAktiekapital') ?? 0)
+  const bundnaFonder =
+    (amount('OverkursfondBunden') ?? 0) + (amount('Uppskrivningsfond') ?? 0) + (amount('Reservfond') ?? 0)
+  const overkursfond = amount('Overkursfond') ?? 0
   return {
     aktiekapital: roundOre(aktiekapital),
-    balanserat: roundOre(total - aktiekapital - aretsResultat),
+    bundnaFonder: roundOre(bundnaFonder),
+    overkursfond: roundOre(overkursfond),
+    balanserat: roundOre(total - aktiekapital - bundnaFonder - overkursfond - aretsResultat),
     aretsResultat: roundOre(aretsResultat),
   }
 }
@@ -41,8 +60,10 @@ function row(
 ): EgenKapitalRow {
   return {
     label,
-    amount: roundOre(values.aktiekapital + values.balanserat + values.aretsResultat),
+    amount: sum(values),
     aktiekapital: values.aktiekapital,
+    bundna_fonder: values.bundnaFonder,
+    overkursfond: values.overkursfond,
     balanserat_resultat: values.balanserat,
     arets_resultat: values.aretsResultat,
     row_kind: rowKind,
@@ -97,12 +118,12 @@ export async function buildK2EquityRollforward(
     const amount = roundOre(Number(event.amount) || 0)
     if (amount === 0 || eventType === 'dividend_proposal') continue
 
-    let movement: EquityComponents = { aktiekapital: 0, balanserat: 0, aretsResultat: 0 }
+    let movement: EquityComponents = { ...ZERO }
     let label: string
     if (eventType === 'prior_year_result_transfer') {
       hasPriorTransfer = true
       movement = {
-        aktiekapital: 0,
+        ...ZERO,
         balanserat: opening.aretsResultat,
         aretsResultat: -opening.aretsResultat,
       }
@@ -124,6 +145,8 @@ export async function buildK2EquityRollforward(
     }
     running = {
       aktiekapital: roundOre(running.aktiekapital + movement.aktiekapital),
+      bundnaFonder: roundOre(running.bundnaFonder + movement.bundnaFonder),
+      overkursfond: roundOre(running.overkursfond + movement.overkursfond),
       balanserat: roundOre(running.balanserat + movement.balanserat),
       aretsResultat: roundOre(running.aretsResultat + movement.aretsResultat),
     }
@@ -137,8 +160,7 @@ export async function buildK2EquityRollforward(
   }
 
   const currentResultMovement: EquityComponents = {
-    aktiekapital: 0,
-    balanserat: 0,
+    ...ZERO,
     aretsResultat: closing.aretsResultat,
   }
   running.aretsResultat = roundOre(running.aretsResultat + closing.aretsResultat)
@@ -146,16 +168,13 @@ export async function buildK2EquityRollforward(
 
   const residual: EquityComponents = {
     aktiekapital: roundOre(closing.aktiekapital - running.aktiekapital),
+    bundnaFonder: roundOre(closing.bundnaFonder - running.bundnaFonder),
+    overkursfond: roundOre(closing.overkursfond - running.overkursfond),
     balanserat: roundOre(closing.balanserat - running.balanserat),
     aretsResultat: roundOre(closing.aretsResultat - running.aretsResultat),
   }
-  const residualTotal = roundOre(
-    residual.aktiekapital + residual.balanserat + residual.aretsResultat,
-  )
-  const hasResidual =
-    Math.abs(residual.aktiekapital) >= 0.01 ||
-    Math.abs(residual.balanserat) >= 0.01 ||
-    Math.abs(residual.aretsResultat) >= 0.01
+  const residualTotal = sum(residual)
+  const hasResidual = Object.values(residual).some((value) => Math.abs(value) >= 0.01)
   if (hasResidual) {
     rows.push(row('Ej klassificerad förändring – manuell granskning krävs', residual, 'movement'))
     warnings.push(

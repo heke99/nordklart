@@ -17,6 +17,7 @@ import type {
   SaleType,
   VatTreatment,
 } from '@/types'
+import { roundOre } from '@/lib/money'
 
 const log = createLogger('invoice-entries')
 
@@ -68,7 +69,7 @@ function generatePerRateLines(
   const toSek = (amount: number): number => {
     if (!isForeign) return amount
     if (exchangeRate != null && exchangeRate > 0) {
-      return Math.round(amount * exchangeRate * 100) / 100
+      return roundOre(amount * exchangeRate)
     }
     return amount // fallback for legacy data
   }
@@ -137,7 +138,7 @@ function generatePerRateLines(
   }
 
   for (const group of netGroups.values()) {
-    const roundedSubtotal = Math.round(toSek(group.subtotal) * 100) / 100
+    const roundedSubtotal = roundOre(toSek(group.subtotal))
     lines.push({
       account_number: group.account,
       debit_amount: 0,
@@ -147,7 +148,7 @@ function generatePerRateLines(
   }
 
   for (const [rate, group] of vatGroups) {
-    const roundedVat = Math.round(toSek(group.vatAmount) * 100) / 100
+    const roundedVat = roundOre(toSek(group.vatAmount))
     if (roundedVat !== 0) {
       const vatAccount = getOutputVatAccount(group.treatment)
       lines.push({
@@ -189,7 +190,7 @@ function generateRotRutLines(
   const toSek = (amount: number): number => {
     if (!isForeign) return amount
     if (exchangeRate != null && exchangeRate > 0) {
-      return Math.round(amount * exchangeRate * 100) / 100
+      return roundOre(amount * exchangeRate)
     }
     return amount
   }
@@ -205,7 +206,7 @@ function generateRotRutLines(
       deduction_type: item.deduction_type,
     })
     if (amount <= 0) continue
-    const amountSek = Math.round(toSek(amount) * 100) / 100
+    const amountSek = roundOre(toSek(amount))
     if (amountSek <= 0) continue
     totalSek += amountSek
     const kind = item.deduction_type === 'rot' ? 'ROT' : 'RUT'
@@ -217,7 +218,7 @@ function generateRotRutLines(
     })
   }
 
-  return { lines, totalSek: Math.round(totalSek * 100) / 100 }
+  return { lines, totalSek: roundOre(totalSek) }
 }
 
 /**
@@ -318,9 +319,9 @@ export async function createInvoiceJournalEntry(
   // lines MINUS the ROT/RUT total which goes to 1513 instead.
   const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
   const debitAmount = isForeign
-    ? Math.round(totalCredits * 100) / 100
+    ? roundOre(totalCredits)
     : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
-  const arAmount = Math.round((debitAmount - rotRut.totalSek) * 100) / 100
+  const arAmount = roundOre((debitAmount - rotRut.totalSek))
 
   lines.push({
     account_number: '1510',
@@ -433,7 +434,7 @@ export async function planInvoicePaymentJournalEntry(
     // Debit: Bank at actual SEK received
     lines.push({
       account_number: '1930',
-      debit_amount: Math.round(actualSekReceived * 100) / 100,
+      debit_amount: roundOre(actualSekReceived),
       credit_amount: 0,
       line_description: desc,
     })
@@ -442,7 +443,7 @@ export async function planInvoicePaymentJournalEntry(
     lines.push({
       account_number: '1510',
       debit_amount: 0,
-      credit_amount: Math.round(bookedSekAmount * 100) / 100,
+      credit_amount: roundOre(bookedSekAmount),
       line_description: desc,
     })
 
@@ -452,14 +453,14 @@ export async function planInvoicePaymentJournalEntry(
       lines.push({
         account_number: '3960',
         debit_amount: 0,
-        credit_amount: Math.round(exchangeRateDifference * 100) / 100,
+        credit_amount: roundOre(exchangeRateDifference),
         line_description: 'Valutakursvinst',
       })
     } else {
       // Loss: Debit 7960 (received less than booked)
       lines.push({
         account_number: '7960',
-        debit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
+        debit_amount: roundOre(Math.abs(exchangeRateDifference)),
         credit_amount: 0,
         line_description: 'Valutakursförlust',
       })
@@ -469,14 +470,14 @@ export async function planInvoicePaymentJournalEntry(
     lines.push(
       {
         account_number: '1930',
-        debit_amount: Math.round(bookedSekAmount * 100) / 100,
+        debit_amount: roundOre(bookedSekAmount),
         credit_amount: 0,
         line_description: desc,
       },
       {
         account_number: '1510',
         debit_amount: 0,
-        credit_amount: Math.round(bookedSekAmount * 100) / 100,
+        credit_amount: roundOre(bookedSekAmount),
         line_description: desc,
       }
     )
@@ -573,7 +574,7 @@ export async function createCreditNoteJournalEntry(
   lines.push({
     account_number: '1510',
     debit_amount: 0,
-    credit_amount: Math.round(totalDebits * 100) / 100,
+    credit_amount: roundOre(totalDebits),
     line_description: `Kreditfaktura ${tag}`,
   })
 
@@ -688,9 +689,9 @@ export async function planInvoiceCashEntry(
   // minus the ROT/RUT total which goes to 1513 instead.
   const totalCredits = creditLines.reduce((sum, l) => sum + l.credit_amount, 0)
   const cashDebit = isForeign
-    ? Math.round(totalCredits * 100) / 100
+    ? roundOre(totalCredits)
     : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
-  const bankAmount = Math.round((cashDebit - rotRut.totalSek) * 100) / 100
+  const bankAmount = roundOre((cashDebit - rotRut.totalSek))
   lines.push({
     account_number: '1930',
     debit_amount: bankAmount,

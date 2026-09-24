@@ -1796,6 +1796,8 @@ export interface SIEExportOptions {
   fiscal_period_id: string
   company_name: string
   org_number: string | null
+  /** Decides whether #SRU carries INK2R (aktiebolag) or NE codes. */
+  entity_type?: string | null
   program_name?: string
   /**
    * When true, omit year-end closing verifikat (source_type = 'year_end')

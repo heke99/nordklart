@@ -43,7 +43,7 @@ export const POST = withRouteContext(
           .from('suppliers')
           .select('id, name, org_number, email')
           .eq('company_id', companyId)
-          .range(from, to),
+          .order('id', { ascending: true }).range(from, to),
       )
       const existing = existingRaw as unknown as ExistingSupplier[]
 

@@ -163,7 +163,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               .from('customers')
               .select('id, org_number, name')
               .eq('company_id', companyId)
-              .range(from, to)
+              .order('id', { ascending: true }).range(from, to)
         )
         for (const row of existingCustomers) {
           if (row.org_number) orgNumberToCustomerId.set(row.org_number, row.id)
@@ -259,7 +259,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               .from('suppliers')
               .select('id, org_number, name')
               .eq('company_id', companyId)
-              .range(from, to)
+              .order('id', { ascending: true }).range(from, to)
         )
         for (const row of existingSuppliers) {
           if (row.org_number) orgNumberToSupplierId.set(row.org_number, row.id)
@@ -347,7 +347,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             .from('invoices')
             .select('invoice_number')
             .eq('company_id', companyId)
-            .range(from, to)
+            .order('id', { ascending: true }).range(from, to)
         )
         const existingInvoiceNumbers = new Set(existingInvoices.map((r) => r.invoice_number))
 
@@ -540,7 +540,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             .from('supplier_invoices')
             .select('supplier_invoice_number, supplier_id')
             .eq('company_id', companyId)
-            .range(from, to)
+            .order('id', { ascending: true }).range(from, to)
         )
         const existingSuppInvKeys = new Set(
           existingSuppInv

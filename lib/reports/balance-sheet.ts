@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
 import type { BalanceSheetReport, BalanceSheetSection, TrialBalanceRow } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
  * Generate Balance Sheet (Balansräkning)
@@ -67,12 +68,10 @@ export async function generateBalanceSheet(
   const incomeExpenseRows = rows.filter(
     (r) => r.account_class >= 3 && r.account_class <= 8
   )
-  const periodResult = Math.round(
-    incomeExpenseRows.reduce(
+  const periodResult = roundOre(incomeExpenseRows.reduce(
       (sum, r) => sum + (r.closing_credit - r.closing_debit),
       0
-    ) * 100
-  ) / 100
+    ))
 
   // Add period result as a synthetic section under equity if non-zero
   if (Math.abs(periodResult) > 0.005) {
@@ -94,9 +93,9 @@ export async function generateBalanceSheet(
 
   return {
     asset_sections: assetSections.filter((s) => s.rows.length > 0),
-    total_assets: Math.round(totalAssets * 100) / 100,
+    total_assets: roundOre(totalAssets),
     equity_liability_sections: equityLiabilitySections.filter((s) => s.rows.length > 0),
-    total_equity_liabilities: Math.round(totalEquityLiabilities * 100) / 100,
+    total_equity_liabilities: roundOre(totalEquityLiabilities),
     period: { start: '', end: '' },
   }
 }
@@ -121,7 +120,7 @@ function buildBalanceSections(
       return {
         account_number: r.account_number,
         account_name: r.account_name,
-        amount: Math.round(amount * 100) / 100,
+        amount: roundOre(amount),
       }
     })
 
@@ -130,7 +129,7 @@ function buildBalanceSections(
     sections.push({
       title,
       rows: sectionRows.filter((r) => Math.abs(r.amount) > 0.005),
-      subtotal: Math.round(subtotal * 100) / 100,
+      subtotal: roundOre(subtotal),
     })
   }
 

@@ -78,7 +78,7 @@ export async function generateMonthlyBreakdown(
         .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
         .eq('journal_entries.company_id', companyId)
         .in('journal_entries.status', ['posted', 'reversed'])
-        .range(from, to)
+        .order('id', { ascending: true }).range(from, to)
     )
   } catch (error) {
     if (error instanceof MonthlyBreakdownDataError) throw error

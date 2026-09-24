@@ -5,7 +5,9 @@ const PAGE_SIZE = 1000
  * Overcomes PostgREST's default 1000-row limit.
  *
  * The callback receives `{ from, to }` range values — append `.range(from, to)`
- * to your query builder:
+ * to your query builder, AFTER a unique `.order(...)` (normally `id`). Without
+ * a stable order Postgres may return a row on two pages or on none, which
+ * silently corrupts totals once a query crosses 1 000 rows:
  *
  * ```ts
  * const accounts = await fetchAllRows(({ from, to }) =>
@@ -13,6 +15,7 @@ const PAGE_SIZE = 1000
  *     .from('chart_of_accounts')
  *     .select('account_number, account_name')
  *     .eq('company_id', companyId)
+ *     .order('id', { ascending: true })
  *     .range(from, to)
  * )
  * ```

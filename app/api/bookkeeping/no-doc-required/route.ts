@@ -16,6 +16,7 @@ export const GET = withRouteContext('bookkeeping.no_doc_required', async (_reque
         .from('journal_entry_no_doc_required')
         .select('journal_entry_id, reason')
         .eq('company_id', companyId)
+        .order('journal_entry_id', { ascending: true })
         .range(from, to)
   )
 

@@ -18,6 +18,7 @@ import {
 import { buildAnlaggningstillgangarNote } from './anlaggningstillgangar-note'
 import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
 import { roundOre } from '@/lib/money'
+import { YEAR_END_CLOSING_SOURCE_TYPES } from '@/lib/reports/period-account-nets'
 import {
   applyVerifiedComparativeSnapshot,
   applyPresentationReclassifications,
@@ -1233,7 +1234,9 @@ async function buildK3EquityChangesStatement(
       const num = row.account_number
       if (num >= '2081' && num <= '2084') {
         aktiekapitalClosing += row.amount
-      } else if (num >= '2085' && num <= '2087') {
+      } else if (num >= '2085' && num <= '2089') {
+        // 2085 uppskrivningsfond, 2086 reservfond, 2087 bunden överkursfond,
+        // 2088 fond för yttre underhåll, 2089 fond för utvecklingsutgifter.
         bundnaClosing += row.amount
       } else if (num.startsWith('209')) {
         fritProtClosing += row.amount
@@ -1307,7 +1310,9 @@ async function buildK3EquityChangesStatement(
     if (src === 'opening_balance') continue
     const net = creditNet(line)
     if (net === 0) continue
-    if (src === 'year_end') continue
+    // Both the legacy and the current closing source type: counting the
+    // closing voucher as an "other" movement double-counts årets resultat.
+    if ((YEAR_END_CLOSING_SOURCE_TYPES as readonly string[]).includes(src)) continue
 
     totalEquityMovement = roundOre(totalEquityMovement + net)
     const acct = line.account_number
@@ -1414,7 +1419,7 @@ function flattenIncomeStatement(is: {
   const resAfterFinancial = is.total_revenue - is.total_expenses + finSubtotal
   lines.push({
     label: 'Resultat efter finansiella poster',
-    amount: Math.round(resAfterFinancial * 100) / 100,
+    amount: roundOre(resAfterFinancial),
     is_total: true,
   })
 
@@ -1427,7 +1432,7 @@ function flattenIncomeStatement(is: {
     const dispositionsSubtotal = dispositionsSections.reduce((sum, s) => sum + s.subtotal, 0)
     lines.push({
       label: 'Resultat före skatt',
-      amount: Math.round((resAfterFinancial + dispositionsSubtotal) * 100) / 100,
+      amount: roundOre((resAfterFinancial + dispositionsSubtotal)),
       is_total: true,
     })
   } else {
@@ -1436,7 +1441,7 @@ function flattenIncomeStatement(is: {
     // pre-tax subtotal expected by ÅRL.
     lines.push({
       label: 'Resultat före skatt',
-      amount: Math.round(resAfterFinancial * 100) / 100,
+      amount: roundOre(resAfterFinancial),
       is_total: true,
     })
   }

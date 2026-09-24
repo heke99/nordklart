@@ -200,7 +200,7 @@ export async function generatePeriodiskSammanstallning(
       .in('journal_entries.source_type', ['invoice_created', 'credit_note'])
       .gte('journal_entries.entry_date', start)
       .lte('journal_entries.entry_date', end)
-      .range(from, to) as unknown as PromiseLike<{ data: RawLine[] | null; error: { message: string } | null }>,
+      .order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{ data: RawLine[] | null; error: { message: string } | null }>,
   )
 
   const invoiceIds = Array.from(
@@ -229,7 +229,7 @@ export async function generatePeriodiskSammanstallning(
           )
         `)
         .in('id', invoiceIds)
-        .range(from, to) as unknown as PromiseLike<{ data: RawInvoice[] | null; error: { message: string } | null }>,
+        .order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{ data: RawInvoice[] | null; error: { message: string } | null }>,
     )
     for (const inv of invoices) invoiceMap.set(inv.id, inv)
   }

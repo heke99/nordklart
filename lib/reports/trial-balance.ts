@@ -83,7 +83,7 @@ export async function generateTrialBalance(
           .neq('journal_entries.source_type', 'year_end_closing')
       }
 
-      return query.range(from, to)
+      return query.order('id', { ascending: true }).range(from, to)
     })
 
     for (const line of priorLines) {
@@ -136,7 +136,7 @@ export async function generateTrialBalance(
         .neq('journal_entries.source_type', 'year_end_closing')
     }
 
-    return query.range(from, to)
+    return query.order('id', { ascending: true }).range(from, to)
   })
 
   if (lines.length === 0 && openingBalances.size === 0) {
@@ -153,7 +153,7 @@ export async function generateTrialBalance(
       .from('chart_of_accounts')
       .select('account_number, account_name, account_class')
       .eq('company_id', companyId)
-      .range(from, to)
+      .order('id', { ascending: true }).range(from, to)
   )
 
   const accountMap = new Map<string, { name: string; class: number }>()

@@ -35,6 +35,7 @@ import { computePremiumLines } from './shift-premium-engine'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
 import type { SalaryLineItemType, ShiftPremiumRule, ShiftPremiumItemType } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /** Item types that the calculator derives from per-day absence records. */
 const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
@@ -75,7 +76,7 @@ function effectiveHourlyRate(emp: {
 }): number {
   if (emp.salary_type === 'hourly') return emp.hourly_rate || 0
   const monthly = emp.monthly_salary || 0
-  return monthly > 0 ? Math.round((monthly / 173) * 100) / 100 : 0
+  return monthly > 0 ? roundOre((monthly / 173)) : 0
 }
 
 /** Benefit-type → line-item-type mapping for the derived benefit rows. */
@@ -321,7 +322,7 @@ export async function runSalaryCalculation(
     }
     if (emp.salary_type === 'hourly') {
       derivedHoursWorked = workedDayRows.reduce(
-        (sum, d) => Math.round((sum + Number(d.hours)) * 100) / 100,
+        (sum, d) => roundOre((sum + Number(d.hours))),
         0,
       )
       opLog.info('Derived hours_worked from calendar', {
@@ -336,7 +337,7 @@ export async function runSalaryCalculation(
       // matches what the engine actually calculated.
       if (derivedHoursWorked > 0 && (emp.hourly_rate || 0) > 0) {
         const baseAmount =
-          Math.round((emp.hourly_rate as number) * derivedHoursWorked * 100) / 100
+          roundOre((emp.hourly_rate as number) * derivedHoursWorked)
         await supabase
           .from('salary_line_items')
           .delete()
@@ -406,7 +407,7 @@ export async function runSalaryCalculation(
           item_type: itemType,
           description: b.description,
           quantity: 1,
-          amount: Math.round(b.monthly_value * 100) / 100,
+          amount: roundOre(b.monthly_value),
           is_taxable: true,
           is_avgift_basis: true,
           is_vacation_basis: false,
@@ -434,7 +435,7 @@ export async function runSalaryCalculation(
         item_type: li.item_type,
         description: li.description,
         quantity: li.quantity,
-        amount: Math.round(li.amount * 100) / 100,
+        amount: roundOre(li.amount),
         is_taxable: li.is_taxable,
         is_avgift_basis: li.is_avgift_basis,
         is_vacation_basis: li.is_vacation_basis,
@@ -694,7 +695,7 @@ export async function runSalaryCalculation(
         item_type: 'semesterersattning',
         description: 'Semesterersättning',
         quantity: 1,
-        amount: Math.round(result.vacationCompensation * 100) / 100,
+        amount: roundOre(result.vacationCompensation),
         is_taxable: true,
         is_avgift_basis: true,
         is_vacation_basis: false,
@@ -720,12 +721,12 @@ export async function runSalaryCalculation(
   const { data: updatedRun, error: updateError } = await supabase
     .from('salary_runs')
     .update({
-      total_gross: Math.round(totalGross * 100) / 100,
-      total_tax: Math.round(totalTax * 100) / 100,
-      total_net: Math.round(totalNet * 100) / 100,
-      total_avgifter: Math.round(totalAvgifter * 100) / 100,
-      total_vacation_accrual: Math.round(totalVacationAccrual * 100) / 100,
-      total_employer_cost: Math.round(totalEmployerCost * 100) / 100,
+      total_gross: roundOre(totalGross),
+      total_tax: roundOre(totalTax),
+      total_net: roundOre(totalNet),
+      total_avgifter: roundOre(totalAvgifter),
+      total_vacation_accrual: roundOre(totalVacationAccrual),
+      total_employer_cost: roundOre(totalEmployerCost),
       calculation_params: serializePayrollConfig(config),
     })
     .eq('id', id)
