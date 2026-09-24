@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { lookupCompanyAtBolagsverket } from '@/lib/company-registry/provider'
@@ -17,9 +17,9 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null)
   const parsed = bodySchema.safeParse(body)
 
-  const limit = await checkRateLimit({
+  const limit = await checkDurableRateLimit({
     prefix: 'company-registry:lookup',
-    identifier: `${user.id}:${parsed.success ? parsed.data.organizationNumber.replace(/\D/g, '') : 'invalid'}`,
+    identifier: user.id,
     maxRequests: 20,
     windowMs: 15 * 60 * 1000,
   })

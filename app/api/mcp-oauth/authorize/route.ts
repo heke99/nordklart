@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { createAuthCode } from '@/lib/auth/oauth-codes'
 import { requireCompanyId } from '@/lib/company/context'
@@ -158,12 +158,14 @@ export async function GET(request: Request) {
   }
 
   // Check if user is logged in
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return buildLoginRedirect(request)
+  // requireAuth() so granting an OAuth client access to the books needs the
+  // same second factor as the app itself.
+  const authResult = await requireAuth()
+  if (authResult.error) {
+    if (authResult.error.status === 401) return buildLoginRedirect(request)
+    return NextResponse.redirect(new URL('/mfa/verify', request.url))
   }
+  const { supabase, user } = authResult
 
   // Validate redirect_uri against allowlist (prevents open redirect). Passing
   // the authenticated client makes the trust boundary explicit (SOC 2 CC6.1).
@@ -624,12 +626,14 @@ export async function POST(request: Request) {
   }
 
   // Check auth
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return buildLoginRedirect(request)
+  // requireAuth() so granting an OAuth client access to the books needs the
+  // same second factor as the app itself.
+  const authResult = await requireAuth()
+  if (authResult.error) {
+    if (authResult.error.status === 401) return buildLoginRedirect(request)
+    return NextResponse.redirect(new URL('/mfa/verify', request.url))
   }
+  const { supabase, user } = authResult
 
   // Pass the authenticated client so the lookup is bound to the same session
   // that the consent display ran under (SOC 2 CC6.1).

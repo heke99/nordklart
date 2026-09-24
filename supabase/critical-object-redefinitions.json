@@ -34,8 +34,8 @@
       "last": "20260619130100_securitydefiner_write_rpc_tenant_guards.sql"
     },
     "next_voucher_number": {
-      "definitions": 3,
-      "last": "20260330130000_multi_tenant_company_refactor.sql"
+      "definitions": 4,
+      "last": "20260924100000_security_definer_authenticated_surface.sql"
     },
     "enforce_period_lock": {
       "definitions": 2,
@@ -82,8 +82,8 @@
       "last": "20260807150000_restore_sie_imported_workpaper_blocker_precedence.sql"
     },
     "year_end_control_status": {
-      "definitions": 2,
-      "last": "20260730110000_canonical_historical_year_end_workpapers.sql"
+      "definitions": 3,
+      "last": "20260924100000_security_definer_authenticated_surface.sql"
     },
     "__year_end_assert_actor": {
       "definitions": 2,

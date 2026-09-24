@@ -1,26 +1,25 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { getAnnualReportZipAtBolagsverket } from '@/lib/company-registry/provider'
 
-function clientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown'
-}
-
+// Signed-in only; see ../route.ts.
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ documentId: string }> },
 ) {
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+
   const { documentId } = await params
   const safeDocumentId = documentId?.trim()
   if (!safeDocumentId || safeDocumentId.length > 200) {
     return NextResponse.json({ error: 'Dokument-id saknas eller är ogiltigt.' }, { status: 400 })
   }
 
-  const limit = await checkRateLimit({
+  const limit = await checkDurableRateLimit({
     prefix: 'company-registry:bolagsverket:document-download',
-    identifier: `${clientIp(request)}:${safeDocumentId}`,
+    identifier: auth.user.id,
     maxRequests: 8,
     windowMs: 15 * 60 * 1000,
   })

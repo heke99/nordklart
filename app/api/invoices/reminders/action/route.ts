@@ -1,5 +1,13 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
+import { truncateIp } from '@/lib/api/truncate-ip'
+
+/**
+ * How long a reminder's reply link stays valid. The link can put an invoice
+ * into `disputed`, so it must not live forever in an old mailbox.
+ */
+const ACTION_TOKEN_TTL_DAYS = 90
 
 // Create a service client (no auth needed - public endpoint with token validation)
 function createServiceClient() {
@@ -17,7 +25,16 @@ function createServiceClient() {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
+    const rawIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || ''
+    const limit = await checkDurableRateLimit({
+      prefix: 'invoice-reminder:action',
+      identifier: truncateIp(rawIp || undefined) ?? 'unknown',
+      maxRequests: 20,
+      windowMs: 15 * 60 * 1000,
+    })
+    if (!limit.ok) return limit.response!
+
+    const body = await request.json().catch(() => ({}))
     const { token, action } = body
 
     if (!token) {
@@ -61,8 +78,17 @@ export async function POST(request: Request) {
       )
     }
 
-    // Update the reminder with the response
-    const { error: updateError } = await supabase
+    const issuedAt = Date.parse(reminder.sent_at ?? reminder.created_at)
+    if (Number.isFinite(issuedAt) && Date.now() - issuedAt > ACTION_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000) {
+      return NextResponse.json(
+        { error: 'Länken har gått ut. Kontakta avsändaren direkt.' },
+        { status: 410 }
+      )
+    }
+
+    // Claim the token conditionally so two concurrent clicks cannot both act
+    // (e.g. one marking paid while the other disputes).
+    const { data: claimed, error: updateError } = await supabase
       .from('invoice_reminders')
       .update({
         response_type: action,
@@ -70,12 +96,22 @@ export async function POST(request: Request) {
         action_token_used: true
       })
       .eq('id', reminder.id)
+      // The column is nullable (default false); NULL is "unused" too.
+      .or('action_token_used.is.null,action_token_used.eq.false')
+      .select('id')
+      .maybeSingle()
 
     if (updateError) {
       console.error('Failed to update reminder:', updateError)
       return NextResponse.json(
         { error: 'Kunde inte spara ditt svar' },
         { status: 500 }
+      )
+    }
+    if (!claimed) {
+      return NextResponse.json(
+        { error: 'Denna länk har redan använts' },
+        { status: 400 }
       )
     }
 

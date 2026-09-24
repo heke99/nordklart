@@ -5,6 +5,11 @@ const mocks = vi.hoisted(() => ({
   supabaseFactory: vi.fn(),
 }))
 
+// The durable limiter hits Postgres; these tests are about OAuth, not limits.
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
   return {

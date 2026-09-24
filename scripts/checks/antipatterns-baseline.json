@@ -1,58 +1,11 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: all reach 0 (A1 route-auth campaign, D1 rounding codemod, RLS backfill).",
   "rawRouteAuth": {
-    "count": 46,
-    "files": [
-      "app/api/agency/clients/route.ts",
-      "app/api/agency/staff/invite/route.ts",
-      "app/api/agent/composer/route.ts",
-      "app/api/agent/conversations/[id]/route.ts",
-      "app/api/agent/faq/route.ts",
-      "app/api/agent/invoke/route.ts",
-      "app/api/agent/memory/[id]/route.ts",
-      "app/api/agent/memory/route.ts",
-      "app/api/agent/onboarding/stream/route.ts",
-      "app/api/agent/profile/route.ts",
-      "app/api/agent/profile/verify/route.ts",
-      "app/api/audit-trail/route.ts",
-      "app/api/bookkeeping/accounts/bas-lookup/route.ts",
-      "app/api/bookkeeping/fiscal-periods/route.ts",
-      "app/api/calendar/feed/route.ts",
-      "app/api/cash-accounts/route.ts",
-      "app/api/company/access-requests/[id]/approve/route.ts",
-      "app/api/company/access-requests/[id]/reject/route.ts",
-      "app/api/company/access-requests/route.ts",
-      "app/api/company/current/route.ts",
-      "app/api/company/members/[id]/route.ts",
-      "app/api/company/members/invite/[id]/route.ts",
-      "app/api/company/members/invite/route.ts",
-      "app/api/company/members/route.ts",
-      "app/api/company/route.ts",
-      "app/api/currency/rate/route.ts",
-      "app/api/events/route.ts",
-      "app/api/extensions/[sector]/[slug]/data/route.ts",
-      "app/api/extensions/[sector]/[slug]/settings/route.ts",
-      "app/api/extensions/ext/[...path]/route.ts",
-      "app/api/extensions/skatteverket/skattekonto/drift/route.ts",
-      "app/api/kpi/preferences/route.ts",
-      "app/api/mcp-oauth/authorize/route.ts",
-      "app/api/salary/payroll-config/[year]/route.ts",
-      "app/api/salary/runs/[id]/payslips/send/route.ts",
-      "app/api/salary/tax-tables/lookup/route.ts",
-      "app/api/salary/tax-tables/status/route.ts",
-      "app/api/settings/api-keys/[id]/route.ts",
-      "app/api/settings/oauth-clients/[id]/route.ts",
-      "app/api/settings/oauth-clients/route.ts",
-      "app/api/skatteverket/tax-payments/[period]/mark-paid/route.ts",
-      "app/api/skatteverket/tax-payments/[period]/payment-file/route.ts",
-      "app/api/skatteverket/tax-payments/[period]/route.ts",
-      "app/api/support/contact/route.ts",
-      "app/api/tax-deadlines/generate/route.ts",
-      "app/api/team/members/route.ts"
-    ]
+    "count": 0,
+    "files": []
   },
   "naiveOreRound": {
-    "count": 631
+    "count": 630
   },
   "migrationsMissingRls": {
     "count": 2,
@@ -69,7 +22,7 @@
     ]
   },
   "adhocErrorEnvelope": {
-    "count": 159,
+    "count": 157,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -77,7 +30,6 @@
       "app/api/agency/staff/invite/route.ts",
       "app/api/agent/composer/route.ts",
       "app/api/agent/conversations/[id]/route.ts",
-      "app/api/agent/faq/route.ts",
       "app/api/agent/invoke/route.ts",
       "app/api/agent/memory/[id]/route.ts",
       "app/api/agent/memory/route.ts",
@@ -121,7 +73,6 @@
       "app/api/company/members/invite/[id]/route.ts",
       "app/api/company/members/invite/route.ts",
       "app/api/company/members/route.ts",
-      "app/api/company/route.ts",
       "app/api/currency/rate/route.ts",
       "app/api/deadlines/[id]/complete/route.ts",
       "app/api/deadlines/[id]/route.ts",

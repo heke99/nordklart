@@ -4,7 +4,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger } from '@/lib/logger'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     log.warn('unparseable forwarded-for header on sandbox seed', { headerLength: rawIp.length })
   }
 
-  const rl = await checkRateLimit({
+  const rl = await checkDurableRateLimit({
     prefix: 'sandbox:seed',
     identifier: ipIdentifier,
     ...RATE_LIMIT,

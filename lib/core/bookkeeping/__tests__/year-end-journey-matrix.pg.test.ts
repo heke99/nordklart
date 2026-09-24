@@ -425,8 +425,10 @@ describe('year-end journey — who may close', () => {
     expect(raised).toBeDefined()
     // The outsider cannot even read company A, so the denial lands at the read
     // boundary before the year-end actor assertion is reached. Either way the
-    // declared p_user_id never overrides the authenticated identity.
-    expect(yearEndError(raised)).toContain('no read access to company')
+    // declared p_user_id never overrides the authenticated identity. Since
+    // 20260924100000 the tenant guard on the year-end control readers can be
+    // the first boundary hit.
+    expect(yearEndError(raised)).toMatch(/no read access to company|caller is not a member of company/)
   })
 })
 

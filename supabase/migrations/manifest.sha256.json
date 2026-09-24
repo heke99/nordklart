@@ -2301,6 +2301,21 @@
       "file": "20260821210000_anon_cannot_execute_security_definer.sql",
       "version": "20260821210000",
       "sha256": "b48cb3d5a6d99a4037509c5228d9ffd7a6e7d189dff48a203b6e66c6a90348e7"
+    },
+    {
+      "file": "20260924100000_security_definer_authenticated_surface.sql",
+      "version": "20260924100000",
+      "sha256": "d293aab4d42786c14530ef9f21bc31cfc3486cdbd546c8188d7a9d5a7f6d9209"
+    },
+    {
+      "file": "20260924101000_company_and_agency_membership_integrity.sql",
+      "version": "20260924101000",
+      "sha256": "256eaedc1fe63dd9ebfc95bc88a67482f3f227f9709e3a3b09383e6034122324"
+    },
+    {
+      "file": "20260924102000_bankid_session_single_use.sql",
+      "version": "20260924102000",
+      "sha256": "519a9225f42b184cd21b8b9720b7346d061b95fe911ccc9dda1fdc6fcc5016a5"
     }
   ]
 }

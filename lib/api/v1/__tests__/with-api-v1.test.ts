@@ -60,7 +60,10 @@ const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.f
 const mockCheckIdempotency = checkIdempotencyKey as ReturnType<typeof vi.fn>
 const mockStoreIdempotency = storeIdempotencyResponse as ReturnType<typeof vi.fn>
 
-function makeSupabaseStub(membership: { company_id: string; role: string } | null) {
+function makeSupabaseStub(
+  membership: { company_id: string; role: string } | null,
+  opts: { canWrite?: boolean } = {},
+) {
   // Mirrors the wrapper's access resolution: an rpc() call to
   // resolve_company_access_for_user returning zero rows (no access) or one
   // row with can_read=true. The legacy membership shape is kept as the
@@ -68,7 +71,7 @@ function makeSupabaseStub(membership: { company_id: string; role: string } | nul
   return {
     rpc: vi.fn().mockResolvedValue({
       data: membership
-        ? [{ company_id: membership.company_id, effective_role: membership.role, can_read: true, can_write: true }]
+        ? [{ company_id: membership.company_id, effective_role: membership.role, can_read: true, can_write: opts.canWrite ?? true }]
         : [],
       error: null,
     }),
@@ -258,6 +261,34 @@ describe('withApiV1 — company membership', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.companyId).toBe('company-1')
+  })
+
+  it('refuses a write when the user only has read access in the URL company', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-a',
+      scopes: ['customers:write'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(
+      makeSupabaseStub({ company_id: 'company-b', role: 'viewer' }, { canWrite: false }),
+    )
+
+    const inner = vi.fn(async (_req: Request, ctx: { requestId: string }) => ok({}, { requestId: ctx.requestId }))
+    const handler = withApiV1<CompanyRouteParams>('customers.create', inner, {
+      requireScope: 'customers:write',
+    })
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-b/customers', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer nordklart_sk_x', 'Content-Type': 'application/json' },
+        body: '{}',
+      }),
+      companyParams('company-b'),
+    )
+    expect(res.status).toBe(403)
+    expect(inner).not.toHaveBeenCalled()
   })
 })
 

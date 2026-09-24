@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { createClient } from '@/lib/supabase/server'
 import { fetchTaxTableRates, TaxTableUnavailableError } from '@/lib/salary/tax-tables'
 
@@ -8,7 +9,9 @@ import { fetchTaxTableRates, TaxTableUnavailableError } from '@/lib/salary/tax-t
  */
 export async function GET(request: Request) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { searchParams } = new URL(request.url)

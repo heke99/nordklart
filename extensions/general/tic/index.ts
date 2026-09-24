@@ -31,11 +31,12 @@ import { hashPersonalNumberHmac, personalNumberHashCandidates, encryptPersonalNu
 import { getBankIdProvider, registerBankIdProvider } from '@/lib/auth/bankid-provider'
 import {
   claimBankIdLoginSession,
+  consumeBankIdSession,
   recordBankIdLoginProgress,
   recordBankIdLoginStart,
 } from './lib/bankid-session-log'
 import { ticBankIdProvider } from './lib/bankid-provider'
-import { createServiceClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
 import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { truncateIp } from '@/lib/api/truncate-ip'
@@ -818,6 +819,16 @@ export const ticExtension: Extension = {
           const startedAt = Date.now()
           const session = await provider.startAuth({ endUserIp: ip, userAgent })
 
+          // A signed-in caller is starting a link order from settings. Record
+          // who, so /bankid/link can refuse an order someone else scanned.
+          let initiatorUserId: string | null = null
+          try {
+            const { data: { user } } = await (await createClient()).auth.getUser()
+            initiatorUserId = user?.id ?? null
+          } catch {
+            initiatorUserId = null
+          }
+
           await recordBankIdLoginStart({
             supabase: createServiceClient(),
             log,
@@ -825,6 +836,7 @@ export const ticExtension: Extension = {
             sessionRef: session.sessionRef,
             ipPrefix: truncateIp(ip) ?? null,
             userAgent: userAgent ?? null,
+            initiatorUserId,
           })
 
           return NextResponse.json({
@@ -900,7 +912,9 @@ export const ticExtension: Extension = {
               status: result.status,
               hintCode: result.hintCode,
               message: result.message ?? null,
-              user: result.user,
+              // The personnummer never goes back to the browser: anyone
+              // holding the sessionId could read it. Login and link resolve
+              // the identity server-side from the provider.
               completedAt: result.completedAt ?? null,
               qrStartToken: result.qrStartToken ?? null,
               qrStartSecret: result.qrStartSecret ?? null,
@@ -978,10 +992,23 @@ export const ticExtension: Extension = {
           }
 
           const { personalNumber, givenName, surname, name } = session.user
+          const supabase = createServiceClient()
+
+          // One login per order. result() is idempotent, so without this a
+          // completed sessionId could be replayed to mint new login tokens.
+          const consumed = await consumeBankIdSession({
+            supabase, provider, sessionRef: sessionId, kind: 'login',
+          })
+          if (!consumed) {
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID session has already been used' },
+              { status: 409 }
+            )
+          }
+
           // Keyed HMAC for all NEW rows; legacy plain-SHA256 rows are found
           // via dual-read and upgraded in place on successful match.
           const pnrHash = hashPersonalNumberHmac(personalNumber)
-          const supabase = createServiceClient()
 
           // Look up existing BankID identity (HMAC first, then legacy hash).
           const { data: existing } = await supabase
@@ -1124,6 +1151,19 @@ export const ticExtension: Extension = {
           const pnrHash = hashPersonalNumberHmac(personalNumber)
           const supabase = createServiceClient()
 
+          // The order must have been started by this user, and only once.
+          // Otherwise a completed sessionId from someone else's scan would
+          // attach their personnummer to this account.
+          const consumed = await consumeBankIdSession({
+            supabase, provider, sessionRef: sessionId, kind: 'link', userId: ctx.userId,
+          })
+          if (!consumed) {
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID session was not started by this account or has already been used' },
+              { status: 409 }
+            )
+          }
+
           // Check personnummer not already linked to another user
           // (HMAC first, then legacy hash for rows written pre-migration).
           const { data: existing } = await supabase
@@ -1215,9 +1255,13 @@ export const ticExtension: Extension = {
             return NextResponse.json({ error: 'Failed to unlink BankID' }, { status: 500 })
           }
 
-          // Clear app_metadata.bankid_linked so MFA enforcement resumes
+          // Clear app_metadata.bankid_linked so MFA enforcement resumes.
+          // Read-merge-write like /link: updateUserById replaces app_metadata
+          // wholesale, and dropping has_password would misreport the account.
+          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const priorMeta = priorUser?.user?.app_metadata ?? {}
           await supabase.auth.admin.updateUserById(ctx.userId, {
-            app_metadata: { bankid_linked: false },
+            app_metadata: { ...priorMeta, bankid_linked: false },
           })
 
           return NextResponse.json({ data: { unlinked: true } })

@@ -45,7 +45,7 @@ function makeSession(overrides: Partial<{ status: string; user: unknown }> = {})
 
 type QueuedResult = { data?: unknown; error?: unknown }
 
-function mockServiceClient(fromResults: QueuedResult[]) {
+function mockServiceClient(fromResults: QueuedResult[], opts: { consumed?: boolean } = {}) {
   const queue = [...fromResults]
 
   const chain = (): unknown => {
@@ -82,6 +82,8 @@ function mockServiceClient(fromResults: QueuedResult[]) {
 
   const client = {
     from: vi.fn().mockImplementation(() => chain()),
+    // consume_bankid_session: true = first use of the order.
+    rpc: vi.fn().mockResolvedValue({ data: opts.consumed ?? true, error: null }),
     auth: { admin },
   }
 
@@ -105,6 +107,24 @@ afterEach(() => {
 })
 
 describe('POST /bankid/complete', () => {
+  it('refuses a replayed order and mints no login token', async () => {
+    vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+    const { admin, client } = mockServiceClient([], { consumed: false })
+
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      method: 'POST',
+      body: { sessionId: 'test-session', mode: 'login' },
+    })
+    const { status } = await parseJsonResponse<{ error?: string }>(await findCompleteHandler()(req))
+
+    expect(status).toBe(409)
+    expect(client.rpc).toHaveBeenCalledWith('consume_bankid_session', expect.objectContaining({
+      p_session_ref: 'test-session',
+      p_kind: 'login',
+    }))
+    expect(admin.generateLink).not.toHaveBeenCalled()
+  })
+
   describe('provider convergence', () => {
     it('refuses when BankID is switched off, instead of authenticating anyway', async () => {
       // Login used to call the TIC client directly, so NEXT_PUBLIC_BANKID_ENABLED

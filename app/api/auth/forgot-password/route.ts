@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
-import { checkRateLimit } from "@/lib/auth/rate-limit-http";
+import { checkDurableRateLimit } from "@/lib/auth/rate-limit-durable";
 import { createServiceClient } from "@/lib/supabase/server";
 
 function getIp(request: NextRequest) {
@@ -16,9 +16,9 @@ export async function POST(request: NextRequest) {
   const email = body.email?.trim().toLowerCase();
   const ip = getIp(request);
 
-  const limited = await checkRateLimit({
+  const limited = await checkDurableRateLimit({
     prefix: "auth:forgot-password",
-    identifier: `${ip}:${email ?? "missing"}`,
+    identifier: ip,
     maxRequests: 5,
     windowMs: 15 * 60 * 1000,
   });
@@ -28,6 +28,16 @@ export async function POST(request: NextRequest) {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ ok: true });
   }
+
+  // A second limit per address, so rotating IPs cannot flood one inbox. It
+  // answers exactly like a successful request so it reveals nothing.
+  const perAddress = await checkDurableRateLimit({
+    prefix: "auth:forgot-password:email",
+    identifier: email,
+    maxRequests: 3,
+    windowMs: 60 * 60 * 1000,
+  });
+  if (!perAddress.ok) return NextResponse.json({ ok: true });
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

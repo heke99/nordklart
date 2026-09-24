@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import type { AuditAction } from '@/types'
@@ -6,7 +7,9 @@ import { requireCompanyId } from '@/lib/company/context'
 
 export async function GET(request: Request) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

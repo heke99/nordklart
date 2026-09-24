@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { extractBearerToken, validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { validateQuery } from '@/lib/api/validate'
@@ -34,7 +35,9 @@ export async function GET(request: Request) {
     supabase = createServiceClientNoCookies()
   } else {
     supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const authResult = await requireAuth()
+    if (authResult.error) return authResult.error
+    const { user } = authResult
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }

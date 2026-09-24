@@ -27,6 +27,12 @@ interface StartArgs {
   /** Already truncated to a /24 or /48 — never a full client IP. */
   ipPrefix: string | null
   userAgent: string | null
+  /**
+   * The signed-in user who started the order, when there is one (the link
+   * flow from settings). consume_bankid_session() refuses to link an order to
+   * anyone else.
+   */
+  initiatorUserId?: string | null
 }
 
 export async function recordBankIdLoginStart(args: StartArgs): Promise<void> {
@@ -37,8 +43,9 @@ export async function recordBankIdLoginStart(args: StartArgs): Promise<void> {
     provider_session_ref: args.sessionRef,
     purpose: 'auth',
     status: 'pending',
+    initiator_user_id: args.initiatorUserId ?? null,
     context: {
-      kind: 'login',
+      kind: args.initiatorUserId ? 'link' : 'login',
       ip_prefix: args.ipPrefix,
       user_agent: args.userAgent?.slice(0, 256) ?? null,
     },
@@ -122,4 +129,27 @@ export async function claimBankIdLoginSession(args: {
       code: error.code,
     })
   }
+}
+
+/**
+ * Mark an order as used. Returns true for exactly one caller per order: a
+ * second /complete (replay) or a /link by someone other than the user who
+ * started the order gets false. Unlike the helpers above this is NOT
+ * best-effort — the caller must refuse when it returns false or errors.
+ */
+export async function consumeBankIdSession(args: {
+  supabase: SupabaseClient
+  provider: BankIdProvider
+  sessionRef: string
+  kind: 'login' | 'link'
+  userId?: string | null
+}): Promise<boolean> {
+  const { data, error } = await args.supabase.rpc('consume_bankid_session', {
+    p_provider: args.provider.id,
+    p_session_ref: args.sessionRef,
+    p_kind: args.kind,
+    p_user_id: args.userId ?? null,
+  })
+  if (error) throw new Error(`consume_bankid_session failed: ${error.message}`)
+  return data === true
 }
