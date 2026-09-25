@@ -2401,6 +2401,16 @@
       "file": "20260925130001_seed_agent_atom_bodies.sql",
       "version": "20260925130001",
       "sha256": "c247d67eb65122c9058baa8a69c89928ed9919cc52925797ceb88d53ac80629d"
+    },
+    {
+      "file": "20260925131000_payroll_config_2025_reduced_avgift_age.sql",
+      "version": "20260925131000",
+      "sha256": "d7cd0e5d2e366fcc0ff7d88f04e1ab8bd3d8beb7ec04c47c8bef21b82b688f82"
+    },
+    {
+      "file": "20260925131001_seed_agent_atom_bodies.sql",
+      "version": "20260925131001",
+      "sha256": "6466a434f5935a124ec46e80a151ab032e28d0b2442753997a534b35676b5032"
     }
   ]
 }
