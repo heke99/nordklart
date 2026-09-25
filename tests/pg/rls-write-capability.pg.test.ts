@@ -123,13 +123,14 @@ describe('RLS write capability', () => {
       [ownerId, companyId],
     )
 
-    // Direct table read: RLS with zero policies → empty for everyone.
+    // Direct read of the token columns: no column grant (20260925140000), so
+    // it is refused outright for every session, members included.
     for (const userId of [ownerId, viewerId, outsiderId]) {
-      const rows = await withUserContext(userId, async (client) => {
-        const result = await client.query(`SELECT access_token FROM public.skatteverket_tokens`)
-        return result.rows
-      })
-      expect(rows).toHaveLength(0)
+      await expect(
+        withUserContext(userId, async (client) => {
+          await client.query(`SELECT access_token FROM public.skatteverket_tokens`)
+        }),
+      ).rejects.toMatchObject({ code: '42501' })
     }
 
     // View: members see their company's connection metadata, outsiders none.

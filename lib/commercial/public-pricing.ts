@@ -1,6 +1,14 @@
 import 'server-only'
 
-import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
+
+/**
+ * public_price_plans_v is security_invoker and granted to service_role only
+ * (20260925140000): it joins platform tables no session role has a policy on.
+ * The rows it returns are the public catalog — active, is_public plans — so
+ * reading it server-side with the service client exposes nothing tenant-scoped.
+ * This module is the only reader.
+ */
 
 export type PublicPricePlan = {
   plan_id: string
@@ -47,7 +55,7 @@ function normalizePlan(row: Record<string, unknown>): PublicPricePlan {
 }
 
 export async function listPublicPricePlans() {
-  const supabase = await createClient()
+  const supabase = createServiceClient()
   const { data, error } = await supabase
     .from('public_price_plans_v')
     .select('*')
@@ -60,6 +68,26 @@ export async function listPublicPricePlans() {
   }
 
   return (data ?? []).map((row) => normalizePlan(row as Record<string, unknown>))
+}
+
+export type PublicPricePlanLookup =
+  | { ok: true; plan: PublicPricePlan | null }
+  | { ok: false }
+
+/** One public plan version by id (registration page); null when not public. */
+export async function getPublicPricePlan(planVersionId: string): Promise<PublicPricePlanLookup> {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('public_price_plans_v')
+    .select('*')
+    .eq('plan_version_id', planVersionId)
+    .maybeSingle()
+
+  if (error) {
+    console.error('[pricing] public plan unavailable', { code: error.code, message: error.message })
+    return { ok: false }
+  }
+  return { ok: true, plan: data ? normalizePlan(data as Record<string, unknown>) : null }
 }
 
 export function planLimitLabel(plan: PublicPricePlan, code: string, fallback: string) {

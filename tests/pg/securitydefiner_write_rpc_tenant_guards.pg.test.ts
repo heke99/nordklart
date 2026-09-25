@@ -141,36 +141,36 @@ describe('SECURITY DEFINER write RPCs — tenant-isolation guard', () => {
     expect(bare?.code).not.toBe('42501')
   })
 
-  it('reserve_voucher_range: blocks cross-company, passes own, bypasses for no-claims', async () => {
+  // reserve_voucher_range / release_voucher_range have no caller in the
+  // application, so 20260925140000 revoked EXECUTE from session roles. A
+  // session is now refused before the body runs (42501 permission denied, for
+  // its own company too); the in-body tenant guard stays as defence in depth
+  // for no-claims callers.
+  it('reserve_voucher_range: not executable by a session, own company included', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
 
-    const cross = await callAsUser(a.userId, RESERVE, [b.companyId, b.fiscalPeriodId, 'A', 10])
-    expect(cross?.code).toBe('42501')
+    for (const target of [b, a]) {
+      const err = await callAsUser(a.userId, RESERVE, [target.companyId, target.fiscalPeriodId, 'A', 10])
+      expect(err?.code).toBe('42501')
+      expect(err?.message ?? '').toMatch(/permission denied for function/i)
+    }
 
-    // Own company → succeeds (void). No other gate exists on this RPC, so this
-    // is the cleanest proof the guard does not break the legitimate path.
-    const own = await callAsUser(a.userId, RESERVE, [a.companyId, a.fiscalPeriodId, 'A', 10])
-    expect(own).toBeNull()
-
-    // No-claims bare pool cross-tenant → the new tenant guard is bypassed. (The
-    // INSERT then writes auth.uid()=NULL into voucher_sequences.user_id, which is
-    // NOT NULL, so a 23502 surfaces — pre-existing behaviour for a true no-session
-    // caller; the point here is only that it is NOT the 42501 tenant guard.)
+    // No-claims bare pool → not the 42501 tenant guard (23502 on the NOT NULL
+    // voucher_sequences.user_id, pre-existing for a caller without a session).
     const bare = await callBare(RESERVE, [b.companyId, b.fiscalPeriodId, 'A', 10])
     expect(bare?.code).not.toBe('42501')
   })
 
-  it('release_voucher_range: blocks cross-company, passes own, bypasses for no-claims', async () => {
+  it('release_voucher_range: not executable by a session, own company included', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
 
-    const cross = await callAsUser(a.userId, RELEASE, [b.companyId, b.fiscalPeriodId, 'A', 5, 10])
-    expect(cross?.code).toBe('42501')
-
-    // Own company → succeeds (void no-op against an empty sequence).
-    const own = await callAsUser(a.userId, RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 5, 10])
-    expect(own).toBeNull()
+    for (const target of [b, a]) {
+      const err = await callAsUser(a.userId, RELEASE, [target.companyId, target.fiscalPeriodId, 'A', 5, 10])
+      expect(err?.code).toBe('42501')
+      expect(err?.message ?? '').toMatch(/permission denied for function/i)
+    }
 
     const bare = await callBare(RELEASE, [b.companyId, b.fiscalPeriodId, 'A', 5, 10])
     expect(bare).toBeNull()

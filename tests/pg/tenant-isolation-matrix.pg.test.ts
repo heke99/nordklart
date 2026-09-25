@@ -148,7 +148,8 @@ describe('every company-scoped table is wired for isolation', () => {
       SELECT
         tablename,
         cmd,
-        (coalesce(qual, '') || coalesce(with_check, '')) LIKE '%user_id = auth.uid()%' AS owner_scoped
+        -- auth.uid() is wrapped as an InitPlan since 20260925141000; accept both spellings.
+        (coalesce(qual, '') || coalesce(with_check, '')) ~ 'user_id = (auth\\.uid\\(\\)|\\( SELECT auth\\.uid\\(\\) AS uid\\))' AS owner_scoped
       FROM pg_policies
       WHERE schemaname = 'public' AND cmd IN ('INSERT', 'UPDATE', 'DELETE', 'ALL')
         AND (
