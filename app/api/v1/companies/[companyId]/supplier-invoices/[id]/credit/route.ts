@@ -394,7 +394,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           })
         }
       } catch (err) {
-        // Engine threw — conservatively assume the JE may have committed.
+        // Engine threw. createJournalEntry is idempotent per credit note, so a
+        // throw means no voucher for it is posted; soft-mark for the trail.
         await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'credit_journal_entry', true)
         if (isBookkeepingError(err)) {
           return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })

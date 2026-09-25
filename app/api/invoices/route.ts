@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
@@ -345,9 +346,9 @@ async function createCreditNote(
     vat_amount: -(
       item.vat_amount != null
         ? Math.abs(item.vat_amount)
-        : Math.round(
-            Math.abs(item.line_total) * ((item.vat_rate ?? originalInvoice.vat_rate ?? 0) / 100) * 100,
-          ) / 100
+        : roundOre(
+            Math.abs(item.line_total) * ((item.vat_rate ?? originalInvoice.vat_rate ?? 0) / 100),
+          )
     ),
     // Carry the original's per-line revenue-account override so the reversal
     // hits the SAME account it originally credited (e.g. 3041, not the
@@ -378,11 +379,6 @@ async function createCreditNote(
     })
   }
 
-  await supabase
-    .from('invoices')
-    .update({ status: 'credited' })
-    .eq('id', input.credited_invoice_id)
-
   const { data: completeCreditNote } = await supabase
     .from('invoices')
     .select('*, customer:customers(*), items:invoice_items(*)')
@@ -400,7 +396,13 @@ async function createCreditNote(
 
   // Cash method skips: there's no original invoice JE to reverse — recognition
   // is deferred until refund.
+  // A kreditfaktura is an affärshändelse: under the accrual method it must
+  // have its verifikation (BFL 5 kap). If booking fails, remove the
+  // not-yet-issued credit note (its KR- number derives from the original, so
+  // no gap arises in the invoice series) and leave the original untouched, so
+  // the user can simply try again.
   if (completeCreditNote && accountingMethod === 'accrual') {
+    let journalEntryId: string | null = null
     try {
       const journalEntry = await createCreditNoteJournalEntry(
         supabase,
@@ -410,18 +412,56 @@ async function createCreditNote(
         entityType,
         completeCreditNote.customer?.name,
       )
-      if (journalEntry) {
-        await supabase
-          .from('invoices')
-          .update({ journal_entry_id: journalEntry.id })
-          .eq('id', creditNote.id)
-      }
+      if (!journalEntry) throw new Error('Ingen verifikation skapades.')
+      journalEntryId = journalEntry.id
     } catch (err) {
-      log.error('failed to create credit note journal entry', err as Error, {
+      log.error('failed to create credit note journal entry; removing the credit note', err as Error, {
         creditNoteId: creditNote.id,
       })
-      // Non-blocking — credit note still exists.
+      await supabase.from('invoice_items').delete().eq('invoice_id', creditNote.id)
+      await supabase.from('invoices').delete().eq('id', creditNote.id).eq('company_id', companyId)
+      return errorResponseFromCode('INVOICE_CREDIT_BOOKING_FAILED', log, {
+        requestId,
+        details: { reason: err instanceof Error ? err.message : 'unknown' },
+      })
     }
+
+    const { error: linkError } = await supabase
+      .from('invoices')
+      .update({ journal_entry_id: journalEntryId })
+      .eq('id', creditNote.id)
+      .eq('company_id', companyId)
+    if (linkError) {
+      log.error('credit note voucher link failed', linkError, { creditNoteId: creditNote.id, journalEntryId })
+      warnings.push({
+        code: 'JOURNAL_ENTRY_LINK_FAILED',
+        message: 'Kreditfakturan är bokförd men verifikationen kunde inte kopplas till den. Kontakta supporten.',
+      })
+    }
+  }
+
+  // The original is credited only once the credit note (and, for accrual,
+  // its voucher) exists. Guarded on the statuses a credit is allowed from.
+  {
+    const { data: flipped, error: flipError } = await supabase
+      .from('invoices')
+      .update({ status: 'credited' })
+      .eq('id', input.credited_invoice_id)
+      .eq('company_id', companyId)
+      .in('status', ['sent', 'paid', 'overdue'])
+      .select('id')
+    if (flipError || !flipped || flipped.length === 0) {
+      log.error('original invoice could not be marked credited', flipError ?? new Error('0 rows'), {
+        originalId: input.credited_invoice_id,
+      })
+      warnings.push({
+        code: 'ORIGINAL_STATUS_NOT_UPDATED',
+        message: 'Kreditfakturan är skapad, men ursprungsfakturans status kunde inte ändras till krediterad.',
+      })
+    }
+  }
+
+  if (completeCreditNote && accountingMethod === 'accrual') {
 
     // Periodisering interplay: cancel remaining months and storno posted
     // dissolutions so origin + dissolutions + stornos + credit net to zero on

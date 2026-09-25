@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
@@ -31,8 +32,15 @@ export const POST = withRouteContext(
       return errorResponseFromCode('SI_CREDIT_ALREADY_CREDITED', opLog, { requestId })
     }
 
-    const { data: arrivalNum } = await supabase
+    const { data: arrivalNum, error: arrivalError } = await supabase
       .rpc('get_next_arrival_number', { p_company_id: companyId })
+    if (arrivalError || arrivalNum == null) {
+      opLog.error('arrival number allocation failed', arrivalError as Error)
+      return errorResponseFromCode('SI_CREDIT_FAILED', opLog, {
+        requestId,
+        details: { reason: arrivalError?.message ?? 'no arrival number', step: 'arrival_number' },
+      })
+    }
 
     const { data: creditNote, error: creditError } = await supabase
       .from('supplier_invoices')
@@ -87,7 +95,15 @@ export const POST = withRouteContext(
       reverse_charge_rate: item.reverse_charge_rate,
     }))
 
-    await supabase.from('supplier_invoice_items').insert(creditItems)
+    const { error: itemsError } = await supabase.from('supplier_invoice_items').insert(creditItems)
+    if (itemsError) {
+      await supabase.from('supplier_invoices').delete().eq('id', creditNote.id).eq('company_id', companyId)
+      opLog.error('credit note items insert failed; removed the credit note', itemsError as Error)
+      return errorResponseFromCode('SI_CREDIT_FAILED', opLog, {
+        requestId,
+        details: { reason: itemsError.message, step: 'credit_note_items' },
+      })
+    }
 
     const { data: settings } = await supabase
       .from('company_settings')
@@ -109,16 +125,13 @@ export const POST = withRouteContext(
           original.supplier?.supplier_type || 'swedish_business',
           original.supplier?.name,
         )
-        if (journalEntry) {
-          journalEntryId = journalEntry.id
-          await supabase
-            .from('supplier_invoices')
-            .update({ registration_journal_entry_id: journalEntry.id })
-            .eq('id', creditNote.id)
-        }
+        if (!journalEntry) throw new Error('Ingen verifikation skapades.')
+        journalEntryId = journalEntry.id
       } catch (err) {
-        // Roll back the orphan credit-note row (items cascade-delete) on JE
-        // failure — same momsdeklaration-integrity concern as the POST route.
+        // createJournalEntry is idempotent per credit note: when it throws,
+        // no voucher for this credit note is posted. Roll back the orphan
+        // credit-note row (items cascade-delete) — same momsdeklaration-
+        // integrity concern as the POST route.
         await supabase.from('supplier_invoices').delete().eq('id', creditNote.id).eq('company_id', companyId)
 
         if (isBookkeepingError(err)) {
@@ -135,16 +148,42 @@ export const POST = withRouteContext(
       }
     }
 
-    const newRemaining = Math.max(0, original.remaining_amount - original.total)
+    const warnings: Array<{ code: string; message: string }> = []
+    if (journalEntryId) {
+      const { error: linkError } = await supabase
+        .from('supplier_invoices')
+        .update({ registration_journal_entry_id: journalEntryId })
+        .eq('id', creditNote.id)
+        .eq('company_id', companyId)
+      if (linkError) {
+        opLog.error('credit note voucher link failed', linkError as Error, { journalEntryId })
+        warnings.push({ code: 'JOURNAL_ENTRY_LINK_FAILED', message: 'Kreditnotan är bokförd men verifikationen kunde inte kopplas till den.' })
+      }
+    }
+
+    const newRemaining = Math.max(0, roundOre(original.remaining_amount - original.total))
     const newStatus = newRemaining <= 0 ? 'credited' : original.status
 
-    await supabase
+    // Guarded on the original's state as read above: a concurrent payment or
+    // credit changes it, and this update must then not overwrite that.
+    const { data: flipped, error: flipError } = await supabase
       .from('supplier_invoices')
       .update({
         status: newStatus,
         remaining_amount: newRemaining,
       })
       .eq('id', id)
+      .eq('company_id', companyId)
+      .eq('status', original.status)
+      .eq('remaining_amount', original.remaining_amount)
+      .select('id')
+    if (flipError || !flipped || flipped.length === 0) {
+      opLog.error('original supplier invoice not updated after credit', (flipError ?? new Error('0 rows')) as Error)
+      warnings.push({
+        code: 'ORIGINAL_STATUS_NOT_UPDATED',
+        message: 'Kreditnotan är bokförd, men leverantörsfakturans status/restbelopp kunde inte uppdateras. Kontrollera fakturan.',
+      })
+    }
 
     try {
       await eventBus.emit({
@@ -163,6 +202,7 @@ export const POST = withRouteContext(
     return NextResponse.json({
       data: creditNote,
       journal_entry_id: journalEntryId,
+      ...(warnings.length > 0 ? { warnings } : {}),
     })
   },
   { requireWrite: true },

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
@@ -702,6 +703,7 @@ export const POST = withRouteContext(
         journal_entry_id: journalEntryId,
       })
       .eq('id', id)
+      .eq('company_id', companyId)
       .is('journal_entry_id', null)
       .select('id')
 
@@ -711,31 +713,29 @@ export const POST = withRouteContext(
     }
 
     if ((!updateResult || updateResult.length === 0) && journalEntryId) {
-      // CAS guard: another request set journal_entry_id between our read and
-      // write. Cancel the orphaned entry and document the voucher gap.
-      const { data: orphan } = await supabase
-        .from('journal_entries')
-        .select('fiscal_period_id, voucher_series, voucher_number')
-        .eq('id', journalEntryId)
-        .single()
-
-      await supabase
-        .from('journal_entries')
-        .update({ status: 'cancelled' })
-        .eq('id', journalEntryId)
-
-      if (orphan) {
-        await supabase.from('voucher_gap_explanations').insert({
-          company_id: companyId,
-          fiscal_period_id: orphan.fiscal_period_id,
-          voucher_series: orphan.voucher_series || 'A',
-          gap_number: orphan.voucher_number,
-          explanation: 'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-          created_by: user.id,
-        })
+      // createJournalEntry is idempotent per transaction: a concurrent
+      // identical request gets the SAME voucher and may already have linked
+      // it — that is success, not a race.
+      const { data: current } = await supabase
+        .from('transactions')
+        .select('journal_entry_id')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (current?.journal_entry_id !== journalEntryId) {
+        // Genuinely lost the race: the transaction is booked by another
+        // voucher. Ours is posted and immutable, so it is cancelled by storno
+        // (BFL 5 kap 5 §) — never by a status write, which the immutability
+        // trigger refuses anyway. The pair keeps the voucher series unbroken.
+        try {
+          await reverseEntry(supabase, companyId, user.id, journalEntryId)
+        } catch (revErr) {
+          txLog.error('TX_CATEGORIZE_RACE: storno of the losing voucher failed — manual reconciliation required', revErr as Error, {
+            journalEntryId,
+          })
+        }
+        return errorResponseFromCode('TX_CATEGORIZE_RACE', txLog, { requestId })
       }
-
-      return errorResponseFromCode('TX_CATEGORIZE_RACE', txLog, { requestId })
     }
 
     // Flag any inbox underlag already matched to this transaction as booked.

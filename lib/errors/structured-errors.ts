@@ -673,6 +673,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan har redan krediterats.',
     message_en: 'Invoice has already been credited.',
   },
+  INVOICE_CREDIT_BOOKING_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kreditfakturan kunde inte bokföras och har inte skapats. Kontrollera att räkenskapsåret är öppet och försök igen.',
+    message_en: 'The credit note could not be booked and was not created.',
+  },
   INVOICE_CREDIT_NOT_SENT: {
     httpStatus: 400,
     message_sv: 'Endast skickade, betalda eller förfallna fakturor kan krediteras.',

@@ -175,11 +175,14 @@ export const POST = withRouteContext(
     const partialFailures: Array<{ step: string; reason: string }> = []
 
     {
+      // Only a draft becomes 'sent'. Re-sending an invoice that is already
+      // sent, overdue, partially paid or paid must not reset its status.
       const { error: updateError } = await supabase
         .from('invoices')
         .update({ status: 'sent' })
         .eq('id', id)
         .eq('company_id', companyId)
+        .eq('status', 'draft')
 
       if (updateError) {
         opLog.warn('failed to update invoice status to sent', updateError)
@@ -200,12 +203,22 @@ export const POST = withRouteContext(
           invoice as Invoice,
           (company as CompanySettings).entity_type,
         )
+        // createJournalEntry is idempotent per invoice: a re-send, a retry
+        // after a lost response or a concurrent send returns the voucher
+        // that is already posted instead of booking the revenue twice.
         if (journalEntry) {
           createdJournalEntryId = journalEntry.id
-          await supabase
-            .from('invoices')
-            .update({ journal_entry_id: journalEntry.id })
-            .eq('id', id)
+          if (invoice.journal_entry_id !== journalEntry.id) {
+            const { error: linkError } = await supabase
+              .from('invoices')
+              .update({ journal_entry_id: journalEntry.id })
+              .eq('id', id)
+              .eq('company_id', companyId)
+            if (linkError) {
+              opLog.error('failed to link invoice to its voucher', linkError)
+              partialFailures.push({ step: 'journal_entry_link', reason: linkError.message })
+            }
+          }
         }
       } catch (err) {
         opLog.error('failed to create invoice journal entry on send', err as Error)

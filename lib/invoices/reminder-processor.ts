@@ -1,3 +1,4 @@
+import { roundOre } from '@/lib/money'
 import { createServerClient } from '@supabase/ssr'
 import { getEmailService } from '@/lib/email/service'
 import {
@@ -147,6 +148,55 @@ export async function sendReminder(
  * Process all overdue invoices and send reminders
  * This is the main function called by the cron job
  */
+/**
+ * Book the påminnelseavgift for a reminder that HAS been sent and link it to
+ * the reminder row. Lag 1981:739 allows the fee only for a skriftlig
+ * påminnelse that was actually sent, so the processor calls this after a
+ * successful delivery — never before, and never for a failed send.
+ * Failures are logged, not thrown: the reminder itself has already gone out.
+ */
+export async function bookSentReminderFee(
+  supabase: Parameters<typeof createReminderFeeEntry>[0],
+  params: {
+    invoiceId: string
+    invoiceNumber: string
+    companyId: string
+    userId: string
+    reminderId: string
+    feeAmount: number
+    asOfDate: string
+  },
+): Promise<string | null> {
+  try {
+    const feeResult = await createReminderFeeEntry(supabase, {
+      invoiceId: params.invoiceId,
+      invoiceNumber: params.invoiceNumber,
+      companyId: params.companyId,
+      userId: params.userId,
+      feeAmount: params.feeAmount,
+      asOfDate: params.asOfDate,
+    })
+    const feeJournalEntryId = feeResult?.journal_entry_id ?? null
+    if (feeJournalEntryId) {
+      const { error: feeLinkError } = await supabase
+        .from('invoice_reminders')
+        .update({ fee_journal_entry_id: feeJournalEntryId })
+        .eq('id', params.reminderId)
+        .eq('company_id', params.companyId)
+      if (feeLinkError) {
+        log.error(`Reminder fee booked but not linked for invoice ${params.invoiceNumber}:`, feeLinkError)
+      }
+    }
+    return feeJournalEntryId
+  } catch (feeError) {
+    log.error(
+      `Reminder sent but the fee could not be booked for invoice ${params.invoiceNumber} — book it manually:`,
+      feeError as Error,
+    )
+    return null
+  }
+}
+
 export async function processOverdueReminders(): Promise<ProcessRemindersResult> {
   const supabase = createServiceClient()
   const results: ReminderResult[] = []
@@ -271,7 +321,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       continue
     }
 
-    const overdueAmount = Math.max(0, Math.round(Number(invoice.remaining_amount ?? (invoice.total - (invoice.paid_amount ?? 0))) * 100) / 100)
+    const overdueAmount = Math.max(0, roundOre(Number(invoice.remaining_amount ?? (invoice.total - (invoice.paid_amount ?? 0)))))
     if (overdueAmount <= 0) {
       log.info(`Skipping invoice ${invoice.invoice_number}: no remaining amount`)
       continue
@@ -291,36 +341,11 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     // Clamp at 60 kr — the statute caps the fee even if company_settings
     // somehow holds a higher value (defense in depth against a stale DB row).
     const reminderFee = company.reminder_fee_enabled
-      ? Math.min(60, Math.round((company.reminder_fee_amount ?? 60) * 100) / 100)
+      ? Math.min(60, roundOre(company.reminder_fee_amount ?? 60))
       : 0
 
-    // Book the fee as a journal entry. Booked BEFORE creating the
-    // invoice_reminders row so we can persist fee_journal_entry_id.
-    // Failure to book the fee is logged but does not abort the reminder
-    // send — the customer still needs to receive the notification.
-    let feeJournalEntryId: string | null = null
-    if (reminderFee > 0) {
-      try {
-        const feeResult = await createReminderFeeEntry(supabase, {
-          invoiceId: invoice.id,
-          invoiceNumber: invoice.invoice_number,
-          companyId: invoice.company_id,
-          userId: invoice.user_id,
-          feeAmount: reminderFee,
-          asOfDate,
-        })
-        feeJournalEntryId = feeResult?.journal_entry_id ?? null
-      } catch (feeError) {
-        log.error(
-          `Failed to book reminder fee for invoice ${invoice.invoice_number}:`,
-          feeError as Error,
-        )
-        // Continue — surcharge still appears in the email, but no JE is linked.
-      }
-    }
-
     const totalDue =
-      Math.round((overdueAmount + interest.amount + reminderFee) * 100) / 100
+      roundOre(overdueAmount + interest.amount + reminderFee)
 
     // Claim the reminder row FIRST (send_status='pending'). The partial
     // unique index on (invoice_id, reminder_level) where send_status IN
@@ -343,7 +368,6 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
           interest_from_date: interest.fromDate,
           interest_days: interest.days,
           reminder_fee: reminderFee,
-          fee_journal_entry_id: feeJournalEntryId,
         })
         .select('id, action_token')
         .single()
@@ -403,12 +427,30 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     if (sendResult.success) {
       log.info(`Sent level ${reminderLevel} reminder for invoice ${invoice.invoice_number} to ${customer.email}`)
 
+      // Påminnelseavgift may only be charged for a skriftlig påminnelse that
+      // was actually sent (lag 1981:739), so it is booked only now — after
+      // the claim (no concurrent run can reach this point for the same level)
+      // and after delivery (a failed send books nothing; its retry books once).
+      if (reminderFee > 0) {
+        await bookSentReminderFee(supabase, {
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.invoice_number,
+          companyId: invoice.company_id,
+          userId: invoice.user_id,
+          reminderId: reminderRecord.id,
+          feeAmount: reminderFee,
+          asOfDate,
+        })
+      }
+
       // Update invoice status to overdue if not already
       if (invoice.status === 'sent') {
         await supabase
           .from('invoices')
           .update({ status: 'overdue' })
           .eq('id', invoice.id)
+          .eq('company_id', invoice.company_id)
+          .eq('status', 'sent')
       }
     } else {
       log.error(`Failed to send reminder for invoice ${invoice.invoice_number}:`, sendResult.error)

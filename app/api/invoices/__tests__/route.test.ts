@@ -439,6 +439,29 @@ describe('POST /api/invoices (create credit note)', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_SENT')
   })
 
+  it('removes the credit note and leaves the original untouched when booking fails', async () => {
+    const original = makeInvoice({ id: VALID_UUID, status: 'sent', subtotal: 1000, vat_amount: 250, total: 1250, items: [] })
+    const creditNote = makeInvoice({ id: 'cn-2', credited_invoice_id: VALID_UUID, total: -1250, status: 'sent' })
+    enqueue({ data: original, error: null })
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: null, error: null }) // items
+    enqueue({ data: { ...creditNote, items: [] }, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', accounting_method: 'accrual' }, error: null })
+    mockCreateCreditNoteJournalEntry.mockRejectedValue(new Error('Period locked'))
+    enqueue({ data: null, error: null }) // delete items
+    enqueue({ data: null, error: null }) // delete credit note
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID, reason: 'Fel pris' },
+    })
+    const response = await POST(request)
+
+    expect(response.status).toBe(500)
+    const updates = (mockSupabase.from as unknown as { mock: { calls: unknown[][] } }).mock.calls.length
+    expect(updates).toBeGreaterThan(0)
+  })
+
   it('creates credit note with negated amounts and emits event', async () => {
     const items = [
       {
@@ -478,8 +501,6 @@ describe('POST /api/invoices (create credit note)', () => {
     enqueue({ data: creditNote, error: null })
     // Insert credit note items
     enqueue({ data: null, error: null })
-    // Update original status to 'credited'
-    enqueue({ data: null, error: null })
     // Fetch complete credit note
     enqueue({ data: { ...creditNote, items: [] }, error: null })
     // Fetch company settings for entity type
@@ -488,6 +509,8 @@ describe('POST /api/invoices (create credit note)', () => {
     mockCreateCreditNoteJournalEntry.mockResolvedValue({ id: 'je-1' })
     // Update credit note with journal_entry_id
     enqueue({ data: null, error: null })
+    // Original → 'credited' (only after the voucher exists)
+    enqueue({ data: [{ id: VALID_UUID }], error: null })
 
     const emitSpy = vi.spyOn(eventBus, 'emit')
 

@@ -16,10 +16,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
-import { createLogger } from '@/lib/logger'
 import type { Invoice, Transaction } from '@/types'
 
-const log = createLogger('transactions/link-journal-entry')
 
 // Codes returned by linkTransactionToJournalEntry. All map to entries in
 // lib/errors/structured-errors.ts so both callers (REST route, MCP commit
@@ -207,130 +205,40 @@ export async function linkTransactionToJournalEntry(
     newStatus = isFullyPaid ? 'paid' : 'partially_paid'
   }
 
-  // Snapshot tx state so the compensating-rollback path can restore the row
-  // if a subsequent step fails — otherwise a partial state would persist
-  // (tx linked, invoice unchanged, no payment row).
-  const priorTxState = {
-    journal_entry_id: transaction.journal_entry_id, // validated null above
-    invoice_id: transaction.invoice_id,
-    potential_invoice_id: transaction.potential_invoice_id,
-    potential_supplier_invoice_id: transaction.potential_supplier_invoice_id,
-    is_business: transaction.is_business,
+  // The transaction link, the invoice's paid/remaining amounts and the
+  // invoice_payments row are written in ONE transaction, under row locks on
+  // the transaction and the invoice (link_transaction_to_existing_voucher).
+  // The function re-checks every precondition above under those locks and
+  // computes the amounts itself; nothing needs rolling back by hand.
+  const { data: linkResult, error: linkError } = await supabase.rpc('link_transaction_to_existing_voucher', {
+    p_company_id: companyId,
+    p_user_id: userId,
+    p_transaction_id: transactionId,
+    p_journal_entry_id: journalEntryId,
+    p_invoice_id: invoiceId ?? null,
+  })
+
+  if (linkError) {
+    if (linkError.code === '23505') {
+      return { ok: false, code: 'MATCH_INVOICE_RECORD_PAYMENT_FAILED', details: { reason: 'payment_already_recorded' } }
+    }
+    return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: linkError.message } }
   }
-
-  const { error: updateTxError } = await supabase
-    .from('transactions')
-    .update({
-      journal_entry_id: journalEntryId,
-      invoice_id: invoiceId ?? null,
-      potential_invoice_id: null,
-      potential_supplier_invoice_id: null,
-      is_business: true,
-    })
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
-    .is('journal_entry_id', null)
-
-  if (updateTxError) {
-    return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }
+  const outcome = linkResult as {
+    ok: boolean
+    code?: LinkTransactionJournalEntryErrorCode
+    details?: Record<string, unknown>
+    invoiceStatus?: 'paid' | 'partially_paid' | null
+    paidAmount?: number | null
+    remainingAmount?: number | null
+  } | null
+  if (!outcome?.ok) {
+    return { ok: false, code: outcome?.code ?? 'LINK_TX_DB_ERROR', ...(outcome?.details ? { details: outcome.details } : {}) }
   }
-
-  async function rollbackTxLink(reason: string): Promise<void> {
-    // SOC 2 PI1.3 (processing integrity): if a rollback itself fails, the
-    // ledger ends up in a partial state — tx pointing at the existing
-    // verifikat with no invoice_payments row, or the invoice row at an
-    // intermediate paid_amount. We surface the rollback failure (IDs only,
-    // no amounts or counterparty names) so a reconciliation job can
-    // detect and repair the divergence. The original failure code still
-    // goes back to the caller as the proximate cause.
-    const { error: rollbackErr } = await supabase
-      .from('transactions')
-      .update(priorTxState)
-      .eq('id', transactionId)
-      .eq('company_id', companyId)
-    if (rollbackErr) {
-      log.warn('failed to roll back transaction link after subsequent step failed', {
-        companyId,
-        transactionId,
-        journalEntryId,
-        reason,
-        rollbackError: rollbackErr.message,
-      })
-    }
-  }
-
-  const now = new Date().toISOString()
-
-  if (invoice && invoiceId) {
-    const { data: updatedRows, error: updateInvError } = await supabase
-      .from('invoices')
-      .update({
-        status: newStatus,
-        paid_at: isFullyPaid ? now : null,
-        paid_amount: newPaidAmount,
-        remaining_amount: newRemaining,
-      })
-      .eq('id', invoiceId)
-      .eq('company_id', companyId)
-      .in('status', ['sent', 'overdue', 'partially_paid'])
-      .select('id')
-
-    if (updateInvError) {
-      await rollbackTxLink('invoice update errored')
-      return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: updateInvError.message } }
-    }
-
-    if (!updatedRows || updatedRows.length === 0) {
-      await rollbackTxLink('invoice optimistic lock returned 0 rows')
-      return { ok: false, code: 'LINK_TX_INVOICE_RACE' }
-    }
-
-    // BFL 5 kap 2§ + ML 8 kap 21–23§: the payment row must record the rate
-    // effective on the PAYMENT date, not the invoice-creation date. If
-    // transaction.exchange_rate is null (SEK tx, no rate needed), leave the
-    // payment row's rate null too — a downstream Riksbanken lookup can
-    // populate it lazily if reporting needs it. Falling back to
-    // invoice.exchange_rate would silently record the wrong (invoice-date)
-    // rate, which corrupts the FX-diff figures in any later VAT or income
-    // reporting.
-    const paymentExchangeRate = transaction.exchange_rate ?? null
-
-    const { error: paymentInsertError } = await supabase
-      .from('invoice_payments')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        invoice_id: invoiceId,
-        payment_date: transaction.date,
-        amount: transaction.amount,
-        currency: invoice.currency,
-        exchange_rate: paymentExchangeRate,
-        journal_entry_id: journalEntryId,
-        transaction_id: transactionId,
-        notes: 'Kopplad till befintlig verifikation (ingen ny bokföring skapad)',
-      })
-
-    if (paymentInsertError && paymentInsertError.code !== '23505') {
-      const { error: invRevertErr } = await supabase
-        .from('invoices')
-        .update({
-          status: invoice.status,
-          paid_at: invoice.paid_at ?? null,
-          paid_amount: invoice.paid_amount ?? 0,
-          remaining_amount: invoice.remaining_amount ?? invoice.total,
-        })
-        .eq('id', invoiceId)
-        .eq('company_id', companyId)
-      if (invRevertErr) {
-        log.warn('failed to revert invoice status after payment insert failed', {
-          companyId,
-          invoiceId,
-          rollbackError: invRevertErr.message,
-        })
-      }
-      await rollbackTxLink('invoice_payments insert failed')
-      return { ok: false, code: 'MATCH_INVOICE_RECORD_PAYMENT_FAILED' }
-    }
+  if (invoice) {
+    newStatus = outcome.invoiceStatus ?? newStatus
+    newPaidAmount = Number(outcome.paidAmount ?? newPaidAmount)
+    newRemaining = Number(outcome.remainingAmount ?? newRemaining)
   }
 
   logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {

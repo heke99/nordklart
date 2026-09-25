@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **476**.
+Antal SQL-migreringar: **478**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -500,3 +500,5 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 474 | 20260925122000 | `20260925122000_correct_salary_run_atomic.sql` | `6ab6bbfbb9ed54a6bdc3059f10db1a242a91fd9b223d78067fe9bd4e0e18c499` |
 | 475 | 20260925123000 | `20260925123000_post_depreciation_atomic.sql` | `6826b75ad8b34ba5cdff91cd70c53ff1802d956797ac5ff3ddf8ca866a2d684f` |
 | 476 | 20260925124000 | `20260925124000_ledger_indexes_and_account_sums.sql` | `ea43ceb6c45904927646613f4319f9d4d9a839961cb119fae336cb218904d9ea` |
+| 477 | 20260925125000 | `20260925125000_one_posted_voucher_per_source.sql` | `61a304e8ed63cdf92d9c72828d4910e227afd66f2b8b35637ade67b5bb78c310` |
+| 478 | 20260925126000 | `20260925126000_link_transaction_to_voucher_atomic.sql` | `fad3079e50f9a80e7ef3782aea2aeac0046f413ed4ad5d329f779a8681feef8c` |

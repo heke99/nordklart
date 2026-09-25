@@ -95,7 +95,7 @@ describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
 
   it('archives the rendered PDF as underlag linked to the journal entry', async () => {
     enqueue({ data: invoice, error: null }) // fetch invoice
-    enqueue({ data: null, error: null }) // status update
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status update (draft CAS)
     enqueue({ data: company, error: null }) // settings
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-7' })
     enqueue({ data: null, error: null }) // update invoice with journal_entry_id
@@ -125,36 +125,34 @@ describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
     )
   })
 
-  it('archives the PDF even when journal entry creation fails (non-blocking)', async () => {
+  it('keeps the invoice a draft and fails when the voucher cannot be booked', async () => {
     enqueue({ data: invoice, error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     enqueue({ data: company, error: null })
     mockCreateInvoiceJournalEntry.mockRejectedValue(new Error('Period locked'))
+    enqueue({ data: null, error: null }) // revert to draft
 
     const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string | null }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_id).toBeNull()
+    expect(response.status).toBe(500)
+    expect(mockUploadDocument).not.toHaveBeenCalled()
+  })
 
-    expect(mockUploadDocument).toHaveBeenCalledTimes(1)
-    expect(mockUploadDocument).toHaveBeenCalledWith(
-      expect.anything(),
-      'user-1',
-      'company-1',
-      expect.objectContaining({ name: 'faktura-F-2026010.pdf' }),
-      expect.objectContaining({
-        upload_source: 'system',
-        journal_entry_id: undefined,
-      })
-    )
+  it('returns 409 when another request already marked the invoice as sent', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // draft CAS matched nothing
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+
+    expect(response.status).toBe(409)
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })
 
   it('still returns 200 when PDF archival itself fails', async () => {
     enqueue({ data: invoice, error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     enqueue({ data: company, error: null })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-8' })
     enqueue({ data: null, error: null })
@@ -180,7 +178,7 @@ describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
     })
 
     enqueue({ data: proforma, error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     enqueue({ data: company, error: null })
 
     const request = createMockRequest('/api/invoices/inv-2/mark-sent', { method: 'POST' })
@@ -204,7 +202,7 @@ describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
     })
 
     enqueue({ data: creditNote, error: null })
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     enqueue({ data: company, error: null })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-9' })
     enqueue({ data: null, error: null })
@@ -227,7 +225,7 @@ describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
 
   it('renders the archived PDF as if already sent (no UTKAST banner)', async () => {
     enqueue({ data: invoice, error: null }) // fetch invoice (status: 'draft')
-    enqueue({ data: null, error: null }) // status update
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status update (draft CAS)
     enqueue({ data: company, error: null }) // settings
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-99' })
     enqueue({ data: null, error: null }) // update invoice with journal_entry_id

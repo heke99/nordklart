@@ -2381,6 +2381,16 @@
       "file": "20260925124000_ledger_indexes_and_account_sums.sql",
       "version": "20260925124000",
       "sha256": "ea43ceb6c45904927646613f4319f9d4d9a839961cb119fae336cb218904d9ea"
+    },
+    {
+      "file": "20260925125000_one_posted_voucher_per_source.sql",
+      "version": "20260925125000",
+      "sha256": "61a304e8ed63cdf92d9c72828d4910e227afd66f2b8b35637ade67b5bb78c310"
+    },
+    {
+      "file": "20260925126000_link_transaction_to_voucher_atomic.sql",
+      "version": "20260925126000",
+      "sha256": "fad3079e50f9a80e7ef3782aea2aeac0046f413ed4ad5d329f779a8681feef8c"
     }
   ]
 }

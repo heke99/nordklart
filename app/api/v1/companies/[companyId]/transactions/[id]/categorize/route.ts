@@ -424,7 +424,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     if (updateErr) return v1ErrorResponse(updateErr, txLog, { requestId: ctx.requestId })
 
+    // createJournalEntry is idempotent per transaction: a concurrent
+    // identical request gets the SAME voucher and may already have linked it.
+    // That is success — reversing it would unbook the transaction.
+    let alreadyLinkedBySibling = false
     if ((!updateResult || updateResult.length === 0) && journalEntryId) {
+      const { data: current } = await ctx.supabase
+        .from('transactions')
+        .select('journal_entry_id')
+        .eq('id', txId)
+        .eq('company_id', ctx.companyId!)
+        .maybeSingle()
+      alreadyLinkedBySibling = current?.journal_entry_id === journalEntryId
+    }
+
+    if ((!updateResult || updateResult.length === 0) && journalEntryId && !alreadyLinkedBySibling) {
       // Lost the race. The orphan JE was created with status='posted' by the
       // engine, so the immutability trigger blocks a direct status flip to
       // 'cancelled'. BFL 5 kap 5 § requires corrections via a reversing

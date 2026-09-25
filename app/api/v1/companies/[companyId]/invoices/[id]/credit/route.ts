@@ -29,6 +29,7 @@ import { created } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { eventBus } from '@/lib/events'
@@ -350,26 +351,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 3: flip original invoice to credited.
     const warnings: { code: string; message: string }[] = []
-    const { error: flipErr } = await ctx.supabase
-      .from('invoices')
-      .update({ status: 'credited', updated_at: new Date().toISOString() })
-      .eq('id', originalId)
-      .eq('company_id', ctx.companyId!)
-    if (flipErr) {
-      ctx.log.error('credit: failed to mark original as credited', flipErr as Error, {
-        invoiceId: originalId,
-        creditNoteId,
-        companyId: ctx.companyId,
-      })
-      warnings.push({
-        code: 'ORIGINAL_NOT_FLIPPED',
-        message: 'Credit note was created but the original invoice could not be marked credited. Reconcile manually.',
-      })
-    }
 
-    // Step 4: post the reverse journal entry (accrual only). Best-effort.
+    // Step 3: post the reversing voucher (accrual only). A credit note without
+    // its verifikation is not allowed (BFL 5 kap): on failure the credit note
+    // is removed (its KR- number derives from the original, so the series has
+    // no gap) and the original stays as it was, so the call can be retried.
     let journalEntryId: string | null = null
     if (wouldCreateJournalEntry) {
       try {
@@ -386,42 +373,60 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           entityType,
           original.customer?.name,
         )
-        if (entry) {
-          journalEntryId = entry.id
-          const { error: writeBackErr } = await ctx.supabase
-            .from('invoices')
-            .update({ journal_entry_id: entry.id })
-            .eq('id', creditNoteId)
-            .eq('company_id', ctx.companyId!)
-          if (writeBackErr) {
-            ctx.log.error('credit: journal_entry_id write-back failed', writeBackErr as Error, {
-              creditNoteId,
-              journalEntryId: entry.id,
-            })
-            warnings.push({
-              code: 'JOURNAL_ENTRY_ID_WRITEBACK_FAILED',
-              message: 'Credit-note journal entry was posted but the row could not be updated with its id. Re-fetch and reconcile.',
-            })
-          }
-        } else {
-          ctx.log.error('credit: journal entry not created (engine returned null)', new Error('null entry'), {
-            creditNoteId,
-          })
-          warnings.push({
-            code: 'JOURNAL_ENTRY_NOT_POSTED',
-            message: 'Credit note was created but no journal entry was posted. Check fiscal period and the engine logs (BFL 5 kap reconciliation required).',
-          })
-        }
+        if (!entry) throw new Error('Ingen verifikation skapades (saknas ett öppet räkenskapsår?).')
+        journalEntryId = entry.id
       } catch (err) {
-        ctx.log.error('credit: journal entry creation failed', err as Error, {
+        ctx.log.error('credit: journal entry creation failed; removing the credit note', err as Error, {
           creditNoteId,
           companyId: ctx.companyId,
         })
-        warnings.push({
-          code: 'JOURNAL_ENTRY_NOT_POSTED',
-          message: 'Credit note was created but the journal entry failed. Reconcile manually.',
+        await ctx.supabase.from('invoice_items').delete().eq('invoice_id', creditNoteId)
+        await ctx.supabase.from('invoices').delete().eq('id', creditNoteId).eq('company_id', ctx.companyId!)
+        if (isBookkeepingError(err)) {
+          return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+        }
+        return v1ErrorResponseFromCode('INVOICE_CREDIT_BOOKING_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+          details: { reason: err instanceof Error ? err.message : 'unknown' },
         })
       }
+
+      const { error: writeBackErr } = await ctx.supabase
+        .from('invoices')
+        .update({ journal_entry_id: journalEntryId })
+        .eq('id', creditNoteId)
+        .eq('company_id', ctx.companyId!)
+      if (writeBackErr) {
+        ctx.log.error('credit: journal_entry_id write-back failed', writeBackErr as Error, {
+          creditNoteId,
+          journalEntryId,
+        })
+        warnings.push({
+          code: 'JOURNAL_ENTRY_ID_WRITEBACK_FAILED',
+          message: 'Credit-note journal entry was posted but the row could not be updated with its id. Re-fetch and reconcile.',
+        })
+      }
+    }
+
+    // Step 4: flip the original to credited, guarded on the statuses a
+    // credit is allowed from (a concurrent credit already flipped it).
+    const { data: flipRows, error: flipErr } = await ctx.supabase
+      .from('invoices')
+      .update({ status: 'credited', updated_at: new Date().toISOString() })
+      .eq('id', originalId)
+      .eq('company_id', ctx.companyId!)
+      .in('status', ['sent', 'paid', 'overdue'])
+      .select('id')
+    if (flipErr || !flipRows || flipRows.length === 0) {
+      ctx.log.error('credit: failed to mark original as credited', (flipErr ?? new Error('0 rows')) as Error, {
+        invoiceId: originalId,
+        creditNoteId,
+        companyId: ctx.companyId,
+      })
+      warnings.push({
+        code: 'ORIGINAL_NOT_FLIPPED',
+        message: 'Credit note was created but the original invoice could not be marked credited. Reconcile manually.',
+      })
     }
 
     // Step 5: emit credit_note.created (existing event in the bus). The
