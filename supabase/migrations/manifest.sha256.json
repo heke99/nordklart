@@ -2411,6 +2411,11 @@
       "file": "20260925131001_seed_agent_atom_bodies.sql",
       "version": "20260925131001",
       "sha256": "6466a434f5935a124ec46e80a151ab032e28d0b2442753997a534b35676b5032"
+    },
+    {
+      "file": "20260925132000_commit_inventory_adjustment.sql",
+      "version": "20260925132000",
+      "sha256": "3ffc1d75c62c434f5a212edf7c37d929dc85bc0f569f74c42a88799d0917ca50"
     }
   ]
 }

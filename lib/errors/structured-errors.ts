@@ -743,6 +743,26 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det finns inget öppet räkenskapsår för datumet.',
     message_en: 'There is no open fiscal year for the date.',
   },
+  INVENTORY_BALANCE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Lagersaldot ändrades medan inventeringen bokfördes. Ladda om och kontrollera inventeringen igen.',
+    message_en: 'The inventory balance changed while the count was being booked. Reload and check the count again.',
+  },
+  INVENTORY_PERIOD_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret är stängt. Lagerförändringen kan inte bokföras.',
+    message_en: 'The fiscal year is closed; the inventory change cannot be booked.',
+  },
+  INVENTORY_PERIOD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret hittades inte.',
+    message_en: 'Fiscal year not found.',
+  },
+  INVENTORY_DRAFT_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Lagerverifikationen stämmer inte med inventeringen.',
+    message_en: 'The inventory voucher does not match the count.',
+  },
   INVOICE_CREDIT_BOOKING_FAILED: {
     httpStatus: 500,
     message_sv: 'Kreditfakturan kunde inte bokföras och har inte skapats. Kontrollera att räkenskapsåret är öppet och försök igen.',

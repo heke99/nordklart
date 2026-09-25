@@ -6,14 +6,16 @@ import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-end/access'
 import { createServiceClient } from '@/lib/supabase/server'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import {
   INVENTORY_CHANGE_ACCOUNTS,
   InventoryValuationError,
-  planInventoryAdjustment,
   valueInventory,
 } from '@/lib/bokslut/inventory/inventory-valuation'
-import type { CreateJournalEntryLineInput } from '@/types'
+import {
+  bookInventoryAdjustment,
+  InventoryAdjustmentError,
+  loadInventoryBalances,
+} from '@/lib/bokslut/inventory/book-inventory-adjustment'
 
 ensureInitialized()
 
@@ -21,8 +23,8 @@ ensureInitialized()
  * Lagerinventering for fiscal year `[id]`. GET: booked balance of each
  * inventory account at the balance date. POST: book the lagerförändring that
  * brings each counted account to its value (IL 17 kap. 3–4 §§), as one
- * voucher dated the balance date. Re-posting the same count is a no-op: the
- * adjustment is always counted from the current booked balance.
+ * voucher dated the balance date. Re-posting the same count is a no-op, and
+ * two concurrent counts cannot both post (commit_inventory_adjustment).
  */
 
 const CountSchema = z.object({
@@ -35,24 +37,6 @@ const CountSchema = z.object({
 const BodySchema = z.object({
   counts: z.array(CountSchema).min(1).max(Object.keys(INVENTORY_CHANGE_ACCOUNTS).length),
 })
-
-async function bookedBalances(companyId: string, periodEnd: string): Promise<Record<string, number>> {
-  const db = createServiceClient()
-  const entries = await Promise.all(
-    Object.keys(INVENTORY_CHANGE_ACCOUNTS).map(async (account) => {
-      const { data, error } = await db.rpc('__ledger_balance_at', {
-        p_company_id: companyId,
-        p_account_from: account,
-        p_account_to: account,
-        p_date: periodEnd,
-      })
-      if (error) throw error
-      // The helper is credit-positive; inventory is debit-normal.
-      return [account, -(Number(data) || 0)] as const
-    }),
-  )
-  return Object.fromEntries(entries)
-}
 
 async function loadPeriod(supabase: ReturnType<typeof createServiceClient>, companyId: string, id: string) {
   const { data, error } = await supabase
@@ -69,14 +53,15 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'period.year_end_inventory_read',
   async (_request, ctx, { params }) => {
     const { id } = await params
-    const access = await requireYearEndAccess(createServiceClient(), ctx.companyId, ctx.user.id, id, {
+    const service = createServiceClient()
+    const access = await requireYearEndAccess(service, ctx.companyId, ctx.user.id, id, {
       operation: 'period.year_end_inventory_read',
       requestId: ctx.requestId,
     })
     if (!access.allowed) return yearEndAccessDeniedResponse('year_end.projects', access.reason)
     const period = await loadPeriod(ctx.supabase, ctx.companyId, id)
     if (!period) return errorResponseFromCode('FISCAL_PERIOD_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    const balances = await bookedBalances(ctx.companyId, period.period_end)
+    const balances = await loadInventoryBalances(service, ctx.companyId, period.period_end)
     return NextResponse.json({
       data: {
         balance_date: period.period_end,
@@ -96,7 +81,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'period.year_end_inventory',
   async (request, ctx, { params }) => {
     const { id } = await params
-    const access = await requireYearEndAccess(createServiceClient(), ctx.companyId, ctx.user.id, id, {
+    const service = createServiceClient()
+    const access = await requireYearEndAccess(service, ctx.companyId, ctx.user.id, id, {
       operation: 'period.year_end_inventory',
       requestId: ctx.requestId,
       requireWrite: true,
@@ -132,20 +118,25 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       throw error
     }
 
-    const balances = await bookedBalances(ctx.companyId, period.period_end)
-    const lines: CreateJournalEntryLineInput[] = valuations.flatMap((v) => planInventoryAdjustment(v, balances[v.account] ?? 0))
-    if (lines.length === 0) {
-      return NextResponse.json({ data: { journal_entry: null, valuations } })
+    try {
+      const entry = await bookInventoryAdjustment(
+        {
+          supabase: ctx.supabase,
+          service,
+          companyId: ctx.companyId,
+          userId: ctx.user.id,
+          fiscalPeriodId: id,
+          balanceDate: period.period_end,
+        },
+        valuations,
+      )
+      return NextResponse.json({ data: { journal_entry: entry, valuations } }, { status: entry ? 201 : 200 })
+    } catch (error) {
+      if (error instanceof InventoryAdjustmentError) {
+        return errorResponseFromCode(error.code, ctx.log, { requestId: ctx.requestId, reason: error.details })
+      }
+      throw error
     }
-
-    const entry = await createJournalEntry(ctx.supabase, ctx.companyId, ctx.user.id, {
-      fiscal_period_id: id,
-      entry_date: period.period_end,
-      description: 'Lagerförändring enligt inventering',
-      source_type: 'year_end_inventory',
-      lines,
-    })
-    return NextResponse.json({ data: { journal_entry: entry, valuations } }, { status: 201 })
   },
   { allowRequestedCompany: true, requireWrite: true },
 )
