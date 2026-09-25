@@ -47,7 +47,7 @@ describe('create_salary_run_with_employees', () => {
            FROM public.salary_line_items li
            JOIN public.salary_run_employees s ON s.id = li.salary_run_employee_id
            JOIN public.employees e ON e.id = s.employee_id
-          WHERE s.salary_run_id = $1 ORDER BY e.first_name`,
+          WHERE s.salary_run_id = $1 ORDER BY li.account_number`,
         [rows[0].run.id],
       )
       expect(lines.rows).toEqual([
