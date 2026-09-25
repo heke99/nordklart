@@ -217,7 +217,7 @@ Riktade regler (koncerninterna lån) — IL 24 kap 16–20 §§:
 - **57 kap 16 a § IL (ny 2026)** — Schablonavdrag **8 IBB per delägare** från löneunderlaget (≈ 644 800 kr 2026 baserat på IBB 80 600 kr).
 - **57 kap 17 § IL** — Lönebaserat utrymme = **50 %** av löneunderlaget efter schablonavdrag.
 - **57 kap 19 § IL UPPHÄVD 2026** — **Löneuttagskravet för delägaren slopas**. Ingen lägstanivå för ägares eller närståendes löneuttag krävs.
-- **Grundbelopp 4 IBB (322 400 kr 2026)** per företag fördelat efter ägarandel. Räntebaserat utrymme: SLR + 9 % på omkostnadsbelopp **överstigande 100 000 kr**. Uppräkning av sparat utdelningsutrymme **slopad**. Karenstid förkortad från 5 → 4 år (gäller utlösande händelser från 2027). 4 %-spärren (kapitalandelskravet) slopad.
+- **Grundbelopp 4 IBB (322 400 kr 2026)** fördelat lika per aktie; en delägare får **högst ett grundbelopp totalt** för alla sina företag — överstiger summan ett grundbelopp fördelas det i förhållande till andelsinnehaven (IL 57 kap. 11 a §). Räntebaserat utrymme: SLR + 9 % på omkostnadsbelopp **överstigande 100 000 kr**. Uppräkning av sparat utdelningsutrymme **slopad**. Karenstid förkortad från 5 → 4 år (gäller utlösande händelser från 2027). 4 %-spärren (kapitalandelskravet) slopad.
 
 ### 4d. HFD och Skatteverket — senaste 5 åren (urval för holding-AB)
 

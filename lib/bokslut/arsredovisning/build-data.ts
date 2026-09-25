@@ -598,7 +598,7 @@ async function loadStructuredProfitDisposition(
     const { data, error } = await supabase
       .from('year_end_profit_dispositions')
       .select(
-        'current_year_result, proposed_dividend, carried_forward, narrative_override, status',
+        'id, current_year_result, free_equity, proposed_dividend, carried_forward, narrative_override, status',
       )
       .eq('company_id', companyId)
       .eq('fiscal_period_id', fiscalPeriodId)
@@ -607,19 +607,64 @@ async function loadStructuredProfitDisposition(
     if (error || !data) return null
     if (data.narrative_override) return String(data.narrative_override)
 
-    const dividend = Number(data.proposed_dividend) || 0
-    const carried = Number(data.carried_forward) || 0
-    const format = (value: number) =>
-      new Intl.NumberFormat('sv-SE', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(value)
-    return dividend > 0
-      ? `Styrelsen föreslår att ${format(dividend)} kr lämnas i utdelning och att ${format(carried)} kr balanseras i ny räkning.`
-      : `Styrelsen föreslår att ${format(carried)} kr balanseras i ny räkning.`
+    type ProposalRow = { amount_per_share: number | null; prudence_assessment: string | null }
+    let proposal: ProposalRow | null = null
+    if ((Number(data.proposed_dividend) || 0) > 0) {
+      const { data: row } = await supabase
+        .from('dividend_proposals')
+        .select('amount_per_share, prudence_assessment')
+        .eq('company_id', companyId)
+        .eq('profit_disposition_id', data.id)
+        .neq('status', 'withdrawn')
+        .maybeSingle()
+      proposal = (row as ProposalRow | null) ?? null
+    }
+    return formatProfitDispositionText({
+      currentYearResult: Number(data.current_year_result) || 0,
+      availableFunds: Number(data.free_equity) || 0,
+      dividend: Number(data.proposed_dividend) || 0,
+      carriedForward: Number(data.carried_forward) || 0,
+      amountPerShare: proposal?.amount_per_share != null ? Number(proposal.amount_per_share) : null,
+      boardStatement: proposal?.prudence_assessment ?? null,
+    })
   } catch {
     return null
   }
+}
+
+/**
+ * "Förslag till resultatdisposition" in the form used in Bolagsverket's and
+ * the K2 examples: the funds at the stämma's disposal, then how the board
+ * proposes they are disposed of. With a dividend, the board's motivated
+ * statement (ABL 18 kap. 4 §) follows.
+ */
+export function formatProfitDispositionText(p: {
+  currentYearResult: number
+  availableFunds: number
+  dividend: number
+  carriedForward: number
+  amountPerShare: number | null
+  boardStatement: string | null
+}): string {
+  const format = (value: number) =>
+    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
+  const retained = roundOre(p.availableFunds - p.currentYearResult)
+  const parts = [
+    `Till årsstämmans förfogande står följande medel (kr): balanserat resultat ${format(retained)}, ` +
+      `årets resultat ${format(p.currentYearResult)}, totalt ${format(p.availableFunds)}.`,
+  ]
+  if (p.dividend > 0) {
+    const perShare = p.amountPerShare != null ? ` (${format(p.amountPerShare)} kr per aktie)` : ''
+    parts.push(
+      `Styrelsen föreslår att ${format(p.dividend)} kr${perShare} delas ut till aktieägarna och att ${format(p.carriedForward)} kr balanseras i ny räkning.`,
+    )
+    if (p.boardStatement && p.boardStatement.trim()) {
+      parts.push(`Styrelsens yttrande över den föreslagna vinstutdelningen: ${p.boardStatement.trim()}`)
+    }
+  } else {
+    parts.push(`Styrelsen föreslår att ${format(p.carriedForward)} kr balanseras i ny räkning.`)
+  }
+  return parts.join(' ')
 }
 
 async function loadAnnualReportAnnotations(

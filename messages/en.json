@@ -3140,7 +3140,7 @@
     "source_label_year_end_depreciation": "Year-end depreciation",
     "source_label_year_end_fx_revaluation": "Year-end FX revaluation",
     "source_label_year_end_tax_adjustment": "Year-end tax adjustment",
-    "source_label_year_end_disposition": "Profit appropriation",
+    "source_label_year_end_disposition": "Year-end appropriation",
     "source_label_year_end_deferred_tax": "Deferred tax",
     "source_label_year_end_closing": "Final closing entry",
     "source_label_storno": "Storno",
@@ -3152,7 +3152,11 @@
     "source_label_supplier_invoice_cash_payment": "Cash payment",
     "source_label_currency_revaluation": "Currency revaluation",
     "source_label_currency_revaluation_reversal": "FX revaluation reversal",
-    "source_label_reminder_fee": "Reminder fee"
+    "source_label_reminder_fee": "Reminder fee",
+    "source_label_result_appropriation": "Prior-year result transfer",
+    "source_label_dividend_decision": "Dividend decision",
+    "source_label_dividend_payment": "Dividend payment",
+    "source_label_year_end_inventory": "Inventory change"
   },
   "journal_correction": {
     "title": "Correction chain",

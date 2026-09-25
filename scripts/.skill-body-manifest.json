@@ -204,8 +204,8 @@
     "version": 3
   },
   "horizontal/swedish-tax-planning/312-regler": {
-    "hash": "f6fd1e6edb45cc31ec990586b08f9e68aa09be15b6e072874c0770bde941a649",
-    "version": 1
+    "hash": "a9bd802d84db2113180f73a9458292aebdd977a2a1c34308dc9b0f1fc44ace34",
+    "version": 2
   },
   "horizontal/swedish-tax-planning/kapitalforsakring": {
     "hash": "3119126a58c9c3729d34303cb5f36c27c75e664e5048544fea2e24a6ac71d3fd",
@@ -272,8 +272,8 @@
     "version": 1
   },
   "modifier/holding-ab": {
-    "hash": "ef3efae6fab6e1a16cef73976064d67a404f131e128ee41b1031659edfbf4075",
-    "version": 3
+    "hash": "12ee4244acd316af1fa5fba1c0eb64d68900ce762090b7c5edbe41376e33443a",
+    "version": 4
   },
   "modifier/holding-ab/312-holding": {
     "hash": "0f5d92aaa8c172f79971b880cd5a0c4ad29fdeede95dc26bb2504cab25c278df",
@@ -328,8 +328,8 @@
     "version": 1
   },
   "modifier/single-shareholder-ab-fmb": {
-    "hash": "a4300ebfc617f18e0af87085cad48a49c5ad6ed94ef8da316fddc8244bff32b6",
-    "version": 3
+    "hash": "c80f31313ead3f24868499782f8e34ae314268852e1b7856cd9751a1dff3e734",
+    "version": 4
   },
   "vertical/bygg-hantverk": {
     "hash": "aaa37df4455c4178126eb662bc6ca6770cb1a49a99f730b5beddcd12cfba7f0b",
@@ -396,8 +396,8 @@
     "version": 1
   },
   "vertical/konsult-it": {
-    "hash": "eb45a1dd6d0ea5290d696fd41ac3db1ad3f6512fcf53521d698bc5f65a6dbb4a",
-    "version": 3
+    "hash": "480a0526954d07ca3cbcbb9d9995ddc4eaa0180cfc08f62d5fcc4b8d90606ad2",
+    "version": 4
   },
   "vertical/konsult-it/3-12-rules": {
     "hash": "4b61a79c690e5e079590fadfb85a899488486c1108c402847c31c3523d53599c",

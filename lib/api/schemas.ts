@@ -205,6 +205,9 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'reminder_fee',
   'accrual',
   'result_appropriation',
+  'dividend_decision',
+  'dividend_payment',
+  'year_end_inventory',
 ])
 
 export const AccountTypeSchema = z.enum([

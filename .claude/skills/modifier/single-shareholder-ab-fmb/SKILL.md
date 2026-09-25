@@ -35,17 +35,24 @@ This modifier composes with:
 
 ## Implications
 
-1. **Lön vs. utdelning**: ägaren styr själv. Under gränsbeloppet beskattas
-   utdelning som kapital (20%). Över gränsbeloppet beskattas det överskjutande
-   som tjänsteinkomst (kommunal + statlig + arbetsgivaravgifter — högsta marginalskatt).
-   Lön ger socialförsäkringsrätt och pension; utdelning gör det inte.
-2. **Löneunderlagsregeln** (3:12-reglernas favorit): genom att ägaren tar ut
-   minst en viss årslön (cirka 6 IBB + 5% av total löneunderlag, max 9,6 IBB)
-   adderas en stor del av bolagets totala lönesumma till gränsbeloppet.
+1. **Lön vs. utdelning**: ägaren styr själv. Under gränsbeloppet tas 2/3 av
+   utdelningen upp i kapital och beskattas med 30 % (effektivt 20 %). Över
+   gränsbeloppet tas det överskjutande upp i tjänst (kommunal + statlig skatt;
+   inga arbetsgivaravgifter på utdelning), högst 90 IBB för inkomståret per
+   företag och närståendekrets (2026: 7 506 000 kr) — resten i kapital med 30 %
+   (IL 57 kap. 20–20 a §§). Lön ger socialförsäkringsrätt och pension;
+   utdelning gör det inte.
+2. **Lönebaserat utrymme** (från inkomstår 2026, SFS 2025:1361): 50 % av
+   delägarens andel av löneunderlaget (föregående års kontanta löner i bolaget
+   och dotterföretag) över 8 IBB (2026: 644 800 kr), högst 50 × den kontanta
+   ersättning ägaren eller närstående fått från bolaget året före. Löneuttagskravet
+   och 4 %-kravet är slopade (IL 57 kap. 16–17 §§).
 3. **K10**: ägaren ska lämna K10-blankett varje år där gränsbelopp,
    sparade utdelningsutrymmen och utdelningen själv redovisas.
-4. **2026-års 3:12-reform**: vissa parametrar är reviderade (löneunderlag,
-   förenklingsregel). Verifiera mot aktuell version av swedish-tax-planning innan
+4. **2026-års 3:12-reform**: förenklingsregeln och huvudregeln är ersatta av en
+   beräkning — grundbelopp 4 IBB (2026: 322 400 kr, högst ett grundbelopp totalt
+   för alla ägda företag), lönebaserat utrymme och ränta (SLR + 9 %, 2026: 11,55 %)
+   på omkostnadsbelopp över 100 000 kr. Se swedish-tax-planning innan
    konkret rådgivning.
 
 ## BAS-konton

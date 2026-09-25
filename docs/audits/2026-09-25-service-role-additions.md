@@ -28,3 +28,16 @@ Three route files were added to `scripts/checks/service-role-baseline.json`. Eac
 - **Actor:** `withRouteContext` handles auth and MFA, and `requireWritePermission` checks write access.
 - **Company and resource:** the run is loaded with the user's client and filtered by `company_id` and `status = 'booked'`.
 - **Permission:** the service role is only used to call `correct_salary_run`, which is granted to `service_role` only, like `reverse_journal_entry_v2` which it calls. The RPC checks the actor's `can_write` again through `resolve_company_access_for_user`, and it locks the run and filters everything by `company_id`.
+
+## `app/api/bookkeeping/fiscal-periods/[id]/dividend/route.ts` (GET, POST)
+
+- **Actor:** `withRouteContext` handles auth and MFA.
+- **Company and permission:** `requireYearEndAccess` resolves the actor's access to the company and to fiscal period `[id]` (the balance-sheet year). POST passes `requireWrite: true`, and the wrapper also has `requireWrite`.
+- **Resource:** every read is filtered by `company_id` and the period id. The dividend proposal and decision come from those filtered reads, never from the request body.
+- **Why service role:** `book_dividend_decision`, `book_dividend_payment`, `dividend_distributable_amount` and `__ledger_balance_at` are granted to `service_role` only. They repeat every ABL check under a row lock and filter by `p_company_id`. The drafts are created through the engine (`createDraftEntry`) with the same client.
+
+## `app/api/bookkeeping/fiscal-periods/[id]/inventory/route.ts` (GET, POST)
+
+- **Actor:** `withRouteContext` handles auth and MFA.
+- **Company and permission:** `requireYearEndAccess` checks access to the company and the period, with write access required for POST.
+- **Resource and why service role:** the service client is used only for `__ledger_balance_at`, which is service-role only, on the inventory accounts of `companyId`. The period read and the voucher (`createJournalEntry`) use the user's RLS client.

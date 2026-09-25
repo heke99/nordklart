@@ -44,6 +44,10 @@ const SOURCE_TYPES = [
   'currency_revaluation',
   'currency_revaluation_reversal',
   'reminder_fee',
+  'result_appropriation',
+  'dividend_decision',
+  'dividend_payment',
+  'year_end_inventory',
 ] as const
 
 /**

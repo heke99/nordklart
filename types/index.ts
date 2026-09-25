@@ -1435,6 +1435,9 @@ export type JournalEntrySourceType =
   | 'reminder_fee'
   | 'accrual'
   | 'result_appropriation'
+  | 'dividend_decision'
+  | 'dividend_payment'
+  | 'year_end_inventory'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'

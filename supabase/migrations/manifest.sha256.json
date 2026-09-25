@@ -2391,6 +2391,16 @@
       "file": "20260925126000_link_transaction_to_voucher_atomic.sql",
       "version": "20260925126000",
       "sha256": "fad3079e50f9a80e7ef3782aea2aeac0046f413ed4ad5d329f779a8681feef8c"
+    },
+    {
+      "file": "20260925130000_profit_disposition_and_dividend_booking.sql",
+      "version": "20260925130000",
+      "sha256": "651b7064bb2171f22b6695fd09c491c99c2bdf45b481be31add2017b874878f5"
+    },
+    {
+      "file": "20260925130001_seed_agent_atom_bodies.sql",
+      "version": "20260925130001",
+      "sha256": "c247d67eb65122c9058baa8a69c89928ed9919cc52925797ceb88d53ac80629d"
     }
   ]
 }

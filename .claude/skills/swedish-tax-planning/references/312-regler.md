@@ -91,9 +91,9 @@ Major changes replacing the dual system with a unified calculation:
 
 | Component | New rule (inkomstår 2026) |
 |-----------|--------------------------|
-| Grundbelopp | **4 x IBB (2025) = 322,400 kr** (replaces förenklingsregeln) |
-| Lönebaserat utrymme | 50% x (ägarandel x löneunderlag - 8 IBB) |
-| Ränta on omkostnadsbelopp | (Belopp - 100,000) x (SLR + 9%) |
+| Grundbelopp | **4 x IBB (2025) = 322,400 kr** (replaces förenklingsregeln), shared equally per share; at most **one grundbelopp in total** across all companies an owner holds, split by holding size (IL 57:11 a) |
+| Lönebaserat utrymme | 50% x (ägarandel x löneunderlag - 8 IBB), capped at 50 x the owner's or närstående's cash pay from the company group the year before (IL 57:16) |
+| Ränta on omkostnadsbelopp | (Belopp - 100,000) x (SLR + 9%) = 11.55% for 2026 (SLR 30 Nov 2025 = 2.55%) |
 | Sparat utdelningsutrymme | Carried forward WITHOUT ränteuppräkning |
 | 4%-spärren | **Abolished** |
 | Löneuttagskravet | **Abolished** (50x cap remains) |
