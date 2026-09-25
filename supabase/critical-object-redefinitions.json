@@ -114,8 +114,8 @@
       "last": "20260714120000_access_hardening_agency_status_service_resolver.sql"
     },
     "resolve_company_access_for_user": {
-      "definitions": 1,
-      "last": "20260714120000_access_hardening_agency_status_service_resolver.sql"
+      "definitions": 2,
+      "last": "20260925110000_agency_access_level_enforced.sql"
     },
     "user_company_ids": {
       "definitions": 5,

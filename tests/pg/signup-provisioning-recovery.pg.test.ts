@@ -302,3 +302,37 @@ describe('signup provisioning v4 — duplicate org number → access request', (
     expect(resolved.onboarding_path).toBe('/app')
   })
 })
+
+describe('provision_authorized_signup_draft_v5 (founder verification)', () => {
+  async function v5(userId: string, status: string) {
+    const { rows } = await getPool().query(
+      `select * from public.provision_authorized_signup_draft_v5($1::uuid, $2, 'test', '{}'::jsonb)`,
+      [userId, status],
+    )
+    return rows[0]
+  }
+
+  it('an unmatched founder is provisioned read-only for manual review, atomically', async () => {
+    const userId = await insertAuthUser()
+    await insertReadySignupDraft({ userId, workspaceType: 'company' })
+    const row = await v5(userId, 'manual_review')
+    expect(row.provision_state).toBe('provisioned')
+    const { rows } = await getPool().query(
+      `select status, verification_status from public.company_members where company_id = $1 and user_id = $2`,
+      [row.company_id, userId],
+    )
+    expect(rows[0]).toMatchObject({ status: 'active_limited', verification_status: 'manual_review' })
+  })
+
+  it('a verified founder is an active owner, and a retry keeps the decision', async () => {
+    const userId = await insertAuthUser()
+    await insertReadySignupDraft({ userId, workspaceType: 'company' })
+    const row = await v5(userId, 'verified')
+    await v5(userId, 'manual_review')
+    const { rows } = await getPool().query(
+      `select status, verification_status from public.company_members where company_id = $1 and user_id = $2`,
+      [row.company_id, userId],
+    )
+    expect(rows[0]).toMatchObject({ status: 'active', verification_status: 'verified' })
+  })
+})

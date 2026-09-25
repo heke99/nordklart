@@ -37,12 +37,13 @@ type AgencyInviteRow = {
  * must stay owner. Unknown roles rank lowest.
  */
 const COMPANY_ROLE_RANK: Record<string, number> = {
+  // Same order as resolve_company_access_for_user's role_rank.
   viewer: 1,
-  auditor: 1,
-  member: 2,
-  accountant: 3,
-  admin: 4,
-  owner: 5,
+  auditor: 2,
+  member: 3,
+  accountant: 4,
+  admin: 5,
+  owner: 6,
 }
 
 const AGENCY_ROLE_RANK: Record<string, number> = {

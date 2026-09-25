@@ -140,6 +140,10 @@ export interface ArsredovisningData {
     name: string
     signed_at: string | null
     status?: 'pending' | 'signed' | 'declined'
+    /** 'bankid' when signed with BankID evidence, 'manual' when marked by hand. */
+    evidence?: 'bankid' | 'manual' | null
+    /** BankID signer holds a signing position in Bolagsverket's register. */
+    registry_verified?: boolean | null
   }[]
   /** Prior period metadata for the jämförelse column (R03). */
   prior_period?: {

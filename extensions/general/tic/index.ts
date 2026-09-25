@@ -37,6 +37,7 @@ import {
 } from './lib/bankid-session-log'
 import { ticBankIdProvider } from './lib/bankid-provider'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { createLogger } from '@/lib/logger'
 import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { truncateIp } from '@/lib/api/truncate-ip'
@@ -1127,13 +1128,20 @@ export const ticExtension: Extension = {
     {
       method: 'POST',
       path: '/bankid/link',
-      // skipAuth: false — requires existing Supabase session
-      handler: async (request: Request, ctx?) => {
+      // Requires a Supabase session but NOT a company: a new user links
+      // BankID before their first company can be created (company creation
+      // requires an identified founder — lib/company/verify-signatory.ts).
+      skipCompanyContext: true,
+      handler: async (request: Request) => {
         try {
+          const auth = await requireAuth()
+          if (auth.error) return auth.error
+          const userId = auth.user.id
+
           const body = await request.json()
           const { sessionId } = body
 
-          if (!sessionId || !ctx?.userId) {
+          if (!sessionId) {
             return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
           }
 
@@ -1155,7 +1163,7 @@ export const ticExtension: Extension = {
           // Otherwise a completed sessionId from someone else's scan would
           // attach their personnummer to this account.
           const consumed = await consumeBankIdSession({
-            supabase, provider, sessionRef: sessionId, kind: 'link', userId: ctx.userId,
+            supabase, provider, sessionRef: sessionId, kind: 'link', userId: userId,
           })
           if (!consumed) {
             return NextResponse.json(
@@ -1173,14 +1181,17 @@ export const ticExtension: Extension = {
             .limit(1)
             .maybeSingle()
 
-          if (existing && existing.user_id !== ctx.userId) {
+          if (existing && existing.user_id !== userId) {
             return NextResponse.json(
               { error: 'already_linked', message: 'This BankID is already linked to another account' },
               { status: 409 }
             )
           }
 
-          if (existing && existing.user_id === ctx.userId) {
+          if (existing && existing.user_id === userId) {
+            // Refresh the Bolagsverket company roles from this fresh session:
+            // founder verification only trusts roles enriched recently.
+            await fetchAndStoreEnrichment(sessionId, userId, supabase)
             return NextResponse.json({ data: { linked: true, alreadyLinked: true } })
           }
 
@@ -1188,7 +1199,7 @@ export const ticExtension: Extension = {
           const { error: insertError } = await supabase
             .from('bankid_identities')
             .insert({
-              user_id: ctx.userId,
+              user_id: userId,
               personal_number_hash: pnrHash,
               personal_number_enc: encryptPersonalNumber(personalNumber),
               given_name: givenName,
@@ -1208,11 +1219,14 @@ export const ticExtension: Extension = {
           // { bankid_linked: true } would wipe has_password for users who
           // already set one — they'd then be incorrectly shown the
           // set-password banner on their next session.
-          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const { data: priorUser } = await supabase.auth.admin.getUserById(userId)
           const priorMeta = priorUser?.user?.app_metadata ?? {}
-          await supabase.auth.admin.updateUserById(ctx.userId, {
+          await supabase.auth.admin.updateUserById(userId, {
             app_metadata: { ...priorMeta, bankid_linked: true },
           })
+
+          // Company roles (TIC Identity / Bolagsverket) for founder verification.
+          await fetchAndStoreEnrichment(sessionId, userId, supabase)
 
           return NextResponse.json({ data: { linked: true } })
         } catch (error) {

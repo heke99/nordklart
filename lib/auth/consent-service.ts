@@ -3,6 +3,7 @@ import { getBankIdProvider } from '@/lib/auth/bankid-provider'
 import { hashPersonalNumberHmac, maskPersonalNumber } from '@/lib/auth/bankid'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
+import { checkSignerAgainstRegistry } from '@/lib/company/verify-signatory'
 
 const log = createLogger('consent-service')
 
@@ -311,6 +312,25 @@ async function createConsentForSession(
       : null
 
   const service = createServiceClient()
+
+  // Record whether the signer holds a signing position in Bolagsverket's
+  // register (styrelseledamot/VD). Advisory evidence; a lookup failure must
+  // not lose the signature itself.
+  let recordedContext: Record<string, unknown> = context
+  if (signatureRequestId && row.company_id) {
+    try {
+      const registryCheck = await checkSignerAgainstRegistry(service, {
+        userId: row.user_id,
+        companyId: row.company_id,
+        signerPersonalNumberHash: identity.pnHash,
+      })
+      recordedContext = { ...context, signer_registry_check: registryCheck }
+    } catch (err) {
+      log.warn('signer registry check failed', { sessionId: row.id, message: err instanceof Error ? err.message : 'unknown' })
+      recordedContext = { ...context, signer_registry_check: { matched: false, reason: 'no_registry_data' } }
+    }
+  }
+
   const { data, error } = await service.rpc('record_bankid_consent_v1', {
     p_session_id: row.id,
     p_actor_user_id: row.user_id,
@@ -320,7 +340,7 @@ async function createConsentForSession(
     p_personal_number_hash: identity.pnHash,
     p_personal_number_masked: identity.pnMasked,
     p_signer_name: identity.signerName,
-    p_context: context,
+    p_context: recordedContext,
     p_completed_at: identity.completedAt,
     p_signature_request_id: signatureRequestId,
     p_signer_personnummer_encrypted: null,

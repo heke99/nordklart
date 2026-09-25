@@ -67,7 +67,32 @@ function validData(): ArsredovisningData {
   }
 }
 
+const lockedState = {
+  ledger_locked: true,
+  period_closed: true,
+  closing_entry_id: 'entry',
+  pdf_ixbrl_match: true,
+  final_pdf_requested: true,
+  pdf_text_contains_draft: false,
+}
+
 describe('annual-report preflight', () => {
+  it('warns when a BankID signer is not a registered board member or VD', () => {
+    const data = validData()
+    data.signatures[0] = { ...data.signatures[0], evidence: 'bankid', registry_verified: false }
+    const report = runAnnualReportPreflight(data, lockedState)
+    const issue = report.issues.find((i) => i.code === 'SIGNER_NOT_IN_REGISTRY')
+    expect(issue?.severity).toBe('warning')
+    expect(report.preflight_status).toBe('passed')
+  })
+
+  it('does not warn for a registry-verified BankID signer', () => {
+    const data = validData()
+    data.signatures[0] = { ...data.signatures[0], evidence: 'bankid', registry_verified: true }
+    const report = runAnnualReportPreflight(data, lockedState)
+    expect(report.issues.map((i) => i.code)).not.toContain('SIGNER_NOT_IN_REGISTRY')
+  })
+
   it('allows document data on a locked ledger and reports only the >100% solidity warning', () => {
     const report = runAnnualReportPreflight(validData(), {
       ledger_locked: true,

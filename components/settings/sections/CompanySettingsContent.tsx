@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
 import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
 import { CompanyMembersSection } from '@/components/settings/CompanyMembersSection'
+import { CompanyAgencyLinksSection } from '@/components/settings/CompanyAgencyLinksSection'
 import { BolagsverketRegistrySection } from '@/components/settings/BolagsverketRegistrySection'
 import { FiscalPeriodEditor } from '@/components/settings/FiscalPeriodEditor'
 import { LogoUpload } from '@/components/settings/LogoUpload'
@@ -58,6 +59,8 @@ export function CompanySettingsContent() {
       <div className="border-t border-border pt-8">
         <CompanyMembersSection />
       </div>
+
+      <CompanyAgencyLinksSection />
 
       <FiscalPeriodEditor />
 

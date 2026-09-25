@@ -170,6 +170,12 @@ function NewCompanyContent() {
         },
       })
 
+      if (result.bankIdRequired) {
+        // Hosted: the founder must identify with BankID before a company is created.
+        router.push('/onboarding/bankid?next=companies_new')
+        return
+      }
+
       if (result.error || !result.companyId) {
         logError('create company action failed', { error: result.error })
         toast({

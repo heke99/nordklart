@@ -2336,6 +2336,26 @@
       "file": "20260925100000_salary_payroll_config_2025.sql",
       "version": "20260925100000",
       "sha256": "2142141b60c0f566982f109d6f6a4c49dd6c1400574f91e8e1468a4116eceaf8"
+    },
+    {
+      "file": "20260925110000_agency_access_level_enforced.sql",
+      "version": "20260925110000",
+      "sha256": "565f10952647c4216fd7527b9745fc825978faced1d3ba76f0bf82403f0b78ad"
+    },
+    {
+      "file": "20260925110500_company_roles_accountant_auditor.sql",
+      "version": "20260925110500",
+      "sha256": "e5da1088c12b3941975964951ca649ee1e21870c916a619641d498b273b266ec"
+    },
+    {
+      "file": "20260925111000_approve_access_request_atomic.sql",
+      "version": "20260925111000",
+      "sha256": "a7e7e9843724516ab1786283eea224db2a9c24fdd37fe405ff715ffb809c60ef"
+    },
+    {
+      "file": "20260925112000_company_founder_verification.sql",
+      "version": "20260925112000",
+      "sha256": "a48fb3d7eaa1b04991fa28fe4c93b04a3416f1b2fec0ede39e17758cdfc7acc5"
     }
   ]
 }

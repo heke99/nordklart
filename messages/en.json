@@ -1099,7 +1099,29 @@
     "wrapper_saved": "Saved",
     "wrapper_saving": "Saving...",
     "wrapper_save_changes": "Save changes",
-    "wrapper_readonly_tooltip": "You have read-only access to this company"
+    "wrapper_readonly_tooltip": "You have read-only access to this company",
+    "agency_title": "Accounting agencies",
+    "agency_description": "Agencies that have, or request, access to the company’s books. Only the company’s owners and administrators can approve or revoke access.",
+    "agency_empty": "No agency is linked to the company.",
+    "agency_unknown": "Unknown agency",
+    "agency_status_pending": "Awaiting approval",
+    "agency_status_active": "Active",
+    "agency_status_paused": "Paused",
+    "agency_status_suspended": "Suspended",
+    "agency_status_ended": "Ended",
+    "agency_level_bookkeeping": "Bookkeeping",
+    "agency_level_review": "Review (read-only)",
+    "agency_level_audit": "Audit (read-only)",
+    "agency_level_full_service": "Full service",
+    "agency_level_label": "Access level",
+    "agency_approved_on": "Approved {date}",
+    "agency_approve": "Approve",
+    "agency_decline": "Decline",
+    "agency_revoke": "Revoke",
+    "agency_confirm_revoke": "Revoke access for {name}? The agency’s staff lose access to the company immediately.",
+    "agency_toast_approved": "The agency’s access is approved.",
+    "agency_toast_revoked": "The agency’s access is revoked.",
+    "agency_toast_failed": "Access could not be updated."
   },
   "settings_invoicing": {
     "bank_validation_title": "Check bank details"
@@ -4162,5 +4184,15 @@
     "submit_save": "Save article",
     "submit_saving": "Saving...",
     "viewer_disabled_tooltip": "You only have viewer access in this company"
+  },
+  "onboarding_bankid": {
+    "title": "Identify with BankID",
+    "description": "Before a company is created in Nordklart we check that you are authorised to represent it. We match your BankID identity against the Swedish Companies Registration Office register of board members, CEO and authorised signatories. For a sole proprietorship we match your personal identity number.",
+    "linked": "BankID is linked. Continuing to create the company.",
+    "continue": "Continue",
+    "continuing": "Creating the company…",
+    "link_failed": "BankID identification failed. Please try again.",
+    "already_linked": "This BankID is already linked to another account.",
+    "manual_review_note": "If you are not listed as authorised in the register, the company is created with read-only access until we have reviewed your authority."
   }
 }

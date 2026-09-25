@@ -540,6 +540,8 @@ export async function buildArsredovisningData(
       name: r.signer_name,
       signed_at: r.signed_at,
       status: r.status,
+      evidence: r.status !== 'signed' ? null : r.bankid_signature_data?.consent_id ? 'bankid' : 'manual',
+      registry_verified: r.registry_verified ?? null,
     })),
     prior_period: priorPeriodMeta,
     unconfirmed_defaults: unconfirmedDefaults,
