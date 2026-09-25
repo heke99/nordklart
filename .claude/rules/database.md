@@ -46,7 +46,7 @@ Use the `/supabase-migration` skill for new migrations.
 
 ## Key RPC Functions
 
-- `create_company_with_owner()` — Atomic company + owner creation
+- `create_company_for_founder()` — Atomic company + verified owner creation (onboarding, service role). `create_company_with_owner()` is reserved for the anonymous sandbox
 - `commit_journal_entry()` — Atomic draft→posted with voucher number
 - `next_voucher_number()` — Concurrent-safe voucher generation
 - `detect_voucher_gaps()` — BFNAR 2013:2 gap detection

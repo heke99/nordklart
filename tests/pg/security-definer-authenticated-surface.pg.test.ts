@@ -156,19 +156,16 @@ describe('SECURITY DEFINER surface for authenticated', () => {
     /**
      * Reviewed exceptions. Each has a reason; "it is internal" is only valid
      * when EXECUTE has actually been revoked, which would drop it from this
-     * query anyway.
+     * query anyway (20260925140000 revoked company_has_feature,
+     * company_feature_usage, assert_company_commercial_limit,
+     * assert_company_member_claims and replace_period_opening_balance_link).
      */
     const ALLOWLIST = new Map<string, string>([
-      ['company_has_feature', 'plan metadata; called from postgres-owned views for non-member rows'],
-      ['company_feature_usage', 'plan usage counts; same view constraint as company_has_feature'],
-      ['company_commercial_limit', 'plan limits; same view constraint as company_has_feature'],
-      ['assert_company_commercial_limit', 'wraps company_commercial_limit; raises only'],
-      ['assert_company_member_claims', 'the guard itself'],
+      ['company_commercial_limit', 'plan limits via company_feature_access, which checks membership; used by company_effective_commercial_limits_v'],
       ['bulk_book_transactions', 'in-function auth.uid() membership check with domain error'],
       ['match_batch_allocate', 'in-function auth.uid() membership check with domain error'],
       ['create_document_version', 'requires p_user_id = auth.uid() and membership'],
       ['delete_last_voucher', 'owner/admin check against auth.uid()'],
-      ['replace_period_opening_balance_link', 'owner/admin check against auth.uid()'],
       ['generate_invoice_number', 'membership check against auth.uid()'],
       ['peek_next_invoice_number', 'membership check against auth.uid()'],
       ['create_company_with_owner', 'creates a company for auth.uid(); team membership enforced'],
