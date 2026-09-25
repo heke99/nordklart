@@ -1,4 +1,7 @@
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { getActor } from '@/lib/bookkeeping/actor-context'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { eventBus } from '@/lib/events'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { createLogger } from '@/lib/logger'
 import { SALARY_ACCOUNTS, getLineItemAccount } from './account-mapping'
@@ -12,7 +15,7 @@ import { roundOre } from '@/lib/money'
 
 const log = createLogger('salary-entries')
 
-interface SalaryRunEmployee {
+export interface SalaryRunEmployee {
   employee_id: string
   employment_type: string
   gross_salary: number
@@ -51,13 +54,19 @@ interface SalaryRunData {
 }
 
 /**
- * Create all journal entries for a salary run.
- * Creates 3 entries:
- *   1. Salary entry: gross salary expenses, tax withholding, net payment
- *   2. Avgifter entry: employer contributions expense + liability
- *   3. Vacation entry: vacation accrual expense + liability + avgifter on accrual
+ * Book a salary run: create its verifikationer and post them together.
  *
- * All entries use source_type: 'salary_payment' and source_id: salaryRun.id
+ *   1. Salary entry: gross salary expenses, tax withholding, nettolöneavdrag,
+ *      net payment
+ *   2. Avgifter entry: employer contributions (skipped when 0, e.g. only
+ *      F-skatt payees)
+ *   3. Vacation entry: semesteravsättning + avgifter on it (if any)
+ *   4. Pension entry: löneväxling pension + SLP (if any)
+ *
+ * All vouchers are created as drafts, then book_salary_run commits every one
+ * of them and flips the run to 'booked' in ONE database transaction (voucher
+ * numbers are assigned there). If anything fails the drafts are cancelled and
+ * nothing is posted — a retry can never book the salary twice.
  */
 export async function createSalaryRunEntries(
   supabase: SupabaseClient,
@@ -66,9 +75,10 @@ export async function createSalaryRunEntries(
   run: SalaryRunData
 ): Promise<{
   salaryEntry: JournalEntry
-  avgifterEntry: JournalEntry
+  avgifterEntry: JournalEntry | null
   vacationEntry: JournalEntry | null
   pensionEntry: JournalEntry | null
+  bookedRun: Record<string, unknown>
 }> {
   const entryDate = run.payment_date
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
@@ -81,40 +91,91 @@ export async function createSalaryRunEntries(
 
   await ensureSalaryAccountsExist(supabase, companyId, userId, run)
 
-  // ─── Entry 1: Salary (brutto, skatt, netto) ───
-  const salaryEntry = await createSalaryEntry(
-    supabase, companyId, userId, run, fiscalPeriodId, desc
-  )
+  const salaryInput = buildSalaryInput(run, fiscalPeriodId, desc)
 
-  // ─── Entry 2: Arbetsgivaravgifter ───
-  const avgifterEntry = await createAvgifterEntry(
-    supabase, companyId, userId, run, fiscalPeriodId, desc
-  )
+  const totalAvgifter = roundOre(run.employees.reduce((sum, e) => sum + e.avgifter_amount, 0))
+  const avgifterInput = totalAvgifter > 0 ? buildAvgifterInput(run, fiscalPeriodId, desc) : null
 
-  // ─── Entry 3: Vacation accrual (if any) ───
-  let vacationEntry: JournalEntry | null = null
   const totalVacation = run.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
   const totalVacationAvgifter = run.employees.reduce((sum, e) => sum + e.vacation_accrual_avgifter, 0)
-  if (totalVacation > 0 || totalVacationAvgifter > 0) {
-    vacationEntry = await createVacationEntry(
-      supabase, companyId, userId, run, fiscalPeriodId, desc, totalVacation, totalVacationAvgifter
-    )
-  }
+  const vacationInput = roundOre(totalVacation) > 0 || roundOre(totalVacationAvgifter) > 0
+    ? buildVacationInput(run, fiscalPeriodId, desc, totalVacation, totalVacationAvgifter)
+    : null
 
-  // ─── Entry 4: Pension provisions + SLP (if löneväxling) ───
   // Per deductions-lonevaxling.md: pension = löneväxling × 1.058, SLP = pension × 24.26%
-  // Debit 7410 Pensionsförsäkringspremier / Credit 2740 Skuld pensionsförsäkringar
-  // Debit 7533 Särskild löneskatt / Credit 2514 Beräknad särskild löneskatt
-  let pensionEntry: JournalEntry | null = null
   const totalPension = run.employees.reduce((sum, e) => sum + (e.pension_contribution || 0), 0)
   const totalSlp = run.employees.reduce((sum, e) => sum + (e.pension_slp || 0), 0)
-  if (totalPension > 0) {
-    pensionEntry = await createPensionEntry(
-      supabase, companyId, userId, run, fiscalPeriodId, desc, totalPension, totalSlp
-    )
+  const pensionInput = roundOre(totalPension) > 0
+    ? buildPensionInput(run, fiscalPeriodId, desc, totalPension, totalSlp)
+    : null
+
+  const drafts: JournalEntry[] = []
+  const cancelDrafts = async () => {
+    if (drafts.length === 0) return
+    const { error } = await supabase
+      .from('journal_entries')
+      .update({ status: 'cancelled' })
+      .in('id', drafts.map((d) => d.id))
+      .eq('company_id', companyId)
+      .eq('status', 'draft')
+    if (error) log.error('salary draft cleanup failed (drafts remain)', error, { salaryRunId: run.id })
   }
 
-  return { salaryEntry, avgifterEntry, vacationEntry, pensionEntry }
+  let draftIds: { salary: string; avgifter: string | null; vacation: string | null; pension: string | null }
+  try {
+    const create = async (input: CreateJournalEntryInput | null) => {
+      if (!input) return null
+      const draft = await createDraftEntry(supabase, companyId, userId, input)
+      drafts.push(draft)
+      return draft.id
+    }
+    draftIds = {
+      salary: (await create(salaryInput))!,
+      avgifter: await create(avgifterInput),
+      vacation: await create(vacationInput),
+      pension: await create(pensionInput),
+    }
+  } catch (err) {
+    await cancelDrafts()
+    throw err
+  }
+
+  const actor = getActor()
+  const { data: bookedRun, error: bookError } = await supabase.rpc('book_salary_run', {
+    p_company_id: companyId,
+    p_run_id: run.id,
+    p_salary_entry_id: draftIds.salary,
+    p_avgifter_entry_id: draftIds.avgifter,
+    p_vacation_entry_id: draftIds.vacation,
+    p_pension_entry_id: draftIds.pension,
+    p_booked_by: userId,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+  if (bookError || !bookedRun) {
+    await cancelDrafts()
+    log.error('book_salary_run failed', bookError ?? undefined, { salaryRunId: run.id })
+    throw new BookkeepingDatabaseError('commit_entry', bookError?.message ?? 'no result')
+  }
+
+  const { data: posted, error: postedError } = await supabase
+    .from('journal_entries')
+    .select('*, lines:journal_entry_lines(*)')
+    .in('id', drafts.map((d) => d.id))
+    .eq('company_id', companyId)
+  if (postedError) throw new BookkeepingDatabaseError('commit_entry', postedError.message)
+  const byId = new Map((posted ?? []).map((e) => [e.id as string, e as JournalEntry]))
+  for (const entry of byId.values()) {
+    await eventBus.emit({ type: 'journal_entry.committed', payload: { entry, userId, companyId } })
+  }
+
+  return {
+    salaryEntry: byId.get(draftIds.salary)!,
+    avgifterEntry: draftIds.avgifter ? byId.get(draftIds.avgifter) ?? null : null,
+    vacationEntry: draftIds.vacation ? byId.get(draftIds.vacation) ?? null : null,
+    pensionEntry: draftIds.pension ? byId.get(draftIds.pension) ?? null : null,
+    bookedRun: bookedRun as Record<string, unknown>,
+  }
 }
 
 /**
@@ -124,18 +185,16 @@ export async function createSalaryRunEntries(
  * Credit: 2710 Personalskatt (total tax withheld)
  * Credit: 1930 Företagskonto (total net salary)
  */
-async function createSalaryEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+function buildSalaryInput(
   run: SalaryRunData,
   fiscalPeriodId: string,
   desc: string
-): Promise<JournalEntry> {
+): CreateJournalEntryInput {
   const lines: CreateJournalEntryLineInput[] = []
 
   // Aggregate salary expenses by account
   const expenseByAccount = new Map<string, number>()
+  const netDeductionByAccount = new Map<string, number>()
   for (const emp of run.employees) {
     // Base salary and additions go to the employee-type account
     const salaryAccount = getEmployeeSalaryAccount(emp.employment_type)
@@ -144,14 +203,27 @@ async function createSalaryEntry(
     // Förmånsvärden (benefits) are excluded — they affect the tax base but
     // have no cash flow and should not appear as expense lines in the journal.
     const BENEFIT_TYPES = ['benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other']
+    // Skattefria traktamenten/bilersättningar are paid with the net salary
+    // but are not bruttolön: debit their own accounts (7321/7331) outside the
+    // gross reconciliation below.
+    const TAX_FREE_TYPES = ['traktamente_taxfree', 'mileage_taxfree']
     let lineItemTotal = 0
     for (const li of emp.line_items) {
-      if (li.is_net_deduction || li.is_gross_deduction) continue
+      if (li.is_gross_deduction) continue
       if (BENEFIT_TYPES.includes(li.item_type)) continue // No cash flow for förmånsvärden
-      const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
+      if (li.is_net_deduction) {
+        const account = resolveLineAccount(li, emp.employment_type)
+        // Withheld from the employee's pay and owed elsewhere: credit the
+        // liability/receivable (2790 / 1610 / 7388). Stored amounts may be
+        // signed either way; the deduction is its absolute value.
+        const current = netDeductionByAccount.get(account) || 0
+        netDeductionByAccount.set(account, current + Math.abs(li.amount))
+        continue
+      }
+      const account = resolveLineAccount(li, emp.employment_type)
       const current = expenseByAccount.get(account) || 0
       expenseByAccount.set(account, current + li.amount)
-      lineItemTotal += li.amount
+      if (!TAX_FREE_TYPES.includes(li.item_type)) lineItemTotal += li.amount
     }
 
     // Ensure the debit side always equals gross_salary (minus gross deductions,
@@ -198,6 +270,17 @@ async function createSalaryEntry(
     })
   }
 
+  // Credit: Nettolöneavdrag to the accounts they are owed to.
+  for (const [account, amount] of netDeductionByAccount) {
+    if (roundOre(amount) === 0) continue
+    lines.push({
+      account_number: account,
+      debit_amount: 0,
+      credit_amount: roundOre(amount),
+      line_description: `${desc} — Nettolöneavdrag`,
+    })
+  }
+
   // Credit: Net salary to bank
   const totalNet = run.employees.reduce((sum, e) => sum + e.net_salary, 0)
   if (totalNet > 0) {
@@ -219,8 +302,7 @@ async function createSalaryEntry(
     lines,
   }
 
-  log.info(`Creating salary entry for ${desc}: ${lines.length} lines`)
-  return createJournalEntry(supabase, companyId, userId, input)
+  return input
 }
 
 /**
@@ -229,14 +311,11 @@ async function createSalaryEntry(
  * Debit:  7510 Lagstadgade sociala avgifter
  * Credit: 2731 Avräkning sociala avgifter
  */
-async function createAvgifterEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+function buildAvgifterInput(
   run: SalaryRunData,
   fiscalPeriodId: string,
   desc: string
-): Promise<JournalEntry> {
+): CreateJournalEntryInput {
   const totalAvgifter = run.employees.reduce((sum, e) => sum + e.avgifter_amount, 0)
   const roundedAvgifter = roundOre(totalAvgifter)
 
@@ -265,8 +344,7 @@ async function createAvgifterEntry(
     lines,
   }
 
-  log.info(`Creating avgifter entry for ${desc}: ${roundedAvgifter} SEK`)
-  return createJournalEntry(supabase, companyId, userId, input)
+  return input
 }
 
 /**
@@ -277,16 +355,13 @@ async function createAvgifterEntry(
  * Debit:  7519 Sociala avgifter semester
  * Credit: 2940 Upplupna sociala avgifter
  */
-async function createVacationEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+function buildVacationInput(
   run: SalaryRunData,
   fiscalPeriodId: string,
   desc: string,
   totalVacation: number,
   totalVacationAvgifter: number
-): Promise<JournalEntry> {
+): CreateJournalEntryInput {
   const roundedVacation = roundOre(totalVacation)
   const roundedAvgifter = roundOre(totalVacationAvgifter)
 
@@ -336,8 +411,7 @@ async function createVacationEntry(
     lines,
   }
 
-  log.info(`Creating vacation entry for ${desc}: ${roundedVacation} SEK + ${roundedAvgifter} SEK avgifter`)
-  return createJournalEntry(supabase, companyId, userId, input)
+  return input
 }
 
 /**
@@ -350,16 +424,13 @@ async function createVacationEntry(
  *
  * Per deductions-lonevaxling.md: pension = löneväxling × 1.058
  */
-async function createPensionEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
+function buildPensionInput(
   run: SalaryRunData,
   fiscalPeriodId: string,
   desc: string,
   totalPension: number,
   totalSlp: number
-): Promise<JournalEntry> {
+): CreateJournalEntryInput {
   const roundedPension = roundOre(totalPension)
   const roundedSlp = roundOre(totalSlp)
 
@@ -405,8 +476,7 @@ async function createPensionEntry(
     lines,
   }
 
-  log.info(`Creating pension entry for ${desc}: ${roundedPension} SEK pension + ${roundedSlp} SEK SLP`)
-  return createJournalEntry(supabase, companyId, userId, input)
+  return input
 }
 
 // ============================================================
@@ -440,7 +510,7 @@ async function ensureSalaryAccountsExist(
   for (const emp of run.employees) {
     needed.add(getEmployeeSalaryAccount(emp.employment_type))
     for (const li of emp.line_items) {
-      const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
+      const account = resolveLineAccount(li, emp.employment_type)
       if (account) needed.add(account)
     }
   }
@@ -506,6 +576,23 @@ async function ensureSalaryAccountsExist(
   log.info(`Auto-created ${missing.length} missing salary accounts: ${missing.join(', ')}`)
 }
 
+/**
+ * The BAS account a salary line books to: the line's own account_number, or
+ * the default mapping. Nettolöneavdrag saved before 2026-09-25 carry the old
+ * default (7210/7385) — a cost account that must not be credited for money
+ * owed to a union or repaid by the employee — so for those the mapping wins
+ * unless a different account was chosen deliberately.
+ */
+export function resolveLineAccount(
+  li: { item_type: string; account_number: string | null; is_net_deduction?: boolean },
+  employmentType: string,
+): string {
+  const mapped = getLineItemAccount(li.item_type as never, employmentType)
+  if (!li.account_number) return mapped
+  if (li.is_net_deduction && (li.account_number === '7210' || li.account_number === '7385')) return mapped
+  return li.account_number
+}
+
 function accountLabel(account: string): string {
   const labels: Record<string, string> = {
     '7210': 'Löner tjänstemän',
@@ -517,6 +604,9 @@ function accountLabel(account: string): string {
     '7322': 'Traktamenten skattepliktiga',
     '7331': 'Bilersättningar skattefria',
     '7332': 'Bilersättningar skattepliktiga',
+    '1610': 'Förskott till anställda',
+    '2790': 'Övriga löneavdrag',
+    '7388': 'Anställdas ersättning för förmåner',
   }
   return labels[account] || `Konto ${account}`
 }

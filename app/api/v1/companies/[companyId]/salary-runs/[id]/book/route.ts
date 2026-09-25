@@ -34,6 +34,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import { toBookingEmployee } from '@/lib/salary/booking-employee'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 
@@ -208,6 +209,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       avgifter_rate: number
       vacation_accrual: number
       vacation_accrual_avgifter: number
+      tax_withheld_override?: number | null
+      avgifter_amount_override?: number | null
       line_items: Array<{
         item_type: string
         amount: number
@@ -217,7 +220,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }> | null
     }
     let salaryEntry: { id: string; voucher_number: string }
-    let avgifterEntry: { id: string }
+    let avgifterEntry: { id: string } | null
+    let bookedRunFull: Record<string, unknown>
     let vacationEntry: { id: string } | null
     let pensionEntry: { id: string } | null
     try {
@@ -232,24 +236,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         total_net: (run as { total_net: number }).total_net,
         total_avgifter: (run as { total_avgifter: number }).total_avgifter,
         total_vacation_accrual: (run as { total_vacation_accrual: number }).total_vacation_accrual,
-        employees: (employees as EmpRow[]).map((sre) => ({
-          employee_id: sre.employee_id,
-          employment_type: sre.employee?.employment_type || 'employee',
-          gross_salary: sre.gross_salary,
-          tax_withheld: sre.tax_withheld,
-          net_salary: sre.net_salary,
-          avgifter_amount: sre.avgifter_amount,
-          avgifter_rate: sre.avgifter_rate,
-          vacation_accrual: sre.vacation_accrual,
-          vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
-          line_items: (sre.line_items || []).map((li) => ({
-            item_type: li.item_type,
-            amount: li.amount,
-            account_number: li.account_number,
-            is_net_deduction: li.is_net_deduction,
-            is_gross_deduction: li.is_gross_deduction,
-          })),
-        })),
+        employees: (employees as EmpRow[]).map(toBookingEmployee),
       })
       // Narrow to just the fields the route consumes — id + voucher_number
       // for the primary salary entry, id for the others. The full
@@ -258,6 +245,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       avgifterEntry = result.avgifterEntry
       vacationEntry = result.vacationEntry
       pensionEntry = result.pensionEntry
+      bookedRunFull = result.bookedRun
     } catch (err) {
       if (isBookkeepingError(err)) {
         return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
@@ -273,62 +261,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // 5. Optimistic-lock the status flip on status='paid'. Concurrent calls
-    //    would have re-posted JEs (a real bug — we'd have orphans), but
-    //    the engine's atomicity makes that a no-op race that just won't
-    //    commit the second status flip.
-    const entryIds = [salaryEntry.id, avgifterEntry.id]
-    const updates: Record<string, unknown> = {
-      status: 'booked',
-      salary_entry_id: salaryEntry.id,
-      avgifter_entry_id: avgifterEntry.id,
-      booked_at: new Date().toISOString(),
-      booked_by: ctx.userId,
-    }
-    if (vacationEntry) {
-      updates.vacation_entry_id = vacationEntry.id
-      entryIds.push(vacationEntry.id)
-    }
-    if (pensionEntry) {
-      updates.pension_entry_id = pensionEntry.id
-      entryIds.push(pensionEntry.id)
-    }
-
-    const { data: bookedRun, error: updateError } = await ctx.supabase
-      .from('salary_runs')
-      .update(updates)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', salaryRunId)
-      .eq('status', 'paid')
-      .select(BOOK_RESPONSE_COLUMNS)
-      .maybeSingle()
-
-    if (updateError) {
-      // The engine already committed; the row update failed. This is a
-      // partial-state we cannot recover automatically. Surface loudly so
-      // an operator notices and runs a manual reconciliation (the
-      // verifikationer exist and have voucher numbers; the salary_runs
-      // row just doesn't point at them yet).
-      ctx.log.error('salary_runs status flip failed after engine commit', updateError as Error, {
-        salaryRunId,
-        companyId: ctx.companyId,
-        entryIds,
-      })
-      return v1ErrorResponse(updateError, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!bookedRun) {
-      // Race: the row's status changed between fetch and update. The
-      // engine has committed; we cannot un-commit. Log loudly.
-      ctx.log.error('salary_runs row missing after engine commit', new Error('race'), {
-        salaryRunId,
-        companyId: ctx.companyId,
-        entryIds,
-      })
-      return v1ErrorResponseFromCode('SALARY_RUN_BOOK_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: 'row missing after engine commit', entry_ids: entryIds },
-      })
-    }
+    // 5. The vouchers, the status flip and the entry links were written in
+    //    ONE transaction by book_salary_run (createSalaryRunEntries): either
+    //    the run is booked with every voucher posted, or nothing is posted.
+    const entryIds = [salaryEntry, avgifterEntry, vacationEntry, pensionEntry]
+      .filter((e): e is { id: string } => e !== null)
+      .map((e) => e.id)
+    const bookedRun = Object.fromEntries(
+      BOOK_RESPONSE_COLUMNS.split(',').map((c) => c.trim()).map((c) => [c, bookedRunFull[c] ?? null]),
+    )
 
     try {
       await eventBus.emit({

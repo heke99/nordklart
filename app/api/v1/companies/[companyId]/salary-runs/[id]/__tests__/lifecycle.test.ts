@@ -462,6 +462,12 @@ describe('POST /salary-runs/:id/book', () => {
       avgifterEntry: { id: 'je_avg' },
       vacationEntry: null,
       pensionEntry: null,
+      bookedRun: {
+        id: RUN_ID, status: 'booked',
+        booked_at: '2026-05-26T09:15:00Z', booked_by: USER_ID,
+        salary_entry_id: 'je_salary', avgifter_entry_id: 'je_avg',
+        vacation_entry_id: null, pension_entry_id: null,
+      },
     })
 
     const res = await book(

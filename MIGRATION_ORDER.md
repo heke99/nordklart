@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **471**.
+Antal SQL-migreringar: **476**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -495,3 +495,8 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 469 | 20260925110500 | `20260925110500_company_roles_accountant_auditor.sql` | `e5da1088c12b3941975964951ca649ee1e21870c916a619641d498b273b266ec` |
 | 470 | 20260925111000 | `20260925111000_approve_access_request_atomic.sql` | `a7e7e9843724516ab1786283eea224db2a9c24fdd37fe405ff715ffb809c60ef` |
 | 471 | 20260925112000 | `20260925112000_company_founder_verification.sql` | `a48fb3d7eaa1b04991fa28fe4c93b04a3416f1b2fec0ede39e17758cdfc7acc5` |
+| 472 | 20260925120000 | `20260925120000_salary_run_atomic_writes.sql` | `dbcdfef85c6bc827d49cb8155ed29ded789303e0cc3c4da5ba81e6c83f7a85a3` |
+| 473 | 20260925121000 | `20260925121000_book_salary_run_atomic.sql` | `f3e9a72dcee694436f4e17ece27c6a6f317d9bcbb1f821bda2c6e3b2312fbd82` |
+| 474 | 20260925122000 | `20260925122000_correct_salary_run_atomic.sql` | `6ab6bbfbb9ed54a6bdc3059f10db1a242a91fd9b223d78067fe9bd4e0e18c499` |
+| 475 | 20260925123000 | `20260925123000_post_depreciation_atomic.sql` | `6826b75ad8b34ba5cdff91cd70c53ff1802d956797ac5ff3ddf8ca866a2d684f` |
+| 476 | 20260925124000 | `20260925124000_ledger_indexes_and_account_sums.sql` | `ea43ceb6c45904927646613f4319f9d4d9a839961cb119fae336cb218904d9ea` |

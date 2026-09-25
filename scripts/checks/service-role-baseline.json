@@ -78,6 +78,7 @@
     "app/api/peppol/inbound/route.ts",
     "app/api/platform/companies/[companyId]/founder-verification/route.ts",
     "app/api/platform/companies/[companyId]/troubleshooting/route.ts",
+    "app/api/salary/runs/[id]/correct/route.ts",
     "app/api/settings/logo/route.ts",
     "app/api/stripe/webhook/route.ts",
     "app/api/team/accept/route.ts",

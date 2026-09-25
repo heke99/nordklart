@@ -24,12 +24,13 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   // Gross deductions
   gross_deduction_pension: '7218',
   gross_deduction_other: '7210',
-  // Benefits (förmånsvärden — not a cash payment, just tax base)
+  // Benefits (förmånsvärden — not a cash payment, just tax base; the
+  // benefit's cost is booked when it is paid). Display/SIE account only.
   benefit_car: '7385',
   benefit_housing: '7381',
   benefit_meals: '7382',
-  benefit_wellness: '7699',
-  benefit_bike: '7388',
+  benefit_wellness: '7389',
+  benefit_bike: '7389',
   benefit_other: '7389',
   // Absence
   sick_karens: '7281',
@@ -46,10 +47,13 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   mileage_taxfree: '7331',
   mileage_taxable: '7332',
   // Net deductions
-  net_deduction_advance: '7210',
-  net_deduction_union: '7210',
-  net_deduction_benefit_payment: '7385',
-  net_deduction_other: '7210',
+  // Nettolöneavdrag are credited to where the money is owed (BAS 2026):
+  // förskott back to 1610, fackavgift/övrigt to 2790 Övriga löneavdrag
+  // (paid on to the recipient), the employee's payment for a förmån to 7388.
+  net_deduction_advance: '1610',
+  net_deduction_union: '2790',
+  net_deduction_benefit_payment: '7388',
+  net_deduction_other: '2790',
   // Other
   correction: '7210',
   other: '7210',

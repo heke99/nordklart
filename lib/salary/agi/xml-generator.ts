@@ -490,8 +490,9 @@ export function generateAGIXml(
       continue
     }
 
-    // FK011 — Kontant ersättning, underlag arbetsgivaravgifter (= gross salary)
-    if (emp.grossSalary > 0) {
+    // FK011 — Kontant ersättning, underlag arbetsgivaravgifter (= gross salary).
+    // A payee approved for F-skatt is reported in FK131 instead, never both.
+    if (emp.grossSalary > 0 && !(emp.fSkattPayment && emp.fSkattPayment > 0)) {
       lines.push(`        <gem:KontantErsattningUlagAG faltkod="011">${formatAmount(emp.grossSalary)}</gem:KontantErsattningUlagAG>`)
     }
 

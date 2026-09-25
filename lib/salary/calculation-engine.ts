@@ -98,6 +98,8 @@ export interface SalaryCalculationResult {
   vacationAccrualAvgifter: number
   /** Semesterersättning paid out directly (vacation_rule = 'semesterersattning'). 0 otherwise. */
   vacationCompensation: number
+  /** Skattefria traktamenten/bilersättningar paid with the net salary. */
+  taxFreeAllowances: number
   totalEmployerCost: number
   steps: CalculationStep[]
 }
@@ -317,7 +319,14 @@ export function calculateSalary(
   const additions = input.lineItems.filter(
     li => ADDITION_TYPES.includes(li.itemType) && li.amount > 0
   )
-  const totalAdditions = r(additions.reduce((sum, li) => sum + li.amount, 0))
+  // Taxable allowances (traktamente/bilersättning above the tax-free
+  // schablon) are cash pay: part of bruttolön, taxed and avgiftspliktiga.
+  // Corrections and 'other' may be negative (a claw-back of an earlier error).
+  const TAXABLE_OTHER_TYPES: SalaryLineItemType[] = ['traktamente_taxable', 'mileage_taxable', 'correction', 'other']
+  const taxableOther = input.lineItems.filter(li => TAXABLE_OTHER_TYPES.includes(li.itemType) && !li.isGrossDeduction && !li.isNetDeduction)
+  const totalAdditions = r(
+    additions.reduce((sum, li) => sum + li.amount, 0) + taxableOther.reduce((sum, li) => sum + li.amount, 0),
+  )
   if (totalAdditions > 0) {
     steps.push({
       label: 'Tillägg (övertid, OB, bonus, provision)',
@@ -467,17 +476,43 @@ export function calculateSalary(
   const netDeductionItems = input.lineItems.filter(li => li.isNetDeduction)
   const totalNetDeductions = r(Math.abs(netDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
 
-  const netSalary = r(grossSalary - taxWithheld - totalNetDeductions)
+  // Skattefria traktamenten och bilersättningar (inom schablonbeloppen) are
+  // paid out on top of the net salary: not bruttolön, not taxed, no avgifter.
+  const TAX_FREE_TYPES: SalaryLineItemType[] = ['traktamente_taxfree', 'mileage_taxfree']
+  const totalTaxFree = r(input.lineItems
+    .filter(li => TAX_FREE_TYPES.includes(li.itemType) && li.amount > 0)
+    .reduce((sum, li) => sum + li.amount, 0))
+
+  const netSalary = r(grossSalary - taxWithheld - totalNetDeductions + totalTaxFree)
   steps.push({
     label: 'Nettolön',
-    formula: 'bruttolön − skatt − nettoavdrag',
-    input: { gross: grossSalary, tax: taxWithheld, net_deductions: totalNetDeductions },
+    formula: totalTaxFree > 0
+      ? 'bruttolön − skatt − nettoavdrag + skattefria ersättningar'
+      : 'bruttolön − skatt − nettoavdrag',
+    input: { gross: grossSalary, tax: taxWithheld, net_deductions: totalNetDeductions, tax_free_allowances: totalTaxFree },
     output: netSalary,
   })
 
   // ─── Step 8: Employer contributions (avgifter) ───
-  const avgifterCalc = calculateAvgifterRate(input, config, paymentYear)
-  const avgifterBasis = r(grossSalary + totalBenefits)
+  // Ersättning till en mottagare som är godkänd för F-skatt: varken
+  // skatteavdrag eller arbetsgivaravgifter (SFL 10 kap. 11 §, SAL 2 kap.
+  // 1–2 §§). It is reported in AGI fält 131, outside the avgiftsunderlag.
+  const avgifterCalc: AvgifterCalculation = input.fSkattStatus === 'f_skatt'
+    ? {
+        rate: 0,
+        amount: 0,
+        basis: 0,
+        category: 'exempt',
+        steps: [{
+          label: 'Avgiftskategori',
+          formula: 'Mottagaren är godkänd för F-skatt — inga arbetsgivaravgifter (AGI fält 131)',
+          input: {},
+          output: null,
+        }],
+      }
+    : calculateAvgifterRate(input, config, paymentYear)
+  // F-skatt: nothing forms underlag för arbetsgivaravgifter.
+  const avgifterBasis = input.fSkattStatus === 'f_skatt' ? 0 : r(grossSalary + totalBenefits)
 
   // Handle salary caps for youth and växa-stöd:
   // Reduced rate applies only up to the cap, standard rate on the rest
@@ -575,11 +610,11 @@ export function calculateSalary(
     output: vacationAccrualAvgifter,
   })
 
-  const totalEmployerCost = r(grossSalary + avgifterAmount + vacationAccrual + vacationAccrualAvgifter)
+  const totalEmployerCost = r(grossSalary + totalTaxFree + avgifterAmount + vacationAccrual + vacationAccrualAvgifter)
   steps.push({
     label: 'Total arbetsgivarkostnad',
-    formula: 'bruttolön + avgifter + semesteravsättning + avgifter på semester',
-    input: { gross: grossSalary, avgifter: avgifterAmount, vacation_accrual: vacationAccrual, vacation_avgifter: vacationAccrualAvgifter },
+    formula: 'bruttolön + skattefria ersättningar + avgifter + semesteravsättning + avgifter på semester',
+    input: { gross: grossSalary, tax_free_allowances: totalTaxFree, avgifter: avgifterAmount, vacation_accrual: vacationAccrual, vacation_avgifter: vacationAccrualAvgifter },
     output: totalEmployerCost,
   })
 
@@ -598,6 +633,7 @@ export function calculateSalary(
     vacationAccrual,
     vacationAccrualAvgifter,
     vacationCompensation,
+    taxFreeAllowances: totalTaxFree,
     totalEmployerCost,
     steps,
   }

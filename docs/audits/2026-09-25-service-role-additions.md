@@ -22,3 +22,9 @@ Three route files were added to `scripts/checks/service-role-baseline.json`. Eac
 - **Permission:** the route checks for an active, non-revoked `platform_admin` row in `platform_roles`. The RPC `platform_decide_founder_verification` checks the same role again for `p_actor` in the same transaction.
 - **Resource:** the RPC only updates the `owner` row for `(company_id, user_id)` whose `verification_status` is `manual_review`, and writes the audit event in the same transaction.
 - **Why service role:** the RPC is granted to `service_role` only.
+
+## `app/api/salary/runs/[id]/correct/route.ts` (POST)
+
+- **Actor:** `withRouteContext` handles auth and MFA, and `requireWritePermission` checks write access.
+- **Company and resource:** the run is loaded with the user's client and filtered by `company_id` and `status = 'booked'`.
+- **Permission:** the service role is only used to call `correct_salary_run`, which is granted to `service_role` only, like `reverse_journal_entry_v2` which it calls. The RPC checks the actor's `can_write` again through `resolve_company_access_for_user`, and it locks the run and filters everything by `company_id`.

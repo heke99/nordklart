@@ -374,9 +374,62 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   }
 }
 
+/** Absence row as loaded for a whole salary run (one query for all employees). */
+export interface PreloadedAbsenceRow {
+  employee_id: string
+  absence_date: string
+  absence_type: string
+  hours: number | null
+}
+
 /**
- * Convenience: load all DB inputs and derive in one call. Used by the
- * salary calculate route.
+ * The window a run must preload so deriveAbsenceFromRows can reproduce
+ * loadAndDeriveAbsence exactly: 365 days of sick-leave lookback before the
+ * period (karensdag / sjuklöneperiod merging) — which also covers the
+ * year-to-date VAB and parental counts, since 1 January is never more than
+ * 365 days before a period start in the same year.
+ */
+export function absenceLookbackStart(periodStart: string): string {
+  return addDays(periodStart, -365)
+}
+
+/**
+ * Same derivation as loadAndDeriveAbsence, from rows preloaded for the whole
+ * run (rows of other employees are ignored).
+ */
+export function deriveAbsenceFromRows(params: {
+  employeeId: string
+  rows: PreloadedAbsenceRow[]
+  monthlySalary: number
+  payrollConfig: PayrollConfig
+  periodStart: string
+  periodEnd: string
+}): DeriveResult {
+  const { periodStart, periodEnd } = params
+  const lookbackStart = absenceLookbackStart(periodStart)
+  const yearStart = `${periodStart.slice(0, 4)}-01-01`
+  const own = params.rows.filter((r) => r.employee_id === params.employeeId)
+
+  const periodDays = own
+    .filter((r) => r.absence_date >= periodStart && r.absence_date <= periodEnd)
+    .sort((a, b) => a.absence_date.localeCompare(b.absence_date))
+    .map((r) => ({ absence_date: r.absence_date, absence_type: r.absence_type, hours: r.hours })) as AbsenceDay[]
+  const before = own.filter((r) => r.absence_date < periodStart)
+
+  return deriveAbsenceLineItems({
+    monthlySalary: params.monthlySalary,
+    payrollConfig: params.payrollConfig,
+    periodDays,
+    lookbackSickDates: before
+      .filter((r) => r.absence_type === 'sick' && r.absence_date >= lookbackStart)
+      .map((r) => r.absence_date),
+    vabDaysYtd: before.filter((r) => r.absence_type === 'vab' && r.absence_date >= yearStart).length,
+    parentalDaysPregnancyYtd: before.filter((r) => r.absence_type === 'parental' && r.absence_date >= yearStart).length,
+  })
+}
+
+/**
+ * Convenience: load all DB inputs and derive in one call for one employee.
  */
 export async function loadAndDeriveAbsence(params: {
   supabase: SupabaseClient

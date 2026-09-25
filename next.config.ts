@@ -31,6 +31,12 @@ const cspDirectives = [
   "object-src 'self' blob:",
   `frame-src 'self' blob: ${supabaseUrl}${activepiecesUrl ? ` ${activepiecesUrl}` : ""}`,
   "frame-ancestors 'none'",
+  // No <base> injection, and forms only post back to Nordklart itself. The
+  // MCP OAuth consent page (/api/mcp-oauth/authorize) posts and then
+  // redirects to the OAuth client, so it is excluded from this policy below
+  // and sends its own CSP with the allowed client origin.
+  "base-uri 'self'",
+  "form-action 'self'",
 ].join("; ");
 
 const nextConfig: NextConfig = {
@@ -86,7 +92,7 @@ const nextConfig: NextConfig = {
     // "Det här innehållet har blockerats" in Chromium browsers.
     return [
       {
-        source: "/((?!api/documents/[^/]+/inline$).*)",
+        source: "/((?!api/documents/[^/]+/inline$|api/mcp-oauth/authorize$).*)",
         headers: [
           {
             key: "Strict-Transport-Security",
@@ -112,6 +118,19 @@ const nextConfig: NextConfig = {
             key: "Content-Security-Policy",
             value: cspDirectives,
           },
+        ],
+      },
+      // MCP OAuth consent: the catch-all's headers except CSP, nosniff and
+      // Referrer-Policy, which the route sets itself (no-referrer) —
+      // the route sets its own (nonce script-src, form-action 'self' + the
+      // validated redirect origin). Two CSP headers are both enforced, so the
+      // catch-all's form-action 'self' would block the post-consent redirect.
+      {
+        source: "/api/mcp-oauth/authorize",
+        headers: [
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
         ],
       },
       // Document inline-preview proxy must be embeddable in same-origin

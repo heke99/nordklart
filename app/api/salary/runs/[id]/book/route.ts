@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import { toBookingEmployee } from '@/lib/salary/booking-employee'
 import { eventBus } from '@/lib/events'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -41,7 +42,7 @@ export const POST = withRouteContext(
     }
 
     try {
-      const { salaryEntry, avgifterEntry, vacationEntry, pensionEntry } = await createSalaryRunEntries(
+      const { salaryEntry, avgifterEntry, vacationEntry, pensionEntry, bookedRun } = await createSalaryRunEntries(
         supabase,
         companyId!,
         user.id,
@@ -56,56 +57,15 @@ export const POST = withRouteContext(
           total_net: run.total_net,
           total_avgifter: run.total_avgifter,
           total_vacation_accrual: run.total_vacation_accrual,
-          employees: employees.map((sre) => ({
-            employee_id: sre.employee_id,
-            employment_type: sre.employee?.employment_type || 'employee',
-            gross_salary: sre.gross_salary,
-            // Apply per-employee overrides (advanced mode) so manual
-            // adjustments for FoU-avdrag / jämkning flow into the ledger.
-            tax_withheld: sre.tax_withheld_override ?? sre.tax_withheld,
-            net_salary: sre.net_salary + (sre.tax_withheld - (sre.tax_withheld_override ?? sre.tax_withheld)),
-            avgifter_amount: sre.avgifter_amount_override ?? sre.avgifter_amount,
-            avgifter_rate: sre.avgifter_rate,
-            vacation_accrual: sre.vacation_accrual,
-            vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
-            line_items: (sre.line_items || []).map((li: Record<string, unknown>) => ({
-              item_type: li.item_type as string,
-              amount: li.amount as number,
-              account_number: li.account_number as string | null,
-              is_net_deduction: li.is_net_deduction as boolean,
-              is_gross_deduction: li.is_gross_deduction as boolean,
-            })),
-          })),
+          employees: employees.map(toBookingEmployee),
         },
       )
 
-      const entryIds = [salaryEntry.id, avgifterEntry.id]
-      const updates: Record<string, unknown> = {
-        status: 'booked',
-        salary_entry_id: salaryEntry.id,
-        avgifter_entry_id: avgifterEntry.id,
-        booked_at: new Date().toISOString(),
-        booked_by: user.id,
-      }
-      if (vacationEntry) {
-        updates.vacation_entry_id = vacationEntry.id
-        entryIds.push(vacationEntry.id)
-      }
-      if (pensionEntry) {
-        updates.pension_entry_id = pensionEntry.id
-        entryIds.push(pensionEntry.id)
-      }
-
-      const { data: bookedRun, error: updateError } = await supabase
-        .from('salary_runs')
-        .update(updates)
-        .eq('id', id)
-        .select()
-        .single()
-
-      if (updateError) {
-        return errorResponse(updateError, opLog, { requestId })
-      }
+      // The vouchers and the run's status/links were written in one
+      // transaction by book_salary_run (see createSalaryRunEntries).
+      const entryIds = [salaryEntry, avgifterEntry, vacationEntry, pensionEntry]
+        .filter((e): e is NonNullable<typeof e> => e !== null)
+        .map((e) => e.id)
 
       await eventBus.emit({
         type: 'salary_run.booked',
