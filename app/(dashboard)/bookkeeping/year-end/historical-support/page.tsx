@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
+import { DividendDecisionCard } from '@/components/bokslut/DividendDecisionCard'
 import {
   HISTORICAL_WORKPAPER_LABELS,
   historicalWorkpaperSourceLabel,
@@ -699,16 +700,16 @@ export default function HistoricalSupportPage() {
             <CardContent>
               <form onSubmit={submitProfitDisposition} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Field label="Årets resultat">
-                  <Input name="current_year_result" type="number" step="0.01" required defaultValue={data.profit_disposition?.current_year_result ?? data.profit_disposition_proposal.current_year_result} />
+                  <Input name="current_year_result" type="number" step="0.01" readOnly value={data.profit_disposition_proposal.current_year_result} />
                 </Field>
-                <Field label="Fritt eget kapital">
-                  <Input name="free_equity" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.free_equity ?? data.profit_disposition_proposal.free_equity} />
+                <Field label="Till stämmans förfogande">
+                  <Input name="free_equity" type="number" step="0.01" readOnly value={data.profit_disposition_proposal.free_equity} />
                 </Field>
                 <Field label="Föreslagen utdelning">
                   <Input name="proposed_dividend" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.proposed_dividend ?? data.profit_disposition_proposal.proposed_dividend} />
                 </Field>
                 <Field label="Balanseras i ny räkning">
-                  <Input name="carried_forward" type="number" min="0" step="0.01" required defaultValue={data.profit_disposition?.carried_forward ?? data.profit_disposition_proposal.carried_forward} />
+                  <Input name="carried_forward" type="number" step="0.01" readOnly value={data.profit_disposition?.carried_forward ?? data.profit_disposition_proposal.carried_forward} />
                 </Field>
                 <Field label="Belopp per aktie"><Input name="amount_per_share" type="number" min="0" step="0.000001" /></Field>
                 <Field label="Antal aktier"><Input name="share_count" type="number" min="1" step="1" /></Field>
@@ -726,10 +727,13 @@ export default function HistoricalSupportPage() {
               </form>
               <p className="mt-3 text-xs text-muted-foreground">
                 Förslag: {data.profit_disposition_proposal.proposal_text}{' '}
-                Ett utdelningsförslag bokför inte någon skuld i det avslutade året. Belopp per aktie, antal aktier, datum och motiveringar krävs när utdelningen är större än noll.
+                Årets resultat och fritt eget kapital hämtas från bokföringen. Utdelningen får inte överstiga fritt eget kapital (ABL 17 kap. 3 §).
+                Ett utdelningsförslag bokför inte någon skuld i det avslutade året – skulden bokförs när årsstämman beslutat. Belopp per aktie, antal aktier, utbetalningsdag, motivering och styrelsens yttrande (ABL 18 kap. 4 §) krävs när utdelningen är större än noll.
               </p>
             </CardContent>
           </Card>
+
+          {periodId ? <DividendDecisionCard periodId={periodId} companyId={companyId} key={`dividend-${refresh}`} /> : null}
 
           <Card>
             <CardHeader><CardTitle className="text-base">Extern eller manuell verifiering</CardTitle></CardHeader>

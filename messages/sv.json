@@ -1099,7 +1099,29 @@
     "wrapper_saved": "Sparat",
     "wrapper_saving": "Sparar...",
     "wrapper_save_changes": "Spara ändringar",
-    "wrapper_readonly_tooltip": "Du har endast läsbehörighet i detta företag"
+    "wrapper_readonly_tooltip": "Du har endast läsbehörighet i detta företag",
+    "agency_title": "Redovisningsbyråer",
+    "agency_description": "Byråer som har eller begär åtkomst till bolagets bokföring. Endast bolagets ägare och administratörer kan godkänna eller återkalla åtkomsten.",
+    "agency_empty": "Ingen byrå är kopplad till bolaget.",
+    "agency_unknown": "Okänd byrå",
+    "agency_status_pending": "Väntar på godkännande",
+    "agency_status_active": "Aktiv",
+    "agency_status_paused": "Pausad",
+    "agency_status_suspended": "Spärrad",
+    "agency_status_ended": "Avslutad",
+    "agency_level_bookkeeping": "Löpande bokföring",
+    "agency_level_review": "Granskning (endast läsa)",
+    "agency_level_audit": "Revision (endast läsa)",
+    "agency_level_full_service": "Full service",
+    "agency_level_label": "Åtkomstnivå",
+    "agency_approved_on": "Godkänd {date}",
+    "agency_approve": "Godkänn",
+    "agency_decline": "Neka",
+    "agency_revoke": "Återkalla",
+    "agency_confirm_revoke": "Återkalla åtkomsten för {name}? Byråns medarbetare förlorar direkt åtkomst till bolaget.",
+    "agency_toast_approved": "Byråns åtkomst är godkänd.",
+    "agency_toast_revoked": "Byråns åtkomst är återkallad.",
+    "agency_toast_failed": "Åtkomsten kunde inte uppdateras."
   },
   "settings_invoicing": {
     "bank_validation_title": "Kontrollera bankuppgifter"
@@ -2073,9 +2095,9 @@
     "income_other": "Övrigt",
     "vat_standard_25": "Moms 25%",
     "vat_reduced_12": "Moms 12%",
-    "vat_reduced_12_desc": "Livsmedel, hotell, camping",
+    "vat_reduced_12_desc": "Restaurang, hotell, camping",
     "vat_reduced_6": "Moms 6%",
-    "vat_reduced_6_desc": "Böcker, tidningar, kollektivtrafik",
+    "vat_reduced_6_desc": "Livsmedel (2026-04-01–2027-12-31), böcker, kollektivtrafik",
     "vat_reverse_charge": "Omvänd skattskyldighet",
     "vat_reverse_charge_desc": "Köparen redovisar momsen (EU-tjänster m.m.)",
     "vat_export": "Export",
@@ -3118,7 +3140,7 @@
     "source_label_year_end_depreciation": "Bokslutsavskrivning",
     "source_label_year_end_fx_revaluation": "Bokslutsomvärdering",
     "source_label_year_end_tax_adjustment": "Bokslutsskatt",
-    "source_label_year_end_disposition": "Resultatdisposition",
+    "source_label_year_end_disposition": "Bokslutsdisposition",
     "source_label_year_end_deferred_tax": "Uppskjuten skatt",
     "source_label_year_end_closing": "Slutverifikat",
     "source_label_storno": "Storno",
@@ -3130,7 +3152,11 @@
     "source_label_supplier_invoice_cash_payment": "Kontantbetalning",
     "source_label_currency_revaluation": "Valutaomvärdering",
     "source_label_currency_revaluation_reversal": "Återförd valutaomvärdering",
-    "source_label_reminder_fee": "Påminnelseavgift"
+    "source_label_reminder_fee": "Påminnelseavgift",
+    "source_label_result_appropriation": "Omföring av föregående års resultat",
+    "source_label_dividend_decision": "Utdelningsbeslut",
+    "source_label_dividend_payment": "Utbetald utdelning",
+    "source_label_year_end_inventory": "Lagerförändring"
   },
   "journal_correction": {
     "title": "Ändringskedja",
@@ -4162,5 +4188,15 @@
     "submit_save": "Spara artikel",
     "submit_saving": "Sparar...",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag"
+  },
+  "onboarding_bankid": {
+    "title": "Identifiera dig med BankID",
+    "description": "Innan ett företag skapas i Nordklart kontrollerar vi att du är behörig att företräda det. Vi jämför din BankID-identitet med Bolagsverkets register över styrelse, VD och firmatecknare. För en enskild firma jämför vi med ditt personnummer.",
+    "linked": "BankID är kopplat. Vi fortsätter att skapa företaget.",
+    "continue": "Fortsätt",
+    "continuing": "Skapar företaget…",
+    "link_failed": "BankID-identifieringen misslyckades. Försök igen.",
+    "already_linked": "Detta BankID är redan kopplat till ett annat konto.",
+    "manual_review_note": "Om du inte står som behörig i Bolagsverkets register skapas företaget med läsbehörighet tills vi har granskat din behörighet."
   }
 }

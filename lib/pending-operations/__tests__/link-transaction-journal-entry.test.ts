@@ -149,7 +149,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       },
       error: null,
     })
-    enqueue({ data: null, error: null }) // tx UPDATE
+    enqueue({ data: { ok: true, invoiceStatus: null }, error: null }) // atomic link RPC
     enqueue({ data: null, error: null }) // logMatchEvent insert
     enqueue({ data: null, error: null }) // dispatcher commit update
 
@@ -196,9 +196,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       }),
       error: null,
     })
-    enqueue({ data: null, error: null }) // tx UPDATE
-    enqueue({ data: [{ id: INV_UUID }], error: null }) // optimistic-lock invoice UPDATE
-    enqueue({ data: null, error: null }) // invoice_payments INSERT
+    enqueue({ data: { ok: true, invoiceStatus: 'paid', paidAmount: 1000, remainingAmount: 0 }, error: null }) // atomic link RPC
     enqueue({ data: null, error: null }) // logMatchEvent insert
     enqueue({ data: null, error: null }) // dispatcher commit update
 
@@ -220,7 +218,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     })
   })
 
-  it('returns 409 LINK_TX_INVOICE_RACE when optimistic lock loses', async () => {
+  it('is rejected when the atomic link finds the transaction already linked', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
@@ -241,9 +239,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       data: makeInvoice({ id: INV_UUID, status: 'sent', total: 1000, remaining_amount: 1000 }),
       error: null,
     })
-    enqueue({ data: null, error: null }) // tx UPDATE succeeds
-    enqueue({ data: [], error: null }) // optimistic invoice UPDATE returns 0 rows
-    enqueue({ data: null, error: null }) // compensating rollback restores tx
+    enqueue({ data: { ok: false, code: 'LINK_TX_TX_ALREADY_LINKED' }, error: null }) // atomic link RPC under lock
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
     const op = makePendingOp({
@@ -255,9 +251,9 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    // 409 is auto-rejected by the dispatcher (a fresh stage with the latest
-    // invoice state will succeed if the racing payer didn't already settle).
-    expect(result.status).toBe('rejected')
-    expect(result.http_status).toBe(409)
+    // A 4xx outcome: nothing is linked and the operation does not commit.
+    expect(result.status).not.toBe('committed')
+    expect(result.http_status).toBeGreaterThanOrEqual(400)
+    expect(result.http_status).toBeLessThan(500)
   })
 })

@@ -235,6 +235,11 @@ function LoginPageContent() {
       }
 
       const activation = await fetch('/api/auth/signup-draft/claim', { method: 'POST' })
+      if (activation.status === 428) {
+        // Hosted Nordklart requires BankID before a company is created.
+        navigateAfterAuth('/onboarding/bankid')
+        return
+      }
       if (activation.status === 200 || activation.status === 202) {
         const workspace = await activation.json().catch(() => null) as { onboardingPath?: string; state?: string } | null
         if (activation.status === 202 || workspace?.state === 'access_request_pending') {

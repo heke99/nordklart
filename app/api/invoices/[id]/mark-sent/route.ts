@@ -63,15 +63,21 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
-    // Update status to sent
-    const { error: updateError } = await supabase
+    // Update status to sent — only from draft, so two concurrent requests
+    // cannot both proceed to book the invoice.
+    const { data: flipped, error: updateError } = await supabase
       .from('invoices')
       .update({ status: 'sent' })
       .eq('id', id)
       .eq('company_id', companyId)
+      .eq('status', 'draft')
+      .select('id')
 
     if (updateError) {
       return NextResponse.json({ error: 'Kunde inte uppdatera status' }, { status: 500 })
+    }
+    if (!flipped || flipped.length === 0) {
+      return NextResponse.json({ error: 'Fakturan har redan markerats som skickad.' }, { status: 409 })
     }
 
     // Fetch full company settings for PDF rendering and accounting method
@@ -102,6 +108,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             .from('invoices')
             .update({ journal_entry_id: journalEntry.id })
             .eq('id', id)
+            .eq('company_id', companyId)
           if (linkError) {
             // Don't fail mark-sent — the verifikat committed; only the link
             // failed. But log it through the structured logger so it reaches log
@@ -115,7 +122,22 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           }
         }
       } catch (err) {
+        // An accrual-method invoice is booked when it is sent (BFL 5 kap). A
+        // 'sent' invoice without its voucher would later settle against a 1510
+        // that was never debited, and could not be retried (no longer a
+        // draft). Put it back to draft — nothing has been emailed — and fail.
         log.error('failed to create invoice journal entry on mark-sent', err as Error)
+        await supabase
+          .from('invoices')
+          .update({ status: 'draft' })
+          .eq('id', id)
+          .eq('company_id', companyId)
+          .eq('status', 'sent')
+          .is('journal_entry_id', null)
+        return NextResponse.json(
+          { error: 'Fakturan kunde inte bokföras och är kvar som utkast. Försök igen.' },
+          { status: 500 },
+        )
       }
     }
 

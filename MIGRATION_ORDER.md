@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **460**.
+Antal SQL-migreringar: **483**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -484,3 +484,26 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 458 | 20260821190000 | `20260821190000_skatteverket_ombud_authorizations.sql` | `fd0a84b32890c17ffc0e651f41f9807bb89729f2532b9e6a81813dd11b72cd59` |
 | 459 | 20260821200000 | `20260821200000_skatteverket_request_idempotency_and_retry.sql` | `d7875d2c51161c1f398c038da9648f86458ae2cd223c6723d288cc5db41162d8` |
 | 460 | 20260821210000 | `20260821210000_anon_cannot_execute_security_definer.sql` | `b48cb3d5a6d99a4037509c5228d9ffd7a6e7d189dff48a203b6e66c6a90348e7` |
+| 461 | 20260924100000 | `20260924100000_security_definer_authenticated_surface.sql` | `d293aab4d42786c14530ef9f21bc31cfc3486cdbd546c8188d7a9d5a7f6d9209` |
+| 462 | 20260924101000 | `20260924101000_company_and_agency_membership_integrity.sql` | `256eaedc1fe63dd9ebfc95bc88a67482f3f227f9709e3a3b09383e6034122324` |
+| 463 | 20260924102000 | `20260924102000_bankid_session_single_use.sql` | `519a9225f42b184cd21b8b9720b7346d061b95fe911ccc9dda1fdc6fcc5016a5` |
+| 464 | 20260924103000 | `20260924103000_year_end_ruleset_schablonintakt_rates.sql` | `c85175dbe50632a200ffbde9384c6023a01e1a2c181fdd290cf0b4f809f2edd1` |
+| 465 | 20260924104000 | `20260924104000_bas_sru_codes_from_declaration_mapping.sql` | `1676350352cd8b6517d70162d5b3006ab571bcc3ec86f135104fcc3f3e034d72` |
+| 466 | 20260924104001 | `20260924104001_seed_agent_atom_bodies.sql` | `4499c7da7ea284390aa1b0a25a8bb3a94714874ca1bcf100b53c2854a999ee31` |
+| 467 | 20260925100000 | `20260925100000_salary_payroll_config_2025.sql` | `2142141b60c0f566982f109d6f6a4c49dd6c1400574f91e8e1468a4116eceaf8` |
+| 468 | 20260925110000 | `20260925110000_agency_access_level_enforced.sql` | `565f10952647c4216fd7527b9745fc825978faced1d3ba76f0bf82403f0b78ad` |
+| 469 | 20260925110500 | `20260925110500_company_roles_accountant_auditor.sql` | `e5da1088c12b3941975964951ca649ee1e21870c916a619641d498b273b266ec` |
+| 470 | 20260925111000 | `20260925111000_approve_access_request_atomic.sql` | `a7e7e9843724516ab1786283eea224db2a9c24fdd37fe405ff715ffb809c60ef` |
+| 471 | 20260925112000 | `20260925112000_company_founder_verification.sql` | `a48fb3d7eaa1b04991fa28fe4c93b04a3416f1b2fec0ede39e17758cdfc7acc5` |
+| 472 | 20260925120000 | `20260925120000_salary_run_atomic_writes.sql` | `dbcdfef85c6bc827d49cb8155ed29ded789303e0cc3c4da5ba81e6c83f7a85a3` |
+| 473 | 20260925121000 | `20260925121000_book_salary_run_atomic.sql` | `f3e9a72dcee694436f4e17ece27c6a6f317d9bcbb1f821bda2c6e3b2312fbd82` |
+| 474 | 20260925122000 | `20260925122000_correct_salary_run_atomic.sql` | `6ab6bbfbb9ed54a6bdc3059f10db1a242a91fd9b223d78067fe9bd4e0e18c499` |
+| 475 | 20260925123000 | `20260925123000_post_depreciation_atomic.sql` | `6826b75ad8b34ba5cdff91cd70c53ff1802d956797ac5ff3ddf8ca866a2d684f` |
+| 476 | 20260925124000 | `20260925124000_ledger_indexes_and_account_sums.sql` | `ea43ceb6c45904927646613f4319f9d4d9a839961cb119fae336cb218904d9ea` |
+| 477 | 20260925125000 | `20260925125000_one_posted_voucher_per_source.sql` | `61a304e8ed63cdf92d9c72828d4910e227afd66f2b8b35637ade67b5bb78c310` |
+| 478 | 20260925126000 | `20260925126000_link_transaction_to_voucher_atomic.sql` | `fad3079e50f9a80e7ef3782aea2aeac0046f413ed4ad5d329f779a8681feef8c` |
+| 479 | 20260925130000 | `20260925130000_profit_disposition_and_dividend_booking.sql` | `651b7064bb2171f22b6695fd09c491c99c2bdf45b481be31add2017b874878f5` |
+| 480 | 20260925130001 | `20260925130001_seed_agent_atom_bodies.sql` | `c247d67eb65122c9058baa8a69c89928ed9919cc52925797ceb88d53ac80629d` |
+| 481 | 20260925131000 | `20260925131000_payroll_config_2025_reduced_avgift_age.sql` | `d7cd0e5d2e366fcc0ff7d88f04e1ab8bd3d8beb7ec04c47c8bef21b82b688f82` |
+| 482 | 20260925131001 | `20260925131001_seed_agent_atom_bodies.sql` | `6466a434f5935a124ec46e80a151ab032e28d0b2442753997a534b35676b5032` |
+| 483 | 20260925132000 | `20260925132000_commit_inventory_adjustment.sql` | `3ffc1d75c62c434f5a212edf7c37d929dc85bc0f569f74c42a88799d0917ca50` |

@@ -103,16 +103,20 @@ Since 2019, employers must report per individual each month.
 Standard rate: 31.42% on total ersättning
 Breakdown:
 - Ålderspensionsavgift: 10.21%
+- Efterlevandepensionsavgift: 0.30%
 - Sjukförsäkringsavgift: 3.55%
-- Föräldraförsäkringsavgift: 2.60%
-- Arbetsskadeavgift: 0.20%
+- Föräldraförsäkringsavgift: 2.00%
 - Arbetsmarknadsavgift: 2.64%
-- Allmän löneavgift: 11.62%
-- Efterlevandepensionsavgift: 0.60%
+- Arbetsskadeavgift: 0.10%
+- Allmän löneavgift: 12.62%
 
-**Age-based reductions (2026):**
-- Born 1959 or earlier (67+ at year start): only ålderspensionsavgift = 10.21%
-- Born 2001-2007 (18-24): full rate 31.42% (the previous ungdomsrabatt expired 2023)
+(Skatteverket, arbetsgivaravgifter 2026; the seven components sum to 31.42%.)
+
+**Age-based tiers (2026, by birth year — "vid årets ingång"):**
+- Born 1937 or earlier: no arbetsgivaravgifter
+- Born 1938–1958 (fyllt 67 vid årets ingång; in 2025: fyllt 66, also born 1938–1958): only ålderspensionsavgift = 10.21%
+- Born 2003–2007 (fyllt 18 men inte 23): temporary 20.81% on pay up to 25,000 SEK/month, paid 1 April 2026 – 30 September 2027; full rate above the cap and outside the period
+- Everyone else (born 1959–2002, and 2008 or later): 31.42%
 
 ### Filing
 - Monthly, together with skattedeklaration

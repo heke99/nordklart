@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { z } from 'zod'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { ensureInitialized } from '@/lib/init'
@@ -28,7 +29,9 @@ type AgencyRow = { id: string; name: string | null; company_id: string | null }
 
 export async function POST(request: Request) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const parsed = AgencyStaffInviteSchema.safeParse(await request.json().catch(() => null))

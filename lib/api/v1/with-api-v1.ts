@@ -182,20 +182,28 @@ function isDryRun(request: Request, url: URL): boolean {
  * migration applies), fall back to the pre-existing direct
  * `company_members` check so direct members are never locked out.
  */
+interface CompanyAccess {
+  canRead: boolean
+  canWrite: boolean
+}
+
+/** Roles that may write when the resolver RPC is unavailable (mirrors resolve_company_access_for_user). */
+const FALLBACK_WRITE_ROLES = new Set(['owner', 'admin', 'member', 'accountant'])
+
 async function userCanAccessCompany(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
   log: Logger,
-): Promise<boolean | 'error'> {
+): Promise<CompanyAccess | 'error'> {
   try {
     const { data, error } = await supabase.rpc('resolve_company_access_for_user', {
       p_user_id: userId,
       p_company_id: companyId,
     })
     if (!error && Array.isArray(data)) {
-      const row = data[0] as { can_read?: boolean } | undefined
-      return row?.can_read === true
+      const row = data[0] as { can_read?: boolean; can_write?: boolean } | undefined
+      return { canRead: row?.can_read === true, canWrite: row?.can_write === true }
     }
     if (error) {
       log.warn('resolve_company_access_for_user unavailable — falling back to direct membership', {
@@ -219,7 +227,12 @@ async function userCanAccessCompany(
     return 'error'
   }
 
-  return Boolean(membership)
+  if (!membership) return { canRead: false, canWrite: false }
+  return {
+    canRead: true,
+    // The query admits active and active_limited; only the latter is read-only.
+    canWrite: membership.status !== 'active_limited' && FALLBACK_WRITE_ROLES.has(String(membership.role)),
+  }
 }
 
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
@@ -359,12 +372,24 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           return await v1ErrorResponseFromCode('INTERNAL_ERROR', userLog, { requestId })
         }
 
-        if (!hasAccess) {
+        if (!hasAccess.canRead) {
           userLog.warn('user has no access to company in URL', { companyId, ...forensic })
           // 404 (not 403) so we don't leak company existence to unauthorized callers.
           return await v1ErrorResponseFromCode('NOT_FOUND', userLog, {
             requestId,
             details: { companyId },
+          })
+        }
+
+        // A write-scoped key inherits the user's reach, not more: a viewer (or
+        // an agency reviewer) in this company must not be able to write here
+        // with a key they minted while acting in another company. The service
+        // client below bypasses RLS, so this is the only role gate.
+        if (REQUIRES_IDEMPOTENCY.has(request.method) && !hasAccess.canWrite) {
+          userLog.warn('user has read-only access to company in URL', { companyId, ...forensic })
+          return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
+            requestId,
+            details: { companyId, reason: 'read_only_access' },
           })
         }
       }

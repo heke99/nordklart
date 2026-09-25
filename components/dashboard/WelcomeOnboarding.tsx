@@ -199,8 +199,13 @@ export default function WelcomeOnboarding({
           endDate: periodResult.endStr,
           name: periodResult.periodName,
         },
-        ticLookup,
       })
+
+      if (result.bankIdRequired) {
+        // Hosted: the founder must identify with BankID before a company is created.
+        router.push('/onboarding/bankid?next=onboarding')
+        return
+      }
 
       if (result.error || !result.companyId) {
         logError('create company action failed', { error: result.error })

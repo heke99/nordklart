@@ -4,6 +4,15 @@ import { lookupTaxAmount, calculateJamkningTax, calculateSidoinkomstTax } from '
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import type { SalaryLineItemType } from '@/types'
 
+/**
+ * Tillfälligt sänkta arbetsgivaravgifter för unga (Prop. 2025/26:66):
+ * ersättning utbetald 2026-04-01 – 2027-09-30 (Skatteverket).
+ */
+export const YOUTH_AVGIFT_PERIOD = { from: '2026-04-01', to: '2027-09-30' } as const
+
+/** Växa-stöd is a refund, not a reduced AGI rate, from redovisningsperiod 2026-01. */
+export const VAXA_REFUND_MODEL_FROM = '2026-01-01'
+
 // ============================================================
 // Types
 // ============================================================
@@ -89,6 +98,8 @@ export interface SalaryCalculationResult {
   vacationAccrualAvgifter: number
   /** Semesterersättning paid out directly (vacation_rule = 'semesterersattning'). 0 otherwise. */
   vacationCompensation: number
+  /** Skattefria traktamenten/bilersättningar paid with the net salary. */
+  taxFreeAllowances: number
   totalEmployerCost: number
   steps: CalculationStep[]
 }
@@ -308,7 +319,14 @@ export function calculateSalary(
   const additions = input.lineItems.filter(
     li => ADDITION_TYPES.includes(li.itemType) && li.amount > 0
   )
-  const totalAdditions = r(additions.reduce((sum, li) => sum + li.amount, 0))
+  // Taxable allowances (traktamente/bilersättning above the tax-free
+  // schablon) are cash pay: part of bruttolön, taxed and avgiftspliktiga.
+  // Corrections and 'other' may be negative (a claw-back of an earlier error).
+  const TAXABLE_OTHER_TYPES: SalaryLineItemType[] = ['traktamente_taxable', 'mileage_taxable', 'correction', 'other']
+  const taxableOther = input.lineItems.filter(li => TAXABLE_OTHER_TYPES.includes(li.itemType) && !li.isGrossDeduction && !li.isNetDeduction)
+  const totalAdditions = r(
+    additions.reduce((sum, li) => sum + li.amount, 0) + taxableOther.reduce((sum, li) => sum + li.amount, 0),
+  )
   if (totalAdditions > 0) {
     steps.push({
       label: 'Tillägg (övertid, OB, bonus, provision)',
@@ -458,17 +476,43 @@ export function calculateSalary(
   const netDeductionItems = input.lineItems.filter(li => li.isNetDeduction)
   const totalNetDeductions = r(Math.abs(netDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
 
-  const netSalary = r(grossSalary - taxWithheld - totalNetDeductions)
+  // Skattefria traktamenten och bilersättningar (inom schablonbeloppen) are
+  // paid out on top of the net salary: not bruttolön, not taxed, no avgifter.
+  const TAX_FREE_TYPES: SalaryLineItemType[] = ['traktamente_taxfree', 'mileage_taxfree']
+  const totalTaxFree = r(input.lineItems
+    .filter(li => TAX_FREE_TYPES.includes(li.itemType) && li.amount > 0)
+    .reduce((sum, li) => sum + li.amount, 0))
+
+  const netSalary = r(grossSalary - taxWithheld - totalNetDeductions + totalTaxFree)
   steps.push({
     label: 'Nettolön',
-    formula: 'bruttolön − skatt − nettoavdrag',
-    input: { gross: grossSalary, tax: taxWithheld, net_deductions: totalNetDeductions },
+    formula: totalTaxFree > 0
+      ? 'bruttolön − skatt − nettoavdrag + skattefria ersättningar'
+      : 'bruttolön − skatt − nettoavdrag',
+    input: { gross: grossSalary, tax: taxWithheld, net_deductions: totalNetDeductions, tax_free_allowances: totalTaxFree },
     output: netSalary,
   })
 
   // ─── Step 8: Employer contributions (avgifter) ───
-  const avgifterCalc = calculateAvgifterRate(input, config, paymentYear)
-  const avgifterBasis = r(grossSalary + totalBenefits)
+  // Ersättning till en mottagare som är godkänd för F-skatt: varken
+  // skatteavdrag eller arbetsgivaravgifter (SFL 10 kap. 11 §, SAL 2 kap.
+  // 1–2 §§). It is reported in AGI fält 131, outside the avgiftsunderlag.
+  const avgifterCalc: AvgifterCalculation = input.fSkattStatus === 'f_skatt'
+    ? {
+        rate: 0,
+        amount: 0,
+        basis: 0,
+        category: 'exempt',
+        steps: [{
+          label: 'Avgiftskategori',
+          formula: 'Mottagaren är godkänd för F-skatt — inga arbetsgivaravgifter (AGI fält 131)',
+          input: {},
+          output: null,
+        }],
+      }
+    : calculateAvgifterRate(input, config, paymentYear)
+  // F-skatt: nothing forms underlag för arbetsgivaravgifter.
+  const avgifterBasis = input.fSkattStatus === 'f_skatt' ? 0 : r(grossSalary + totalBenefits)
 
   // Handle salary caps for youth and växa-stöd:
   // Reduced rate applies only up to the cap, standard rate on the rest
@@ -566,11 +610,11 @@ export function calculateSalary(
     output: vacationAccrualAvgifter,
   })
 
-  const totalEmployerCost = r(grossSalary + avgifterAmount + vacationAccrual + vacationAccrualAvgifter)
+  const totalEmployerCost = r(grossSalary + totalTaxFree + avgifterAmount + vacationAccrual + vacationAccrualAvgifter)
   steps.push({
     label: 'Total arbetsgivarkostnad',
-    formula: 'bruttolön + avgifter + semesteravsättning + avgifter på semester',
-    input: { gross: grossSalary, avgifter: avgifterAmount, vacation_accrual: vacationAccrual, vacation_avgifter: vacationAccrualAvgifter },
+    formula: 'bruttolön + skattefria ersättningar + avgifter + semesteravsättning + avgifter på semester',
+    input: { gross: grossSalary, tax_free_allowances: totalTaxFree, avgifter: avgifterAmount, vacation_accrual: vacationAccrual, vacation_avgifter: vacationAccrualAvgifter },
     output: totalEmployerCost,
   })
 
@@ -589,6 +633,7 @@ export function calculateSalary(
     vacationAccrual,
     vacationAccrualAvgifter,
     vacationCompensation,
+    taxFreeAllowances: totalTaxFree,
     totalEmployerCost,
     steps,
   }
@@ -653,8 +698,23 @@ export function calculateAvgifterRate(
     return { rate: config.avgifterReduced65plus, amount: 0, basis: 0, category: 'reduced_65plus', steps }
   }
 
-  // Växa-stöd eligible
-  if (input.vaxaStodEligible && input.vaxaStodStart && input.vaxaStodEnd) {
+  // Växa-stöd eligible.
+  // From redovisningsperiod 2026-01 Skatteverket no longer takes växa-stöd as
+  // a reduced rate in the AGI: full avgifter are reported and paid, and the
+  // stöd is applied for afterwards as a refund (e-tjänst, within a year of the
+  // month). So for payments from 2026 the avgift stays standard here and the
+  // step records that a refund can be claimed.
+  if (input.vaxaStodEligible && input.vaxaStodStart && input.vaxaStodEnd && input.paymentDate >= VAXA_REFUND_MODEL_FROM) {
+    const payDate = input.paymentDate
+    if (payDate >= input.vaxaStodStart && payDate <= input.vaxaStodEnd) {
+      steps.push({
+        label: 'Växa-stöd',
+        formula: `Full avgift redovisas i AGI; växa-stöd söks som återbetalning hos Skatteverket (gäller från 2026)`,
+        input: { vaxa_cap: config.avgifterVaxaStodCap ?? 0 },
+        output: null,
+      })
+    }
+  } else if (input.vaxaStodEligible && input.vaxaStodStart && input.vaxaStodEnd) {
     const payDate = input.paymentDate
     if (payDate >= input.vaxaStodStart && payDate <= input.vaxaStodEnd && config.avgifterVaxaStodRate !== null) {
       steps.push({
@@ -676,9 +736,8 @@ export function calculateAvgifterRate(
   // rejects 23-year-olds at year start as not eligible.
   // Active period: 1 April 2026 - 30 September 2027.
   if (config.avgifterYouthRate !== null && ageAtYearStart >= 18 && ageAtYearStart <= 22) {
-    const [, monthStr] = input.paymentDate.split('-')
-    const month = parseInt(monthStr)
-    const isYouthPeriod = (paymentYear === 2026 && month >= 4) || (paymentYear === 2027 && month <= 9)
+    const payDate = input.paymentDate.slice(0, 10)
+    const isYouthPeriod = payDate >= YOUTH_AVGIFT_PERIOD.from && payDate <= YOUTH_AVGIFT_PERIOD.to
     if (isYouthPeriod) {
       steps.push({
         label: 'Avgiftskategori',

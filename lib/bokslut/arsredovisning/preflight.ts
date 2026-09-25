@@ -240,6 +240,18 @@ export function runAnnualReportPreflight(
     )
   }
   for (const signature of data.signatures) {
+    if (signature.status === 'signed' && signature.evidence === 'bankid' && signature.registry_verified === false) {
+      add(
+        issue(
+          'SIGNER_NOT_IN_REGISTRY',
+          'warning',
+          'annual_report',
+          `${signature.name} kunde inte bekräftas som styrelseledamot eller VD i Bolagsverkets register. Årsredovisningen ska skrivas under av samtliga styrelseledamöter och VD (ÅRL 2 kap. 7 §).`,
+          [{ id: 'manage_signatures', label: 'Kontrollera undertecknare' }],
+          { comparedValues: { signer: signature.name, role: signature.role } },
+        ),
+      )
+    }
     const signedDate = signature.signed_at?.slice(0, 10) ?? null
     if (signedDate && signedDate <= data.fiscal_period.period_end) {
       add(

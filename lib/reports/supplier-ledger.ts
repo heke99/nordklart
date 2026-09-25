@@ -64,7 +64,7 @@ export async function generateSupplierLedger(
     } else {
       q = q.in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
     }
-    return q.range(from, to)
+    return q.order('id', { ascending: true }).range(from, to)
   }).catch((err: Error) => {
     throw new Error(`Leverantörsreskontran kunde inte läsas: ${err.message}`)
   })

@@ -46,6 +46,7 @@ function buildCapturingSupabase(opts?: {
       return {
         select: () => ({
           eq: () => ({
+            order: () => ({
             range: (from: number, to: number) => ({
               then: (
                 resolve: (v: {
@@ -59,6 +60,7 @@ function buildCapturingSupabase(opts?: {
                 }
                 resolve({ data: existing.slice(from, to + 1), error: null })
               },
+            }),
             }),
           }),
         }),

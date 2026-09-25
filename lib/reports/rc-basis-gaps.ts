@@ -122,7 +122,7 @@ export async function findRcBasisGaps(
       .eq('journal_entries.status', 'posted')
       .gte('journal_entries.entry_date', start)
       .lte('journal_entries.entry_date', end)
-      .range(from, to),
+      .order('id', { ascending: true }).range(from, to),
   )) as RcLineRow[]
 
   if (rcLines.length === 0) return []
@@ -134,7 +134,7 @@ export async function findRcBasisGaps(
       .from('journal_entry_lines')
       .select('journal_entry_id, account_number, debit_amount, credit_amount')
       .in('journal_entry_id', entryIds)
-      .range(from, to),
+      .order('id', { ascending: true }).range(from, to),
   )
 
   const basisByEntry = new Map<string, number>()

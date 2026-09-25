@@ -290,7 +290,6 @@ async function categorizeOne(
   }
 
   let journalEntryId: string | null = null
-  let journalEntryError: string | null = null
   try {
     const je = await createTransactionJournalEntry(
       supabase,
@@ -322,10 +321,19 @@ async function categorizeOne(
         },
       }
     }
-    if (isBookkeepingError(err)) {
-      journalEntryError = getErrorMessage(err, { context: 'transaction' })
-    } else {
-      journalEntryError = err instanceof Error ? err.message : 'Unknown error'
+    // Any other booking failure: same reasoning — a business transaction
+    // must not be marked categorised without its verifikation (BFL 5 kap).
+    // Leave the row untouched so it can be retried.
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'JOURNAL_ENTRY_FAILED',
+        message: isBookkeepingError(err)
+          ? getErrorMessage(err, { context: 'transaction' })
+          : err instanceof Error ? err.message : 'Unknown error',
+      },
     }
   }
 
@@ -349,6 +357,29 @@ async function categorizeOne(
     }
   }
   if ((!updated || updated.length === 0) && journalEntryId) {
+    // createJournalEntry is idempotent per transaction, so a concurrent
+    // identical request gets the SAME voucher and may already have linked
+    // it. That is success, not a race — and the voucher must not be reversed.
+    const { data: current } = await supabase
+      .from('transactions')
+      .select('journal_entry_id')
+      .eq('id', transactionId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (current?.journal_entry_id === journalEntryId) {
+      return {
+        ok: true,
+        request_index: index,
+        transaction_id: transactionId,
+        data: {
+          journal_entry_created: true,
+          journal_entry_id: journalEntryId,
+          journal_entry_error: null,
+          category: finalCategory,
+        },
+      }
+    }
+
     // CAS race — storno the orphan (BFL 5 kap 5 §). Direct status flip
     // would be blocked by enforce_journal_entry_immutability since the
     // engine writes the JE as posted. Same fix as the single :categorize
@@ -418,7 +449,7 @@ async function categorizeOne(
     data: {
       journal_entry_created: !!journalEntryId,
       journal_entry_id: journalEntryId,
-      journal_entry_error: journalEntryError,
+      journal_entry_error: null,
       category: finalCategory,
     },
   }

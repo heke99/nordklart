@@ -414,6 +414,36 @@ export async function commitEntry(
  * the orphan draft is cancelled so callers don't leave an undeletable stuck draft.
  * The commit RPC is atomic — no voucher number is burned on failure.
  */
+/**
+ * Source types booked by exactly ONE voucher per document (see
+ * 20260925125000_one_posted_voucher_per_source.sql, which enforces it).
+ */
+export const ONE_VOUCHER_PER_SOURCE_TYPES = new Set([
+  'invoice_created',
+  'credit_note',
+  'supplier_invoice_registered',
+  'supplier_credit_note',
+  'bank_transaction',
+])
+
+async function findPostedSourceVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  sourceType: string,
+  sourceId: string,
+): Promise<JournalEntry | null> {
+  const { data } = await supabase
+    .from('journal_entries')
+    .select('*, lines:journal_entry_lines(*)')
+    .eq('company_id', companyId)
+    .eq('source_type', sourceType)
+    .eq('source_id', sourceId)
+    .eq('status', 'posted')
+    .limit(1)
+    .maybeSingle()
+  return (data as JournalEntry | null) ?? null
+}
+
 export async function createJournalEntry(
   supabase: SupabaseClient,
   companyId: string,
@@ -422,10 +452,42 @@ export async function createJournalEntry(
   commitMethod?: string,
   rubricVersion?: string
 ): Promise<JournalEntry> {
+  // Idempotent for document vouchers: a retry after a lost response, a
+  // double-click or a concurrent send gets the voucher that is already
+  // posted instead of a second one.
+  const oneVoucherSource = input.source_id && input.source_type && ONE_VOUCHER_PER_SOURCE_TYPES.has(input.source_type)
+    ? { type: input.source_type, id: input.source_id }
+    : null
+  if (oneVoucherSource) {
+    const existing = await findPostedSourceVoucher(supabase, companyId, oneVoucherSource.type, oneVoucherSource.id)
+    if (existing) {
+      log.warn('document already booked; returning the posted voucher', {
+        operation: 'create_journal_entry.idempotent',
+        companyId,
+        entityType: 'journal_entry',
+        entityId: existing.id,
+        sourceType: oneVoucherSource.type,
+      })
+      return existing
+    }
+  }
+
   const draft = await createDraftEntry(supabase, companyId, userId, input)
   try {
     return await commitEntry(supabase, companyId, userId, draft.id, commitMethod, rubricVersion)
   } catch (commitError) {
+    // The commit may have succeeded with only the response lost, or a
+    // concurrent request may have booked the same document first.
+    if (oneVoucherSource) {
+      const posted = await findPostedSourceVoucher(supabase, companyId, oneVoucherSource.type, oneVoucherSource.id)
+        .catch(() => null)
+      if (posted) {
+        if (posted.id !== draft.id) {
+          await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', draft.id).eq('status', 'draft')
+        }
+        return posted
+      }
+    }
     // CAS guard: only cancel if still in draft. If the RPC actually posted
     // before failing downstream, immutability trigger blocks draft→cancelled
     // on a posted row anyway — the filter just avoids firing the trigger.

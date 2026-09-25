@@ -131,9 +131,9 @@ Most small AB/enskild firma need these accounts at minimum:
 - 2091 Balanserad vinst/förlust
 - 2099 Årets resultat
 - 2440 Leverantörsskulder
-- 2610 Utgående moms 25%
-- 2611 Utgående moms 12%
-- 2612 Utgående moms 6%
+- 2611 Utgående moms 25%
+- 2621 Utgående moms 12%
+- 2631 Utgående moms 6%
 - 2640 Ingående moms
 - 2650 Redovisningskonto för moms
 - 2710 Personalskatt
@@ -171,9 +171,9 @@ Standard moms account structure in BAS:
 
 | Konto | Beskrivning |
 |---|---|
-| 2610 | Utgående moms 25% |
-| 2611 | Utgående moms 12% |
-| 2612 | Utgående moms 6% |
+| 2611 | Utgående moms 25% |
+| 2621 | Utgående moms 12% |
+| 2631 | Utgående moms 6% |
 | 2614 | Utgående moms omvänd skattskyldighet |
 | 2615 | Utgående moms import |
 | 2640 | Ingående moms |
@@ -181,8 +181,8 @@ Standard moms account structure in BAS:
 | 2650 | Redovisningskonto för moms |
 
 Workflow:
-1. During the period: book utgående on 2610/2611/2612 and ingående on 2640
-2. At declaration: netta 2610+2611+2612-2640 against 2650
+1. During the period: book utgående on 2611/2621/2631 and ingående on 2640
+2. At declaration: netta 2611+2621+2631-2640 against 2650
 3. Payment to/from Skatteverket: 2650 <-> 1630 (skattekonto)
 
 **From 1 Apr 2026**: livsmedel output VAT moves from 2621 (12%) to 2631 (6%). Your system must handle the transition correctly based on leveransdatum.
@@ -201,7 +201,7 @@ Workflow:
 **Kundfaktura:**
 - Debit 1510 (kundfordringar) full amount inkl moms
 - Credit 30xx (intäkt) exkl moms
-- Credit 2610/2611/2612 (utgående moms)
+- Credit 2611/2621/2631 (utgående moms)
 
 **Leverantörsfaktura:**
 - Debit 4xxx/5xxx/6xxx (kostnad) exkl moms
@@ -217,9 +217,9 @@ Then separately:
 - Credit 2730 (arbetsgivaravgifter skuld)
 
 **Momsredovisning (monthly/quarterly):**
-- Debit 2610 (tömma utgående 25%)
-- Debit 2611 (tömma utgående 12%)
-- Debit 2612 (tömma utgående 6%)
+- Debit 2611 (tömma utgående 25%)
+- Debit 2621 (tömma utgående 12%)
+- Debit 2631 (tömma utgående 6%)
 - Credit 2640 (tömma ingående)
 - Credit/Debit 2650 (netto: skuld if credit, fordran if debit)
 

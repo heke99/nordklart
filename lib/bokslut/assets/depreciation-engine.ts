@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { createDraftEntry } from '@/lib/bookkeeping/engine'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { eventBus } from '@/lib/events'
+import { roundOre } from '@/lib/money'
 import { listAssets } from './asset-service'
 import { depreciableBaseForAsset } from './property-rules'
 import type {
@@ -337,8 +340,7 @@ export async function proposeAnnualPostings(
     if (amount <= 0) continue
 
     const existingSchedule = existing.get(asset.id)
-    const netBookValueAfter =
-      Math.round((Number(asset.acquisition_cost) - accumulatedBefore - amount) * 100) / 100
+    const netBookValueAfter = roundOre(Number(asset.acquisition_cost) - accumulatedBefore - amount)
 
     items.push({
       asset,
@@ -363,9 +365,10 @@ export async function proposeAnnualPostings(
  * independently and so the depreciation_schedules row links one-to-one to
  * its journal entry.
  *
- * Skips assets that already have a posted schedule för this period — the
- * unique constraint would block them, and silently skipping is more useful
- * than throwing. Returns the list of (asset_id, schedule, entry) tuples.
+ * Atomic: every voucher is created as a draft, then post_depreciation_batch
+ * commits them all and links each schedule row in ONE transaction. A failure
+ * cancels the drafts and posts nothing, so a retry can never depreciate an
+ * asset twice. Assets already posted for the period are skipped.
  */
 export async function commitAnnualPostings(
   supabase: SupabaseClient,
@@ -382,66 +385,83 @@ export async function commitAnnualPostings(
   const periodName = proposal.fiscalPeriod.name
 
   const allowed = options.assetIds ? new Set(options.assetIds) : null
-  const posted: { assetId: string; entry: JournalEntry; scheduleId: string }[] = []
   const skipped: { assetId: string; reason: string }[] = []
-
-  for (const item of proposal.items) {
-    if (allowed && !allowed.has(item.asset.id)) continue
+  const toPost = proposal.items.filter((item) => {
+    if (allowed && !allowed.has(item.asset.id)) return false
     if (item.existingJournalEntryId) {
       skipped.push({ assetId: item.asset.id, reason: 'already_posted' })
-      continue
+      return false
     }
+    return true
+  })
+  if (toPost.length === 0) return { posted: [], skipped }
 
-    const lines: CreateJournalEntryLineInput[] = [
-      {
-        account_number: item.asset.bas_expense_account,
-        debit_amount: item.amount,
-        credit_amount: 0,
-        line_description: `Avskrivning ${item.asset.name}`,
-      },
-      {
-        account_number: item.asset.bas_accumulated_account,
-        debit_amount: 0,
-        credit_amount: item.amount,
-        line_description: `Ack. avskrivning ${item.asset.name}`,
-      },
-    ]
+  const drafts: { assetId: string; entryId: string; amount: number }[] = []
+  const cancelDrafts = async () => {
+    if (drafts.length === 0) return
+    await supabase
+      .from('journal_entries')
+      .update({ status: 'cancelled' })
+      .in('id', drafts.map((d) => d.entryId))
+      .eq('company_id', companyId)
+      .eq('status', 'draft')
+  }
 
-    const entry = await createJournalEntry(supabase, companyId, userId, {
-      fiscal_period_id: fiscalPeriodId,
-      entry_date: periodEnd,
-      description: `Planenlig avskrivning ${periodName}: ${item.asset.name}`,
-      source_type: 'year_end_depreciation',
-      lines,
-    })
-
-    // Upsert the schedule row. If a draft (no journal_entry_id) already
-    // exists for (asset, period) we overwrite it with the posted entry.
-    if (item.existingScheduleId) {
-      const { error } = await supabase
-        .from('depreciation_schedules')
-        .update({ journal_entry_id: entry.id, posted_at: new Date().toISOString() })
-        .eq('id', item.existingScheduleId)
-        .eq('company_id', companyId)
-      if (error) throw new Error(`Failed to update schedule: ${error.message}`)
-      posted.push({ assetId: item.asset.id, entry, scheduleId: item.existingScheduleId })
-    } else {
-      const { data, error } = await supabase
-        .from('depreciation_schedules')
-        .insert({
-          user_id: userId,
-          company_id: companyId,
-          asset_id: item.asset.id,
-          fiscal_period_id: fiscalPeriodId,
-          planned_depreciation: item.amount,
-          journal_entry_id: entry.id,
-          posted_at: new Date().toISOString(),
-        })
-        .select('id')
-        .single()
-      if (error || !data) throw new Error(`Failed to insert schedule: ${error?.message}`)
-      posted.push({ assetId: item.asset.id, entry, scheduleId: data.id })
+  try {
+    for (const item of toPost) {
+      const lines: CreateJournalEntryLineInput[] = [
+        {
+          account_number: item.asset.bas_expense_account,
+          debit_amount: item.amount,
+          credit_amount: 0,
+          line_description: `Avskrivning ${item.asset.name}`,
+        },
+        {
+          account_number: item.asset.bas_accumulated_account,
+          debit_amount: 0,
+          credit_amount: item.amount,
+          line_description: `Ack. avskrivning ${item.asset.name}`,
+        },
+      ]
+      const draft = await createDraftEntry(supabase, companyId, userId, {
+        fiscal_period_id: fiscalPeriodId,
+        entry_date: periodEnd,
+        description: `Planenlig avskrivning ${periodName}: ${item.asset.name}`,
+        source_type: 'year_end_depreciation',
+        lines,
+      })
+      drafts.push({ assetId: item.asset.id, entryId: draft.id, amount: item.amount })
     }
+  } catch (err) {
+    await cancelDrafts()
+    throw err
+  }
+
+  const { data, error } = await supabase.rpc('post_depreciation_batch', {
+    p_company_id: companyId,
+    p_user_id: userId,
+    p_fiscal_period_id: fiscalPeriodId,
+    p_items: drafts.map((d) => ({ asset_id: d.assetId, journal_entry_id: d.entryId, amount: d.amount })),
+  })
+  if (error || !Array.isArray(data)) {
+    await cancelDrafts()
+    throw new BookkeepingDatabaseError('commit_entry', error?.message ?? 'post_depreciation_batch returned no result')
+  }
+
+  const { data: entries, error: entriesError } = await supabase
+    .from('journal_entries')
+    .select('*, lines:journal_entry_lines(*)')
+    .eq('company_id', companyId)
+    .in('id', drafts.map((d) => d.entryId))
+  if (entriesError) throw new BookkeepingDatabaseError('commit_entry', entriesError.message)
+  const byId = new Map((entries ?? []).map((e) => [e.id as string, e as JournalEntry]))
+
+  const posted = (data as Array<{ asset_id: string; journal_entry_id: string; schedule_id: string }>).map((row) => {
+    const entry = byId.get(row.journal_entry_id)!
+    return { assetId: row.asset_id, entry, scheduleId: row.schedule_id }
+  })
+  for (const { entry } of posted) {
+    await eventBus.emit({ type: 'journal_entry.committed', payload: { entry, userId, companyId } })
   }
 
   return { posted, skipped }

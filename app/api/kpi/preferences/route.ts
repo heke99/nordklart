@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { mergeWithDefaults } from '@/lib/reports/kpi-definitions'
 import { requireCompanyId } from '@/lib/company/context'
@@ -10,7 +11,9 @@ const KEY = 'preferences'
 
 export async function GET() {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const companyId = await requireCompanyId(supabase, user.id)
@@ -29,7 +32,9 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const writeCheck = await requireWritePermission(supabase, user.id)

@@ -103,16 +103,43 @@ describe('calculateTraktamente', () => {
     expect(result.taxFree).toBe(Math.round((300 - mealReduction) * 100) / 100)
   })
 
-  it('reduces for all meals — 85%', () => {
+  it.each([
+    ['breakfast', 240],
+    ['lunch', 195],
+    ['lunch_dinner', 90],
+    ['all', 30],
+  ] as const)('heldag 300 kr with %s leaves %i kr tax-free (Skatteverket 20/35/70/90 %%)', (meals, expected) => {
     const result = calculateTraktamente({
       tripType: 'full_day',
       days: 1,
-      mealsProvided: 'all',
+      mealsProvided: meals,
       consecutiveMonths: 0,
       config,
     })
-    const mealReduction = Math.round(300 * 0.85 * 100) / 100
-    expect(result.taxFree).toBe(Math.round((300 - mealReduction) * 100) / 100)
+    expect(result.taxFree).toBe(expected)
+  })
+
+  it('reduces meals on halvdag too', () => {
+    const result = calculateTraktamente({
+      tripType: 'half_day',
+      days: 1,
+      mealsProvided: 'breakfast',
+      consecutiveMonths: 0,
+      config,
+    })
+    expect(result.taxFree).toBe(120) // 150 − 20 %
+  })
+
+  it('applies the meal reduction to the amount after the tremånadersregel', () => {
+    const result = calculateTraktamente({
+      tripType: 'full_day',
+      days: 1,
+      mealsProvided: 'breakfast',
+      consecutiveMonths: 4,
+      config,
+    })
+    // 300 × 70 % = 210; frukost 20 % of 210 = 42 → 168
+    expect(result.taxFree).toBe(168)
   })
 })
 

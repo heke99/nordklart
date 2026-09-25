@@ -1,3 +1,5 @@
+import { roundOre } from '@/lib/money'
+
 /**
  * Engångsskatt — tax on one-time payments (bonuses, retroactive pay, etc.)
  *
@@ -48,7 +50,7 @@ export function calculateEngangsskatt(
   monthlySalary: number,
   monthsWorkedThisYear: number = 12
 ): EngangsskattResult {
-  const r = (x: number) => Math.round(x * 100) / 100
+  const r = (x: number) => roundOre(x)
 
   // Estimate annual income = regular salary × 12 + one-time amount
   const annualRegular = monthlySalary * 12

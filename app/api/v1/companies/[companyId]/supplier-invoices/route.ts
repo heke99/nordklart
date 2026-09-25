@@ -712,10 +712,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           })
         }
       } catch (err) {
-        // Engine threw — conservatively assume the JE may have committed
-        // before the throw (createJournalEntry is the atomic write inside
-        // the engine; a throw after that point would still leave a posted
-        // JE). Soft-mark to preserve any half-committed audit trail.
+        // Engine threw. createJournalEntry is idempotent per supplier invoice
+        // (one posted 'supplier_invoice_registered' voucher per document): a
+        // commit whose response was lost is found and returned instead of
+        // throwing, so a throw here means no voucher is posted. Soft-mark the
+        // row anyway so the attempt stays visible in the audit trail.
         await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'registration_journal_entry', true)
         if (isBookkeepingError(err)) {
           return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })

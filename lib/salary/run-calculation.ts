@@ -12,10 +12,11 @@
  * either caller can wrap it in their own response envelope (internal uses
  * `errorResponseFromCode`; v1 uses `v1ErrorResponseFromCode`).
  *
- * Strict-mode: the function aborts at the FIRST per-employee failure. There
- * is no partial-state recovery — either every employee succeeds and the run
- * gets its aggregated totals + updated row, or the caller receives an error
- * and the run remains in `draft`. This matches the dashboard's behaviour and
+ * Atomic: every input is loaded in batch up front, every employee is
+ * calculated in memory, and all writes (derived line items, per-employee
+ * snapshots, run totals, calculation_params) go to the database in ONE
+ * transaction (persist_salary_run_calculation). Either every employee is
+ * recalculated or nothing changes and the run stays as it was in `draft`. This matches the dashboard's behaviour and
  * is required for BFL 5 kap: a half-calculated run that later advances to
  * `review` would post a wrong verifikation when `:book` runs.
  *
@@ -29,12 +30,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { calculateSalary } from './calculation-engine'
 import { loadPayrollConfig, serializePayrollConfig } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
-import { loadAndDeriveAbsence } from './derive-absence-line-items'
+import { absenceLookbackStart, deriveAbsenceFromRows } from './derive-absence-line-items'
+import type { PreloadedAbsenceRow } from './derive-absence-line-items'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getLineItemAccount } from './account-mapping'
 import { computePremiumLines } from './shift-premium-engine'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
 import type { SalaryLineItemType, ShiftPremiumRule, ShiftPremiumItemType } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /** Item types that the calculator derives from per-day absence records. */
 const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
@@ -75,7 +79,7 @@ function effectiveHourlyRate(emp: {
 }): number {
   if (emp.salary_type === 'hourly') return emp.hourly_rate || 0
   const monthly = emp.monthly_salary || 0
-  return monthly > 0 ? Math.round((monthly / 173) * 100) / 100 : 0
+  return monthly > 0 ? roundOre((monthly / 173)) : 0
 }
 
 /** Benefit-type → line-item-type mapping for the derived benefit rows. */
@@ -272,6 +276,60 @@ export async function runSalaryCalculation(
   }
   const premiumRules = (premiumRulesRaw ?? []) as ShiftPremiumRule[]
 
+  // 7c. Batch-load every per-employee input once for the whole run, instead
+  //     of 5–6 queries per employee inside the loop.
+  const employeeIds = runEmployees
+    .map((sre) => sre.employee?.id as string | undefined)
+    .filter((eid): eid is string => typeof eid === 'string')
+  const needsWorkedDays = premiumRules.length > 0
+    || runEmployees.some((sre) => sre.employee?.salary_type === 'hourly')
+
+  let absenceRows: PreloadedAbsenceRow[]
+  let workedDayRowsAll: Array<{ employee_id: string; work_date: string; hours: number; start_time: string | null; end_time: string | null }>
+  let benefitRowsAll: Array<{ id: string; employee_id: string; benefit_type: string; description: string; monthly_value: number }>
+  try {
+    ;[absenceRows, workedDayRowsAll, benefitRowsAll] = await Promise.all([
+      fetchAllRows<PreloadedAbsenceRow>(({ from, to }) =>
+        supabase
+          .from('salary_absence_days')
+          .select('employee_id, absence_date, absence_type, hours')
+          .eq('company_id', companyId)
+          .in('employee_id', employeeIds)
+          .gte('absence_date', absenceLookbackStart(periodStart))
+          .lte('absence_date', periodEnd)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+      needsWorkedDays
+        ? fetchAllRows<{ employee_id: string; work_date: string; hours: number; start_time: string | null; end_time: string | null }>(({ from, to }) =>
+            supabase
+              .from('salary_worked_days')
+              .select('employee_id, hours, work_date, start_time, end_time')
+              .eq('company_id', companyId)
+              .in('employee_id', employeeIds)
+              .gte('work_date', periodStart)
+              .lte('work_date', periodEnd)
+              .order('id', { ascending: true })
+              .range(from, to),
+          )
+        : Promise.resolve([]),
+      fetchAllRows<{ id: string; employee_id: string; benefit_type: string; description: string; monthly_value: number }>(({ from, to }) =>
+        supabase
+          .from('employee_benefits')
+          .select('id, employee_id, benefit_type, description, monthly_value')
+          .eq('company_id', companyId)
+          .in('employee_id', employeeIds)
+          .eq('is_active', true)
+          .lte('valid_from', run.payment_date)
+          .or(`valid_to.is.null,valid_to.gte.${run.payment_date}`)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+    ])
+  } catch (err) {
+    return { ok: false, code: 'DATABASE_ERROR', details: { message: err instanceof Error ? err.message : String(err) } }
+  }
+
   // Per-run aggregates collected during the loop.
   let totalGross = 0
   let totalTax = 0
@@ -285,43 +343,43 @@ export async function runSalaryCalculation(
   const lakarintygEmployees: string[] = []
   const fkReportingEmployees: string[] = []
 
-  // 8. Per-employee calculation loop.
+  // Everything the calculation writes, persisted in ONE transaction below.
+  const employeeWrites: Array<{
+    salary_run_employee_id: string
+    replace_item_types: string[]
+    replace_benefit_rows: boolean
+    insert_lines: Array<Record<string, unknown>>
+    update: Record<string, unknown>
+  }> = []
+
+  // 8. Per-employee calculation — pure computation over the preloaded data.
   for (const sre of runEmployees) {
     const emp = sre.employee
     if (!emp) continue
 
+    const replaceItemTypes: string[] = [
+      ...DERIVED_ABSENCE_TYPES,
+      ...(DERIVED_PREMIUM_TYPES as unknown as string[]),
+      'semesterersattning',
+    ]
+    const insertLines: Array<Record<string, unknown>> = []
+
     // 8a. Derive absence line items from per-day records.
-    const absenceResult = await loadAndDeriveAbsence({
-      supabase,
-      companyId,
+    const absenceResult = deriveAbsenceFromRows({
       employeeId: emp.id,
+      rows: absenceRows,
       monthlySalary: emp.monthly_salary || 0,
       payrollConfig: config,
       periodStart,
       periodEnd,
     })
 
-    // 8b. For hourly employees, derive worked hours from the calendar.
-    //     For all employees (when premium rules exist), the same rows feed
-    //     the shift-premium engine in 8z below.
+    // 8b. Worked days: hours for hourly employees, shifts for OB/övertid.
+    const workedDayRows = workedDayRowsAll.filter((d) => d.employee_id === emp.id)
     let derivedHoursWorked: number | null = null
-    let workedDayRows: Array<{ work_date: string; hours: number; start_time: string | null; end_time: string | null }> = []
-    if (emp.salary_type === 'hourly' || premiumRules.length > 0) {
-      const { data: workedDays, error: workedError } = await supabase
-        .from('salary_worked_days')
-        .select('hours, work_date, start_time, end_time')
-        .eq('company_id', companyId)
-        .eq('employee_id', emp.id)
-        .gte('work_date', periodStart)
-        .lte('work_date', periodEnd)
-      if (workedError) {
-        return { ok: false, code: 'DATABASE_ERROR', details: workedError }
-      }
-      workedDayRows = (workedDays ?? []) as typeof workedDayRows
-    }
     if (emp.salary_type === 'hourly') {
       derivedHoursWorked = workedDayRows.reduce(
-        (sum, d) => Math.round((sum + Number(d.hours)) * 100) / 100,
+        (sum, d) => roundOre((sum + Number(d.hours))),
         0,
       )
       opLog.info('Derived hours_worked from calendar', {
@@ -332,29 +390,21 @@ export async function runSalaryCalculation(
         derivedHoursWorked,
       })
 
-      // Refresh the hourly_salary line item so the displayed Lönerader table
-      // matches what the engine actually calculated.
+      // Refresh the hourly_salary line so the Lönerader table matches what
+      // the engine calculated.
       if (derivedHoursWorked > 0 && (emp.hourly_rate || 0) > 0) {
-        const baseAmount =
-          Math.round((emp.hourly_rate as number) * derivedHoursWorked * 100) / 100
-        await supabase
-          .from('salary_line_items')
-          .delete()
-          .eq('salary_run_employee_id', sre.id)
-          .eq('item_type', 'hourly_salary')
-        await supabase.from('salary_line_items').insert({
-          salary_run_employee_id: sre.id,
-          company_id: companyId,
+        replaceItemTypes.push('hourly_salary')
+        insertLines.push({
           item_type: 'hourly_salary',
           description: 'Timlön',
           quantity: derivedHoursWorked,
-          amount: baseAmount,
+          amount: roundOre((emp.hourly_rate as number) * derivedHoursWorked),
           is_taxable: true,
           is_avgift_basis: true,
           is_vacation_basis: true,
           is_gross_deduction: false,
           is_net_deduction: false,
-          account_number: getLineItemAccount('hourly_salary'),
+          account_number: getLineItemAccount('hourly_salary', emp.employment_type),
           sort_order: 0,
         })
       }
@@ -364,49 +414,33 @@ export async function runSalaryCalculation(
     if (absenceResult.flagLakarintyg) lakarintygEmployees.push(employeeName)
     if (absenceResult.flagFkReporting) fkReportingEmployees.push(employeeName)
 
-    // 8c. Replace derived absence rows.
-    const { error: delAbsErr } = await supabase
-      .from('salary_line_items')
-      .delete()
-      .eq('salary_run_employee_id', sre.id)
-      .in('item_type', DERIVED_ABSENCE_TYPES)
-    if (delAbsErr) {
-      return { ok: false, code: 'DATABASE_ERROR', details: delAbsErr }
-    }
+    // 8c. Absence rows.
+    absenceResult.lineItems.forEach((li, idx) => {
+      insertLines.push({
+        item_type: li.item_type,
+        description: li.description,
+        quantity: li.quantity,
+        amount: roundOre(li.amount),
+        is_taxable: li.is_taxable,
+        is_avgift_basis: li.is_avgift_basis,
+        is_vacation_basis: li.is_vacation_basis,
+        is_gross_deduction: li.is_gross_deduction,
+        is_net_deduction: false,
+        account_number: getLineItemAccount(li.item_type, emp.employment_type),
+        sort_order: 100 + idx,
+      })
+    })
 
-    // 8d. Derive benefit line items from employee_benefits.
-    const { data: activeBenefits, error: benefitsErr } = await supabase
-      .from('employee_benefits')
-      .select('id, benefit_type, description, monthly_value')
-      .eq('employee_id', emp.id)
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .lte('valid_from', run.payment_date)
-      .or(`valid_to.is.null,valid_to.gte.${run.payment_date}`)
-    if (benefitsErr) {
-      return { ok: false, code: 'DATABASE_ERROR', details: benefitsErr }
-    }
-
-    const { error: delBenefitErr } = await supabase
-      .from('salary_line_items')
-      .delete()
-      .eq('salary_run_employee_id', sre.id)
-      .not('source_benefit_id', 'is', null)
-    if (delBenefitErr) {
-      return { ok: false, code: 'DATABASE_ERROR', details: delBenefitErr }
-    }
-
-    const derivedBenefitRows = (activeBenefits ?? [])
-      .filter((b) => b.monthly_value > 0)
+    // 8d. Benefit rows from employee_benefits (förmåner).
+    const derivedBenefitRows = benefitRowsAll
+      .filter((b) => b.employee_id === emp.id && b.monthly_value > 0)
       .map((b, idx) => {
         const itemType = BENEFIT_TYPE_TO_LINE_ITEM[b.benefit_type] ?? 'benefit_other'
         return {
-          salary_run_employee_id: sre.id,
-          company_id: companyId,
           item_type: itemType,
           description: b.description,
           quantity: 1,
-          amount: Math.round(b.monthly_value * 100) / 100,
+          amount: roundOre(b.monthly_value),
           is_taxable: true,
           is_avgift_basis: true,
           is_vacation_basis: false,
@@ -417,70 +451,13 @@ export async function runSalaryCalculation(
           source_benefit_id: b.id,
         }
       })
+    insertLines.push(...derivedBenefitRows)
 
-    if (derivedBenefitRows.length > 0) {
-      const { error: insBenefitErr } = await supabase
-        .from('salary_line_items')
-        .insert(derivedBenefitRows)
-      if (insBenefitErr) {
-        return { ok: false, code: 'DATABASE_ERROR', details: insBenefitErr }
-      }
-    }
-
-    if (absenceResult.lineItems.length > 0) {
-      const rows = absenceResult.lineItems.map((li, idx) => ({
-        salary_run_employee_id: sre.id,
-        company_id: companyId,
-        item_type: li.item_type,
-        description: li.description,
-        quantity: li.quantity,
-        amount: Math.round(li.amount * 100) / 100,
-        is_taxable: li.is_taxable,
-        is_avgift_basis: li.is_avgift_basis,
-        is_vacation_basis: li.is_vacation_basis,
-        is_gross_deduction: li.is_gross_deduction,
-        is_net_deduction: false,
-        account_number: getLineItemAccount(li.item_type),
-        sort_order: 100 + idx,
-      }))
-      const { error: insAbsErr } = await supabase.from('salary_line_items').insert(rows)
-      if (insAbsErr) {
-        return { ok: false, code: 'DATABASE_ERROR', details: insAbsErr }
-      }
-    }
-
-    // 8d2. Derive shift-premium rows (OB-tillägg, övertid 50/100). The engine
-    //      consumes start_time/end_time when present; rows without explicit
-    //      times fall back to a default 08:00-17:00 shift (no pure-night/
-    //      pure-weekend rules trigger for those days). The premium rate is
-    //      applied to the employee's effectiveHourlyRate so monthly
-    //      employees still get OB by deriving an hourly rate as
+    // 8d2. Shift-premium rows (OB-tillägg, övertid 50/100). Rows without
+    //      explicit times fall back to a default 08:00-17:00 shift. The rate
+    //      applies to effectiveHourlyRate, so monthly employees get OB on
     //      monthly_salary / 173.
-    const { error: delPremiumErr } = await supabase
-      .from('salary_line_items')
-      .delete()
-      .eq('salary_run_employee_id', sre.id)
-      .in('item_type', DERIVED_PREMIUM_TYPES as unknown as string[])
-    if (delPremiumErr) {
-      return { ok: false, code: 'DATABASE_ERROR', details: delPremiumErr }
-    }
-
-    let derivedPremiumRows: Array<{
-      salary_run_employee_id: string
-      company_id: string
-      item_type: ShiftPremiumItemType
-      description: string
-      quantity: number
-      amount: number
-      is_taxable: boolean
-      is_avgift_basis: boolean
-      is_vacation_basis: boolean
-      is_gross_deduction: boolean
-      is_net_deduction: boolean
-      account_number: string
-      sort_order: number
-    }> = []
-
+    let derivedPremiumRows: Array<{ item_type: ShiftPremiumItemType; amount: number } & Record<string, unknown>> = []
     if (premiumRules.length > 0 && workedDayRows.length > 0) {
       const baseHourlyRate = effectiveHourlyRate({
         salary_type: emp.salary_type,
@@ -500,8 +477,6 @@ export async function runSalaryCalculation(
         rules: premiumRules,
       })
       derivedPremiumRows = premiumLines.map((line, idx) => ({
-        salary_run_employee_id: sre.id,
-        company_id: companyId,
         item_type: line.itemType,
         description: line.description,
         quantity: line.hours,
@@ -514,14 +489,7 @@ export async function runSalaryCalculation(
         account_number: getLineItemAccount(line.itemType, emp.employment_type),
         sort_order: 300 + idx,
       }))
-      if (derivedPremiumRows.length > 0) {
-        const { error: insPremiumErr } = await supabase
-          .from('salary_line_items')
-          .insert(derivedPremiumRows)
-        if (insPremiumErr) {
-          return { ok: false, code: 'DATABASE_ERROR', details: insPremiumErr }
-        }
-      }
+      insertLines.push(...derivedPremiumRows)
     }
 
     // 8e. Assemble the in-memory line item set fed to calculateSalary.
@@ -616,9 +584,6 @@ export async function runSalaryCalculation(
     )
 
     // Aggregated absence counts derived from per-day records.
-    const sickDays = absenceResult.aggregated.sickDays
-    const vabDays = absenceResult.aggregated.vabDays
-    const parentalDays = absenceResult.aggregated.parentalDays
     const vacationDays = (sre.line_items || [])
       .filter((li: Record<string, unknown>) => li.item_type === 'vacation')
       .reduce(
@@ -626,17 +591,36 @@ export async function runSalaryCalculation(
         0,
       )
 
-    // 8g. Write the per-employee row. Mirrors calendar-derived hours into the
-    //     hours_worked snapshot column so downstream code (reports, storno via
-    //     correct/route) sees a consistent value.
-    const snapshotHoursWorked =
-      derivedHoursWorked !== null && derivedHoursWorked > 0
-        ? derivedHoursWorked
-        : sre.hours_worked
-    const { error: empUpdateError } = await supabase
-      .from('salary_run_employees')
-      .update({
-        hours_worked: snapshotHoursWorked,
+    // 8g. Semesterersättning is derived by the engine on every calculate.
+    if (result.vacationCompensation > 0) {
+      insertLines.push({
+        item_type: 'semesterersattning',
+        description: 'Semesterersättning',
+        quantity: 1,
+        amount: roundOre(result.vacationCompensation),
+        is_taxable: true,
+        is_avgift_basis: true,
+        is_vacation_basis: false,
+        is_gross_deduction: false,
+        is_net_deduction: false,
+        account_number: getLineItemAccount('semesterersattning', emp.employment_type),
+        sort_order: 50,
+      })
+    }
+
+    // 8h. Per-employee snapshot. Calendar-derived hours are mirrored into
+    //     hours_worked so reports and storno see a consistent value.
+    const ytd = ytdByEmployee.get(sre.employee_id) || { gross: 0, tax: 0, net: 0 }
+    employeeWrites.push({
+      salary_run_employee_id: sre.id,
+      replace_item_types: [...new Set(replaceItemTypes)],
+      replace_benefit_rows: true,
+      insert_lines: insertLines,
+      update: {
+        hours_worked:
+          derivedHoursWorked !== null && derivedHoursWorked > 0
+            ? derivedHoursWorked
+            : sre.hours_worked,
         gross_salary: result.grossSalary,
         gross_deductions: result.grossDeductions,
         benefit_values: result.benefitValues,
@@ -653,60 +637,16 @@ export async function runSalaryCalculation(
         tax_table_number: emp.tax_table_number,
         tax_column: emp.tax_column,
         tax_table_year: paymentYear,
-        sick_days: sickDays,
-        vab_days: vabDays,
-        parental_days: parentalDays,
+        sick_days: absenceResult.aggregated.sickDays,
+        vab_days: absenceResult.aggregated.vabDays,
+        parental_days: absenceResult.aggregated.parentalDays,
         vacation_days_taken: vacationDays,
         calculation_breakdown: { steps: result.steps },
-        ytd_gross:
-          Math.round(
-            ((ytdByEmployee.get(sre.employee_id)?.gross || 0) + result.grossSalary) * 100,
-          ) / 100,
-        ytd_tax:
-          Math.round(
-            ((ytdByEmployee.get(sre.employee_id)?.tax || 0) + result.taxWithheld) * 100,
-          ) / 100,
-        ytd_net:
-          Math.round(
-            ((ytdByEmployee.get(sre.employee_id)?.net || 0) + result.netSalary) * 100,
-          ) / 100,
-      })
-      .eq('id', sre.id)
-
-    if (empUpdateError) {
-      return { ok: false, code: 'DATABASE_ERROR', details: empUpdateError }
-    }
-
-    // 8h. Replace any existing 'semesterersattning' line item (the engine
-    //     derives it on every calculate).
-    const { error: delSemErr } = await supabase
-      .from('salary_line_items')
-      .delete()
-      .eq('salary_run_employee_id', sre.id)
-      .eq('item_type', 'semesterersattning')
-    if (delSemErr) {
-      return { ok: false, code: 'DATABASE_ERROR', details: delSemErr }
-    }
-    if (result.vacationCompensation > 0) {
-      const { error: insSemErr } = await supabase.from('salary_line_items').insert({
-        salary_run_employee_id: sre.id,
-        company_id: companyId,
-        item_type: 'semesterersattning',
-        description: 'Semesterersättning',
-        quantity: 1,
-        amount: Math.round(result.vacationCompensation * 100) / 100,
-        is_taxable: true,
-        is_avgift_basis: true,
-        is_vacation_basis: false,
-        is_gross_deduction: false,
-        is_net_deduction: false,
-        account_number: getLineItemAccount('semesterersattning', emp.employment_type),
-        sort_order: 50,
-      })
-      if (insSemErr) {
-        return { ok: false, code: 'DATABASE_ERROR', details: insSemErr }
-      }
-    }
+        ytd_gross: roundOre(ytd.gross + result.grossSalary),
+        ytd_tax: roundOre(ytd.tax + result.taxWithheld),
+        ytd_net: roundOre(ytd.net + result.netSalary),
+      },
+    })
 
     totalGross += result.grossSalary
     totalTax += result.taxWithheld
@@ -716,29 +656,31 @@ export async function runSalaryCalculation(
     totalEmployerCost += result.totalEmployerCost
   }
 
-  // 9. Update run totals + freeze the calculation_params snapshot.
-  const { data: updatedRun, error: updateError } = await supabase
-    .from('salary_runs')
-    .update({
-      total_gross: Math.round(totalGross * 100) / 100,
-      total_tax: Math.round(totalTax * 100) / 100,
-      total_net: Math.round(totalNet * 100) / 100,
-      total_avgifter: Math.round(totalAvgifter * 100) / 100,
-      total_vacation_accrual: Math.round(totalVacationAccrual * 100) / 100,
-      total_employer_cost: Math.round(totalEmployerCost * 100) / 100,
-      calculation_params: serializePayrollConfig(config),
-    })
-    .eq('id', id)
-    // Defense-in-depth: scope the write to the company explicitly. The
-    // first SELECT confirmed `company_id = companyId` for this id, but the
-    // CLAUDE.md rule is that every write carries the filter so the
-    // intent is explicit at the SQL layer even if upstream code is later
-    // refactored.
-    .eq('company_id', companyId)
-    .select()
-    .single()
+  // 9. Persist line items, per-employee snapshots, run totals and the frozen
+  //    calculation_params in ONE transaction — only while the run is a draft.
+  const { data: updatedRun, error: updateError } = await supabase.rpc('persist_salary_run_calculation', {
+    p_company_id: companyId,
+    p_run_id: id,
+    p_employees: employeeWrites,
+    p_totals: {
+      total_gross: roundOre(totalGross),
+      total_tax: roundOre(totalTax),
+      total_net: roundOre(totalNet),
+      total_avgifter: roundOre(totalAvgifter),
+      total_vacation_accrual: roundOre(totalVacationAccrual),
+      total_employer_cost: roundOre(totalEmployerCost),
+    },
+    p_calculation_params: serializePayrollConfig(config),
+  })
 
   if (updateError) {
+    if (updateError.code === '55000') {
+      return {
+        ok: false,
+        code: 'SALARY_RUN_CALCULATE_FAILED',
+        details: { reason: 'not_draft' },
+      }
+    }
     return { ok: false, code: 'DATABASE_ERROR', details: updateError }
   }
 

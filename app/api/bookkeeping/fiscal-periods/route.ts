@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { validateBody } from '@/lib/api/validate'
@@ -58,7 +59,9 @@ function rpcErrorCode(message: string): string {
 export async function GET(request: Request) {
   const rid = requestId()
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized', code: 'UNAUTHORIZED', requestId: rid }, { status: 401 })
@@ -146,7 +149,9 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const rid = requestId()
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized', code: 'UNAUTHORIZED', requestId: rid }, { status: 401 })

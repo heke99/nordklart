@@ -1435,6 +1435,9 @@ export type JournalEntrySourceType =
   | 'reminder_fee'
   | 'accrual'
   | 'result_appropriation'
+  | 'dividend_decision'
+  | 'dividend_payment'
+  | 'year_end_inventory'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -1796,6 +1799,8 @@ export interface SIEExportOptions {
   fiscal_period_id: string
   company_name: string
   org_number: string | null
+  /** Decides whether #SRU carries INK2R (aktiebolag) or NE codes. */
+  entity_type?: string | null
   program_name?: string
   /**
    * When true, omit year-end closing verifikat (source_type = 'year_end')

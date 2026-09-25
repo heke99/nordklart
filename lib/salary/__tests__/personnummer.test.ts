@@ -73,9 +73,12 @@ describe('calculateAge', () => {
 })
 
 describe('calculateAgeAtYearStart', () => {
-  it('calculates age at January 1 of given year', () => {
-    expect(calculateAgeAtYearStart('199001019802', 2026)).toBe(36)
+  it('uses the birth year only (Skatteverket: 2026 youth rate for born 2003–2007)', () => {
+    expect(calculateAgeAtYearStart('199001019802', 2026)).toBe(35)
     expect(calculateAgeAtYearStart('199012319802', 2026)).toBe(35)
+    expect(calculateAgeAtYearStart('200301019802', 2026)).toBe(22)
+    expect(calculateAgeAtYearStart('195801019802', 2026)).toBe(67)
+    expect(calculateAgeAtYearStart('195901019802', 2026)).toBe(66)
   })
 })
 

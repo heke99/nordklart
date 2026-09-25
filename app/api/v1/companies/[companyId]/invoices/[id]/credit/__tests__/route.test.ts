@@ -161,6 +161,31 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     expect(mockCreditEntry).toHaveBeenCalledTimes(1)
   })
 
+  it('removes the credit note and fails when the reverse voucher cannot be posted', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: ORIGINAL_SENT_INVOICE, error: null },
+        { data: CREATED_CREDIT_NOTE, error: null },
+      ],
+      invoice_items: { data: null, error: null },
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      companies: { data: { entity_type: 'enskild_firma' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    mockCreditEntry.mockRejectedValueOnce(new Error('Period locked'))
+
+    const res = await creditInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/credit`, { reason: 'Fel' }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(500)
+    // header + items deleted; original never flipped to credited
+    const tables = supabase.from.mock.calls.map((c) => c[0])
+    expect(tables.filter((t) => t === 'invoices').length).toBeGreaterThanOrEqual(3)
+  })
+
   it('returns 404 INVOICE_CREDIT_ORIGINAL_NOT_FOUND when the original is missing', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

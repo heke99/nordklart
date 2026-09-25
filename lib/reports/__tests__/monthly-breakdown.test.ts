@@ -56,11 +56,11 @@ describe('generateMonthlyBreakdown', () => {
           eq: () => ({
             eq: () => ({
               in: () => ({
-                range: () =>
+                order: () => ({ range: () =>
                   Promise.resolve({
                     data: [],
                     error: null,
-                  }),
+                  }), }),
               }),
             }),
           }),
@@ -100,7 +100,7 @@ describe('generateMonthlyBreakdown', () => {
           eq: () => ({
             eq: () => ({
               in: () => ({
-                range: () =>
+                order: () => ({ range: () =>
                   Promise.resolve({
                     data: [
                       {
@@ -129,7 +129,7 @@ describe('generateMonthlyBreakdown', () => {
                       },
                     ],
                     error: null,
-                  }),
+                  }), }),
               }),
             }),
           }),
@@ -181,7 +181,7 @@ describe('generateMonthlyBreakdown', () => {
           eq: () => ({
             eq: () => ({
               in: () => ({
-                range: () =>
+                order: () => ({ range: () =>
                   Promise.resolve({
                     data: [
                       {
@@ -210,7 +210,7 @@ describe('generateMonthlyBreakdown', () => {
                       },
                     ],
                     error: null,
-                  }),
+                  }), }),
               }),
             }),
           }),

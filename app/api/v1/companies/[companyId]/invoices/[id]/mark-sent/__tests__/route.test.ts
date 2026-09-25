@@ -250,7 +250,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(body.error.details.field).toBe('moms_ruta')
   })
 
-  it('surfaces a warning in the response when journal entry creation fails', async () => {
+  it('reverts to draft and fails when journal entry creation fails', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -273,14 +273,11 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       detailParams(COMPANY_ID, INVOICE_ID),
     )
 
-    expect(res.status).toBe(200)
+    // A sent invoice without its verifikation cannot be retried, so the
+    // route puts it back to draft and fails (BFL 5 kap).
+    expect(res.status).toBe(500)
     const body = await res.json()
-    // Status STILL flips to sent.
-    expect(body.data.status).toBe('sent')
-    expect(body.data.journal_entry_id).toBeNull()
-    // But the caller is warned.
-    expect(body.data.warnings).toBeDefined()
-    expect(body.data.warnings[0].code).toBe('JOURNAL_ENTRY_NOT_POSTED')
+    expect(body.error.details.invoice_status).toBe('draft')
   })
 
   it('returns 404 when the invoice does not belong to the company', async () => {

@@ -11,6 +11,13 @@ export interface SignatureRequest {
   signed_at: string | null
   created_at: string
   updated_at: string
+  bankid_signature_data?: Record<string, unknown> | null
+  /**
+   * For a BankID signature: whether the signer holds a signing position in
+   * Bolagsverket's register (from signed_consents.context). null = manual
+   * signature or no check recorded.
+   */
+  registry_verified?: boolean | null
 }
 
 export interface CreateSignatureRequestInput {
@@ -28,12 +35,33 @@ export async function listSignatureRequests(
 ): Promise<SignatureRequest[]> {
   const { data, error } = await supabase
     .from('arsredovisning_signature_requests')
-    .select('id, user_id, company_id, fiscal_period_id, role, signer_name, status, signed_at, created_at, updated_at')
+    .select('id, user_id, company_id, fiscal_period_id, role, signer_name, status, signed_at, created_at, updated_at, bankid_signature_data')
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
     .order('created_at', { ascending: true })
   if (error) throw new Error(`Failed to list signature requests: ${error.message}`)
-  return (data ?? []) as SignatureRequest[]
+  const requests = (data ?? []) as SignatureRequest[]
+
+  const consentIds = requests
+    .map((r) => r.bankid_signature_data?.consent_id)
+    .filter((id): id is string => typeof id === 'string')
+  const checks = new Map<string, boolean | null>()
+  if (consentIds.length > 0) {
+    const { data: consents } = await supabase
+      .from('signed_consents')
+      .select('id, context')
+      .eq('company_id', companyId)
+      .in('id', consentIds)
+    for (const c of consents ?? []) {
+      const check = (c.context as Record<string, unknown> | null)?.signer_registry_check as { matched?: boolean } | undefined
+      checks.set(c.id as string, typeof check?.matched === 'boolean' ? check.matched : null)
+    }
+  }
+
+  return requests.map((r) => {
+    const consentId = r.bankid_signature_data?.consent_id
+    return { ...r, registry_verified: typeof consentId === 'string' ? checks.get(consentId) ?? null : null }
+  })
 }
 
 /**

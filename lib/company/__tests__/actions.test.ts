@@ -13,6 +13,11 @@ vi.mock('@/lib/company/context', () => ({
   setActiveCompany: vi.fn().mockResolvedValue(undefined),
 }))
 
+const mockVerifyFounder = vi.fn()
+vi.mock('@/lib/company/verify-signatory', () => ({
+  verifyFounder: (...args: unknown[]) => mockVerifyFounder(...args),
+}))
+
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { createCompanyFromOnboarding } from '../actions'
 
@@ -80,6 +85,7 @@ function buildSupabase(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockVerifyFounder.mockResolvedValue({ kind: 'decided', status: 'verified', reason: 'ab_registered_representative', evidence: {} })
 })
 
 describe('createCompanyFromOnboarding — org_number validation', () => {
@@ -108,7 +114,7 @@ describe('createCompanyFromOnboarding — org_number validation', () => {
     expect(result.error).toBe('org_number_invalid')
     // Must NOT have reached the create RPC — otherwise we'd save a malformed
     // org_number and poison SIE/SRU exports.
-    const rpcCreate = supabase.rpc.mock.calls.find(([name]) => name === 'create_company_with_owner')
+    const rpcCreate = supabase.rpc.mock.calls.find(([name]) => name === 'create_company_for_founder')
     expect(rpcCreate).toBeUndefined()
   })
 
@@ -139,105 +145,80 @@ describe('createCompanyFromOnboarding — org_number validation', () => {
     })
 
     expect(result.error).toBe('org_number_invalid')
-    const rpcCreate = supabase.rpc.mock.calls.find(([name]) => name === 'create_company_with_owner')
+    const rpcCreate = supabase.rpc.mock.calls.find(([name]) => name === 'create_company_for_founder')
     expect(rpcCreate).toBeUndefined()
   })
 })
 
-describe('createCompanyFromOnboarding — TIC snapshot persistence', () => {
-  it('persists the supplied ticLookup to companies.tic_snapshot', async () => {
-    const { supabase, calls } = buildSupabase({
-      user: { id: 'user-1' },
-      rpcResults: {
-        create_company_with_owner: { data: 'new-company-id' },
-        seed_chart_of_accounts: { data: null },
-      },
-    })
+const input = {
+  teamId: 'team-1',
+  settings: { entity_type: 'aktiebolag', company_name: 'Acme AB', org_number: '5560125790', vat_registered: true },
+  fiscalPeriod: { startDate: '2026-01-01', endDate: '2026-12-31', name: 'Räkenskapsår 2026' },
+}
+
+describe('createCompanyFromOnboarding — founder verification and atomic creation', () => {
+  it('stops before creating anything when BankID is required', async () => {
+    mockVerifyFounder.mockResolvedValue({ kind: 'bankid_required' })
+    const { supabase } = buildSupabase({ user: { id: 'user-1' } })
     mockCreateClient.mockResolvedValue(supabase as never)
     mockCreateServiceClient.mockReturnValue(supabase as never)
 
-    const ticLookup = {
-      companyName: 'Acme AB',
-      isCeased: false,
-      address: { street: 'Storgatan 1', postalCode: '11122', city: 'Stockholm' },
-      registration: { fTax: true, vat: true },
-      bankAccounts: [],
-      email: null,
-      phone: null,
-      sniCodes: [{ code: '62010', name: 'Dataprogrammering' }],
-      fiscalYear: { startMonthDay: '01-01', endMonthDay: '12-31' },
-      legalEntityType: 'AB',
-      registrationDate: 0,
-    }
+    const result = await createCompanyFromOnboarding(input)
 
-    const result = await createCompanyFromOnboarding({
-      teamId: 'team-1',
-      settings: {
-        entity_type: 'aktiebolag',
-        company_name: 'Acme AB',
-        org_number: '5560125790',
-      },
-      fiscalPeriod: {
-        startDate: '2026-01-01',
-        endDate: '2026-12-31',
-        name: 'Räkenskapsår 2026',
-      },
-      ticLookup,
-    })
-
-    expect(result.companyId).toBe('new-company-id')
-
-    // The lookup must have been UPDATEd onto the freshly-created company row.
-    // Two updates run on `companies`: one for org_number, one for tic_snapshot.
-    const companyUpdates = calls.filter(
-      (c) => c.table === 'companies' && c.method === 'update',
-    )
-    const snapshotUpdate = companyUpdates.find((c) => {
-      const payload = c.args[0] as Record<string, unknown>
-      return 'tic_snapshot' in payload
-    })
-    expect(snapshotUpdate).toBeDefined()
-    const payload = snapshotUpdate!.args[0] as Record<string, unknown>
-    expect(payload.tic_snapshot).toEqual(ticLookup)
-    expect(payload.tic_snapshot_fetched_at).toBeDefined()
+    expect(result.bankIdRequired).toBe(true)
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('skips the snapshot update when no ticLookup is supplied (manual signup)', async () => {
-    const { supabase, calls } = buildSupabase({
+  it('creates the company with one RPC carrying the verification', async () => {
+    mockVerifyFounder.mockResolvedValue({ kind: 'decided', status: 'manual_review', reason: 'ab_no_role_in_company', evidence: { x: 1 } })
+    const { supabase } = buildSupabase({
       user: { id: 'user-1' },
-      rpcResults: {
-        create_company_with_owner: { data: 'new-company-id' },
-        seed_chart_of_accounts: { data: null },
-      },
+      rpcResults: { create_company_for_founder: { data: 'new-company-id' } },
     })
     mockCreateClient.mockResolvedValue(supabase as never)
     mockCreateServiceClient.mockReturnValue(supabase as never)
 
-    const result = await createCompanyFromOnboarding({
-      teamId: 'team-1',
-      settings: {
-        entity_type: 'aktiebolag',
-        company_name: 'Manual AB',
-        // No org_number — exercises the path where the org_number UPDATE also
-        // doesn't run, so we can isolate the no-snapshot guarantee.
-      },
-      fiscalPeriod: {
-        startDate: '2026-01-01',
-        endDate: '2026-12-31',
-        name: 'Räkenskapsår 2026',
-      },
-      // ticLookup intentionally omitted
-    })
+    const result = await createCompanyFromOnboarding(input)
 
-    expect(result.companyId).toBe('new-company-id')
+    expect(result).toMatchObject({ companyId: 'new-company-id', verificationPending: true })
+    const rpcNames = supabase.rpc.mock.calls.map(([name]) => name)
+    expect(rpcNames).toEqual(['create_company_for_founder'])
+    expect(supabase.rpc).toHaveBeenCalledWith('create_company_for_founder', expect.objectContaining({
+      p_user_id: 'user-1',
+      p_org_number: '5560125790',
+      p_entity_type: 'aktiebolag',
+      p_verification_status: 'manual_review',
+      p_verification_reason: 'ab_no_role_in_company',
+      p_period_start: '2026-01-01',
+      p_period_end: '2026-12-31',
+    }))
+    // No client-side multi-step writes or rollback deletes any more.
+    expect(supabase.from.mock.calls.map(([t]) => t)).not.toContain('company_settings')
+  })
 
-    // No update touched tic_snapshot at all.
-    const snapshotUpdate = calls.find((c) => {
-      if (c.table !== 'companies' || c.method !== 'update') return false
-      const payload = c.args[0] as Record<string, unknown>
-      return 'tic_snapshot' in payload
+  it('never persists browser-supplied TIC data', async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: { create_company_for_founder: { data: 'new-company-id' } },
     })
-    expect(snapshotUpdate).toBeUndefined()
+    mockCreateClient.mockResolvedValue(supabase as never)
+    mockCreateServiceClient.mockReturnValue(supabase as never)
+
+    await createCompanyFromOnboarding({ ...input, ticLookup: { name: 'Injected' } })
+
+    expect(calls.some((c) => c.table === 'companies' && c.method === 'update')).toBe(false)
+  })
+
+  it('maps a duplicate org.nr from the RPC to a clear message', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: { create_company_for_founder: { error: { code: '23505', message: 'dup' } } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+    mockCreateServiceClient.mockReturnValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding(input)
+    expect(result.error).toMatch(/finns redan/)
   })
 
   it('does NOT call the heavy /profile endpoint at signup (regression: was 13 calls/signup)', async () => {
@@ -250,8 +231,7 @@ describe('createCompanyFromOnboarding — TIC snapshot persistence', () => {
     const { supabase } = buildSupabase({
       user: { id: 'user-1' },
       rpcResults: {
-        create_company_with_owner: { data: 'new-company-id' },
-        seed_chart_of_accounts: { data: null },
+        create_company_for_founder: { data: 'new-company-id' },
       },
     })
     mockCreateClient.mockResolvedValue(supabase as never)

@@ -84,14 +84,14 @@ describe('calculateBolagsskatt', () => {
     expect(result!.amount).toBe(41_818)
   })
 
-  it('truncates taxable result to whole krona before applying tax', async () => {
+  it('rounds taxable income down to whole tens of kronor (IL 1 kap. 6 §) and the tax down to kronor', async () => {
     vi.mocked(generateIncomeStatement).mockResolvedValue({
       net_result: 100_999.99,
     } as Awaited<ReturnType<typeof generateIncomeStatement>>)
 
     const result = await calculateBolagsskatt(NOOP_CLIENT, 'co', 'fp')
 
-    // floor(100_999.99) = 100_999, × 0.206 = 20805.794 → round = 20_806
-    expect(result!.amount).toBe(20_806)
+    // 100 999,99 → 100 990 (hela tiotal kronor), × 20,6 % = 20 803,94 → 20 803
+    expect(result!.amount).toBe(20_803)
   })
 })

@@ -279,13 +279,14 @@ async function computeProposal(
         .eq('company_id', companyId)
         .single()
       const periodEnd = periodRow?.period_end ?? `${fiscalYear}-12-31`
-      const existing = await listExistingPeriodiseringsfonder(supabase, companyId, periodEnd)
+      const existing = await listExistingPeriodiseringsfonder(supabase, companyId, periodEnd, fiscalPeriodId)
       const schablonintaktRate = ruleset.schablonintakt_rate
+      // IL 30 kap. 6 a §: schablonintäkt on the funds at the START of the year.
       const schablonintakt = existing.reduce(
-        (sum, f) => sum + f.balance * schablonintaktRate,
+        (sum, f) => sum + Math.max(0, f.opening_balance) * schablonintaktRate,
         0,
       )
-      const base = projected.resultBeforeTax() + Math.round(schablonintakt)
+      const base = projected.resultBeforeTax() + Math.floor(schablonintakt)
       return proposeAvsattning({
         skattemassigtResultatBeforeAvsattning: base,
         desiredAmount: item.desiredAmount,
@@ -307,6 +308,7 @@ async function computeProposal(
         supabase,
         companyId,
         period.period_end,
+        fiscalPeriodId,
       )
       const result = proposeAteforing(existing, {
         returns: item.returns,

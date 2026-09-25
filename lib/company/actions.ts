@@ -4,7 +4,7 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { setActiveCompany } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import type { CompanyLookupResult } from '@/lib/company-lookup/types'
+import { verifyFounder } from '@/lib/company/verify-signatory'
 
 export async function switchCompany(companyId: string): Promise<{ error?: string }> {
   const supabase = await createClient()
@@ -29,12 +29,14 @@ export async function switchCompany(companyId: string): Promise<{ error?: string
 /**
  * Create a company from onboarding wizard data.
  *
- * This runs on the server so that if the Next.js server is unavailable when
- * the user clicks the final "Fortsätt" button, the action never reaches
- * Supabase and no ghost company is created. All operations (company,
- * membership, chart of accounts, settings, fiscal period, active company)
- * happen sequentially; if any step after company creation fails the company
- * is rolled back to avoid partial state.
+ * The founder is verified first (lib/company/verify-signatory.ts): on hosted
+ * Nordklart that means BankID, and for an aktiebolag a current representative
+ * position in Bolagsverket's register. Everything the company needs — the
+ * company row with its org.nr, the owner membership carrying that
+ * verification, cash account, chart of accounts, settings, first fiscal year
+ * and active company — is then created by ONE database function in one
+ * transaction (create_company_for_founder). A failure leaves nothing behind;
+ * there is no client-side rollback to go wrong.
  */
 export async function createCompanyFromOnboarding(params: {
   teamId: string
@@ -44,22 +46,20 @@ export async function createCompanyFromOnboarding(params: {
     endDate: string
     name: string
   }
-  // Optional TIC lookup result captured during the onboarding form. When
-  // supplied, persisted to companies.tic_snapshot so downstream features
-  // (specialized accountant agent composer, MCP briefing) can read the same
-  // Bolagsverket-sourced data the form used. Empty for manual entry paths.
-  ticLookup?: CompanyLookupResult | null
-}): Promise<{ companyId?: string; error?: string; accessRequestPending?: boolean }> {
+  /**
+   * Accepted for compatibility with older wizard builds and ignored: company
+   * facts are never taken from the browser. companies.tic_snapshot is fetched
+   * server-side (ensureTicSnapshot) when a feature needs it.
+   */
+  ticLookup?: unknown
+}): Promise<{ companyId?: string; error?: string; accessRequestPending?: boolean; bankIdRequired?: boolean; verificationPending?: boolean }> {
   try {
     return await createCompanyFromOnboardingImpl(params)
   } catch (err) {
-    // Defensive top-level catch: a thrown error escapes to the client as
-    // an opaque Next.js server-action exception with no message in dev
-    // and a redacted message in prod. Logging the full error here gives
-    // us a server-side trace and returns a localized fallback to the UI.
+    // A thrown error escapes to the client as an opaque server-action
+    // exception; log it here and return a localized message instead.
     console.error('[createCompanyFromOnboarding] unexpected error', err)
-    const message = err instanceof Error ? err.message : String(err)
-    return { error: message || 'Något gick fel när företaget skulle skapas. Försök igen.' }
+    return { error: 'Något gick fel när företaget skulle skapas. Försök igen.' }
   }
 }
 
@@ -67,8 +67,7 @@ async function createCompanyFromOnboardingImpl(params: {
   teamId: string
   settings: Record<string, unknown>
   fiscalPeriod: { startDate: string; endDate: string; name: string }
-  ticLookup?: CompanyLookupResult | null
-}): Promise<{ companyId?: string; error?: string; accessRequestPending?: boolean }> {
+}): Promise<{ companyId?: string; error?: string; accessRequestPending?: boolean; bankIdRequired?: boolean; verificationPending?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -83,25 +82,31 @@ async function createCompanyFromOnboardingImpl(params: {
 
   const companyName = (params.settings.company_name as string | undefined) || 'Mitt företag'
 
-  // Org-number format validation. We intentionally do NOT enforce
-  // uniqueness: the same org number may legitimately appear on multiple
-  // companies (a separate test copy of your real company, or a consultant
-  // and the owner each tracking the same entity). Tenant isolation
-  // (RLS + company_id) is the real boundary — not org-number uniqueness.
-  //
-  // normalizeOrgNumber returns null for malformed input — we refuse rather
-  // than storing a value that would break SIE/SRU exports later.
+  // normalizeOrgNumber returns null for malformed input — refuse rather than
+  // store a value that would break SIE/SRU exports later.
   const rawOrgNumber = params.settings.org_number as string | undefined
   const cleanedOrgNumber = normalizeOrgNumber(rawOrgNumber)
   if (rawOrgNumber && rawOrgNumber.trim() && !cleanedOrgNumber) {
     return { error: 'org_number_invalid' }
   }
 
+  const service = createServiceClient()
+
+  const verification = await verifyFounder(service, {
+    userId: user.id,
+    entityType,
+    orgNumber: cleanedOrgNumber,
+  })
+  if (verification.kind === 'bankid_required') {
+    return { bankIdRequired: true, error: 'Identifiera dig med BankID innan företaget skapas.' }
+  }
+
+  // An org.nr already in Nordklart: a member simply switches to it; anyone
+  // else asks for access. The existing company's name is not disclosed.
   if (cleanedOrgNumber) {
-    const service = createServiceClient()
     const { data: existingCompany } = await service
       .from('companies')
-      .select('id, name')
+      .select('id')
       .eq('org_number', cleanedOrgNumber)
       .is('archived_at', null)
       .order('created_at', { ascending: true })
@@ -111,7 +116,7 @@ async function createCompanyFromOnboardingImpl(params: {
     if (existingCompany?.id) {
       const { data: existingMembership } = await service
         .from('company_members')
-        .select('id, status')
+        .select('id')
         .eq('company_id', existingCompany.id)
         .eq('user_id', user.id)
         .in('status', ['active', 'active_limited'])
@@ -122,158 +127,67 @@ async function createCompanyFromOnboardingImpl(params: {
         return { companyId: existingCompany.id }
       }
 
-      await service.from('company_access_requests').upsert({
+      const { data: request } = await service.from('company_access_requests').upsert({
         company_id: existingCompany.id,
         requester_user_id: user.id,
         requester_email: user.email?.toLowerCase() ?? '',
         requested_role: 'admin',
         status: 'pending',
         message: 'Begäran skapad från inloggad onboarding när orgnumret redan fanns i Nordklart.',
-      }, { onConflict: 'company_id,requester_user_id' })
+      }, { onConflict: 'company_id,requester_user_id' }).select('id').maybeSingle()
+
+      if (request?.id) {
+        // A verified signatory is never gated by an unverified owner.
+        await service.rpc('flag_access_request_for_verified_founder', {
+          p_request_id: request.id,
+          p_status: verification.status,
+        })
+      }
 
       return {
         accessRequestPending: true,
-        error: `Bolaget ${existingCompany.name ?? ''} finns redan i Nordklart. En ägare eller administratör behöver godkänna din åtkomst.`,
+        error: 'Bolaget finns redan i Nordklart. En ägare eller administratör behöver godkänna din åtkomst.',
       }
     }
   }
 
-  // 1. Create company + owner membership atomically via RPC
-  const { data: newCompanyId, error: companyError } = await supabase.rpc('create_company_with_owner', {
+  const { data: newCompanyId, error: createError } = await service.rpc('create_company_for_founder', {
+    p_user_id: user.id,
     p_name: companyName,
     p_entity_type: entityType,
-    p_team_id: params.teamId,
+    p_team_id: params.teamId || null,
+    p_org_number: cleanedOrgNumber,
+    p_settings: params.settings,
+    p_period_start: params.fiscalPeriod.startDate,
+    p_period_end: params.fiscalPeriod.endDate,
+    p_period_name: params.fiscalPeriod.name,
+    p_verification_status: verification.status,
+    p_verification_reason: verification.reason,
+    p_verification_evidence: verification.evidence,
   })
 
-  if (companyError || !newCompanyId) {
-    console.error('[createCompanyFromOnboarding] company creation failed', companyError)
+  if (createError || !newCompanyId) {
+    console.error('[createCompanyFromOnboarding] company creation failed', createError)
+    if (createError?.code === '23505') {
+      return { error: 'Bolaget finns redan i Nordklart. Begär åtkomst till det befintliga bolaget.' }
+    }
+    if (createError?.code === '42501') {
+      return { error: 'Du har inte behörighet att skapa företaget i det valda teamet.' }
+    }
     return { error: 'Kunde inte skapa företag. Försök igen.' }
   }
 
-  await supabase
-    .from('company_members')
-    .update({
-      status: 'active',
-      access_source: 'founder_signup',
-      approved_by: user.id,
-      approved_at: new Date().toISOString(),
-      verification_status: 'self_attested',
-    })
-    .eq('company_id', newCompanyId)
-    .eq('user_id', user.id)
-
-  // Helper: roll back the company if a subsequent step fails. Deletes in FK order.
-  const rollback = async (reason: string, err: unknown) => {
-    console.error(`[createCompanyFromOnboarding] rolling back ${newCompanyId}: ${reason}`, err)
-    await supabase.from('company_settings').delete().eq('company_id', newCompanyId)
-    await supabase.from('fiscal_periods').delete().eq('company_id', newCompanyId)
-    await supabase.from('chart_of_accounts').delete().eq('company_id', newCompanyId)
-    await supabase.from('company_members').delete().eq('company_id', newCompanyId)
-    await supabase.from('companies').delete().eq('id', newCompanyId)
-  }
-
-  // Mirror the normalized org_number onto the companies row so future
-  // duplicate checks and cross-references are reliable. MUST be error-checked
-  // and rolled back on failure — otherwise the freshly-created company would
-  // exist without an org_number and the duplicate guard would never match it
-  // for any future user (the very guard this code is enforcing).
-  if (cleanedOrgNumber) {
-    const { error: orgUpdateError } = await supabase
-      .from('companies')
-      .update({ org_number: cleanedOrgNumber })
-      .eq('id', newCompanyId)
-    if (orgUpdateError) {
-      await rollback('org_number update failed', orgUpdateError)
-      return { error: 'Kunde inte spara organisationsnummer. Försök igen.' }
-    }
-  }
-
-  // Persist whatever lookup data the wizard already gathered. Do NOT call
-  // /profile here — that handler fans out to 13 Lens calls and the 5 s
-  // timeout in tic-fetch.ts ate ~530 wasted calls in May before yielding
-  // zero snapshots (every signup's /profile timed out, but the in-flight
-  // upstream fetches still counted against quota). The agent build path
-  // (app/(onboarding)/onboarding/agent/page.tsx) calls ensureTicSnapshot
-  // with upgradeV1: true lazily, which is the right place: only companies
-  // that actually reach agent onboarding spend the budget.
-  if (params.ticLookup) {
-    const { error: ticErr } = await supabase
-      .from('companies')
-      .update({
-        tic_snapshot: params.ticLookup,
-        tic_snapshot_fetched_at: new Date().toISOString(),
-      })
-      .eq('id', newCompanyId)
-    if (ticErr) {
-      console.warn('[createCompanyFromOnboarding] tic snapshot persist failed', ticErr)
-    }
-  }
-
-  // 2. Seed chart of accounts
-  const { error: coaError } = await supabase.rpc('seed_chart_of_accounts', {
-    p_company_id: newCompanyId,
-    p_entity_type: entityType,
-  })
-  if (coaError) {
-    await rollback('COA seeding failed', coaError)
-    return { error: 'Kunde inte skapa kontoplan. Försök igen.' }
-  }
-
-  // 3. Save settings (strip UI-only and managed fields)
-  const {
-    id: _id,
-    user_id: _uid,
-    company_id: _cid,
-    created_at: _ca,
-    updated_at: _ua,
-    is_first_fiscal_year: _ify,
-    first_year_start: _fys,
-    first_year_end: _fye,
-    ...settingsToSave
-  } = params.settings
-
-  const { error: settingsError } = await supabase
-    .from('company_settings')
-    .upsert(
-      {
-        ...settingsToSave,
-        company_id: newCompanyId,
-        onboarding_complete: true,
-        onboarding_step: 4,
-      },
-      { onConflict: 'company_id' },
-    )
-
-  if (settingsError) {
-    await rollback('settings upsert failed', settingsError)
-    return { error: 'Kunde inte spara inställningar. Försök igen.' }
-  }
-
-  // 4. Create fiscal period
-  const { error: periodError } = await supabase.from('fiscal_periods').upsert(
-    {
-      company_id: newCompanyId,
-      name: params.fiscalPeriod.name,
-      period_start: params.fiscalPeriod.startDate,
-      period_end: params.fiscalPeriod.endDate,
-    },
-    { onConflict: 'company_id,period_start,period_end' },
-  )
-
-  if (periodError) {
-    await rollback('fiscal period upsert failed', periodError)
-    return { error: 'Kunde inte skapa räkenskapsår. Försök igen.' }
-  }
-
-  // 5. Set as active company
+  // The RPC already set user_preferences.active_company_id; this keeps the
+  // legacy cookie in sync for readers that still use it.
   try {
-    await setActiveCompany(supabase, user.id, newCompanyId)
+    await setActiveCompany(supabase, user.id, newCompanyId as string)
   } catch (err) {
-    // Non-fatal: the company was created successfully; the user can switch manually
     console.error('[createCompanyFromOnboarding] setActiveCompany failed', err)
   }
 
   revalidatePath('/')
-  return { companyId: newCompanyId }
+  return {
+    companyId: newCompanyId as string,
+    verificationPending: verification.status === 'manual_review',
+  }
 }
-

@@ -40,7 +40,7 @@ Sverigevistelser och tredjeland-vistelser är tillåtna utan att bryta utlandsvi
 
 **25 % av lön + vissa ersättningar är skattefria** under upp till **7 år** (utökat från 5 år genom **lag 2023:880** för vistelser som påbörjats efter **2023-03-31**; tidigare ankomster bibehåller 5-årsgränsen).
 
-**Förenklingsregel (från 2025-01-01).** Personer med månadsersättning ≥ **1,5 prisbasbelopp** (2025: 1,5 × 58 800 = 88 200 SEK; 2026: 1,5 × 60 500 = 90 750 SEK) får automatiskt expertskatt om övriga formaliakrav uppfylls. Slipper subjektiv bedömning av forskningsmerit/specialistroll. Ansökan till Forskarskattenämnden inom **tre månader** efter arbetets påbörjande.
+**Förenklingsregel (från 2025-01-01).** Personer med månadsersättning ≥ **1,5 prisbasbelopp** (2025: 1,5 × 58 800 = 88 200 SEK; 2026: 1,5 × 59 200 = 88 800 SEK) får automatiskt expertskatt om övriga formaliakrav uppfylls. Slipper subjektiv bedömning av forskningsmerit/specialistroll. Ansökan till Forskarskattenämnden inom **tre månader** efter arbetets påbörjande.
 
 **Kvalifikationer för förenklingsregeln:**
 - Utländsk medborgare (eller svensk medborgare som inte varit bosatt i Sverige under de senaste fem åren)

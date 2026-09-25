@@ -269,6 +269,7 @@ function plantStandardReports() {
       delta_lan: 0,
       utdelningar: 0,
       nyemission: 0,
+      ovriga_finansiering: 0,
       total: 0,
     },
     total_cash_flow: 300_000,

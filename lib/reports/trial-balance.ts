@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchAccountSums } from './account-sums'
+import { YEAR_END_CLOSING_SOURCE_TYPES } from './period-account-nets'
 import { getOpeningBalances } from './opening-balances'
 import type { TrialBalanceRow } from '@/types'
 
@@ -59,7 +61,18 @@ export async function generateTrialBalance(
     period?.period_start &&
     options.fromDate > period.period_start
   ) {
-    const priorLines = await fetchAllRows<{
+    const dayBefore = new Date(Date.parse(`${options.fromDate}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10)
+    const priorSums = await fetchAccountSums(
+      supabase,
+      {
+        companyId,
+        fiscalPeriodId,
+        fromDate: period.period_start,
+        toDate: dayBefore,
+        excludeEntryId: obEntryId ?? null,
+        excludeSourceTypes: options?.excludeYearEndClosing ? YEAR_END_CLOSING_SOURCE_TYPES : null,
+      },
+      () => fetchAllRows<{
       account_number: string
       debit_amount: number
       credit_amount: number
@@ -83,14 +96,15 @@ export async function generateTrialBalance(
           .neq('journal_entries.source_type', 'year_end_closing')
       }
 
-      return query.range(from, to)
-    })
+      return query.order('id', { ascending: true }).range(from, to)
+    }),
+    )
 
-    for (const line of priorLines) {
-      const existing = openingBalances.get(line.account_number) || { debit: 0, credit: 0 }
-      existing.debit += Number(line.debit_amount) || 0
-      existing.credit += Number(line.credit_amount) || 0
-      openingBalances.set(line.account_number, existing)
+    for (const [accountNumber, sums] of priorSums) {
+      const existing = openingBalances.get(accountNumber) || { debit: 0, credit: 0 }
+      existing.debit += sums.debit
+      existing.credit += sums.credit
+      openingBalances.set(accountNumber, existing)
     }
   }
 
@@ -101,7 +115,17 @@ export async function generateTrialBalance(
   // obEntryId between the period query and this query, the OB entry could
   // be missed from both IB and period. The window is sub-second and the
   // consequence is a single stale report — acceptable.
-  const lines = await fetchAllRows<{
+  const periodBalances = await fetchAccountSums(
+    supabase,
+    {
+      companyId,
+      fiscalPeriodId,
+      fromDate: options?.fromDate ?? null,
+      toDate: options?.toDate ?? null,
+      excludeEntryId: obEntryId ?? null,
+      excludeSourceTypes: options?.excludeYearEndClosing ? YEAR_END_CLOSING_SOURCE_TYPES : null,
+    },
+    () => fetchAllRows<{
     account_number: string
     debit_amount: number
     credit_amount: number
@@ -136,10 +160,11 @@ export async function generateTrialBalance(
         .neq('journal_entries.source_type', 'year_end_closing')
     }
 
-    return query.range(from, to)
-  })
+    return query.order('id', { ascending: true }).range(from, to)
+  }),
+  )
 
-  if (lines.length === 0 && openingBalances.size === 0) {
+  if (periodBalances.size === 0 && openingBalances.size === 0) {
     return { rows: [], totalDebit: 0, totalCredit: 0, isBalanced: true }
   }
 
@@ -153,7 +178,7 @@ export async function generateTrialBalance(
       .from('chart_of_accounts')
       .select('account_number, account_name, account_class')
       .eq('company_id', companyId)
-      .range(from, to)
+      .order('id', { ascending: true }).range(from, to)
   )
 
   const accountMap = new Map<string, { name: string; class: number }>()
@@ -162,16 +187,6 @@ export async function generateTrialBalance(
       name: acc.account_name,
       class: acc.account_class,
     })
-  }
-
-  // Aggregate period activity by account
-  const periodBalances = new Map<string, { debit: number; credit: number }>()
-
-  for (const line of lines) {
-    const existing = periodBalances.get(line.account_number) || { debit: 0, credit: 0 }
-    existing.debit += Number(line.debit_amount) || 0
-    existing.credit += Number(line.credit_amount) || 0
-    periodBalances.set(line.account_number, existing)
   }
 
   // Merge account numbers from both opening and period

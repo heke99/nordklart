@@ -71,6 +71,50 @@ beforeEach(() => {
 describe('generateKassaflodesanalys', () => {
   const PERIOD = { period_start: '2024-01-01', period_end: '2024-12-31' }
 
+  it('reconciles a full year with dispositions, tax, depreciation and a dividend', async () => {
+    // Balanced vouchers for the year (IB in opening_*, movements in period_*):
+    //  IB: 1930 100 000, 1220 50 000 / 1229 10 000, 2081 25 000, 2098 115 000
+    //  sales 200 000 (+25 % moms) on credit; 180 000 collected + VAT
+    //  costs 60 000 paid; depreciation 10 000 via 1229 (7832)
+    //  periodiseringsfond 20 000 (8811/2125) — non-cash
+    //  tax 25 000 (8910/2512), 15 000 of it paid via 2512
+    //  dividend 30 000 decided (2098/2898), 20 000 paid
+    //  purchase of equipment 40 000 paid
+    const rows = [
+      makeRow({ account_number: '1930', account_class: 1, opening_debit: 100000,
+        period_debit: 180000 + 45000, period_credit: 60000 + 15000 + 20000 + 40000 + 50000 }),
+      makeRow({ account_number: '1510', account_class: 1, period_debit: 250000, period_credit: 225000 }),
+      makeRow({ account_number: '1220', account_class: 1, opening_debit: 50000, period_debit: 40000 }),
+      makeRow({ account_number: '1229', account_class: 1, opening_credit: 10000, period_credit: 10000 }),
+      makeRow({ account_number: '2611', account_class: 2, period_debit: 50000, period_credit: 50000 }),
+      makeRow({ account_number: '2081', account_class: 2, opening_credit: 25000 }),
+      makeRow({ account_number: '2098', account_class: 2, opening_credit: 115000, period_debit: 30000 }),
+      makeRow({ account_number: '2898', account_class: 2, period_credit: 30000, period_debit: 20000 }),
+      makeRow({ account_number: '2125', account_class: 2, period_credit: 20000 }),
+      makeRow({ account_number: '2512', account_class: 2, period_credit: 25000, period_debit: 15000 }),
+      makeRow({ account_number: '3001', account_class: 3, period_credit: 200000 }),
+      makeRow({ account_number: '5010', account_class: 5, period_debit: 60000 }),
+      makeRow({ account_number: '7832', account_class: 7, period_debit: 10000 }),
+      makeRow({ account_number: '8811', account_class: 8, period_debit: 20000 }),
+      makeRow({ account_number: '8910', account_class: 8, period_debit: 25000 }),
+    ].map((r) => ({
+      ...r,
+      closing_debit: Math.max(0, r.opening_debit - r.opening_credit + r.period_debit - r.period_credit),
+      closing_credit: Math.max(0, -(r.opening_debit - r.opening_credit + r.period_debit - r.period_credit)),
+    }))
+    mockTrialBalance.mockResolvedValue({ rows, totalDebit: 0, totalCredit: 0, isBalanced: true })
+
+    const report = await generateKassaflodesanalys(makeSupabase(PERIOD), 'c', 'p')
+
+    // Result after financial items excludes 88xx and 89xx.
+    expect(report.lopande.resultat_efter_finansiella_poster).toBe(130000)
+    expect(report.lopande.avskrivningar).toBe(10000)
+    expect(report.lopande.skatt_betald).toBe(-15000)
+    expect(report.investerings.forvarv_anlaggningar).toBe(-40000)
+    expect(report.finansierings.utdelningar).toBe(-20000)
+    expect(report.reconciliation.is_reconciled).toBe(true)
+  })
+
   it('returns all-zero sections for an empty period', async () => {
     mockTrialBalance.mockResolvedValue({
       rows: [],

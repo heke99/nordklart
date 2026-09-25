@@ -2,7 +2,7 @@ import { randomBytes, createHash } from 'crypto'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { createTemporarySignupPassword } from '@/lib/signup/temporary-password'
 import { verifyCompanyLookup } from '@/lib/company-registry/lookup-attestation'
@@ -59,8 +59,8 @@ export async function POST(request: NextRequest) {
   const ip = clientIp(request)
   const body = await request.json().catch(() => null)
   const parsed = signupDraftSchema.safeParse(body)
-  const identifier = `${ip}:${parsed.success ? parsed.data.loginEmail.toLowerCase() : 'invalid'}`
-  const limit = await checkRateLimit({
+  const identifier = ip
+  const limit = await checkDurableRateLimit({
     prefix: 'auth:signup-draft',
     identifier,
     maxRequests: 8,

@@ -7,6 +7,7 @@ import type {
   VatPeriodType,
   AccountingMethod,
 } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
  * Calculate VAT declaration (Momsdeklaration) for a given period.
@@ -183,7 +184,7 @@ function formatDate(date: Date): string {
  * Round to 2 decimal places
  */
 function round(value: number): number {
-  return Math.round(value * 100) / 100
+  return roundOre(value)
 }
 
 /**
@@ -274,7 +275,7 @@ export async function calculateVatDeclaration(
       .in('journal_entries.status', ['posted', 'reversed'])
       .gte('journal_entries.entry_date', start)
       .lte('journal_entries.entry_date', end)
-      .range(from, to)
+      .order('id', { ascending: true }).range(from, to)
   )
 
   // Aggregate debit/credit totals per account

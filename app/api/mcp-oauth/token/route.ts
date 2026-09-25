@@ -10,7 +10,7 @@ import {
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
 import { requireCompanyId } from '@/lib/company/context'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
   const rawIp = forwarded
     ? forwarded.split(',')[0]?.trim()
     : request.headers.get('x-real-ip') ?? undefined
-  const rl = await checkRateLimit({
+  const rl = await checkDurableRateLimit({
     prefix: 'mcp-oauth:token',
     identifier: truncateIp(rawIp || undefined) ?? 'unknown',
     ...TOKEN_RATE_LIMIT,

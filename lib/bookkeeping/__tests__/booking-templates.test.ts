@@ -22,8 +22,8 @@ import { applySettlementAccount } from '../mapping-engine'
 // ============================================================
 
 describe('BOOKING_TEMPLATES data integrity', () => {
-  it('has exactly 60 templates', () => {
-    expect(BOOKING_TEMPLATES).toHaveLength(60)
+  it('has exactly 61 templates', () => {
+    expect(BOOKING_TEMPLATES).toHaveLength(61)
   })
 
   it('all template IDs are unique', () => {
@@ -142,7 +142,7 @@ describe('getTemplateGroups', () => {
   it('every template is in exactly one group', () => {
     const groups = getTemplateGroups()
     const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(60)
+    expect(allTemplates).toHaveLength(61)
   })
 })
 
@@ -151,6 +151,13 @@ describe('getTemplateGroups', () => {
 // ============================================================
 
 describe('searchTemplates', () => {
+  it('routes livsmedel to the 6 % template and restaurang to 12 %', () => {
+    expect(searchTemplates('livsmedel')[0]?.id).toBe('revenue_food_6')
+    const restaurang = searchTemplates('restaurang').map((t) => t.id)
+    expect(restaurang).toContain('revenue_reduced_12')
+    expect(restaurang).not.toContain('revenue_food_6')
+  })
+
   it('finds templates by Swedish name', () => {
     const results = searchTemplates('lokalhyra')
     expect(results.length).toBeGreaterThan(0)

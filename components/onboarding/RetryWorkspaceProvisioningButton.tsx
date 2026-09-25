@@ -30,6 +30,11 @@ export function RetryWorkspaceProvisioningButton() {
         return
       }
 
+      if (response.status === 428 && body.onboardingPath) {
+        router.replace(body.onboardingPath)
+        return
+      }
+
       if (response.status === 409) {
         setMessage('Installationen pågår redan. Vänta ett ögonblick och försök sedan igen.')
         return

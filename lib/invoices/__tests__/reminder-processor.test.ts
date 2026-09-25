@@ -43,7 +43,13 @@ vi.mock('@/lib/email/service', () => ({
   }),
 }))
 
+const createReminderFeeEntryMock = vi.fn().mockResolvedValue({ journal_entry_id: 'je-fee' })
+vi.mock('@/lib/bookkeeping/reminder-fee-entries', () => ({
+  createReminderFeeEntry: (...args: unknown[]) => createReminderFeeEntryMock(...args),
+}))
+
 import {
+  bookSentReminderFee,
   processOverdueReminders,
   determineReminderLevel,
   calculateDaysOverdue,
@@ -205,5 +211,27 @@ describe('processOverdueReminders — credit-note filter', () => {
       (c) => c.method === 'in' && c.args[0] === 'status',
     )
     expect(inStatus?.args[1]).toContain('overdue')
+  })
+})
+
+describe('bookSentReminderFee', () => {
+  it('books the fee and links it to the reminder row', async () => {
+    createReminderFeeEntryMock.mockResolvedValueOnce({ journal_entry_id: 'je-fee' })
+    const update = vi.fn().mockReturnValue({ eq: () => ({ eq: async () => ({ error: null }) }) })
+    const supabase = { from: vi.fn(() => ({ update })) }
+    const id = await bookSentReminderFee(supabase as never, {
+      invoiceId: 'inv-1', invoiceNumber: 'F-100', companyId: 'c1', userId: 'u1', reminderId: 'rem-1', feeAmount: 60, asOfDate: '2026-09-25',
+    })
+    expect(id).toBe('je-fee')
+    expect(createReminderFeeEntryMock).toHaveBeenCalledWith(supabase, expect.objectContaining({ feeAmount: 60, invoiceId: 'inv-1' }))
+    expect(update).toHaveBeenCalledWith({ fee_journal_entry_id: 'je-fee' })
+  })
+
+  it('never throws — the reminder has already been sent', async () => {
+    createReminderFeeEntryMock.mockRejectedValueOnce(new Error('period locked'))
+    const supabase = { from: vi.fn() }
+    await expect(bookSentReminderFee(supabase as never, {
+      invoiceId: 'inv-1', invoiceNumber: 'F-100', companyId: 'c1', userId: 'u1', reminderId: 'rem-1', feeAmount: 60, asOfDate: '2026-09-25',
+    })).resolves.toBeNull()
   })
 })

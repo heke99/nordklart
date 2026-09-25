@@ -1,4 +1,5 @@
 import type { PayrollConfig } from './payroll-config'
+import { roundOre } from '@/lib/money'
 
 /**
  * Swedish benefit value calculations (förmånsbeskattning).
@@ -41,7 +42,7 @@ export function calculateCarBenefit(
   params: CarBenefitParams,
   config: PayrollConfig
 ): { monthlyValue: number; annualValue: number; steps: BenefitStep[] } {
-  const r = (x: number) => Math.round(x * 100) / 100
+  const r = (x: number) => roundOre(x)
   const steps: BenefitStep[] = []
 
   let adjustedPrice = params.nybilspris
@@ -147,7 +148,7 @@ export function calculateBikeBenefit(annualMarketValue: number): {
   taxFreePortion: number
   steps: BenefitStep[]
 } {
-  const r = (x: number) => Math.round(x * 100) / 100
+  const r = (x: number) => roundOre(x)
   const annual = Math.max(0, annualMarketValue)
   const taxFreePortion = Math.min(annual, BIKE_BENEFIT_TAX_FREE_ALLOWANCE)
   const annualTaxable = r(annual - taxFreePortion)

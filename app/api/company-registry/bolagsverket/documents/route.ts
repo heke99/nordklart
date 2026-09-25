@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { listAnnualReportsAtBolagsverket } from '@/lib/company-registry/provider'
 
@@ -8,20 +9,18 @@ const bodySchema = z.object({
   organizationNumber: z.string().trim().min(1).max(32),
 })
 
-function clientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown'
-}
-
+// Signed-in only: every call spends Nordklart's Bolagsverket credentials. The
+// limit is keyed on the user alone, so rotating the org number does not reset it.
 export async function POST(request: NextRequest) {
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+
   const body = await request.json().catch(() => null)
   const parsed = bodySchema.safeParse(body)
-  const ip = clientIp(request)
 
-  const limit = await checkRateLimit({
+  const limit = await checkDurableRateLimit({
     prefix: 'company-registry:bolagsverket:documents',
-    identifier: `${ip}:${parsed.success ? parsed.data.organizationNumber.replace(/\D/g, '') : 'invalid'}`,
+    identifier: auth.user.id,
     maxRequests: 12,
     windowMs: 15 * 60 * 1000,
   })

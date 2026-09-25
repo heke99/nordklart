@@ -47,9 +47,10 @@ export interface BolagsskattComputation {
  * Compute bolagsskatt 20.6 % on the company's taxable result.
  *
  * Reads income-statement result before tax and adds the manual adjustments
- * the user provided (non-deductible expenses, schablonintäkt, etc.). The
- * resulting taxable result is rounded down to nearest whole krona before
- * applying the tax rate, per SFL 22 kap 1 §.
+ * the user provided (non-deductible expenses, schablonintäkt, etc.). For a
+ * juridisk person the beskattningsbara inkomsten is rounded DOWN to whole
+ * tens of kronor (IL 1 kap. 6 §) before the rate is applied, and the tax is
+ * rounded down to whole kronor.
  *
  * If the period shows a loss, no tax is proposed — Swedish AB accumulate
  * inrullat underskott for future offset, but that bookkeeping is handled
@@ -78,11 +79,12 @@ export async function calculateBolagsskatt(
     schablonintaktPeriodiseringsfond +
     otherAdjustments
 
-  // Truncate to whole krona before applying rate. Negative taxable result =
-  // no tax provision (handled as inrullat underskott in INK2, not here).
-  const taxableResultClamped = Math.max(0, Math.floor(taxableResult))
+  // Beskattningsbar inkomst for a juridisk person: rounded down to whole
+  // tens of kronor (IL 1 kap. 6 §). Negative taxable result = no tax provision
+  // (handled as inrullat underskott in INK2, not here).
+  const taxableResultClamped = Math.max(0, Math.floor(taxableResult / 10) * 10)
   const taxRate = input.taxRate ?? BOLAGSSKATT_RATE
-  const taxAmount = Math.round(taxableResultClamped * taxRate)
+  const taxAmount = Math.floor(roundOre(taxableResultClamped * taxRate))
   const taxRateLabel = `${roundOre(taxRate * 100).toLocaleString('sv-SE')} %`
 
   const computation: BolagsskattComputation = {

@@ -151,11 +151,15 @@ export function calculateAge(personnummer: string, atDate: string): number {
 }
 
 /**
- * Calculate age at the start of a given year.
- * Used for avgifter age tier determination.
+ * Age "vid årets ingång" as the socialavgiftslagen uses it for the avgift
+ * tiers: the age reached by the end of the previous year, i.e. by birth year
+ * alone. Skatteverket publishes the tiers that way — for 2026: reduced avgift
+ * for those born 1938–1958 (fyllt 67 vid årets ingång), the temporary youth
+ * rate for those born 2003–2007 (fyllt 18 men inte 23) — so a 1 January
+ * birthday does not count as reached at the start of that year.
  */
 export function calculateAgeAtYearStart(personnummer: string, year: number): number {
-  return calculateAge(personnummer, `${year}-01-01`)
+  return year - extractBirthDate(personnummer).year - 1
 }
 
 /**

@@ -50,7 +50,7 @@ export async function getOpeningBalances(
         .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id)')
         .eq('journal_entry_id', obEntryId)
         .eq('journal_entries.company_id', companyId)
-        .range(from, to)
+        .order('id', { ascending: true }).range(from, to)
     )
 
     for (const line of obLines) {

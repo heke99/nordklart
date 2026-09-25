@@ -31,4 +31,5 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   return NextResponse.json({ data: { success: true } })
   },
+  { requireWrite: true },
 )

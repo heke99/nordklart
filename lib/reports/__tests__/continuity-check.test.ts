@@ -9,7 +9,7 @@ let mockResults: Record<string, MockResult[]>
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'range', 'update']) {
+  for (const m of ['select', 'eq', 'in', 'lt', 'neq', 'order', 'range', 'update']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   const consume = (): MockResult => {
@@ -24,6 +24,12 @@ function makeBuilder(tableName: string) {
 
 function makeClient() {
   const rpc = vi.fn().mockImplementation(async (fn: string) => {
+    // These suites drive the row-level aggregation; account_period_sums
+    // (covered in account-sums.test.ts) reports "not deployed" so the
+    // row fallback runs.
+    if (fn === 'account_period_sums' && !mockResults[`rpc:${fn}`]) {
+      return { data: null, error: { code: 'PGRST202', message: 'function not found' } }
+    }
     const queue = mockResults[`rpc:${fn}`]
     if (!queue || queue.length === 0) return { data: [], error: null }
     return queue.shift()!

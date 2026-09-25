@@ -10,6 +10,7 @@ import {
   INK2R_INCOME_CODES,
   INK2S_NUMERIC_CODES,
 } from './types'
+import { SKV_FIELD_CODES } from '@/lib/reports/sru/skv-field-codes'
 
 /**
  * SRU File Generator for INK2 (Aktiebolag)
@@ -28,17 +29,15 @@ const CRLF = '\r\n'
 const PROGRAM_VERSION = '1.0'
 
 /**
- * Compute the period suffix for blankett type strings.
- * Based on which month the fiscal year ENDS in:
- *   P1 = Jan-Apr, P2 = May-Aug, P3 = special, P4 = Sep-Dec
+ * Beskattningsperiod suffix for the blankett type string, from the date the
+ * fiscal year ENDS (Skatteverket, INK2_SKV2002 field 7012 rule):
+ *   P1 = 01-01 – 04-30, P2 = 05-01 – 06-30, P3 = 07-01 – 08-31, P4 = 09-01 – 12-31
  */
-function computePeriodSuffix(fiscalYearEnd: string): string {
-  const endMonth = parseInt(fiscalYearEnd.substring(5, 7), 10)
-  if (endMonth >= 1 && endMonth <= 4) return 'P1'
-  if (endMonth >= 5 && endMonth <= 8) return 'P2'
-  // P4 covers Sep-Dec (most common: calendar year companies)
-  // NOTE: P3 (first/short fiscal year) cannot be derived from end month alone.
-  // Callers must handle P3 manually for brutet räkenskapsår.
+export function computePeriodSuffix(fiscalYearEnd: string): 'P1' | 'P2' | 'P3' | 'P4' {
+  const mmdd = fiscalYearEnd.substring(5, 10).replace('-', '')
+  if (mmdd <= '0430') return 'P1'
+  if (mmdd <= '0630') return 'P2'
+  if (mmdd <= '0831') return 'P3'
   return 'P4'
 }
 
@@ -156,9 +155,9 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   lines.push(`#UPPGIFT 7011 ${declaration.ink2['7011']}`)
   lines.push(`#UPPGIFT 7012 ${declaration.ink2['7012']}`)
 
-  // Överskott/underskott
-  if (declaration.ink2['7113'] > 0) {
-    lines.push(`#UPPGIFT 7113 ${formatAmount(declaration.ink2['7113'])}`)
+  // 1.1 Överskott / 1.2 Underskott
+  if (declaration.ink2['7104'] > 0) {
+    lines.push(`#UPPGIFT 7104 ${formatAmount(declaration.ink2['7104'])}`)
   }
   if (declaration.ink2['7114'] > 0) {
     lines.push(`#UPPGIFT 7114 ${formatAmount(declaration.ink2['7114'])}`)
@@ -267,18 +266,20 @@ export function validateBlanketterSru(content: string): {
     errors.push(`Expected 3 BLANKETTSLUT, found ${blankettslutCount}`)
   }
 
-  const validFieldCodes = new Set<string>([
-    '7011', '7012', '7113', '7114',
-    ...INK2R_ASSET_CODES,
-    ...INK2R_EQUITY_LIABILITY_CODES,
-    ...INK2R_INCOME_CODES,
-    ...INK2S_NUMERIC_CODES,
-  ])
+  // Codes are checked per block against Skatteverket's own field tables, so a
+  // code that exists on INK2S cannot slip into INK2R (or vice versa).
+  const validFieldCodesByForm: Record<string, ReadonlySet<string>> = {
+    INK2: SKV_FIELD_CODES.INK2,
+    INK2R: SKV_FIELD_CODES.INK2R,
+    INK2S: SKV_FIELD_CODES.INK2S,
+  }
 
   const identityRegex = /^#IDENTITET (\d{10}|\d{12}) \d{8} \d{6}\r?$/m
   const blankettBlocks = content.split(/^#BLANKETT /m).slice(1)
   for (const block of blankettBlocks) {
     const type = block.split('\n')[0]?.split('\r')[0] || 'unknown'
+    const form = type.split('-')[0]
+    const validFieldCodes = validFieldCodesByForm[form] ?? new Set<string>()
     if (!identityRegex.test(block)) errors.push(`Blankett ${type} missing or malformed #IDENTITET`)
     if (!/^#NAMN .+/m.test(block)) errors.push(`Blankett ${type} missing #NAMN`)
     if (!/^#BLANKETTSLUT\r?$/m.test(block)) errors.push(`Blankett ${type} missing #BLANKETTSLUT`)
@@ -304,8 +305,8 @@ export function validateBlanketterSru(content: string): {
     if (!seen.has('7012')) errors.push(`Blankett ${type} missing fiscal year end 7012`)
   }
 
-  if (!/#UPPGIFT\s+7113\s+\d+/.test(content) && !/#UPPGIFT\s+7114\s+\d+/.test(content)) {
-    warnings.push('INK2 saknar både överskott 7113 och underskott 7114. Kontrollera nollresultat eller ofullständig INK2S.')
+  if (!/#UPPGIFT\s+7104\s+\d+/.test(content) && !/#UPPGIFT\s+7114\s+\d+/.test(content)) {
+    warnings.push('INK2 saknar både överskott 7104 och underskott 7114. Kontrollera nollresultat eller ofullständig INK2S.')
   }
 
   return {

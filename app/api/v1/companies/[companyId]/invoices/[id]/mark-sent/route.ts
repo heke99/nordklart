@@ -40,6 +40,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { eventBus } from '@/lib/events'
 import type { EntityType, Invoice } from '@/types'
@@ -328,23 +329,34 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           }
         } else {
           // null result = no fiscal period or other engine-side guard.
-          ctx.log.error('mark-sent: journal entry not created (engine returned null)', new Error('null entry'), {
-            invoiceId,
-            companyId: ctx.companyId,
-          })
-          warnings.push({
-            code: 'JOURNAL_ENTRY_NOT_POSTED',
-            message: 'Invoice was marked sent but no journal entry was posted. Check fiscal period, then issue a credit note and reissue if the missing verifikation is required (BFL 5 kap).',
-          })
+          throw new Error('Ingen verifikation skapades (saknas ett öppet räkenskapsår för fakturadatumet?).')
         }
       } catch (err) {
-        ctx.log.error('mark-sent: journal entry creation failed', err as Error, {
+        // An accrual invoice is booked when it is sent (BFL 5 kap). A 'sent'
+        // invoice without its voucher cannot be retried and would later
+        // settle against a 1510 that was never debited. Nothing was emailed
+        // by mark-sent, so put it back to draft and fail the call.
+        ctx.log.error('mark-sent: journal entry creation failed; reverting to draft', err as Error, {
           invoiceId,
           companyId: ctx.companyId,
         })
-        warnings.push({
-          code: 'JOURNAL_ENTRY_NOT_POSTED',
-          message: 'Invoice was marked sent but the journal entry posting failed. Check fiscal period and engine logs; the verifikation must be created for BFL 5 kap compliance.',
+        await ctx.supabase
+          .from('invoices')
+          .update({ status: 'draft' })
+          .eq('id', invoiceId)
+          .eq('company_id', ctx.companyId!)
+          .eq('status', 'sent')
+          .is('journal_entry_id', null)
+        if (isBookkeepingError(err)) {
+          return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+        }
+        return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            reason: 'journal_entry_not_posted',
+            message: err instanceof Error ? err.message : 'unknown',
+            invoice_status: 'draft',
+          },
         })
       }
     }

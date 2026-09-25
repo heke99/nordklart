@@ -72,8 +72,8 @@ export interface VatTreatmentOption {
 
 export const VAT_TREATMENT_OPTIONS: VatTreatmentOption[] = [
   { value: 'standard_25', label: 'Moms 25%', labelKey: 'vat_standard_25' },
-  { value: 'reduced_12', label: 'Moms 12%', labelKey: 'vat_reduced_12', description: 'Livsmedel, hotell, camping', descriptionKey: 'vat_reduced_12_desc' },
-  { value: 'reduced_6', label: 'Moms 6%', labelKey: 'vat_reduced_6', description: 'Böcker, tidningar, kollektivtrafik', descriptionKey: 'vat_reduced_6_desc' },
+  { value: 'reduced_12', label: 'Moms 12%', labelKey: 'vat_reduced_12', description: 'Restaurang, hotell, camping', descriptionKey: 'vat_reduced_12_desc' },
+  { value: 'reduced_6', label: 'Moms 6%', labelKey: 'vat_reduced_6', description: 'Livsmedel (2026-04-01–2027-12-31), böcker, kollektivtrafik', descriptionKey: 'vat_reduced_6_desc' },
   { value: 'reverse_charge', label: 'Omvänd skattskyldighet', labelKey: 'vat_reverse_charge', description: 'Köparen redovisar momsen (EU-tjänster m.m.)', descriptionKey: 'vat_reverse_charge_desc' },
   { value: 'export', label: 'Export', labelKey: 'vat_export', description: 'Försäljning utanför EU (behåller avdragsrätt)', descriptionKey: 'vat_export_desc' },
   { value: 'exempt', label: 'Momsfri', labelKey: 'vat_exempt', description: 'Undantaget enligt ML (vård, utbildning, finans)', descriptionKey: 'vat_exempt_desc' },

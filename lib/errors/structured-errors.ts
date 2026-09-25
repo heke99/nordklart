@@ -673,6 +673,101 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan har redan krediterats.',
     message_en: 'Invoice has already been credited.',
   },
+  DIVIDEND_PROPOSAL_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Utdelningsförslaget hittades inte.',
+    message_en: 'Dividend proposal not found.',
+  },
+  DIVIDEND_PROPOSAL_NOT_APPROVED: {
+    httpStatus: 409,
+    message_sv: 'Utdelningsförslaget är inte godkänt för årsredovisningen.',
+    message_en: 'The dividend proposal is not approved for the annual report.',
+  },
+  DIVIDEND_ALREADY_DECIDED: {
+    httpStatus: 409,
+    message_sv: 'Stämmans beslut om utdelning är redan bokfört.',
+    message_en: 'The dividend decision has already been booked.',
+  },
+  DIVIDEND_DECISION_BEFORE_BALANCE_DATE: {
+    httpStatus: 400,
+    message_sv: 'Beslutsdatum måste infalla efter balansdagen.',
+    message_en: 'The decision date must be after the balance sheet date.',
+  },
+  DIVIDEND_ANNUAL_REPORT_NOT_ADOPTED: {
+    httpStatus: 409,
+    message_sv: 'Årsredovisningen måste vara fastställd på årsstämman (senast beslutsdagen) innan utdelning kan beslutas.',
+    message_en: 'The annual report must be adopted at the AGM before a dividend can be decided.',
+  },
+  DIVIDEND_AMOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Utdelningsbeloppet måste vara större än noll.',
+    message_en: 'The dividend amount must be greater than zero.',
+  },
+  DIVIDEND_EXCEEDS_BOARD_PROPOSAL: {
+    httpStatus: 409,
+    message_sv: 'Stämman får inte besluta om större utdelning än styrelsen föreslagit (ABL 18 kap. 1 §) utan angivet skäl.',
+    message_en: 'The AGM may not decide a larger dividend than the board proposed (Companies Act 18:1) without a stated reason.',
+  },
+  DIVIDEND_EXCEEDS_DISTRIBUTABLE: {
+    httpStatus: 409,
+    message_sv: 'Utdelningen överstiger fritt eget kapital enligt fastställd balansräkning efter senare värdeöverföringar (ABL 17 kap. 3 §).',
+    message_en: 'The dividend exceeds the distributable equity (Companies Act 17:3).',
+  },
+  DIVIDEND_PAYMENT_DATE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Utbetalningsdagen kan inte ligga före beslutsdagen.',
+    message_en: 'The payment date cannot be before the decision date.',
+  },
+  DIVIDEND_DRAFT_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Utdelningsverifikationen stämmer inte med beslutet.',
+    message_en: 'The dividend voucher does not match the decision.',
+  },
+  DIVIDEND_PRIOR_RESULT_NOT_TRANSFERRED: {
+    httpStatus: 409,
+    message_sv: 'Föregående års resultat ligger kvar på 2099. Bokför omföringen till 2098 först.',
+    message_en: 'Last year\'s result is still on 2099. Transfer it to 2098 first.',
+  },
+  DIVIDEND_DECISION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Utdelningsbeslutet hittades inte.',
+    message_en: 'Dividend decision not found.',
+  },
+  DIVIDEND_OVERPAID: {
+    httpStatus: 409,
+    message_sv: 'Utbetalningen överstiger återstående beslutad utdelning.',
+    message_en: 'The payment exceeds the remaining decided dividend.',
+  },
+  DIVIDEND_NO_OPEN_PERIOD: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget öppet räkenskapsår för datumet.',
+    message_en: 'There is no open fiscal year for the date.',
+  },
+  INVENTORY_BALANCE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Lagersaldot ändrades medan inventeringen bokfördes. Ladda om och kontrollera inventeringen igen.',
+    message_en: 'The inventory balance changed while the count was being booked. Reload and check the count again.',
+  },
+  INVENTORY_PERIOD_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret är stängt. Lagerförändringen kan inte bokföras.',
+    message_en: 'The fiscal year is closed; the inventory change cannot be booked.',
+  },
+  INVENTORY_PERIOD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret hittades inte.',
+    message_en: 'Fiscal year not found.',
+  },
+  INVENTORY_DRAFT_INVALID: {
+    httpStatus: 409,
+    message_sv: 'Lagerverifikationen stämmer inte med inventeringen.',
+    message_en: 'The inventory voucher does not match the count.',
+  },
+  INVOICE_CREDIT_BOOKING_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kreditfakturan kunde inte bokföras och har inte skapats. Kontrollera att räkenskapsåret är öppet och försök igen.',
+    message_en: 'The credit note could not be booked and was not created.',
+  },
   INVOICE_CREDIT_NOT_SENT: {
     httpStatus: 400,
     message_sv: 'Endast skickade, betalda eller förfallna fakturor kan krediteras.',

@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -232,16 +232,13 @@ async function handleRequest(
     return decorateResponse(response, requestId)
   }
 
-  // Auth check
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return decorateResponse(
-      NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-      requestId,
-    )
+  // Auth check — requireAuth() so extension routes get the same MFA (AAL2)
+  // enforcement as every other API route.
+  const authResult = await requireAuth()
+  if (authResult.error) {
+    return decorateResponse(authResult.error, requestId)
   }
+  const { supabase, user } = authResult
 
   // If path params were extracted, create a new Request with them as search params
   let handlerRequest = request

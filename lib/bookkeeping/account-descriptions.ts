@@ -125,13 +125,13 @@ const ACCOUNT_DESCRIPTIONS: Record<string, AccountDescription> = {
     name: 'Utgående moms 12%',
     classLabel: 'Eget kapital och skulder',
     type: 'liability',
-    explanation: 'Moms du tar ut på försäljning med 12% momssats (t.ex. livsmedel, hotell).',
+    explanation: 'Moms du tar ut på försäljning med 12% momssats (t.ex. restaurang, hotell; livsmedel utanför perioden 2026-04-01–2027-12-31).',
   },
   '2631': {
     name: 'Utgående moms 6%',
     classLabel: 'Eget kapital och skulder',
     type: 'liability',
-    explanation: 'Moms du tar ut på försäljning med 6% momssats (t.ex. böcker, kollektivtrafik).',
+    explanation: 'Moms du tar ut på försäljning med 6% momssats (t.ex. böcker, kollektivtrafik, livsmedel 2026-04-01–2027-12-31).',
   },
   '2641': {
     name: 'Ingående moms',
@@ -181,13 +181,13 @@ const ACCOUNT_DESCRIPTIONS: Record<string, AccountDescription> = {
     name: 'Försäljning varor/tjänster 12%',
     classLabel: 'Intäkter',
     type: 'revenue',
-    explanation: 'Intäkter från försäljning med 12% moms (t.ex. livsmedel).',
+    explanation: 'Intäkter från försäljning med 12% moms (t.ex. restaurang och logi).',
   },
   '3003': {
     name: 'Försäljning varor/tjänster 6%',
     classLabel: 'Intäkter',
     type: 'revenue',
-    explanation: 'Intäkter från försäljning med 6% moms (t.ex. böcker, tidningar).',
+    explanation: 'Intäkter från försäljning med 6% moms (t.ex. böcker, tidningar, livsmedel 2026-04-01–2027-12-31).',
   },
   '3305': {
     name: 'Försäljning export utanför EU',

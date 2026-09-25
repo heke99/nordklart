@@ -18,6 +18,7 @@ import {
 import { buildAnlaggningstillgangarNote } from './anlaggningstillgangar-note'
 import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
 import { roundOre } from '@/lib/money'
+import { YEAR_END_CLOSING_SOURCE_TYPES } from '@/lib/reports/period-account-nets'
 import {
   applyVerifiedComparativeSnapshot,
   applyPresentationReclassifications,
@@ -539,6 +540,8 @@ export async function buildArsredovisningData(
       name: r.signer_name,
       signed_at: r.signed_at,
       status: r.status,
+      evidence: r.status !== 'signed' ? null : r.bankid_signature_data?.consent_id ? 'bankid' : 'manual',
+      registry_verified: r.registry_verified ?? null,
     })),
     prior_period: priorPeriodMeta,
     unconfirmed_defaults: unconfirmedDefaults,
@@ -595,7 +598,7 @@ async function loadStructuredProfitDisposition(
     const { data, error } = await supabase
       .from('year_end_profit_dispositions')
       .select(
-        'current_year_result, proposed_dividend, carried_forward, narrative_override, status',
+        'id, current_year_result, free_equity, proposed_dividend, carried_forward, narrative_override, status',
       )
       .eq('company_id', companyId)
       .eq('fiscal_period_id', fiscalPeriodId)
@@ -604,19 +607,64 @@ async function loadStructuredProfitDisposition(
     if (error || !data) return null
     if (data.narrative_override) return String(data.narrative_override)
 
-    const dividend = Number(data.proposed_dividend) || 0
-    const carried = Number(data.carried_forward) || 0
-    const format = (value: number) =>
-      new Intl.NumberFormat('sv-SE', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(value)
-    return dividend > 0
-      ? `Styrelsen föreslår att ${format(dividend)} kr lämnas i utdelning och att ${format(carried)} kr balanseras i ny räkning.`
-      : `Styrelsen föreslår att ${format(carried)} kr balanseras i ny räkning.`
+    type ProposalRow = { amount_per_share: number | null; prudence_assessment: string | null }
+    let proposal: ProposalRow | null = null
+    if ((Number(data.proposed_dividend) || 0) > 0) {
+      const { data: row } = await supabase
+        .from('dividend_proposals')
+        .select('amount_per_share, prudence_assessment')
+        .eq('company_id', companyId)
+        .eq('profit_disposition_id', data.id)
+        .neq('status', 'withdrawn')
+        .maybeSingle()
+      proposal = (row as ProposalRow | null) ?? null
+    }
+    return formatProfitDispositionText({
+      currentYearResult: Number(data.current_year_result) || 0,
+      availableFunds: Number(data.free_equity) || 0,
+      dividend: Number(data.proposed_dividend) || 0,
+      carriedForward: Number(data.carried_forward) || 0,
+      amountPerShare: proposal?.amount_per_share != null ? Number(proposal.amount_per_share) : null,
+      boardStatement: proposal?.prudence_assessment ?? null,
+    })
   } catch {
     return null
   }
+}
+
+/**
+ * "Förslag till resultatdisposition" in the form used in Bolagsverket's and
+ * the K2 examples: the funds at the stämma's disposal, then how the board
+ * proposes they are disposed of. With a dividend, the board's motivated
+ * statement (ABL 18 kap. 4 §) follows.
+ */
+export function formatProfitDispositionText(p: {
+  currentYearResult: number
+  availableFunds: number
+  dividend: number
+  carriedForward: number
+  amountPerShare: number | null
+  boardStatement: string | null
+}): string {
+  const format = (value: number) =>
+    new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)
+  const retained = roundOre(p.availableFunds - p.currentYearResult)
+  const parts = [
+    `Till årsstämmans förfogande står följande medel (kr): balanserat resultat ${format(retained)}, ` +
+      `årets resultat ${format(p.currentYearResult)}, totalt ${format(p.availableFunds)}.`,
+  ]
+  if (p.dividend > 0) {
+    const perShare = p.amountPerShare != null ? ` (${format(p.amountPerShare)} kr per aktie)` : ''
+    parts.push(
+      `Styrelsen föreslår att ${format(p.dividend)} kr${perShare} delas ut till aktieägarna och att ${format(p.carriedForward)} kr balanseras i ny räkning.`,
+    )
+    if (p.boardStatement && p.boardStatement.trim()) {
+      parts.push(`Styrelsens yttrande över den föreslagna vinstutdelningen: ${p.boardStatement.trim()}`)
+    }
+  } else {
+    parts.push(`Styrelsen föreslår att ${format(p.carriedForward)} kr balanseras i ny räkning.`)
+  }
+  return parts.join(' ')
 }
 
 async function loadAnnualReportAnnotations(
@@ -1233,7 +1281,9 @@ async function buildK3EquityChangesStatement(
       const num = row.account_number
       if (num >= '2081' && num <= '2084') {
         aktiekapitalClosing += row.amount
-      } else if (num >= '2085' && num <= '2087') {
+      } else if (num >= '2085' && num <= '2089') {
+        // 2085 uppskrivningsfond, 2086 reservfond, 2087 bunden överkursfond,
+        // 2088 fond för yttre underhåll, 2089 fond för utvecklingsutgifter.
         bundnaClosing += row.amount
       } else if (num.startsWith('209')) {
         fritProtClosing += row.amount
@@ -1307,7 +1357,9 @@ async function buildK3EquityChangesStatement(
     if (src === 'opening_balance') continue
     const net = creditNet(line)
     if (net === 0) continue
-    if (src === 'year_end') continue
+    // Both the legacy and the current closing source type: counting the
+    // closing voucher as an "other" movement double-counts årets resultat.
+    if ((YEAR_END_CLOSING_SOURCE_TYPES as readonly string[]).includes(src)) continue
 
     totalEquityMovement = roundOre(totalEquityMovement + net)
     const acct = line.account_number
@@ -1414,7 +1466,7 @@ function flattenIncomeStatement(is: {
   const resAfterFinancial = is.total_revenue - is.total_expenses + finSubtotal
   lines.push({
     label: 'Resultat efter finansiella poster',
-    amount: Math.round(resAfterFinancial * 100) / 100,
+    amount: roundOre(resAfterFinancial),
     is_total: true,
   })
 
@@ -1427,7 +1479,7 @@ function flattenIncomeStatement(is: {
     const dispositionsSubtotal = dispositionsSections.reduce((sum, s) => sum + s.subtotal, 0)
     lines.push({
       label: 'Resultat före skatt',
-      amount: Math.round((resAfterFinancial + dispositionsSubtotal) * 100) / 100,
+      amount: roundOre((resAfterFinancial + dispositionsSubtotal)),
       is_total: true,
     })
   } else {
@@ -1436,7 +1488,7 @@ function flattenIncomeStatement(is: {
     // pre-tax subtotal expected by ÅRL.
     lines.push({
       label: 'Resultat före skatt',
-      amount: Math.round(resAfterFinancial * 100) / 100,
+      amount: roundOre(resAfterFinancial),
       is_total: true,
     })
   }

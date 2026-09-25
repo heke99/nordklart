@@ -140,6 +140,12 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
+  // Resolved once per request: the MFA gate and the company context below both
+  // need it, and each resolution is two round trips.
+  let resolvedCompany: Awaited<ReturnType<typeof resolveCompanyForMiddleware>> | null = null
+  const getResolvedCompany = async () =>
+    (resolvedCompany ??= await resolveCompanyForMiddleware(supabase, user.id, request))
+
   // MFA enforcement (application-side only, not RLS)
   if (shouldEnforceMfa(user)) {
     const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
@@ -156,7 +162,7 @@ export async function updateSession(request: NextRequest) {
 
     // MFA required but user has no factor enrolled yet → force enrollment
     // Skip for users with no companies (still setting up)
-    const { companyId: companyIdForMfa } = await resolveCompanyForMiddleware(supabase, user.id, request)
+    const { companyId: companyIdForMfa } = await getResolvedCompany()
     if (companyIdForMfa) {
       const { data: factors } = await supabase.auth.mfa.listFactors()
       const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
@@ -173,7 +179,7 @@ export async function updateSession(request: NextRequest) {
 
   // Company context resolution
   const cookieCompanyId = request.cookies.get('nordklart-company-id')?.value
-  const { companyId, locale: dbLocale } = await resolveCompanyForMiddleware(supabase, user.id, request)
+  const { companyId, locale: dbLocale } = await getResolvedCompany()
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it.

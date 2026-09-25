@@ -105,7 +105,7 @@ export const POST = withRouteContext(
           .from('chart_of_accounts')
           .select('account_number')
           .eq('company_id', companyId)
-          .range(from, to),
+          .order('id', { ascending: true }).range(from, to),
       )
 
       const existingNumbers = new Set(existingAccounts.map((a) => a.account_number))

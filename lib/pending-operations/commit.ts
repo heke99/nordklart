@@ -93,6 +93,7 @@ import type {
   CreateJournalEntryLineInput,
   JournalEntrySourceType,
 } from '@/types'
+import { roundOre } from '@/lib/money'
 
 const log = createLogger('pending-operations/commit')
 
@@ -697,7 +698,7 @@ async function commitCreateInvoice(
       return { error: `Momssats ${itemRate}% är inte tillåten för denna kundtyp`, status: 400 }
     }
     const lineTotal = item.quantity * item.unit_price
-    vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
+    vatAmount += roundOre(lineTotal * itemRate / 100)
   }
 
   // Validate any per-line revenue-account override (defense in depth — the field
@@ -790,7 +791,7 @@ async function commitCreateInvoice(
     }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
     const lineTotal = item.quantity * item.unit_price
-    const itemVat = Math.round(lineTotal * itemRate / 100 * 100) / 100
+    const itemVat = roundOre(lineTotal * itemRate / 100)
     return {
       invoice_id: invoice.id,
       sort_order: index,
@@ -1153,13 +1154,13 @@ async function commitMatchTransactionInvoice(
     : Number(invoice.remaining_amount)
   const bookedSek = invoiceCurrency === 'SEK'
     ? paymentAmount
-    : Math.round(paymentAmount * Number(invoice.exchange_rate ?? 1) * 100) / 100
+    : roundOre(paymentAmount * Number(invoice.exchange_rate ?? 1))
   const actualBankSek = transactionCurrency === 'SEK'
     ? Number(transaction.amount)
     : Number(transaction.amount_sek ?? bookedSek)
   const exchangeRateDifference = invoiceCurrency === 'SEK'
     ? 0
-    : Math.round((actualBankSek - bookedSek) * 100) / 100
+    : roundOre((actualBankSek - bookedSek))
 
   const result = await markInvoicePaid(supabase, companyId, userId, {
     invoiceId,
@@ -1845,12 +1846,12 @@ async function commitCreateSupplierInvoiceFromInbox(
   }
 
   const reverseCharge = vatTreatment === 'reverse_charge'
-  const subtotalRounded = Math.round(subtotal * 100) / 100
-  const vatAmountRounded = Math.round(vatAmount * 100) / 100
-  const totalRounded = Math.round(total * 100) / 100
-  const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
-  const vatAmountSek = exchangeRate ? Math.round(vatAmount * exchangeRate * 100) / 100 : null
-  const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
+  const subtotalRounded = roundOre(subtotal)
+  const vatAmountRounded = roundOre(vatAmount)
+  const totalRounded = roundOre(total)
+  const subtotalSek = exchangeRate ? roundOre(subtotal * exchangeRate) : null
+  const vatAmountSek = exchangeRate ? roundOre(vatAmount * exchangeRate) : null
+  const totalSek = exchangeRate ? roundOre(total * exchangeRate) : null
 
   const { data: invoice, error: invoiceErr } = await supabase
     .from('supplier_invoices')

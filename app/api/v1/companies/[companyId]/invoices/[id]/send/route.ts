@@ -451,11 +451,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 9b: journal entry (accrual + real invoices).
+    // Step 9b: journal entry (accrual + real invoices). Only the request that
+    // flipped draft → sent books the invoice; a concurrent send or mark-sent
+    // that won the flip books it. (createJournalEntry is idempotent per
+    // invoice as a second line of defence.)
     let journalEntryId: string | null = null
     const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
     const accountingMethod = settings.accounting_method ?? 'accrual'
-    if (isRealInvoice && accountingMethod === 'accrual') {
+    if (statusFlipped && isRealInvoice && accountingMethod === 'accrual') {
       try {
         const entry = await createInvoiceJournalEntry(
           ctx.supabase,

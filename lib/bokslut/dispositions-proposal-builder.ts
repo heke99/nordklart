@@ -11,6 +11,7 @@ import {
   LATENT_TAX_LIABILITY_ACCOUNT,
   proposeLatentTaxChange,
 } from './tax-provision/latent-tax-calculator'
+import { NON_DEDUCTIBLE_COST_ACCOUNTS } from '@/lib/reports/ink2/ink2-engine'
 import {
   listExistingPeriodiseringsfonder,
   proposeAvsattning,
@@ -90,7 +91,7 @@ export async function buildDispositionsProposal(
 
   const proposals: ProposedDisposition[] = []
 
-  const existingFonder = await listExistingPeriodiseringsfonder(supabase, companyId, period.period_end)
+  const existingFonder = await listExistingPeriodiseringsfonder(supabase, companyId, period.period_end, fiscalPeriodId)
   const ateforing = proposeAteforing(existingFonder, {
     schablonintaktRate: ruleset.schablonintakt_rate,
   })
@@ -124,6 +125,12 @@ export async function buildDispositionsProposal(
     taxRate: ruleset.corporate_tax_rate,
     manualAdjustments: {
       schablonintaktPeriodiseringsfond: ateforing.schablonintaktAmount,
+      // Costs that are non-deductible by BAS definition (same list INK2S 4.3c
+      // defaults to), so the booked tax matches the declaration.
+      nonDeductibleExpenses: NON_DEDUCTIBLE_COST_ACCOUNTS.reduce(
+        (sum, account) => sum + Math.max(0, projected.debitBalance(account)),
+        0,
+      ),
     },
   })
   if (bolagsskatt) {

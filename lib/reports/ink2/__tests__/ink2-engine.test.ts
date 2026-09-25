@@ -47,9 +47,10 @@ describe('INK2R Account Mappings', () => {
       expect(findSRUCodeForAccount('1099')).toBe('7201')
     })
 
-    it('1080-1089 -> 7202 (Förskott immateriella)', () => {
-      expect(findSRUCodeForAccount('1080')).toBe('7202')
-      expect(findSRUCodeForAccount('1089')).toBe('7202')
+    it('1088 -> 7202 (Förskott immateriella); rest of 10xx -> 7201', () => {
+      expect(findSRUCodeForAccount('1088')).toBe('7202')
+      expect(findSRUCodeForAccount('1080')).toBe('7201')
+      expect(findSRUCodeForAccount('1089')).toBe('7201')
     })
 
     it('1100-1119, 1130-1179, 1190-1199 -> 7214 (Byggnader och mark)', () => {
@@ -75,15 +76,24 @@ describe('INK2R Account Mappings', () => {
       expect(findSRUCodeForAccount('1299')).toBe('7215')
     })
 
-    it('1500-1519 -> 7251 (Kundfordringar)', () => {
-      expect(findSRUCodeForAccount('1500')).toBe('7251')
+    it('151x-155x, 158x -> 7251 (Kundfordringar)', () => {
       expect(findSRUCodeForAccount('1510')).toBe('7251')
       expect(findSRUCodeForAccount('1519')).toBe('7251')
+      expect(findSRUCodeForAccount('1550')).toBe('7251')
+      expect(findSRUCodeForAccount('1580')).toBe('7251')
     })
 
-    it('1520-1559 -> 7261 (Övriga fordringar, not 7251)', () => {
-      expect(findSRUCodeForAccount('1520')).toBe('7261')
-      expect(findSRUCodeForAccount('1550')).toBe('7261')
+    it('161x, 163x-165x, 168x-169x, 1573, 1673 -> 7261 (Övriga fordringar)', () => {
+      expect(findSRUCodeForAccount('1610')).toBe('7261')
+      expect(findSRUCodeForAccount('1650')).toBe('7261')
+      expect(findSRUCodeForAccount('1680')).toBe('7261')
+      expect(findSRUCodeForAccount('1573')).toBe('7261')
+      expect(findSRUCodeForAccount('1673')).toBe('7261')
+    })
+
+    it('156x, 166x -> 7252 (Fordringar koncern/intresse)', () => {
+      expect(findSRUCodeForAccount('1560')).toBe('7252')
+      expect(findSRUCodeForAccount('1660')).toBe('7252')
     })
 
     it('1700-1799 -> 7263 (Förutbetalda kostnader)', () => {
@@ -99,8 +109,7 @@ describe('INK2R Account Mappings', () => {
   })
 
   describe('Balance sheet - Equity & Liabilities', () => {
-    it('2010-2089 -> 7301 (Bundet EK)', () => {
-      expect(findSRUCodeForAccount('2010')).toBe('7301')
+    it('208x -> 7301 (Bundet EK)', () => {
       expect(findSRUCodeForAccount('2081')).toBe('7301')
       expect(findSRUCodeForAccount('2089')).toBe('7301')
     })
@@ -160,9 +169,12 @@ describe('INK2R Account Mappings', () => {
       expect(findSRUCodeForAccount('4499')).toBe('7511')
     })
 
-    it('4600-4699 -> 7512 (Handelsvaror)', () => {
-      expect(findSRUCodeForAccount('4600')).toBe('7512')
-      expect(findSRUCodeForAccount('4699')).toBe('7512')
+    it('42xx, 496x, 498x -> 7512 (Handelsvaror); other 40-47 -> 7511', () => {
+      expect(findSRUCodeForAccount('4200')).toBe('7512')
+      expect(findSRUCodeForAccount('4960')).toBe('7512')
+      expect(findSRUCodeForAccount('4010')).toBe('7511')
+      expect(findSRUCodeForAccount('4600')).toBe('7511')
+      expect(findSRUCodeForAccount('4910')).toBe('7511')
     })
 
     it('5000-6999 ALL -> 7513 (Övriga externa kostnader)', () => {
@@ -184,9 +196,24 @@ describe('INK2R Account Mappings', () => {
       expect(findSRUCodeForAccount('7899')).toBe('7515')
     })
 
-    it('7700-7799 -> 7516 (Nedskrivningar OT)', () => {
-      expect(findSRUCodeForAccount('7700')).toBe('7516')
-      expect(findSRUCodeForAccount('7799')).toBe('7516')
+    it('774x, 779x -> 7516 (Nedskrivningar OT); other 77xx -> 7515', () => {
+      expect(findSRUCodeForAccount('7740')).toBe('7516')
+      expect(findSRUCodeForAccount('7790')).toBe('7516')
+      expect(findSRUCodeForAccount('7710')).toBe('7515')
+      expect(findSRUCodeForAccount('7760')).toBe('7515')
+    })
+
+    it('807x/808x/817x/818x/827x/828x/837x/838x -> 7521 (Nedskrivningar finansiella)', () => {
+      for (const account of ['8070', '8080', '8170', '8180', '8270', '8280', '8370', '8380']) {
+        expect(findSRUCodeForAccount(account)).toBe('7521')
+      }
+    })
+
+    it('8113/8118/8123/8133 -> 7423 (övriga ägarintressen)', () => {
+      for (const account of ['8113', '8118', '8123', '8133']) {
+        expect(findSRUCodeForAccount(account)).toBe('7423')
+      }
+      expect(findSRUCodeForAccount('8110')).toBe('7415')
     })
 
     it('7900-7999 -> 7517 (Övriga rörelsekostnader)', () => {
@@ -230,8 +257,8 @@ describe('INK2R Account Mappings', () => {
         expect(findSRUCodeForAccount('8853')).toBe('7421') // M&I sub-cat
         expect(findSRUCodeForAccount('8859')).toBe('7421')
       })
-      it('8840 + 8860-8899 -> 7422 (Övriga bokslutsdispositioner)', () => {
-        expect(findSRUCodeForAccount('8840')).toBe('7422')
+      it('884x -> 7527; 886x-889x -> 7422/7527 by sign', () => {
+        expect(findSRUCodeForAccount('8840')).toBe('7527')
         expect(findSRUCodeForAccount('8860')).toBe('7422')
         expect(findSRUCodeForAccount('8899')).toBe('7422')
       })

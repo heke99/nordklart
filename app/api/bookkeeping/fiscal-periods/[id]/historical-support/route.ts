@@ -33,10 +33,14 @@ const snapshotSchema = z.object({
 
 const profitDispositionSchema = z.object({
   action: z.literal('save_profit_disposition'),
-  current_year_result: z.number(),
-  free_equity: z.number().nonnegative(),
+  // Årets resultat, fritt eget kapital and the amount carried forward are
+  // taken from the ledger by record_year_end_profit_disposition; the client
+  // values are accepted for compatibility and ignored. They may be negative
+  // (ansamlad förlust).
+  current_year_result: z.number().optional(),
+  free_equity: z.number().optional(),
   proposed_dividend: z.number().nonnegative().default(0),
-  carried_forward: z.number().nonnegative(),
+  carried_forward: z.number().optional(),
   amount_per_share: z.number().nonnegative().optional(),
   share_count: z.number().int().positive().optional(),
   planned_payment_date: z.string().date().optional(),
@@ -44,6 +48,16 @@ const profitDispositionSchema = z.object({
   prudence_assessment: z.string().trim().max(4000).optional(),
   narrative_override: z.string().trim().max(4000).optional(),
 })
+
+const PROFIT_DISPOSITION_ERRORS: Record<string, string> = {
+  YEAR_END_DIVIDEND_EXCEEDS_FREE_EQUITY:
+    'Föreslagen utdelning överstiger fritt eget kapital i balansräkningen (ABL 17 kap. 3 §).',
+  YEAR_END_PROFIT_DISPOSITION_AB_ONLY: 'Resultatdisposition upprättas endast för aktiebolag.',
+  YEAR_END_DIVIDEND_PAYMENT_DATE_INVALID:
+    'Utbetalningsdagen måste ligga efter balansdagen (utdelningen beslutas av årsstämman).',
+  YEAR_END_DIVIDEND_JUSTIFICATION_REQUIRED:
+    'Belopp per aktie, antal aktier, utbetalningsdag, motivering och styrelsens yttrande (ABL 18 kap. 4 §) krävs för utdelning.',
+}
 
 const annotationSchema = z.object({
   action: z.literal('add_annotation'),
@@ -464,6 +478,13 @@ export const POST = withRouteContext(
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Okänt fel'
       ctx.log.error('historical support write failed', error as Error)
+      const dispositionMessage = PROFIT_DISPOSITION_ERRORS[message]
+      if (dispositionMessage) {
+        return NextResponse.json(
+          { error: { code: message, message: dispositionMessage } },
+          { status: 409 },
+        )
+      }
       return NextResponse.json(
         { error: { code: 'HISTORICAL_SUPPORT_WRITE_FAILED', message } },
         { status: /CONFLICT|LOCKED|DIFFERENCE|INVALID|REQUIRED/i.test(message) ? 409 : 500 },

@@ -31,6 +31,7 @@ import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 import { PreflightStep } from '@/components/bookkeeping/year-end/PreflightStep'
 import { DispositionsStep } from '@/components/bookkeeping/year-end/DispositionsStep'
 import { AccrualsStep } from '@/components/bookkeeping/year-end/AccrualsStep'
+import { InventoryCountCard } from '@/components/bookkeeping/year-end/InventoryCountCard'
 import { PreviewStep } from '@/components/bookkeeping/year-end/PreviewStep'
 import { ExecuteStep } from '@/components/bookkeeping/year-end/ExecuteStep'
 import { ResultStep } from '@/components/bookkeeping/year-end/ResultStep'
@@ -570,6 +571,10 @@ export default function YearEndPage() {
           error={reportError}
           onContinue={() => setStep('accruals')}
         />
+      )}
+
+      {showWizard && step === 'accruals' && selectedPeriodId && (
+        <InventoryCountCard periodId={selectedPeriodId} companyId={companyId} />
       )}
 
       {showWizard && step === 'accruals' && selectedPeriodId && (

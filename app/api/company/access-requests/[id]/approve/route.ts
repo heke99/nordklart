@@ -46,49 +46,28 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   const service = createServiceClient()
 
-  const { data: accessRequest, error: readError } = await service
-    .from('company_access_requests')
-    .select('id, company_id, requester_user_id, requester_email, status')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
+  // Membership + request status in one transaction (never lowers an existing
+  // member's role, and a second approval of the same request fails).
+  const { data: approved, error: approveError } = await service
+    .rpc('approve_company_access_request', {
+      p_request_id: id,
+      p_company_id: companyId,
+      p_role: role,
+      p_actor: user.id,
+    })
+    .maybeSingle<{ requester_user_id: string; role: string; membership_kind: string }>()
 
-  if (readError || !accessRequest) return NextResponse.json({ error: 'Förfrågan hittades inte.' }, { status: 404 })
-  if (accessRequest.status !== 'pending') return NextResponse.json({ error: 'Förfrågan är inte väntande.' }, { status: 400 })
-
-  const now = new Date().toISOString()
-  const { error: memberError } = await service
-    .from('company_members')
-    .upsert({
-      company_id: companyId,
-      user_id: accessRequest.requester_user_id,
-      role,
-      source: 'direct',
-      status: 'active',
-      access_source: 'access_request',
-      membership_kind: membershipKind,
-      approved_by: user.id,
-      approved_at: now,
-      revoked_by: null,
-      revoked_at: null,
-    }, { onConflict: 'company_id,user_id' })
-
-  if (memberError) return NextResponse.json({ error: 'Kunde inte godkänna användaren.' }, { status: 500 })
+  if (approveError?.code === 'P0002') return NextResponse.json({ error: 'Förfrågan hittades inte.' }, { status: 404 })
+  if (approveError?.code === '55000') return NextResponse.json({ error: 'Förfrågan är inte väntande.' }, { status: 400 })
+  if (approveError || !approved) return NextResponse.json({ error: 'Kunde inte godkänna användaren.' }, { status: 500 })
 
   await service.from('user_preferences').upsert({
-    user_id: accessRequest.requester_user_id,
+    user_id: approved.requester_user_id,
     active_company_id: companyId,
     active_workspace_type: 'company',
     active_agency_id: null,
-    updated_at: now,
+    updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id' }).then(() => undefined, () => undefined)
-
-  const { error: updateError } = await service
-    .from('company_access_requests')
-    .update({ status: 'approved', requested_role: role, reviewed_by: user.id, reviewed_at: now })
-    .eq('id', accessRequest.id)
-
-  if (updateError) return NextResponse.json({ error: 'Användaren fick åtkomst, men förfrågan kunde inte markeras som godkänd.' }, { status: 500 })
 
   await service.from('auth_audit_events').insert({
     user_id: user.id,
@@ -97,13 +76,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     status: 'success',
     metadata: {
       company_id: companyId,
-      access_request_id: accessRequest.id,
-      approved_user_id: accessRequest.requester_user_id,
-      role,
-      membership_kind: membershipKind,
+      access_request_id: id,
+      approved_user_id: approved.requester_user_id,
+      role: approved.role,
+      membership_kind: approved.membership_kind,
     },
   }).then(() => undefined, () => undefined)
 
-  return NextResponse.json({ data: { id: accessRequest.id, approved: true, role } })
+  return NextResponse.json({ data: { id, approved: true, role: approved.role } })
 },
 )

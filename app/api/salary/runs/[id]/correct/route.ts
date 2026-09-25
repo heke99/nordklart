@@ -2,51 +2,53 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireWritePermission } from '@/lib/auth/require-write'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { bookkeepingErrorResponse, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
+import { planReversalJournal, translateStornoRpcError } from '@/lib/bookkeeping/storno-plan'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createServiceClient } from '@/lib/supabase/server'
+import { eventBus } from '@/lib/events'
+import type { JournalEntry, JournalEntryLine } from '@/types'
 
 ensureInitialized()
 
 /**
  * Create a correction for a booked salary run.
  *
- * Per BFL 5 kap 5§ (Rättelse): Corrections must preserve the original.
- * This is implemented as:
- *   1. Reverse (storno) all journal entries from the original run
- *   2. Create a new correction salary run for the same period
- *   3. Mark the original run as 'corrected'
+ * Per BFL 5 kap 5§ (Rättelse): corrections preserve the original. In ONE
+ * database transaction (correct_salary_run):
+ *   1. Storno of every voucher of the original run (reverse_journal_entry_v2)
+ *   2. The original run is marked 'corrected'
+ *   3. A new draft correction run for the same period, with every employee
+ *      and line item copied, ready to be edited and re-calculated
  *
- * The new run starts in 'draft' status so the user can edit and re-calculate.
- * On booking the correction run, new correct entries are created.
- * Both original and correction are visible in the journal per BFL.
- *
- * AGI must be re-generated with same FK570 (correction flag) per agi-filing.md.
+ * Either all of it happens or none of it. AGI must be re-generated for the
+ * period (the correction replaces the individuppgifter).
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.runs.correct',
   async (_request, ctx, { params }) => {
-    const { supabase, companyId, user } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
     const { id } = await params
 
     const writeCheck = await requireWritePermission(supabase, user.id)
     if (!writeCheck.ok) return writeCheck.response
 
-
-
-    // Load the original booked run
     const { data: originalRun, error: runError } = await supabase
       .from('salary_runs')
-      .select('*')
+      .select('id, status, salary_entry_id, avgifter_entry_id, vacation_entry_id, pension_entry_id')
       .eq('id', id)
       .eq('company_id', companyId)
       .eq('status', 'booked')
-      .single()
+      .maybeSingle()
 
     if (runError || !originalRun) {
-      return NextResponse.json({ error: 'Kan bara korrigera bokförda lönekörningar' }, { status: 400 })
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        status: 400,
+        messageSv: 'Kan bara korrigera bokförda lönekörningar.',
+      })
     }
 
-    // Reverse all journal entries from the original run (storno per BFL 5 kap 5§)
     const entryIds = [
       originalRun.salary_entry_id,
       originalRun.avgifter_entry_id,
@@ -54,110 +56,59 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       originalRun.pension_entry_id,
     ].filter(Boolean) as string[]
 
-    for (const entryId of entryIds) {
-      try {
-        await reverseEntry(supabase, companyId, user.id, entryId)
-      } catch (err) {
-        // Entry may already be reversed — continue
-        if (err instanceof EntryAlreadyReversedError) continue
-        const typed = bookkeepingErrorResponse(err)
-        const msg = err instanceof Error ? err.message : ''
-        return NextResponse.json({ error: `Kunde inte makulera verifikation: ${msg}` }, { status: 500 })
-      }
+    const { data: entries, error: entriesError } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('company_id', companyId)
+      .in('id', entryIds)
+    if (entriesError) return errorResponse(entriesError, log, { requestId })
+
+    const reversalDate = getSwedishLocalDate()
+    const plans: Record<string, unknown> = {}
+    for (const entry of (entries ?? []) as JournalEntry[]) {
+      if (entry.status !== 'posted') continue
+      plans[entry.id] = planReversalJournal(entry, (entry.lines ?? []) as JournalEntryLine[], reversalDate)
     }
 
-    // Mark original as corrected
-    await supabase
-      .from('salary_runs')
-      .update({ status: 'corrected' })
-      .eq('id', id)
+    const { data, error } = await createServiceClient().rpc('correct_salary_run', {
+      p_company_id: companyId,
+      p_actor_user_id: user.id,
+      p_run_id: id,
+      p_reversal_plans: plans,
+      p_reversal_date: reversalDate,
+    })
 
-    // Create new correction run for same period
-    // Remove the unique constraint conflict by using the original run's unique key
-    // The unique constraint is (company_id, period_year, period_month) so we need
-    // to delete the uniqueness or handle it. Since original is now 'corrected',
-    // and we want a new run for the same period, we update the unique constraint.
-    // Actually the DB still enforces uniqueness. The correction run needs the same period.
-    // Solution: drop the old unique index and add a partial one excluding corrected runs,
-    // OR just use the same run ID pattern. Let's create the correction run and handle the conflict.
-
-    const { data: correctionRun, error: createError } = await supabase
-      .from('salary_runs')
-      .insert({
-        company_id: companyId,
-        user_id: user.id,
-        period_year: originalRun.period_year,
-        period_month: originalRun.period_month,
-        payment_date: originalRun.payment_date,
-        voucher_series: originalRun.voucher_series,
-        is_correction: true,
-        corrects_run_id: originalRun.id,
-        notes: `Korrigering av lönekörning ${originalRun.period_year}-${String(originalRun.period_month).padStart(2, '0')}`,
-      })
-      .select()
-      .single()
-
-    if (createError) {
-      // If unique constraint violation, the period already has an active run
-      if (createError.code === '23505') {
-        return NextResponse.json({
-          error: 'Det finns redan en aktiv lönekörning för denna period. Ta bort den först.',
-        }, { status: 409 })
-      }
-      return NextResponse.json({ error: createError.message }, { status: 500 })
-    }
-
-    // Copy employees from original run to correction run (with snapshots)
-    const { data: originalEmployees } = await supabase
-      .from('salary_run_employees')
-      .select('*, line_items:salary_line_items(*)')
-      .eq('salary_run_id', id)
-
-    for (const origEmp of originalEmployees || []) {
-      const { data: newSre } = await supabase
-        .from('salary_run_employees')
-        .insert({
-          salary_run_id: correctionRun.id,
-          employee_id: origEmp.employee_id,
-          company_id: companyId,
-          employment_degree: origEmp.employment_degree,
-          monthly_salary: origEmp.monthly_salary,
-          salary_type: origEmp.salary_type,
-          hours_worked: origEmp.hours_worked,
-          tax_table_number: origEmp.tax_table_number,
-          tax_column: origEmp.tax_column,
+    if (error) {
+      if (error.code === '23505') {
+        return errorResponseFromCode('CONFLICT', log, {
+          requestId,
+          messageSv: 'Det finns redan en aktiv lönekörning för denna period. Ta bort den först.',
         })
-        .select()
-        .single()
-
-      if (newSre) {
-        // Copy line items
-        const lineItems = (origEmp.line_items || []) as Array<Record<string, unknown>>
-        for (const li of lineItems) {
-          await supabase.from('salary_line_items').insert({
-            salary_run_employee_id: newSre.id,
-            company_id: companyId,
-            item_type: li.item_type,
-            description: li.description,
-            quantity: li.quantity,
-            unit_price: li.unit_price,
-            amount: li.amount,
-            is_taxable: li.is_taxable,
-            is_avgift_basis: li.is_avgift_basis,
-            is_vacation_basis: li.is_vacation_basis,
-            is_gross_deduction: li.is_gross_deduction,
-            is_net_deduction: li.is_net_deduction,
-            account_number: li.account_number,
-            sort_order: li.sort_order,
-          })
-        }
       }
+      if (error.code === '55000') {
+        return errorResponseFromCode('CONFLICT', log, {
+          requestId,
+          messageSv: 'Lönekörningen är inte längre bokförd — den kan redan ha korrigerats.',
+        })
+      }
+      return errorResponse(translateStornoRpcError(error, 'create_reversal_entry'), log, { requestId })
+    }
+
+    const result = data as { correction_run: Record<string, unknown>; reversed_entry_count: number }
+
+    const { data: stornos } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('company_id', companyId)
+      .in('reverses_id', entryIds)
+    for (const entry of (stornos ?? []) as JournalEntry[]) {
+      await eventBus.emit({ type: 'journal_entry.committed', payload: { entry, userId: user.id, companyId } })
     }
 
     return NextResponse.json({
-      data: correctionRun,
+      data: result.correction_run,
       message: 'Korrigeringskörning skapad. Originalverifikationer har makulerats (storno). Redigera och beräkna om den nya körningen.',
-      reversed_entry_count: entryIds.length,
+      reversed_entry_count: result.reversed_entry_count,
     }, { status: 201 })
   },
 )

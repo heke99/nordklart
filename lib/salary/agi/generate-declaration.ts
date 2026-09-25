@@ -297,8 +297,13 @@ export async function generateAgiDeclaration(
 
       const absenceEvents = absenceByEmployee.get(sre.employee_id)
 
+      // FK062/FK063 were removed from the AGI from redovisningsperiod 2026-01:
+      // växa-stöd is now claimed afterwards in Skatteverket's e-tjänst
+      // "Ansök om växa-stöd" (full avgifter are declared). Emit the flag only
+      // for earlier periods (corrections of 2025 declarations).
+      const vaxaFlagPeriod = run.period_year * 100 + run.period_month < 202601
       let vaxaStod: 'forsta_anstalld' | 'vaxa_stod' | undefined
-      if (emp?.vaxa_stod_eligible) {
+      if (emp?.vaxa_stod_eligible && vaxaFlagPeriod) {
         vaxaStod =
           emp.employment_start && emp.employment_start < VAXA_STOD_FK063_CUTOFF
             ? 'forsta_anstalld'
@@ -311,7 +316,7 @@ export async function generateAgiDeclaration(
       // employee in the same period. Catching this at generation time
       // avoids emitting an FK062/FK063 flag inconsistent with the FK061
       // category total.
-      if (vaxaStod && sre.avgifter_category === 'youth') {
+      if (emp?.vaxa_stod_eligible && vaxaFlagPeriod && sre.avgifter_category === 'youth') {
         throw new AGIIncompleteDataError(
           `Anställd ${emp?.specification_number ?? '?'}: kan inte kombinera växa-stöd ` +
             '(FK062/FK063) med ungdomsrabatt (avgifter_category="youth") — programmen är ömsesidigt uteslutande. ' +

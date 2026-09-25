@@ -132,7 +132,7 @@ export async function createSupplierInvoiceRegistrationEntry(
   for (const [accountNumber, amount] of expenseByAccount) {
     debitLines.push({
       account_number: accountNumber,
-      debit_amount: Math.round(amount * 100) / 100,
+      debit_amount: roundOre(amount),
       credit_amount: 0,
       line_description: desc,
     })
@@ -233,7 +233,7 @@ export async function createSupplierInvoiceRegistrationEntry(
   lines.push({
     account_number: '2440',
     debit_amount: 0,
-    credit_amount: Math.round((totalDebits - totalCredits) * 100) / 100,
+    credit_amount: roundOre((totalDebits - totalCredits)),
     line_description: desc,
     ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
   })
@@ -325,7 +325,7 @@ export async function planSupplierInvoicePaymentEntry(
     // Debit: Clear leverantörsskulder at original booked SEK amount
     lines.push({
       account_number: '2440',
-      debit_amount: Math.round(originalSekAmount * 100) / 100,
+      debit_amount: roundOre(originalSekAmount),
       credit_amount: 0,
       line_description: desc,
     })
@@ -334,7 +334,7 @@ export async function planSupplierInvoicePaymentEntry(
     lines.push({
       account_number: creditAccount,
       debit_amount: 0,
-      credit_amount: Math.round(actualSekPaid * 100) / 100,
+      credit_amount: roundOre(actualSekPaid),
       line_description: desc,
     })
 
@@ -344,14 +344,14 @@ export async function planSupplierInvoicePaymentEntry(
       lines.push({
         account_number: '3960',
         debit_amount: 0,
-        credit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
+        credit_amount: roundOre(Math.abs(exchangeRateDifference)),
         line_description: 'Valutakursvinst',
       })
     } else {
       // Loss: Debit 7960
       lines.push({
         account_number: '7960',
-        debit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
+        debit_amount: roundOre(Math.abs(exchangeRateDifference)),
         credit_amount: 0,
         line_description: 'Valutakursförlust',
       })
@@ -360,7 +360,7 @@ export async function planSupplierInvoicePaymentEntry(
     // Standard SEK payment
     lines.push({
       account_number: '2440',
-      debit_amount: Math.round(paymentAmount * 100) / 100,
+      debit_amount: roundOre(paymentAmount),
       credit_amount: 0,
       line_description: desc,
     })
@@ -368,7 +368,7 @@ export async function planSupplierInvoicePaymentEntry(
     lines.push({
       account_number: creditAccount,
       debit_amount: 0,
-      credit_amount: Math.round(paymentAmount * 100) / 100,
+      credit_amount: roundOre(paymentAmount),
       line_description: desc,
     })
   }
@@ -479,7 +479,7 @@ export async function planSupplierInvoiceCashEntry(
   for (const [accountNumber, amount] of expenseByAccount) {
     const line: CreateJournalEntryLineInput = {
       account_number: accountNumber,
-      debit_amount: Math.round(amount * 100) / 100,
+      debit_amount: roundOre(amount),
       credit_amount: 0,
       line_description: desc,
     }
@@ -586,7 +586,7 @@ export async function planSupplierInvoiceCashEntry(
   lines.push({
     account_number: creditAccount,
     debit_amount: 0,
-    credit_amount: Math.round((totalDebits - totalCredits) * 100) / 100,
+    credit_amount: roundOre((totalDebits - totalCredits)),
     line_description: desc,
   })
 
@@ -645,7 +645,7 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
   for (const [accountNumber, amount] of expenseByAccount) {
     lines.push({
       account_number: accountNumber,
-      debit_amount: Math.round(amount * 100) / 100,
+      debit_amount: roundOre(amount),
       credit_amount: 0,
       line_description: desc,
     })
@@ -680,7 +680,7 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
   lines.push({
     account_number: ownerAccount,
     debit_amount: 0,
-    credit_amount: Math.round(totalDebits * 100) / 100,
+    credit_amount: roundOre(totalDebits),
     line_description: desc,
   })
 
@@ -735,7 +735,7 @@ export async function createSupplierCreditNoteEntry(
     creditLines.push({
       account_number: accountNumber,
       debit_amount: 0,
-      credit_amount: Math.round(amount * 100) / 100,
+      credit_amount: roundOre(amount),
       line_description: desc,
     })
   }
@@ -775,7 +775,7 @@ export async function createSupplierCreditNoteEntry(
     // and so are reversed only via the expense credit line above.
     for (const [rate, baseAmount] of baseByRate) {
       if (rate > 0 && baseAmount > 0) {
-        const fiktivVat = Math.round(baseAmount * rate * 100) / 100
+        const fiktivVat = roundOre(baseAmount * rate)
         // Determine the output account for this rate
         let outputAccount: string
         switch (rate) {
@@ -838,7 +838,7 @@ export async function createSupplierCreditNoteEntry(
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   lines.unshift({
     account_number: '2440',
-    debit_amount: Math.round((totalCredits - totalDebits) * 100) / 100,
+    debit_amount: roundOre((totalCredits - totalDebits)),
     credit_amount: 0,
     line_description: desc,
   })
@@ -883,7 +883,7 @@ function groupVatByRate(
     const rate = item.vat_rate ?? 0.25
     const storedVat = item.vat_amount ?? 0
     const computedVat = rate > 0
-      ? Math.round((item.line_total ?? 0) * rate * 100) / 100
+      ? roundOre((item.line_total ?? 0) * rate)
       : 0
     const sourceVat = storedVat > 0 ? storedVat : computedVat
     let vatSek = resolveSekAmount(sourceVat, null, currency, exchangeRate)

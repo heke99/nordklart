@@ -9,9 +9,11 @@ const TAX_RATES = {
   stateTax: 0.20, // 20% state income tax on high incomes
 }
 
-// State income tax threshold (brytpunkt) for 2026
-const STATE_TAX_THRESHOLD = 643100 // Taxable income above this gets +20% state tax
-// Note: The "brytpunkt" is 660,400 kr but that includes grundavdrag
+// Skiktgräns for statlig inkomstskatt, inkomstår 2026: 643 000 kr of
+// beskattningsbar förvärvsinkomst (after grundavdrag). The brytpunkt 660 400 kr
+// is the same threshold expressed before grundavdrag. Source: Skatteverket,
+// "Skiktgränser, brytpunkter, prisbasbelopp m.m. 2020 till 2026".
+const STATE_TAX_THRESHOLD = 643000
 
 /**
  * Calculate progressive grundavdrag (basic deduction) for 2026
@@ -84,13 +86,13 @@ export function calculateEFTax(
     }
   }
 
-  // Egenavgifter (self-employment contributions) - 28.97%
-  const egenavgifter = netIncome * TAX_RATES.egenavgifter
-
-  // Taxable income (after egenavgifter deduction)
-  // 25% of egenavgifter is deductible from taxable income
-  const egenavgifterDeduction = egenavgifter * 0.25
-  const taxableIncome = netIncome - egenavgifterDeduction
+  // Schablonavdrag för egenavgifter: 25 % of the surplus (Skatteverket's
+  // preliminary method). Both the income tax and the egenavgifter are then
+  // computed on the surplus after that deduction — the egenavgifter are not
+  // charged on the part that is deducted for them.
+  const schablonavdrag = netIncome * 0.25
+  const taxableIncome = netIncome - schablonavdrag
+  const egenavgifter = taxableIncome * TAX_RATES.egenavgifter
 
   // Calculate progressive grundavdrag based on income level
   const grundavdrag = calculateGrundavdrag(taxableIncome)
@@ -99,8 +101,7 @@ export function calculateEFTax(
   // Municipal income tax (~32.38% average for 2026)
   const municipalTax = incomeAfterGrundavdrag * TAX_RATES.municipalTax
 
-  // State income tax (20% on income above threshold)
-  // Only applies to taxable income above 643,100 kr
+  // State income tax (20 % on beskattningsbar förvärvsinkomst above the skiktgräns)
   const incomeAboveThreshold = Math.max(0, incomeAfterGrundavdrag - STATE_TAX_THRESHOLD)
   const stateTax = incomeAboveThreshold * TAX_RATES.stateTax
 

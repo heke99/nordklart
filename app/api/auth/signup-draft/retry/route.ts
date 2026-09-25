@@ -24,6 +24,18 @@ export async function POST() {
       return NextResponse.json({ state: 'not_required', error: 'Det finns ingen installation att fortsätta.' }, { status: 404 })
     }
 
+    if (result.state === 'bankid_required') {
+      return NextResponse.json(
+        {
+          state: result.state,
+          code: 'bankid_required',
+          error: 'Identifiera dig med BankID för att skapa företaget.',
+          onboardingPath: '/onboarding/bankid',
+        },
+        { status: 428 },
+      )
+    }
+
     if (result.state === 'in_progress') {
       return NextResponse.json({ state: result.state, reference: result.reference }, { status: 409 })
     }

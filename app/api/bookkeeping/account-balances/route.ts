@@ -112,7 +112,7 @@ export const GET = withRouteContext('bookkeeping.account_balances', async (reque
         query = query.neq('journal_entry_id', obEntryId)
       }
 
-      return query.range(from, to)
+      return query.order('id', { ascending: true }).range(from, to)
     })
   } catch (err) {
     log.error('period activity lookup failed', {

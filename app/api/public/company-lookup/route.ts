@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { lookupCompanyAtBolagsverket } from '@/lib/company-registry/provider'
 import { signCompanyLookup } from '@/lib/company-registry/lookup-attestation'
@@ -27,9 +27,9 @@ export async function POST(request: NextRequest) {
   const parsed = bodySchema.safeParse(body)
   const ip = clientIp(request)
 
-  const limit = await checkRateLimit({
+  const limit = await checkDurableRateLimit({
     prefix: 'public:company-lookup',
-    identifier: `${ip}:${parsed.success ? parsed.data.organizationNumber.replace(/\D/g, '') : 'invalid'}`,
+    identifier: ip,
     maxRequests: 12,
     windowMs: 15 * 60 * 1000,
   })

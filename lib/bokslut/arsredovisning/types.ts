@@ -24,6 +24,10 @@ export interface EgenKapitalRow {
   amount: number
   /** Optional component columns used by the K2 equity roll-forward table. */
   aktiekapital?: number
+  /** Bundna fonder: reservfond, uppskrivningsfond, bunden överkursfond m.m. */
+  bundna_fonder?: number
+  /** Fri överkursfond (2097). */
+  overkursfond?: number
   balanserat_resultat?: number
   arets_resultat?: number
   row_kind?: 'opening' | 'movement' | 'result' | 'closing'
@@ -136,6 +140,10 @@ export interface ArsredovisningData {
     name: string
     signed_at: string | null
     status?: 'pending' | 'signed' | 'declined'
+    /** 'bankid' when signed with BankID evidence, 'manual' when marked by hand. */
+    evidence?: 'bankid' | 'manual' | null
+    /** BankID signer holds a signing position in Bolagsverket's register. */
+    registry_verified?: boolean | null
   }[]
   /** Prior period metadata for the jämförelse column (R03). */
   prior_period?: {
@@ -198,6 +206,7 @@ export interface KassaflodesAnalysisSummary {
     delta_lan: number
     utdelningar: number
     nyemission: number
+    ovriga_finansiering?: number
     total: number
   }
   total_cash_flow: number

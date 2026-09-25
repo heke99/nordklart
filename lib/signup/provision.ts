@@ -2,6 +2,7 @@ import 'server-only'
 
 import { createHash } from 'crypto'
 import { createServiceClient } from '@/lib/supabase/server'
+import { verifyFounder } from '@/lib/company/verify-signatory'
 
 export type ProvisionedSignupWorkspace = {
   companyId: string
@@ -19,6 +20,7 @@ export type SignupAccessRequest = {
 
 export type SignupProvisioningResult =
   | { state: 'not_required' }
+  | { state: 'bankid_required' }
   | { state: 'in_progress'; reference: string | null }
   | { state: 'failed'; reference: string | null }
   | { state: 'access_request_pending'; reference: string | null; request: SignupAccessRequest }
@@ -51,8 +53,39 @@ export async function markSignupDraftEmailVerified(params: {
  */
 export async function provisionVerifiedSignupDraft(userId: string): Promise<SignupProvisioningResult> {
   const service = createServiceClient()
-  const { data, error } = await service.rpc('provision_authorized_signup_draft_v4', {
+
+  // Decide the founder verification BEFORE provisioning: the RPC applies it in
+  // the same transaction that creates the company (see
+  // 20260925112000_company_founder_verification.sql).
+  const { data: draft, error: draftError } = await service
+    .from('signup_drafts')
+    .select('org_number, legal_form, status')
+    .eq('claimed_by_user_id', userId)
+    .in('status', ['ready_for_first_login', 'provisioning', 'failed', 'provisioned', 'access_request_pending'])
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (draftError) throw draftError
+  if (!draft) return { state: 'not_required' }
+
+  let verification: { status: string; reason: string; evidence: Record<string, unknown> } = {
+    status: 'self_attested', reason: 'already_provisioned', evidence: {},
+  }
+  if (draft.status !== 'provisioned' && draft.status !== 'access_request_pending') {
+    const decided = await verifyFounder(service, {
+      userId,
+      entityType: draft.legal_form === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag',
+      orgNumber: (draft.org_number as string | null) ?? null,
+    })
+    if (decided.kind === 'bankid_required') return { state: 'bankid_required' }
+    verification = decided
+  }
+
+  const { data, error } = await service.rpc('provision_authorized_signup_draft_v5', {
     p_user_id: userId,
+    p_verification_status: verification.status,
+    p_verification_reason: verification.reason,
+    p_verification_evidence: verification.evidence,
   })
   if (error) throw error
 

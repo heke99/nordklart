@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getActiveCompanyId } from '@/lib/company/context'
@@ -28,7 +29,9 @@ const BodySchema = z.object({
 // Plan ref: dev_docs/specialized-agent-plan.md §6.
 export async function POST(request: Request) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const rate = await checkAgentRateLimit(supabase, user.id)

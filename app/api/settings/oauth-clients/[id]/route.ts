@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { requireCompanyId } from '@/lib/company/context'
@@ -23,7 +24,9 @@ export async function DELETE(
 ) {
   const supabase = await createClient()
   const { id } = await params
-  const { data: { user } } = await supabase.auth.getUser()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
