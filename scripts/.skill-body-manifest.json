@@ -4,8 +4,8 @@
     "version": 3
   },
   "horizontal/swedish-accounting-compliance/bas-kontoplan": {
-    "hash": "0d1b05466568344be0afd4b360d582db23331ae4f1b4b05681cc92c50d099bdb",
-    "version": 2
+    "hash": "2f7d262c902ce7a0f95ec16ed8a22f2554eee11b31da2280bcfa3142542c2f41",
+    "version": 3
   },
   "horizontal/swedish-accounting-compliance/bfl-bfnar": {
     "hash": "2240a0e67af22450468f5bcd85ddf2037fd3ed37e8db662afff6cbaf93d4b398",
@@ -408,8 +408,8 @@
     "version": 1
   },
   "vertical/konsult-it/cross-border-payroll": {
-    "hash": "587e018c1936e73cc220d48b358e09a5508f5912141686042af08b26b02003e2",
-    "version": 1
+    "hash": "2f01766ef81e618d4a86c7f956f1594c2dd70a0c2a9099b7ff7aef2269714d99",
+    "version": 2
   },
   "vertical/konsult-it/electronic-services-classification": {
     "hash": "dcd82bc64dce24c5feab9c1a70ad63d43193be5ad5fab530677b665259b2abc0",

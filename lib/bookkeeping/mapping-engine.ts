@@ -18,22 +18,13 @@ import type {
   VatJournalLine,
 } from '@/types'
 import { createLogger } from '@/lib/logger'
+import { PRISBASBELOPP, LATEST_PBB_YEAR, getHalfPrisbasbelopp } from '@/lib/rules/prisbasbelopp'
 
 const log = createLogger('mapping-engine')
 
-// Half of prisbasbelopp per year (used for capitalization threshold)
-const PRISBASBELOPP_HALVES: Record<number, number> = {
-  2024: 28650,  // PBB 57,300
-  2025: 29400,  // PBB 58,800
-  2026: 29600,  // PBB 59,200
-}
-const LATEST_KNOWN_YEAR = 2026
-
 function getCapitalizationThreshold(year: number): number {
-  const threshold = PRISBASBELOPP_HALVES[year]
-  if (threshold) return threshold
-  log.warn(`No prisbasbelopp for ${year}, using ${LATEST_KNOWN_YEAR} value`)
-  return PRISBASBELOPP_HALVES[LATEST_KNOWN_YEAR]
+  if (!(year in PRISBASBELOPP)) log.warn(`No prisbasbelopp for ${year}, using ${LATEST_PBB_YEAR} value`)
+  return getHalfPrisbasbelopp(year)
 }
 
 /**

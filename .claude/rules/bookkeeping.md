@@ -37,7 +37,8 @@ Invoice items support individual `vat_rate` values (mixed-rate invoices). Use `g
 
 `VatDeclarationRutor` type maps to momsdeklaration:
 - **Ruta 05**: Domestic taxable sales (3001+3002+3003)
-- **Ruta 06/07**: Unused, always 0
+- **Ruta 06**: Momspliktiga uttag (3401–3403)
+- **Ruta 07/08**: Vinstmarginal / frivilligt skattskyldig uthyrning — no account mapping yet, always 0
 - **Ruta 10/11/12**: Output VAT 25%/12%/6% (2611/2621/2631)
 - **Ruta 39/40**: EU services / Export (3308/3305)
 - **Ruta 48**: Input VAT (2641/2645)

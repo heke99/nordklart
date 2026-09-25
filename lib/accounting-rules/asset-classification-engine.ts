@@ -1,6 +1,8 @@
 import type { EntityContext, PurchaseRuleInput, RuleDecision } from './types'
 
-export const LOW_VALUE_INVENTORY_LIMIT_2026_EX_VAT = 29_600
+import { getHalfPrisbasbelopp } from '@/lib/rules/prisbasbelopp'
+
+export const LOW_VALUE_INVENTORY_LIMIT_2026_EX_VAT = getHalfPrisbasbelopp(2026)
 export const SHORT_LIFE_MONTHS = 36
 
 export function classifyAssetCandidate(input: PurchaseRuleInput, context: EntityContext): Pick<RuleDecision, 'decision' | 'reasonCode' | 'explanationSv' | 'reviewSeverity' | 'suggestedAsset'> | null {

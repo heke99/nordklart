@@ -1051,6 +1051,22 @@ describe('calculateAvgifterRate', () => {
       2026
     )
 
+    // From 2026 växa-stöd is a refund: the AGI carries the full avgift.
+    expect(result.rate).toBe(0.3142)
+    expect(result.category).toBe('standard')
+  })
+
+  it('keeps the reduced växa-stöd rate for payments before 2026', () => {
+    const result = calculateAvgifterRate(
+      makeBasicInput({
+        paymentDate: '2025-12-25',
+        vaxaStodEligible: true,
+        vaxaStodStart: '2025-01-01',
+        vaxaStodEnd: '2026-12-31',
+      }),
+      config2026,
+      2025
+    )
     expect(result.rate).toBe(0.1021)
     expect(result.category).toBe('vaxa_stod')
   })
