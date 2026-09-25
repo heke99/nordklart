@@ -15,11 +15,11 @@ describe('getReferensrantaAt', () => {
   })
 
   it('returns the boundary value exactly on switch date', () => {
-    expect(getReferensrantaAt('2024-07-01')).toBe(0.0425)
+    expect(getReferensrantaAt('2024-07-01')).toBe(0.04)
   })
 
   it('returns the most recent rate for dates in 2026', () => {
-    expect(getReferensrantaAt('2026-05-15')).toBe(0.025)
+    expect(getReferensrantaAt('2026-05-15')).toBe(0.02)
   })
 
   it('falls back to earliest entry for pre-2022 dates', () => {
@@ -29,9 +29,9 @@ describe('getReferensrantaAt', () => {
 
 describe('getAnnualInterestRate', () => {
   it('adds 8 percentage points to referensränta by default', () => {
-    // 2026 referensränta = 0.025 → 0.025 + 0.08 = 0.105
+    // 2026 referensränta = 0.02 (Riksbanken) → 0.02 + 0.08 = 0.10
     const rate = getAnnualInterestRate('2026-05-01')
-    expect(rate).toBeCloseTo(0.105, 4)
+    expect(rate).toBeCloseTo(0.1, 4)
   })
 
   it('uses the override rate when supplied', () => {
@@ -45,8 +45,8 @@ describe('getAnnualInterestRate', () => {
   })
 
   it('ignores undefined override but respects 0', () => {
-    expect(getAnnualInterestRate('2026-05-01', undefined)).toBeCloseTo(0.105, 4)
-    expect(getAnnualInterestRate('2026-05-01', null)).toBeCloseTo(0.105, 4)
+    expect(getAnnualInterestRate('2026-05-01', undefined)).toBeCloseTo(0.1, 4)
+    expect(getAnnualInterestRate('2026-05-01', null)).toBeCloseTo(0.1, 4)
   })
 })
 
@@ -72,17 +72,17 @@ describe('calculateLatePaymentInterest', () => {
     expect(result.days).toBe(0)
   })
 
-  it('computes Räntelagen §6 default for 30 days on 10 000 kr (2026 rate 10.5%)', () => {
-    // 2026-01-01 referensränta = 0.025 → annual rate = 0.105
-    // interest = 10 000 × 0.105 × 30 / 365 ≈ 86.30
+  it('computes Räntelagen §6 default for 30 days on 10 000 kr (2026 rate 10 %)', () => {
+    // 2026-01-01 referensränta = 0.02 → annual rate = 0.10
+    // interest = 10 000 × 0.10 × 30 / 365 ≈ 82.19
     const result = calculateLatePaymentInterest({
       overdueAmount: 10_000,
       dueDate: '2026-04-15',
       asOfDate: '2026-05-15',
     })
     expect(result.days).toBe(30)
-    expect(result.rate).toBeCloseTo(0.105, 4)
-    expect(result.amount).toBeCloseTo(86.3, 1)
+    expect(result.rate).toBeCloseTo(0.1, 4)
+    expect(result.amount).toBeCloseTo(82.19, 2)
   })
 
   it('computes with explicit override 5% on 10 000 kr for 30 days ≈ 41.10', () => {
@@ -109,15 +109,31 @@ describe('calculateLatePaymentInterest', () => {
     expect(result.rate).toBe(0.115)
   })
 
-  it('uses the rate at the dueDate even when asOfDate is in a later rate period', () => {
-    // Due in late 2025 (rate at 2025-12-15: referensränta 0.0325 → annual 0.1125),
-    // checked in 2026 (rate 0.025 + 0.08 = 0.105). We should use the dueDate rate.
+  it('applies the referensränta of each calendar half-year the debt spans (räntelagen 6 §)', () => {
+    // Overdue 2024-12-15 → 2025-02-15: 16 days at 4 % + 8 = 12 % (2024 H2),
+    // then 46 days at 3 % + 8 = 11 % (2025 H1).
     const result = calculateLatePaymentInterest({
       overdueAmount: 10_000,
-      dueDate: '2025-12-15',
-      asOfDate: '2026-02-15',
+      dueDate: '2024-12-15',
+      asOfDate: '2025-02-15',
     })
-    expect(result.rate).toBeCloseTo(0.1125, 4)
+    expect(result.days).toBe(62)
+    expect(result.segments?.map((s) => [s.days, Number(s.rate.toFixed(4))])).toEqual([
+      [16, 0.12],
+      [46, 0.11],
+    ])
+    const expected = 10_000 * 0.12 * 16 / 365 + 10_000 * 0.11 * 46 / 365
+    expect(result.amount).toBeCloseTo(expected, 2)
+  })
+
+  it('does not segment a contractual override rate', () => {
+    const result = calculateLatePaymentInterest({
+      overdueAmount: 10_000,
+      dueDate: '2024-12-15',
+      asOfDate: '2025-02-15',
+      overrideRate: 0.12,
+    })
+    expect(result.segments?.every((s) => s.rate === 0.12)).toBe(true)
   })
 
   it('throws on a negative overdue amount', () => {

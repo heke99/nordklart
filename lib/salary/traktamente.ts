@@ -66,17 +66,22 @@ export function calculateTraktamente(params: {
     })
   }
 
-  // Meal reductions per Skatteverket (from max tax-free amount)
-  // Breakfast: 15%, Lunch: 35%, Dinner: 35%, All three: 85%
-  let mealReduction = 0
-  if (params.tripType === 'full_day') {
-    switch (params.mealsProvided) {
-      case 'breakfast': mealReduction = r(baseRate * 0.15); break
-      case 'lunch': case 'dinner': mealReduction = r(baseRate * 0.35); break
-      case 'lunch_dinner': mealReduction = r(baseRate * 0.70); break
-      case 'all': mealReduction = r(baseRate * 0.85); break
-    }
+  // Måltidsreduktion (Skatteverket, inrikes): frukost 20 %, lunch eller
+  // middag 35 %, lunch och middag 70 %, frukost + lunch + middag 90 % of the
+  // day's maximum tax-free amount — the amount AFTER the tremånadersregel, and
+  // for halvdag as well as heldag (heldag 2026: 60 / 105 / 210 / 270 kr).
+  // Nattraktamente is not reduced for meals.
+  const MEAL_REDUCTION: Record<MealsProvided, number> = {
+    none: 0,
+    breakfast: 0.20,
+    lunch: 0.35,
+    dinner: 0.35,
+    lunch_dinner: 0.70,
+    all: 0.90,
   }
+  const mealReduction = params.tripType === 'night'
+    ? 0
+    : r(maxTaxFreePerDay * MEAL_REDUCTION[params.mealsProvided])
 
   const taxFreePerDay = r(Math.max(maxTaxFreePerDay - mealReduction, 0))
   const taxFree = r(taxFreePerDay * params.days)

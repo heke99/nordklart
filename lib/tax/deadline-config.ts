@@ -16,6 +16,12 @@ export interface CompanySettingsForDeadlines {
   vat_registered: boolean
   pays_salaries: boolean
   fiscal_year_start_month: number // 1-12
+  /**
+   * Beskattningsunderlag för moms över 40 miljoner kronor per år. Changes the
+   * monthly VAT deadline to the 26th of the following month. Defaults to
+   * false (the SME case).
+   */
+  vat_base_over_40m?: boolean
 }
 
 // Configuration for a single tax deadline type
@@ -44,7 +50,10 @@ export interface DeadlineInstance {
  * All tax deadline configurations
  */
 export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
-  // Momsdeklaration (monthly)
+  // Momsdeklaration (monthly). Skatteverket "När ska jag deklarera moms":
+  //   underlag ≤ 40 MSEK: den 12:e i andra månaden efter perioden
+  //                       (den 17:e i januari och augusti)
+  //   underlag > 40 MSEK: den 26:e i månaden efter perioden (27 december)
   {
     type: 'moms_monthly',
     titleTemplate: 'Momsdeklaration {periodLabel}',
@@ -52,15 +61,18 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     condition: (s) => s.vat_registered && s.moms_period === 'monthly',
     priority: 'important',
     linkedReportType: 'vat',
-    generateDates: (year) => {
+    generateDates: (year, settings) => {
       const instances: DeadlineInstance[] = []
-      // Due on the 12th of the following month
       for (let month = 0; month < 12; month++) {
-        // Deadline for month X is on 12th of month X+1
-        const deadlineMonth = (month + 1) % 12
-        const deadlineYear = month === 11 ? year + 1 : year
+        const large = settings.vat_base_over_40m === true
+        const offset = large ? 1 : 2
+        const deadlineMonth = (month + offset) % 12
+        const deadlineYear = year + Math.floor((month + offset) / 12)
+        const day = large
+          ? (deadlineMonth === 11 ? 27 : 26)
+          : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
         instances.push({
-          day: 12,
+          day,
           month: deadlineMonth,
           year: deadlineYear,
           period: `${year}-${String(month + 1).padStart(2, '0')}`,
@@ -71,25 +83,41 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Momsdeklaration (quarterly) - e-tjänst deadline (26:e)
+  // Momsdeklaration (quarterly): den 12:e i andra månaden efter kvartalet,
+  // den 17:e i augusti (Skatteverket).
   {
     type: 'moms_quarterly',
     titleTemplate: 'Momsdeklaration {periodLabel}',
-    description: 'Momsdeklaration för kvartalsredovisare (e-tjänst)',
+    description: 'Momsdeklaration för kvartalsredovisare',
     condition: (s) => s.vat_registered && s.moms_period === 'quarterly',
     priority: 'important',
     linkedReportType: 'vat',
     generateDates: (year) => {
-      // Q1 (Jan-Mar) -> 26 april
-      // Q2 (Apr-Jun) -> 26 juli
-      // Q3 (Jul-Sep) -> 26 oktober
-      // Q4 (Oct-Dec) -> 26 januari next year
       return [
-        { day: 26, month: 3, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },   // April
-        { day: 26, month: 6, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },   // July
-        { day: 26, month: 9, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },   // October
-        { day: 26, month: 0, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` }, // January next year
+        { day: 12, month: 4, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },   // 12 maj
+        { day: 17, month: 7, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },   // 17 augusti
+        { day: 12, month: 10, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },  // 12 november
+        { day: 12, month: 1, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` }, // 12 februari
       ]
+    },
+  },
+
+  // Momsdeklaration (helår). Without EU trade the return follows the income
+  // tax return: enskild firma 12 maj året efter (digital inkomstdeklaration);
+  // aktiebolag the same day as INK2 per the fiscal-year-end table below.
+  {
+    type: 'moms_yearly',
+    titleTemplate: 'Momsdeklaration helår {periodLabel}',
+    description: 'Momsdeklaration för helårsredovisare (utan EU-handel)',
+    condition: (s) => s.vat_registered && s.moms_period === 'yearly',
+    priority: 'important',
+    linkedReportType: 'vat',
+    generateDates: (year, settings) => {
+      if (settings.entity_type === 'enskild_firma') {
+        return [{ day: 12, month: 4, year, period: `${year - 1}`, periodLabel: `${year - 1}` }]
+      }
+      const abConfig = TAX_DEADLINE_CONFIGS.find((c) => c.type === 'inkomstdeklaration_ab')
+      return abConfig ? abConfig.generateDates(year, settings) : []
     },
   },
 
@@ -103,10 +131,11 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     linkedReportType: null,
     generateDates: (year) => {
       const instances: DeadlineInstance[] = []
-      // Due on the 17th of each month
+      // Debiterad preliminärskatt is due on the 12th of each month, the 17th
+      // in January and August (Skatteverket; the decision can say otherwise).
       for (let month = 0; month < 12; month++) {
         instances.push({
-          day: 17,
+          day: month === 0 || month === 7 ? 17 : 12,
           month,
           year,
           period: `${year}-${String(month + 1).padStart(2, '0')}`,
@@ -157,12 +186,14 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     priority: 'normal',
     linkedReportType: null,
     generateDates: (year) => {
-      // Q1 -> 20 april, Q2 -> 20 juli, Q3 -> 20 oktober, Q4 -> 20 januari
+      // Lämnas elektroniskt senast den 25:e i månaden efter kvartalet (den
+      // 20:e gäller pappersblankett). Varuförsäljning över tröskeln redovisas
+      // per månad; det kräver EU-flaggan som inte finns ännu.
       return [
-        { day: 20, month: 3, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },
-        { day: 20, month: 6, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },
-        { day: 20, month: 9, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },
-        { day: 20, month: 0, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` },
+        { day: 25, month: 3, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },
+        { day: 25, month: 6, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },
+        { day: 25, month: 9, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },
+        { day: 25, month: 0, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` },
       ]
     },
   },

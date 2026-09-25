@@ -1,3 +1,5 @@
+import { roundOre } from '@/lib/money'
+
 /**
  * Statutory late-payment interest (dröjsmålsränta) per Räntelagen §6.
  *
@@ -5,8 +7,9 @@
  * applied as a simple annual interest on the overdue amount over the
  * number of days the invoice has been overdue.
  *
- * Formula:
- *   interest = overdueAmount × annualRate × overdueDays / 365
+ * Formula, per calendar half-year segment (räntelagen 6 §: "den vid varje
+ * tidpunkt gällande referensräntan"; the rate is fixed for each half-year):
+ *   interest = Σ overdueAmount × (referensränta_segment + 8 pe) × days_segment / 365
  *
  * We use 365 days (not 360) — this matches Swedish practice and is what
  * Skatteverket / Kronofogden use in their late-payment calculators.
@@ -30,6 +33,8 @@
  * walk from newest to oldest at lookup time.
  *
  * Source: https://www.riksbank.se/sv/statistik/rantor-och-valutakurser/referensranta/
+ * (checked 2026-09-24; 2024-07 … 2026-07 per Riksbanken's announcements
+ * "Referensräntan fastställd till …").
  *
  * The "annual default rate" applied to invoices is referensränta + 0.08
  * (eight percentage points, Räntelagen §6).
@@ -40,10 +45,11 @@ const REFERENSRANTA_HISTORY: ReadonlyArray<{ from: string; rate: number }> = [
   { from: '2023-01-01', rate: 0.025 },
   { from: '2023-07-01', rate: 0.035 },
   { from: '2024-01-01', rate: 0.04 },
-  { from: '2024-07-01', rate: 0.0425 },
-  { from: '2025-01-01', rate: 0.0375 },
-  { from: '2025-07-01', rate: 0.0325 },
-  { from: '2026-01-01', rate: 0.025 },
+  { from: '2024-07-01', rate: 0.04 },
+  { from: '2025-01-01', rate: 0.03 },
+  { from: '2025-07-01', rate: 0.02 },
+  { from: '2026-01-01', rate: 0.02 },
+  { from: '2026-07-01', rate: 0.02 },
 ] as const
 
 const LATE_PAYMENT_PREMIUM = 0.08 // 8 procentenheter per Räntelagen §6
@@ -94,8 +100,13 @@ export interface LatePaymentInterestInput {
 }
 
 export interface LatePaymentInterestResult {
-  /** Annual rate actually applied (decimal fraction, e.g. 0.115 = 11.5%). */
+  /**
+   * Annual rate at the start of the overdue period (decimal fraction). When
+   * the period spans half-years, `segments` holds each rate actually applied.
+   */
   rate: number
+  /** One entry per calendar half-year the overdue period touches. */
+  segments?: Array<{ from: string; to: string; days: number; rate: number }>
   /** Computed interest amount in SEK, rounded to 2 decimals. */
   amount: number
   /** Start date used for the interest calc (= dueDate). */
@@ -130,10 +141,45 @@ export function calculateLatePaymentInterest(
     return { rate, amount: 0, fromDate: dueDate, days: 0 }
   }
 
-  const raw = overdueAmount * rate * (days / 365)
-  const amount = Math.round(raw * 100) / 100
+  // Split the overdue period at every 1 January / 1 July: the referensränta
+  // changes there, and räntelagen applies the rate in force on each day.
+  // An override is a flat contractual rate, so it is not segmented.
+  const segments: Array<{ from: string; to: string; days: number; rate: number }> = []
+  let cursor = dueDate
+  while (cursor < asOfDate) {
+    const boundary = nextHalfYearBoundary(cursor)
+    const to = boundary < asOfDate ? boundary : asOfDate
+    const segmentDays = daysBetween(cursor, to)
+    if (segmentDays > 0) {
+      // Interest for a day accrues at the rate in force that day; the first
+      // accruing day of the segment is cursor + 1.
+      const segmentRate = getAnnualInterestRate(addDays(cursor, 1), overrideRate)
+      segments.push({ from: cursor, to, days: segmentDays, rate: segmentRate })
+    }
+    cursor = to
+  }
 
-  return { rate, amount, fromDate: dueDate, days }
+  const raw = segments.reduce((sum, seg) => sum + overdueAmount * seg.rate * (seg.days / 365), 0)
+  const amount = roundOre(raw)
+
+  return { rate, amount, fromDate: dueDate, days, segments }
+}
+
+/**
+ * Last day of the calendar half-year that `date` falls in — or of the next
+ * half-year when `date` already is that last day, so the caller always moves.
+ */
+function nextHalfYearBoundary(date: string): string {
+  const year = Number(date.slice(0, 4))
+  const month = Number(date.slice(5, 7))
+  const end = month < 7 ? `${year}-06-30` : `${year}-12-31`
+  if (end > date) return end
+  return month < 7 ? `${year}-12-31` : `${year + 1}-06-30`
+}
+
+function addDays(date: string, days: number): string {
+  const ms = Date.parse(`${date}T00:00:00Z`) + days * 86_400_000
+  return new Date(ms).toISOString().slice(0, 10)
 }
 
 /**
