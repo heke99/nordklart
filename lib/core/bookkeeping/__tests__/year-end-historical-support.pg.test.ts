@@ -17,7 +17,7 @@ async function seed() {
   // leads with company_details_incomplete.
   await insertCompanySettings({ companyId })
   await getPool().query(
-    `UPDATE public.companies SET org_number = '5594167149' WHERE id = $1`,
+    `UPDATE public.companies SET org_number = '5568554884' WHERE id = $1`,
     [companyId],
   )
   const fiscalPeriodId = await insertFiscalPeriod({
@@ -105,7 +105,7 @@ describe('historical support ledgers', () => {
          (id, user_id, company_id, filename, file_hash, sie_type,
           fiscal_year_start, fiscal_year_end, status, fiscal_period_id, org_number)
        VALUES ($1, $2, $3, 'staged.se', $4, 4, '2025-01-01',
-               '2025-12-31', 'staged', $5, '5594167149')`,
+               '2025-12-31', 'staged', $5, '5568554884')`,
       [
         randomUUID(),
         seeded.userId,
@@ -264,7 +264,7 @@ describe('historical support ledgers', () => {
           fiscal_year_start, fiscal_year_end, status, fiscal_period_id,
           org_number, imported_at)
        VALUES ($1, $2, $3, 'historik.se', $4, 4, '2025-01-01',
-               '2025-12-31', 'completed', $5, '5594167149', now())`,
+               '2025-12-31', 'completed', $5, '5568554884', now())`,
       [
         importId,
         seeded.userId,
@@ -335,7 +335,7 @@ describe('historical support ledgers', () => {
           fiscal_year_start, fiscal_year_end, status, fiscal_period_id,
           org_number, imported_at)
        VALUES ($1, $2, $3, 'historik-accept.se', $4, 4, '2025-01-01',
-               '2025-12-31', 'completed', $5, '5594167149', now())`,
+               '2025-12-31', 'completed', $5, '5568554884', now())`,
       [
         importId,
         seeded.userId,

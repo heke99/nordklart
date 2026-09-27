@@ -8,9 +8,9 @@ import {
 } from '@/lib/branding/legal-identity'
 
 export const metadata: Metadata = {
-  title: 'Om Nordklart och Gridex El AB',
+  title: `Om Nordklart och ${NORDKLART_LEGAL_NAME}`,
   description:
-    'Nordklart är ett digitalt system för bokföring, fakturor och bokslut som tillhandahålls av Gridex El AB, org.nr 559416-7149.',
+    `Nordklart är ett digitalt system för bokföring, fakturor och bokslut som tillhandahålls av ${NORDKLART_LEGAL_NAME}, org.nr ${NORDKLART_ORG_NUMBER}.`,
 }
 
 export default function OmOssPage() {
@@ -18,7 +18,7 @@ export default function OmOssPage() {
     <MarketingInfoPage
       showLegalEntity
       eyebrow="Om oss"
-      title="Nordklart är systemet. Gridex El AB är bolaget bakom tjänsten."
+      title={`Nordklart är systemet. ${NORDKLART_LEGAL_NAME} är bolaget bakom tjänsten.`}
       description={NORDKLART_LEGAL_DISCLOSURE}
       highlights={[
         'Nordklart är produkt- och systemnamnet',
@@ -40,8 +40,8 @@ export default function OmOssPage() {
           title: 'Bolaget bakom Nordklart',
           body: `${NORDKLART_LEGAL_NAME}, org.nr ${NORDKLART_ORG_NUMBER}, tillhandahåller Nordklart och är den juridiska avtalsparten för tjänsten om inget annat uttryckligen anges i ett särskilt avtal.`,
           points: [
-            'Avtal och betalningar kopplas till Gridex El AB',
-            'Gridex El AB anges som ansvarigt bolag i juridiska texter',
+            `Avtal och betalningar kopplas till ${NORDKLART_LEGAL_NAME}`,
+            `${NORDKLART_LEGAL_NAME} anges som ansvarigt bolag i juridiska texter`,
             'Personuppgiftsroller framgår i integritetspolicy och personuppgiftsbiträdesavtal',
           ],
         },
@@ -57,7 +57,7 @@ export default function OmOssPage() {
         },
         {
           title: 'Ansvar och transparens',
-          body: 'Vi skiljer tydligt mellan produktnamnet Nordklart och den juridiska personen Gridex El AB. Det ska vara enkelt för kunder att förstå vem som levererar tjänsten, vem som är avtalspart och vart frågor ska riktas.',
+          body: `Vi skiljer tydligt mellan produktnamnet Nordklart och den juridiska personen ${NORDKLART_LEGAL_NAME}. Det ska vara enkelt för kunder att förstå vem som levererar tjänsten, vem som är avtalspart och vart frågor ska riktas.`,
           points: [
             'Tydlig bolagsinformation i sidfot och juridiska sidor',
             'Spårbara system- och bokföringsflöden',

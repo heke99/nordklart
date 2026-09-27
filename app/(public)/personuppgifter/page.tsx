@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { MarketingInfoPage } from '@/components/marketing/MarketingInfoPage'
+import { NORDKLART_LEGAL_NAME } from '@/lib/branding/legal-identity'
 
 export const metadata: Metadata = {
   title: 'Personuppgifter – Nordklart',
@@ -12,7 +13,7 @@ export default function PersonuppgifterPage() {
       showLegalEntity
       eyebrow="Personuppgifter"
       title="Personuppgifter och dataskydd"
-      description="Den här sidan sammanfattar hur Gridex El AB hanterar personuppgifter inom tjänsten Nordklart och hur du kan begära åtkomst, rättelse, export eller radering."
+      description={`Den här sidan sammanfattar hur ${NORDKLART_LEGAL_NAME} hanterar personuppgifter inom tjänsten Nordklart och hur du kan begära åtkomst, rättelse, export eller radering.`}
       sections={[
         {
           title: 'Ansvar och roller',

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { MarketingInfoPage } from '@/components/marketing/MarketingInfoPage'
+import { NORDKLART_LEGAL_NAME } from '@/lib/branding/legal-identity'
 
 export const metadata: Metadata = {
   title: 'Integritetspolicy – Nordklart',
@@ -12,7 +13,7 @@ export default function IntegritetspolicyPage() {
       showLegalEntity
       eyebrow="Integritet"
       title="Integritetspolicy"
-      description="Gridex El AB tillhandahåller Nordklart och behandlar person- och bolagsuppgifter för att tillhandahålla bokföring, bokslut, Bankgiroflöden, support och säker drift."
+      description={`${NORDKLART_LEGAL_NAME} tillhandahåller Nordklart och behandlar person- och bolagsuppgifter för att tillhandahålla bokföring, bokslut, Bankgiroflöden, support och säker drift.`}
       sections={[
         {
           title: 'Uppgifter vi kan behandla',

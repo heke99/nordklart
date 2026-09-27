@@ -17,14 +17,14 @@ async function seedReadyCompany() {
   await insertCompanyMember({ companyId, userId, role: 'owner' })
   await pool.query(
     `UPDATE public.companies
-        SET org_number = '5594167149', accounting_framework = 'k2'
+        SET org_number = '5568554884', accounting_framework = 'k2'
       WHERE id = $1`,
     [companyId],
   )
   await pool.query(
     `INSERT INTO public.company_settings
        (company_id, user_id, company_name, org_number, entity_type, accounting_method)
-     VALUES ($1, $2, 'Test AB', '5594167149', 'aktiebolag', 'accrual')
+     VALUES ($1, $2, 'Test AB', '5568554884', 'aktiebolag', 'accrual')
      ON CONFLICT (company_id) DO UPDATE SET accounting_method = EXCLUDED.accounting_method`,
     [companyId, userId],
   )

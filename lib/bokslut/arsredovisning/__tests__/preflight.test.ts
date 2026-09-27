@@ -4,7 +4,7 @@ import type { ArsredovisningData } from '../types'
 
 function validData(): ArsredovisningData {
   return {
-    company: { name: 'Gridex EL AB', org_number: '559416-7149', city: 'Linköping' },
+    company: { name: 'Trafexa Nordic AB', org_number: '556855-4884', city: 'Linköping' },
     fiscal_period: {
       id: 'period',
       name: '2025',

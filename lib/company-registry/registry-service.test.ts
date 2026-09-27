@@ -5,7 +5,7 @@ import { diffRegistryAgainstSettings, normalizedDataFromLookup, publicLookupPayl
 import type { CompanyRegistryLookup } from './provider'
 
 const lookup: CompanyRegistryLookup = {
-  organizationNumber: '5594167149',
+  organizationNumber: '5568554884',
   companyName: 'Testbolaget AB',
   legalForm: 'aktiebolag',
   registryStatus: 'active',

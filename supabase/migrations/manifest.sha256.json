@@ -2431,6 +2431,11 @@
       "file": "20260925142000_advisor_indexes.sql",
       "version": "20260925142000",
       "sha256": "810c29616d3899342e6de4ffab90a1469848086253b1fd31c9493ae23ff8d1eb"
+    },
+    {
+      "file": "20260925142001_seed_agent_atom_bodies.sql",
+      "version": "20260925142001",
+      "sha256": "4e6261f7309f5c8da60f6535acad6fb00269a6035ece9da2b36b2961ac47892c"
     }
   ]
 }
