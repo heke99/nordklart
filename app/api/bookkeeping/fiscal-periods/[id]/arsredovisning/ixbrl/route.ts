@@ -7,6 +7,10 @@ import { requireYearEndAccess, yearEndAccessDeniedResponse } from '@/lib/year-en
 import { loadCurrentAnnualReportArtifact } from '@/lib/bokslut/arsredovisning/version-service'
 import { annualReportFileSlug } from '@/lib/bokslut/arsredovisning/format'
 
+// The iXBRL document is static markup rendered inline on the app's origin:
+// no script, no network, only its own inline styles and embedded images.
+const IXBRL_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox"
+
 /**
  * Live generation is always a marked draft. `?final=true` serves the exact
  * archived XHTML that belongs to the locked annual-report version; no query
@@ -44,6 +48,8 @@ export const GET = withRouteContext(
             'Content-Type': `${archived.mime_type}; charset=utf-8`,
             'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${archived.file_name.replace(/["\r\n]/g, '_')}"`,
             'Cache-Control': 'private, no-store, no-cache, must-revalidate',
+            'Content-Security-Policy': IXBRL_CSP,
+            'X-Content-Type-Options': 'nosniff',
             Pragma: 'no-cache',
             ETag: `"${archived.sha256_hash}"`,
             'X-Annual-Report-Version': String(archived.version_number),
@@ -61,6 +67,8 @@ export const GET = withRouteContext(
           'Content-Type': 'application/xhtml+xml; charset=utf-8',
           'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${filename}"`,
           'Cache-Control': 'private, no-store, no-cache, must-revalidate',
+          'Content-Security-Policy': IXBRL_CSP,
+          'X-Content-Type-Options': 'nosniff',
           Pragma: 'no-cache',
           'X-Ixbrl-Error-Count': String(preflight.errors.length),
           'X-Ixbrl-Warning-Count': String(preflight.warnings.length + warnings.length),

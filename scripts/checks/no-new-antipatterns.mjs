@@ -45,11 +45,6 @@ const IGNORE_DIRS = new Set(['node_modules', '.next', '.git', 'dist', 'build', '
 const ROUND_EXEMPT = new Set(['lib/money.ts', 'lib/bokslut/rounding.ts'])
 
 const RAW_AUTH_RE = /\.auth\.getUser\(/
-// Match the guard at its CALL site, not a bare import, so a file that imports
-// withRouteContext but still hand-rolls getUser() on another handler is still
-// flagged. withRouteContext is usually called with a generic (`withRouteContext<…>(`),
-// so accept either `<` or `(` after the name.
-const GUARD_RE = /requireAuth\(|withRouteContext[<(]/
 const NAIVE_ROUND_RE = /Math\.round\([^\n]*\*\s*100\s*\)\s*\/\s*100/
 // `NextResponse.json({ error: 'text' …` — a bare string where the canonical
 // envelope `{ error: { code, message, … } }` belongs.
@@ -82,8 +77,11 @@ function findRawRouteAuth() {
   const apiDir = path.join(ROOT, 'app', 'api')
   return walk(apiDir, ['route.ts'])
     .filter((f) => {
+      // Any getUser() in a route handler is flagged, even when another
+      // handler in the same file is guarded: one guarded GET does not make
+      // a hand-rolled DELETE next to it enforce MFA.
       const src = fs.readFileSync(f, 'utf8')
-      return RAW_AUTH_RE.test(src) && !GUARD_RE.test(src)
+      return RAW_AUTH_RE.test(src)
     })
     .map(rel)
     .sort()
