@@ -112,18 +112,21 @@ describe('anon and SECURITY DEFINER (pg-real)', () => {
     }
   })
 
-  it('leaves the deliberately public views readable', async () => {
-    // The one anon surface the product does have. Revoking too broadly would
-    // take the pricing page down.
-    const client = await getClient()
-    try {
-      await client.query('BEGIN')
-      await client.query('SET LOCAL ROLE anon')
-      await client.query('SELECT * FROM public.public_price_plans_v LIMIT 1')
-      await client.query('SELECT * FROM public.public_price_start_v LIMIT 1')
-    } finally {
-      await client.query('ROLLBACK').catch(() => {})
-      client.release()
+  it('keeps the pricing views off the anon surface (served server-side)', async () => {
+    // These views used to be the one anon surface, as SECURITY DEFINER views.
+    // Since 20260925140000 they are security_invoker and read only by
+    // lib/commercial/public-pricing.ts through the service client, so the
+    // pricing page no longer needs anon to reach them.
+    for (const view of ['public_price_plans_v', 'public_price_start_v']) {
+      const client = await getClient()
+      try {
+        await client.query('BEGIN')
+        await client.query('SET LOCAL ROLE anon')
+        await expect(client.query(`SELECT * FROM public.${view} LIMIT 1`)).rejects.toMatchObject({ code: '42501' })
+      } finally {
+        await client.query('ROLLBACK').catch(() => {})
+        client.release()
+      }
     }
   })
 

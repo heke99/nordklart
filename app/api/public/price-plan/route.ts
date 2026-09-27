@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
-import { createClient } from '@/lib/supabase/server'
+import { getPublicPricePlan } from '@/lib/commercial/public-pricing'
 
 const QuerySchema = z.object({
   plan_version_id: z.string().uuid(),
@@ -10,8 +10,8 @@ const QuerySchema = z.object({
 /**
  * Public catalog lookup for the registration page: resolves the plan a
  * visitor selected on /priser (plan_version_id in the register URL) into a
- * display name and price. Reads only the anon-granted public pricing view —
- * nothing tenant-scoped.
+ * display name and price. Reads only the public pricing catalog (active,
+ * is_public plans) — nothing tenant-scoped.
  */
 export async function GET(request: NextRequest) {
   const url = new URL(request.url)
@@ -31,16 +31,11 @@ export async function GET(request: NextRequest) {
   })
   if (!limit.ok) return limit.response!
 
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from('public_price_plans_v')
-    .select('plan_version_id, plan_code, public_name, monthly_price_ex_vat, currency, billing_interval, price_from_label, audience_type')
-    .eq('plan_version_id', parsed.data.plan_version_id)
-    .maybeSingle()
-
-  if (error) {
+  const lookup = await getPublicPricePlan(parsed.data.plan_version_id)
+  if (!lookup.ok) {
     return NextResponse.json({ error: 'Planen kunde inte hämtas just nu.' }, { status: 503 })
   }
+  const data = lookup.plan
   if (!data) {
     return NextResponse.json({ error: 'Planen är inte tillgänglig.' }, { status: 404 })
   }

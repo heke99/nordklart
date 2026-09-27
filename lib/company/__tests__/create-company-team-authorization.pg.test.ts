@@ -12,6 +12,17 @@ import { insertAuthUser } from '@/tests/pg/fixtures'
 // These tests prove the check fires for non-members and passes for members
 // (both owners and ordinary members), while preserving the NULL-team_id path
 // for solo companies.
+//
+// Since 20260925140000 the RPC is reserved for the anonymous sandbox (real
+// companies go through create_company_for_founder after founder
+// verification), so the callers below carry is_anonymous: true.
+
+/** Re-issue the session claims as a Supabase anonymous (sandbox) user. */
+async function asSandboxUser(client: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, userId: string) {
+  await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
+    JSON.stringify({ sub: userId, role: 'authenticated', is_anonymous: true }),
+  ])
+}
 
 async function insertTeam(params: { createdBy: string; name?: string }): Promise<string> {
   const id = randomUUID()
@@ -50,6 +61,7 @@ describe('create_company_with_owner — team_id authorization', () => {
 
     await expect(
       withUserContext(intruderId, async (client) => {
+        await asSandboxUser(client, intruderId)
         await client.query(
           `SELECT public.create_company_with_owner($1, $2, $3, $4)`,
           ['Intruder AB', 'aktiebolag', false, teamId],
@@ -63,6 +75,7 @@ describe('create_company_with_owner — team_id authorization', () => {
     const teamId = await insertTeam({ createdBy: ownerId })
 
     const companyId = await withUserContext(ownerId, async (client) => {
+        await asSandboxUser(client, ownerId)
       const { rows } = await client.query<{ create_company_with_owner: string }>(
         `SELECT public.create_company_with_owner($1, $2, $3, $4)`,
         ['Owner AB', 'aktiebolag', false, teamId],
@@ -80,6 +93,7 @@ describe('create_company_with_owner — team_id authorization', () => {
     await insertTeamMember({ teamId, userId: memberId, role: 'member' })
 
     const companyId = await withUserContext(memberId, async (client) => {
+        await asSandboxUser(client, memberId)
       const { rows } = await client.query<{ create_company_with_owner: string }>(
         `SELECT public.create_company_with_owner($1, $2, $3, $4)`,
         ['Member AB', 'aktiebolag', false, teamId],
@@ -94,6 +108,7 @@ describe('create_company_with_owner — team_id authorization', () => {
     const soloId = await insertAuthUser()
 
     const companyId = await withUserContext(soloId, async (client) => {
+        await asSandboxUser(client, soloId)
       const { rows } = await client.query<{ create_company_with_owner: string }>(
         `SELECT public.create_company_with_owner($1, $2, $3, $4)`,
         ['Solo EF', 'enskild_firma', false, null],
@@ -112,6 +127,7 @@ describe('create_company_with_owner — team_id authorization', () => {
     let sqlstate: string | undefined
     try {
       await withUserContext(intruderId, async (client) => {
+        await asSandboxUser(client, intruderId)
         await client.query(
           `SELECT public.create_company_with_owner($1, $2, $3, $4)`,
           ['Intruder AB', 'aktiebolag', false, teamId],
@@ -122,5 +138,17 @@ describe('create_company_with_owner — team_id authorization', () => {
     }
 
     expect(sqlstate).toBe('42501')
+  })
+
+  it('rejects a regular (non-anonymous) session: companies are created through onboarding', async () => {
+    const userId = await insertAuthUser()
+    await expect(
+      withUserContext(userId, async (client) => {
+        await client.query(
+          `SELECT public.create_company_with_owner($1, $2, $3, $4)`,
+          ['Direct AB', 'aktiebolag', false, null],
+        )
+      }),
+    ).rejects.toMatchObject({ code: '42501' })
   })
 })

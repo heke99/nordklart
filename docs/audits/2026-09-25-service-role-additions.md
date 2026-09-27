@@ -41,3 +41,9 @@ Three route files were added to `scripts/checks/service-role-baseline.json`. Eac
 - **Actor:** `withRouteContext` handles auth and MFA.
 - **Company and permission:** `requireYearEndAccess` checks access to the company and the period, with write access required for POST.
 - **Resource and why service role:** the service client is used only for `__ledger_balance_at`, which is service-role only, on the inventory accounts of `companyId`. The period read and the voucher (`createJournalEntry`) use the user's RLS client.
+
+## `lib/commercial/public-pricing.ts` (`listPublicPricePlans`, `getPublicPricePlan`)
+
+- **Actor:** none. The module serves the public pricing page (`/priser`) and `/api/public/price-plan`. That route validates the id with Zod and applies a per-IP rate limit.
+- **Company and resource:** nothing tenant-scoped. The only table read is `public_price_plans_v`, which returns only active plans with `is_public = true` and their current published version. The route reads one plan by `plan_version_id`.
+- **Why service role:** migration `20260925140000` made the view `security_invoker` to close the Supabase `security_definer_view` error. The view joins platform tables that no session role has a policy on, so it is now granted to `service_role` only, and this module is its only reader. Writes are not possible.
