@@ -21,6 +21,7 @@ import { isRecoverableSignupProvisioningStatus } from '@/lib/signup/provisioning
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { clearRecaptIdentity } from '@/lib/recapt'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
+import { pendingInvitePath } from '@/lib/invitations/pending-invite'
 
 const branding = getBranding()
 
@@ -140,27 +141,12 @@ function LoginPageContent() {
           return
         }
 
-        // Check for pending invite token
-        const bankIdCookieMatch = document.cookie.match(/nordklart-invite-token=([^;]+)/)
-        const bankIdInviteToken = bankIdCookieMatch?.[1]
-
-        if (bankIdInviteToken) {
-          try {
-            const res = await fetch('/api/team/accept', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: bankIdInviteToken }),
-            })
-
-            if (res.ok) {
-              document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
-              window.location.href = '/app'
-              return
-            }
-          } catch (err) {
-            console.error('[login] invite acceptance failed:', err)
-          }
-          document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
+        // A pending invitation wins: the invite page accepts it (and routes
+        // through MFA when required) and keeps the token until it has an outcome.
+        const bankIdInvitePath = pendingInvitePath()
+        if (bankIdInvitePath) {
+          navigateAfterAuth(bankIdInvitePath)
+          return
         }
 
         // Always land on the picker after BankID login so the user sees
@@ -202,36 +188,20 @@ function LoginPageContent() {
         return
       }
 
+      // A pending invitation is accepted on the invite page, after MFA.
+      const invitePath = pendingInvitePath()
+
       // Check MFA status
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
 
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        navigateAfterAuth('/mfa/verify')
+        navigateAfterAuth(invitePath ? `/mfa/verify?returnTo=${encodeURIComponent(invitePath)}` : '/mfa/verify')
         return
       }
 
-      // Check for pending invite token
-      const cookieMatch = document.cookie.match(/nordklart-invite-token=([^;]+)/)
-      const inviteToken = cookieMatch?.[1]
-
-      if (inviteToken) {
-        try {
-          const res = await fetch('/api/team/accept', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: inviteToken }),
-          })
-
-          if (res.ok) {
-            document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
-            window.location.href = '/app'
-            return
-          }
-        } catch (err) {
-          console.error('[login] invite acceptance failed:', err)
-        }
-        // Clear cookie even on failure to avoid retrying stale tokens
-        document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
+      if (invitePath) {
+        navigateAfterAuth(invitePath)
+        return
       }
 
       const activation = await fetch('/api/auth/signup-draft/claim', { method: 'POST' })

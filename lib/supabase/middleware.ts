@@ -163,7 +163,18 @@ export async function updateSession(request: NextRequest) {
     // MFA required but user has no factor enrolled yet → force enrollment
     // Skip for users with no companies (still setting up)
     const { companyId: companyIdForMfa } = await getResolvedCompany()
-    if (companyIdForMfa) {
+    // Agency staff without a client company still hold access to client data
+    // through the agency view, so they are not "still setting up".
+    const needsFactor = companyIdForMfa
+      ? true
+      : Boolean((await supabase
+          .from('agency_members')
+          .select('agency_id')
+          .eq('user_id', user.id)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle()).data)
+    if (needsFactor) {
       const { data: factors } = await supabase.auth.mfa.listFactors()
       const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
 
@@ -221,6 +232,23 @@ export async function updateSession(request: NextRequest) {
   if (!companyId) {
     if (isNoCompanyAllowed) {
       return supabaseResponse
+    }
+
+    // Agency staff reach client companies only through agency_clients; a new
+    // staff member of an agency without clients yet has no company but does
+    // have a workspace: the agency view. Never send them to create a company.
+    const { data: agencyMembership } = await supabase
+      .from('agency_members')
+      .select('agency_id')
+      .eq('user_id', user.id)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle()
+    if (agencyMembership) {
+      if (pathname.startsWith('/agency') || pathname.startsWith('/settings/account')) {
+        return supabaseResponse
+      }
+      return NextResponse.redirect(new URL('/agency', request.url))
     }
 
     // Enrichment lives in its own table since 20260506160000. It used to sit in

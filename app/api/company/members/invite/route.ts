@@ -6,6 +6,8 @@ import { resolveCompanyAccess } from '@/lib/access/company'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getEmailService } from '@/lib/email/service'
 import { assertCommercialLimit, COMMERCIAL_LIMITS } from '@/lib/platform/entitlement-limits'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
+import { createLogger } from '@/lib/logger'
 import {
   generateInviteEmailSubject,
   generateInviteEmailHtml,
@@ -17,6 +19,8 @@ import {
 // is silently skipped in dev whenever this route is hit before any other
 // init'd route in the process.
 ensureInitialized()
+
+const log = createLogger('api/company/members/invite')
 
 /**
  * POST /api/company/members/invite
@@ -36,13 +40,23 @@ export const POST = withRouteContext('company.members.invite', async (request, {
     return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
   }
 
+  // Each invite sends an e-mail naming the company to an address of the
+  // caller's choosing; bound it per inviter and per company.
+  for (const [prefix, identifier, maxRequests, windowMs] of [
+    ['invite:company:user', user.id, 20, 60 * 60 * 1000],
+    ['invite:company:company', companyId, 50, 24 * 60 * 60 * 1000],
+  ] as const) {
+    const limit = await checkDurableRateLimit({ prefix, identifier, maxRequests, windowMs })
+    if (!limit.ok) return limit.response!
+  }
+
   const serviceClient = createServiceClient()
 
-  const body = await request.json()
-  const email = (body.email as string || '').trim().toLowerCase()
-  const role = (body.role as string) || 'viewer'
+  const body = await request.json().catch(() => ({}))
+  const email = (typeof body?.email === 'string' ? body.email : '').trim().toLowerCase()
+  const role = (typeof body?.role === 'string' ? body.role : '') || 'viewer'
 
-  if (!email || !email.includes('@')) {
+  if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ error: 'Ogiltig e-postadress.' }, { status: 400 })
   }
 
@@ -64,9 +78,9 @@ export const POST = withRouteContext('company.members.invite', async (request, {
   // Check if email is already a member of this company
   const { data: existingMembers } = await serviceClient
     .from('company_members')
-    .select('id, user_id')
+    .select('id, user_id, status')
     .eq('company_id', companyId)
-    .in('status', ['active', 'active_limited'])
+    .in('status', ['active', 'active_limited', 'suspended'])
 
   if (existingMembers && existingMembers.length > 0) {
     const memberUserIds = existingMembers.map((m) => m.user_id)
@@ -75,23 +89,36 @@ export const POST = withRouteContext('company.members.invite', async (request, {
       .select('id, email')
       .in('id', memberUserIds)
 
-    const alreadyMember = memberProfiles?.some(
+    const matchedProfile = memberProfiles?.find(
       (p) => p.email?.toLowerCase() === email
     )
-    if (alreadyMember) {
-      return NextResponse.json({ error: 'Denna person är redan medlem.' }, { status: 409 })
+    if (matchedProfile) {
+      const matched = existingMembers.find((m) => m.user_id === matchedProfile.id)
+      return NextResponse.json(
+        {
+          error: matched?.status === 'suspended'
+            ? 'Personens åtkomst är pausad. Återaktivera den i medlemslistan i stället för att bjuda in igen.'
+            : 'Denna person är redan medlem.',
+        },
+        { status: 409 },
+      )
     }
   }
 
-  // Check for existing pending invite
+  // Check for an existing invite. An expired one no longer blocks a new
+  // invitation; the row is reused because (company_id, email) is unique.
   const { data: existingInvite } = await serviceClient
     .from('company_invitations')
-    .select('id, status')
+    .select('id, status, expires_at')
     .eq('company_id', companyId)
     .eq('email', email)
-    .single()
+    .maybeSingle()
 
-  if (existingInvite && existingInvite.status === 'pending') {
+  if (
+    existingInvite
+    && existingInvite.status === 'pending'
+    && new Date(existingInvite.expires_at) > new Date()
+  ) {
     return NextResponse.json({ error: 'En inbjudan har redan skickats till denna e-post.' }, { status: 409 })
   }
 
@@ -115,6 +142,8 @@ export const POST = withRouteContext('company.members.invite', async (request, {
         invited_by: user.id,
         revoked_by: null,
         revoked_at: null,
+        accepted_by: null,
+        accepted_at: null,
         status: 'pending',
         expires_at: expiresAt.toISOString(),
         role,
@@ -123,6 +152,7 @@ export const POST = withRouteContext('company.members.invite', async (request, {
       .eq('id', existingInvite.id)
 
     if (error) {
+      log.error('invitation write failed', { code: error.code })
       return NextResponse.json({ error: 'Kunde inte skapa inbjudan.' }, { status: 500 })
     }
   } else {
@@ -142,6 +172,7 @@ export const POST = withRouteContext('company.members.invite', async (request, {
       })
 
     if (error) {
+      log.error('invitation write failed', { code: error.code })
       return NextResponse.json({ error: 'Kunde inte skapa inbjudan.' }, { status: 500 })
     }
   }
@@ -158,12 +189,6 @@ export const POST = withRouteContext('company.members.invite', async (request, {
       inviteUrl,
     }
 
-    console.log('[company/members/invite] sending email', {
-      to: email,
-      company: emailData.companyName,
-      from: user.email,
-    })
-
     const result = await emailService.sendEmail({
       to: email,
       subject: generateInviteEmailSubject(emailData),
@@ -175,18 +200,11 @@ export const POST = withRouteContext('company.members.invite', async (request, {
       },
     })
 
-    if (result.success) {
-      console.log('[company/members/invite] email sent', {
-        to: email,
-        messageId: result.messageId,
-      })
-    } else {
-      console.error('[company/members/invite] email send failed:', result.error)
+    if (!result.success) {
+      log.error('invite email send failed', { companyId })
     }
   } else {
-    console.warn('[company/members/invite] email service not configured — skipping send', {
-      to: email,
-    })
+    log.warn('email service not configured; invite e-mail not sent', { companyId })
   }
 
   // In development, return the invite URL directly (no email service)

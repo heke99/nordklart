@@ -90,7 +90,16 @@ export default async function DashboardLayout({
   // account after archiving their last company).
   if (!companyId) {
     if (!isNoCompanyAllowed) {
-      redirect('/onboarding')
+      // Agency staff without any client yet work from the agency view.
+      const { data: agencyMembership } = await supabase
+        .from('agency_members')
+        .select('agency_id')
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle()
+      if (!agencyMembership) redirect('/onboarding')
+      if (!pathname.startsWith('/agency')) redirect('/agency')
     }
 
     return (

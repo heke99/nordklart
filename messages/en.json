@@ -998,7 +998,18 @@
     "unexpected_error": "An unexpected error occurred. Please try again.",
     "welcome_title": "Welcome!",
     "joined_named": "You are now a member of {companyName}.",
-    "joined_generic": "You are now a member."
+    "joined_generic": "You are now a member.",
+    "signup_first_name": "First name",
+    "signup_last_name": "Last name",
+    "signup_email": "Email",
+    "signup_password": "Password",
+    "signup_password_hint": "At least 8 characters with upper and lower case letters, digits and a symbol.",
+    "signup_accept_terms": "I accept the terms of service and have read the privacy policy.",
+    "signup_submit": "Create account and join",
+    "signup_submitting": "Creating account…",
+    "signup_failed_title": "Could not create the account",
+    "mfa_required_title": "Two-step verification required",
+    "mfa_required_body": "Complete two-step verification and you will join right after."
   },
   "settings_company": {
     "company_info_heading": "Company details",

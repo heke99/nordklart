@@ -4,21 +4,12 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { createLogger } from '@/lib/logger'
+import { passwordSchema } from '@/lib/auth/password-policy'
 
 const log = createLogger('api/account/password')
 
 const SetPasswordSchema = z.object({
-  password: z
-    .string()
-    .min(8, 'Lösenordet måste vara minst 8 tecken')
-    .refine(
-      (v) =>
-        /[a-z]/.test(v) &&
-        /[A-Z]/.test(v) &&
-        /[0-9]/.test(v) &&
-        /[^a-zA-Z0-9]/.test(v),
-      'Lösenordet måste innehålla versaler, gemener, siffror och specialtecken',
-    ),
+  password: passwordSchema,
 })
 
 /**

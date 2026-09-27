@@ -34,7 +34,7 @@ export async function requireAuth(): Promise<AuthResult> {
       return {
         user: null,
         supabase,
-        error: NextResponse.json({ error: 'MFA verification required' }, { status: 403 }),
+        error: NextResponse.json({ error: 'MFA verification required', code: 'mfa_verification_required' }, { status: 403 }),
       }
     }
 
@@ -42,7 +42,7 @@ export async function requireAuth(): Promise<AuthResult> {
       return {
         user: null,
         supabase,
-        error: NextResponse.json({ error: 'MFA verification required' }, { status: 403 }),
+        error: NextResponse.json({ error: 'MFA verification required', code: 'mfa_verification_required' }, { status: 403 }),
       }
     }
 
@@ -59,7 +59,18 @@ export async function requireAuth(): Promise<AuthResult> {
         .limit(1)
         .maybeSingle()
 
-      if (companyError || anyCompany) {
+      // Agency staff are past onboarding even before their first client.
+      const { data: agencyMembership, error: agencyError } = anyCompany || companyError
+        ? { data: null, error: null }
+        : await supabase
+            .from('agency_members')
+            .select('agency_id')
+            .eq('user_id', user.id)
+            .eq('status', 'active')
+            .limit(1)
+            .maybeSingle()
+
+      if (companyError || anyCompany || agencyError || agencyMembership) {
         return {
           user: null,
           supabase,

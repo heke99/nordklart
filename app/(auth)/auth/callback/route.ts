@@ -1,6 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
 import { type NextRequest, NextResponse } from 'next/server'
-import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import {
   authCallbackErrorParam,
   classifyAuthCallbackFailure,
@@ -205,68 +204,16 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // Keep the legacy company-invitation handoff during the migration to the
-  // unified workspace model. This cookie is set by the invite landing page.
+  // A pending company or agency invitation (cookie set by the invite landing
+  // page) is accepted on /invite/[token]: that page runs the atomic accept
+  // through /api/team/accept, which checks MFA, e-mail and status and never
+  // lowers a role. Accepting here as well would bypass all of that.
   const inviteToken = request.cookies.get('nordklart-invite-token')?.value
-  if (inviteToken) {
-    try {
-      const tokenHash = hashInviteToken(inviteToken)
-      const serviceClient = createServiceClient()
-
-      const { data: invite } = await serviceClient
-        .from('company_invitations')
-        .select('id, company_id, email, role, status, expires_at, invited_by, membership_kind')
-        .eq('token_hash', tokenHash)
-        .single()
-
-      if (
-        invite &&
-        invite.status === 'pending' &&
-        new Date(invite.expires_at) > new Date() &&
-        user.email?.toLowerCase() === invite.email.toLowerCase()
-      ) {
-        await serviceClient.from('company_members').upsert({
-          company_id: invite.company_id,
-          user_id: user.id,
-          role: invite.role,
-          source: 'direct',
-          status: 'active',
-          access_source: 'invite',
-          membership_kind: invite.membership_kind ?? 'internal',
-          invited_by: invite.invited_by ?? null,
-          approved_by: invite.invited_by ?? null,
-          approved_at: new Date().toISOString(),
-        }, { onConflict: 'company_id,user_id' })
-
-        await serviceClient.from('user_preferences').upsert({
-          user_id: user.id,
-          active_company_id: invite.company_id,
-        }, { onConflict: 'user_id' })
-
-        await serviceClient
-          .from('company_invitations')
-          .update({ status: 'accepted', accepted_by: user.id, accepted_at: new Date().toISOString() })
-          .eq('id', invite.id)
-
-        const response = applyPendingCookies(
-          NextResponse.redirect(new URL('/app', origin)),
-          pendingCookies,
-        )
-        response.cookies.set('nordklart-company-id', invite.company_id, {
-          path: '/',
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: 'lax',
-          maxAge: 60 * 60 * 24 * 365,
-        })
-        response.cookies.delete('nordklart-invite-token')
-        return response
-      }
-    } catch (error) {
-      log.error('invite acceptance failed', error, { userId: user.id })
-      // The user still has a valid session; normal destination handling below
-      // avoids turning a non-critical invite retry into an auth failure.
-    }
+  if (inviteToken && /^[A-Za-z0-9_-]{16,200}$/.test(inviteToken)) {
+    return applyPendingCookies(
+      NextResponse.redirect(new URL(`/invite/${encodeURIComponent(inviteToken)}`, origin)),
+      pendingCookies,
+    )
   }
 
   // Existing team records are still required by legacy paths. Create the

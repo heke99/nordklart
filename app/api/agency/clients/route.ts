@@ -1,9 +1,61 @@
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { z } from 'zod'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { resolveCompanyAccess } from '@/lib/access/company'
 import { assertAgencyClientCapacity, resolveManageableAgency } from '@/lib/agency/commercial'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
+import { ensureInitialized } from '@/lib/init'
+import { getEmailService } from '@/lib/email/service'
+import { createLogger } from '@/lib/logger'
+import {
+  generateAgencyLinkRequestEmailHtml,
+  generateAgencyLinkRequestEmailSubject,
+  generateAgencyLinkRequestEmailText,
+} from '@/lib/email/invite-templates'
+
+ensureInitialized()
+
+const log = createLogger('api/agency/clients')
+
+/**
+ * Tell the client company's owners and admins that an agency asked for
+ * access, so a pending link does not sit unnoticed. Best effort.
+ */
+async function notifyClientAdmins(agencyId: string, companyId: string) {
+  const emailService = getEmailService()
+  if (!emailService.isConfigured()) return
+  const service = createServiceClient()
+  const [{ data: agency }, { data: company }, { data: admins }] = await Promise.all([
+    service.from('agencies').select('name').eq('id', agencyId).maybeSingle(),
+    service.from('companies').select('name').eq('id', companyId).maybeSingle(),
+    service
+      .from('company_members')
+      .select('user_id')
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .in('role', ['owner', 'admin']),
+  ])
+  const userIds = (admins ?? []).map((row) => row.user_id)
+  if (userIds.length === 0) return
+  const { data: profiles } = await service.from('profiles').select('email').in('id', userIds)
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  const data = {
+    agencyName: agency?.name || 'En redovisningsbyrå',
+    companyName: company?.name || 'ditt företag',
+    reviewUrl: `${appUrl}/settings/company`,
+  }
+  for (const email of (profiles ?? []).map((p) => p.email).filter((e): e is string => Boolean(e))) {
+    const result = await emailService.sendEmail({
+      to: email,
+      subject: generateAgencyLinkRequestEmailSubject(data),
+      html: generateAgencyLinkRequestEmailHtml(data),
+      text: generateAgencyLinkRequestEmailText(data),
+      context: { companyId, templateKey: 'agency.link_request' },
+    })
+    if (!result.success) log.warn('agency link request email failed', { companyId })
+  }
+}
 
 const CreateAgencyClientSchema = z.object({
   agency_id: z.string().uuid().optional(),
@@ -20,6 +72,14 @@ export async function POST(request: Request) {
   if (authResult.error) return authResult.error
   const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const limit = await checkDurableRateLimit({
+    prefix: 'agency:client-link',
+    identifier: user.id,
+    maxRequests: 30,
+    windowMs: 60 * 60 * 1000,
+  })
+  if (!limit.ok) return limit.response!
 
   const parsed = CreateAgencyClientSchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) {
@@ -83,7 +143,17 @@ export async function POST(request: Request) {
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message || 'Kundrelationen kunde inte skapas.' }, { status: 500 })
+    log.error('agency client link insert failed', { code: error.code })
+    if (error.code === '42501') {
+      return NextResponse.json({ error: 'Behörighet saknas för att koppla kundbolaget.' }, { status: 403 })
+    }
+    return NextResponse.json({ error: 'Kundrelationen kunde inte skapas.' }, { status: 500 })
+  }
+
+  if (data.status === 'pending') {
+    await notifyClientAdmins(agencyAccess.agencyId, parsed.data.company_id).catch(() => {
+      log.warn('agency link request notification failed', { companyId: parsed.data.company_id })
+    })
   }
 
   return NextResponse.json({ data }, { status: 201 })

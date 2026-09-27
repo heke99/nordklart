@@ -998,7 +998,18 @@
     "unexpected_error": "Ett oväntat fel uppstod. Försök igen.",
     "welcome_title": "Välkommen!",
     "joined_named": "Du är nu medlem i {companyName}.",
-    "joined_generic": "Du är nu medlem."
+    "joined_generic": "Du är nu medlem.",
+    "signup_first_name": "Förnamn",
+    "signup_last_name": "Efternamn",
+    "signup_email": "E-post",
+    "signup_password": "Lösenord",
+    "signup_password_hint": "Minst 8 tecken med versaler, gemener, siffror och specialtecken.",
+    "signup_accept_terms": "Jag godkänner de allmänna villkoren och har tagit del av integritetspolicyn.",
+    "signup_submit": "Skapa konto och gå med",
+    "signup_submitting": "Skapar konto…",
+    "signup_failed_title": "Kunde inte skapa kontot",
+    "mfa_required_title": "Tvåstegsverifiering krävs",
+    "mfa_required_body": "Slutför tvåstegsverifieringen så går du med direkt efteråt."
   },
   "settings_company": {
     "company_info_heading": "Företagsuppgifter",

@@ -7,6 +7,7 @@ import { assertAgencyStaffCapacity, resolveManageableAgency } from '@/lib/agency
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import {
   AGENCY_INVITE_ROLE_LABELS,
   generateAgencyInviteEmailHtml,
@@ -33,6 +34,14 @@ export async function POST(request: Request) {
   if (authResult.error) return authResult.error
   const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const limit = await checkDurableRateLimit({
+    prefix: 'invite:agency:user',
+    identifier: user.id,
+    maxRequests: 20,
+    windowMs: 60 * 60 * 1000,
+  })
+  if (!limit.ok) return limit.response!
 
   const parsed = AgencyStaffInviteSchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) {
@@ -80,6 +89,16 @@ export async function POST(request: Request) {
     }
   }
 
+  // A pending invitation that has expired no longer blocks a new one; mark it
+  // expired first so the one-pending-per-e-mail index lets the new row in.
+  await serviceClient
+    .from('agency_invitations')
+    .update({ status: 'expired' })
+    .eq('agency_id', agencyAccess.agencyId)
+    .eq('email', email)
+    .eq('status', 'pending')
+    .lte('expires_at', new Date().toISOString())
+
   const { data: existingInvite } = await serviceClient
     .from('agency_invitations')
     .select('id, status')
@@ -109,7 +128,11 @@ export async function POST(request: Request) {
     })
 
   if (insertError) {
-    return NextResponse.json({ error: insertError.message || 'Kunde inte skapa byråinbjudan.' }, { status: 500 })
+    log.error('agency invitation insert failed', { code: insertError.code })
+    if (insertError.code === '23505') {
+      return NextResponse.json({ error: 'En byråinbjudan har redan skickats till denna e-post.' }, { status: 409 })
+    }
+    return NextResponse.json({ error: 'Kunde inte skapa byråinbjudan.' }, { status: 500 })
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
@@ -136,10 +159,10 @@ export async function POST(request: Request) {
     })
 
     if (!result.success) {
-      log.error('agency staff invite email send failed', result.error)
+      log.error('agency staff invite email send failed', { agencyId: agencyAccess.agencyId })
     }
   } else {
-    log.warn('agency staff invite email service not configured', { email })
+    log.warn('agency staff invite email service not configured', { agencyId: agencyAccess.agencyId })
   }
 
   const isDev = process.env.NODE_ENV === 'development'
@@ -151,4 +174,80 @@ export async function POST(request: Request) {
       ...(isDev && { inviteUrl }),
     },
   }, { status: 201 })
+}
+
+/**
+ * GET /api/agency/staff/invite?agency_id=
+ * Pending staff invitations of an agency the caller administers.
+ */
+export async function GET(request: Request) {
+  const supabase = await createClient()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
+
+  const agencyId = new URL(request.url).searchParams.get('agency_id')
+  if (agencyId && !z.string().uuid().safeParse(agencyId).success) {
+    return NextResponse.json({ error: 'Ogiltigt byrå-id.' }, { status: 400 })
+  }
+
+  const agencyAccess = await resolveManageableAgency(supabase, user.id, agencyId)
+  if (!agencyAccess.ok) return agencyAccess.response
+
+  const { data, error } = await createServiceClient()
+    .from('agency_invitations')
+    .select('id, email, role, status, expires_at, created_at, invited_by')
+    .eq('agency_id', agencyAccess.agencyId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    log.error('agency invitation list failed', { code: error.code })
+    return NextResponse.json({ error: 'Kunde inte hämta inbjudningar.' }, { status: 500 })
+  }
+
+  const now = Date.now()
+  return NextResponse.json({
+    data: (data ?? []).map((row) => ({ ...row, expired: new Date(row.expires_at).getTime() <= now })),
+  })
+}
+
+const RevokeSchema = z.object({ id: z.string().uuid(), agency_id: z.string().uuid().optional() })
+
+/**
+ * DELETE /api/agency/staff/invite  { id, agency_id? }
+ * Revokes a pending staff invitation of an agency the caller administers.
+ */
+export async function DELETE(request: Request) {
+  const supabase = await createClient()
+  const authResult = await requireAuth()
+  if (authResult.error) return authResult.error
+  const { user } = authResult
+
+  const parsed = RevokeSchema.safeParse(await request.json().catch(() => null))
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'Ogiltig begäran.' }, { status: 400 })
+  }
+
+  const agencyAccess = await resolveManageableAgency(supabase, user.id, parsed.data.agency_id ?? null)
+  if (!agencyAccess.ok) return agencyAccess.response
+
+  const { data, error } = await createServiceClient()
+    .from('agency_invitations')
+    .update({ status: 'revoked', revoked_by: user.id, revoked_at: new Date().toISOString() })
+    .eq('id', parsed.data.id)
+    .eq('agency_id', agencyAccess.agencyId)
+    .eq('status', 'pending')
+    .select('id')
+    .maybeSingle()
+
+  if (error) {
+    log.error('agency invitation revoke failed', { code: error.code })
+    return NextResponse.json({ error: 'Kunde inte återkalla inbjudan.' }, { status: 500 })
+  }
+  if (!data) {
+    return NextResponse.json({ error: 'Inbjudan hittades inte eller är inte väntande.' }, { status: 404 })
+  }
+
+  return NextResponse.json({ data: { revoked: data.id } })
 }

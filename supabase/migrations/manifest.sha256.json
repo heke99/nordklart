@@ -2436,6 +2436,11 @@
       "file": "20260925142001_seed_agent_atom_bodies.sql",
       "version": "20260925142001",
       "sha256": "4e6261f7309f5c8da60f6535acad6fb00269a6035ece9da2b36b2961ac47892c"
+    },
+    {
+      "file": "20260927100000_invitations_hardening.sql",
+      "version": "20260927100000",
+      "sha256": "f5879c4ac876a0ca9f08d505d521944460fbc297c8ba39ab3eefadbf39bfaba3"
     }
   ]
 }

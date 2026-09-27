@@ -6,10 +6,14 @@ import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Loader2, Building2, AlertCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
+import { clearPendingInvite, rememberPendingInvite } from '@/lib/invitations/pending-invite'
 
 const branding = getBranding()
 
@@ -52,6 +56,8 @@ export default function InvitePage() {
 
         const data = await inviteRes.json()
         if (!inviteRes.ok) {
+          // A used, revoked or unknown invite is final: drop the handoff cookie.
+          if (inviteRes.status !== 429 && inviteRes.status < 500) clearPendingInvite()
           setError(data.error || t('invalid_invite'))
           return
         }
@@ -66,8 +72,6 @@ export default function InvitePage() {
     }
     loadInvite()
   }, [token, t])
-
-  const secureCookieFlag = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; secure' : ''
 
   // True when the signed-in user's email matches the invite — in that case
   // we can accept the invite with a single click, no re-login required.
@@ -85,22 +89,79 @@ export default function InvitePage() {
     ? t('invited_to_agency')
     : t('invited_to_company')
 
+  const [showSignup, setShowSignup] = useState(false)
+  const [signup, setSignup] = useState({ firstName: '', lastName: '', password: '', accepted: false })
+  const [isSigningUp, setIsSigningUp] = useState(false)
+
+  const invitePath = `/invite/${encodeURIComponent(token)}`
+
+  const destinationAfterJoin = (type: 'company' | 'agency', companyId: string | null | undefined) =>
+    type === 'agency' && !companyId ? '/agency' : '/'
+
   const handleAccept = () => {
-    // Store invite token in cookie before redirecting to register
-    document.cookie = `nordklart-invite-token=${token}; path=/; max-age=3600; samesite=lax${secureCookieFlag}`
-    router.push(`/register?invite=${encodeURIComponent(token)}`)
+    // No account yet: create one right here, for the invited e-mail only.
+    setShowSignup(true)
   }
 
   const handleAcceptExistingUser = () => {
-    // Store invite token in cookie before redirecting to login
-    document.cookie = `nordklart-invite-token=${token}; path=/; max-age=3600; samesite=lax${secureCookieFlag}`
+    // Keep the token so login can send the user back here to accept.
+    rememberPendingInvite(token)
     router.push('/login')
   }
 
+  const handleSignup = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!invite || !signup.accepted) return
+    setIsSigningUp(true)
+    try {
+      const res = await fetch('/api/auth/invite-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          firstName: signup.firstName,
+          lastName: signup.lastName,
+          password: signup.password,
+          acceptedTerms: true,
+          acceptedPrivacy: true,
+        }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const message = typeof body.error === 'string' ? body.error : body.message ?? body.error?.message
+        toast({ title: t('signup_failed_title'), description: message || t('unexpected_error'), variant: 'destructive' })
+        setIsSigningUp(false)
+        return
+      }
+
+      clearPendingInvite()
+      const supabase = createClient()
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: body.data?.email ?? invite.email,
+        password: signup.password,
+      })
+      if (signInError) {
+        // The account and membership exist; the user can log in normally.
+        window.location.assign('/login')
+        return
+      }
+      toast({
+        title: t('welcome_title'),
+        description: invite.companyName ? t('joined_named', { companyName: invite.companyName }) : t('joined_generic'),
+      })
+      // Hard navigation: middleware resolves the new workspace and, on hosted,
+      // sends the user through MFA enrollment first.
+      window.location.assign(destinationAfterJoin(body.data?.type ?? invite.type, body.data?.companyId))
+    } catch (err) {
+      console.error('[invite] signup failed:', err)
+      toast({ title: t('signup_failed_title'), description: t('unexpected_error'), variant: 'destructive' })
+      setIsSigningUp(false)
+    }
+  }
+
   // Already signed in as the invitee — accept directly, no login detour.
-  // POST /api/team/accept handles the membership insert + sets the active
-  // company; we then full-reload to '/' so middleware picks up the new
-  // company context and the switcher shows it.
+  // POST /api/team/accept runs the atomic accept and sets the active
+  // workspace; we then full-reload so middleware picks up the new context.
   const handleJoinNow = async () => {
     setIsJoining(true)
     try {
@@ -112,6 +173,16 @@ export default function InvitePage() {
       const body = await res.json().catch(() => ({}))
 
       if (!res.ok) {
+        // MFA first, then straight back here to finish joining.
+        if (body.code === 'mfa_enrollment_required' || body.code === 'mfa_verification_required') {
+          rememberPendingInvite(token)
+          toast({ title: t('mfa_required_title'), description: t('mfa_required_body') })
+          const mfaPage = body.code === 'mfa_enrollment_required' ? '/mfa/enroll' : '/mfa/verify'
+          window.location.assign(`${mfaPage}?returnTo=${encodeURIComponent(invitePath)}`)
+          return
+        }
+        // Keep the handoff for transient failures; drop it when the invite is spent.
+        if (res.status !== 429 && res.status < 500) clearPendingInvite()
         toast({
           title: t('join_failed_title'),
           description: body.error || t('unexpected_error'),
@@ -121,15 +192,14 @@ export default function InvitePage() {
         return
       }
 
+      clearPendingInvite()
       toast({
         title: t('welcome_title'),
         description: invite?.companyName
           ? t('joined_named', { companyName: invite.companyName })
           : t('joined_generic'),
       })
-      // Full reload so the middleware re-resolves company context from the
-      // updated user_preferences.active_company_id.
-      window.location.href = '/'
+      window.location.href = destinationAfterJoin(body.data?.type ?? 'company', body.data?.companyId)
     } catch (err) {
       console.error('[invite] join failed:', err)
       toast({
@@ -144,12 +214,12 @@ export default function InvitePage() {
   const handleSignOutAndRetry = async () => {
     const supabase = createClient()
     await supabase.auth.signOut()
-    // Keep the invite cookie alive so the next login/register picks it up.
-    document.cookie = `nordklart-invite-token=${token}; path=/; max-age=3600; samesite=lax${secureCookieFlag}`
+    // Keep the invite so the next login comes back here.
+    rememberPendingInvite(token)
     if (invite?.alreadyHasAccount) {
       router.push('/login')
     } else {
-      router.push(`/register?invite=${encodeURIComponent(token)}`)
+      window.location.assign(invitePath)
     }
   }
 
@@ -334,9 +404,77 @@ export default function InvitePage() {
                   </div>
                 </Card>
 
-                <Button size="lg" className="w-full" onClick={handleAccept}>
-                  {t('create_account_and_join')}
-                </Button>
+                {showSignup ? (
+                  <form onSubmit={handleSignup} className="space-y-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="invite-first-name">{t('signup_first_name')}</Label>
+                        <Input
+                          id="invite-first-name"
+                          autoComplete="given-name"
+                          required
+                          maxLength={100}
+                          value={signup.firstName}
+                          onChange={(e) => setSignup((v) => ({ ...v, firstName: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="invite-last-name">{t('signup_last_name')}</Label>
+                        <Input
+                          id="invite-last-name"
+                          autoComplete="family-name"
+                          required
+                          maxLength={100}
+                          value={signup.lastName}
+                          onChange={(e) => setSignup((v) => ({ ...v, lastName: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="invite-email">{t('signup_email')}</Label>
+                      <Input id="invite-email" type="email" value={invite.email} readOnly disabled />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="invite-password">{t('signup_password')}</Label>
+                      <Input
+                        id="invite-password"
+                        type="password"
+                        autoComplete="new-password"
+                        required
+                        minLength={8}
+                        maxLength={128}
+                        value={signup.password}
+                        onChange={(e) => setSignup((v) => ({ ...v, password: e.target.value }))}
+                      />
+                      <p className="text-xs text-muted-foreground">{t('signup_password_hint')}</p>
+                    </div>
+                    <label className="flex items-start gap-2 text-sm">
+                      <Checkbox
+                        checked={signup.accepted}
+                        onCheckedChange={(checked) => setSignup((v) => ({ ...v, accepted: checked === true }))}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        {t('signup_accept_terms')}{' '}
+                        <Link href="/allmanna-villkor" target="_blank" aria-label="Allmänna villkor" className="text-primary hover:underline">↗</Link>
+                      </span>
+                    </label>
+                    <Button type="submit" size="lg" className="w-full" disabled={isSigningUp || !signup.accepted}>
+                      {isSigningUp ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          {t('signup_submitting')}
+                        </>
+                      ) : (
+                        t('signup_submit')
+                      )}
+                    </Button>
+                  </form>
+                ) : (
+                  <Button size="lg" className="w-full" onClick={handleAccept}>
+                    {t('create_account_and_join')}
+                  </Button>
+                )}
 
                 <p className="text-center text-xs text-muted-foreground">
                   {t('terms_notice')}
