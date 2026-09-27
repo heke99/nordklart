@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -30,18 +30,28 @@ export function PendingStaffInvites({ agencyId }: { agencyId: string }) {
   const [invites, setInvites] = useState<PendingInvite[] | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    const res = await fetch(`/api/agency/staff/invite?agency_id=${encodeURIComponent(agencyId)}`)
-    const body = await res.json().catch(() => ({}))
-    setInvites(res.ok ? (body.data as PendingInvite[]) : [])
-  }, [agencyId])
+  const [version, setVersion] = useState(0)
 
   useEffect(() => {
-    void load()
-    const reload = () => void load()
+    let cancelled = false
+    fetch(`/api/agency/staff/invite?agency_id=${encodeURIComponent(agencyId)}`)
+      .then(async (res) => ({ ok: res.ok, body: await res.json().catch(() => ({})) }))
+      .then(({ ok, body }) => {
+        if (!cancelled) setInvites(ok ? (body.data as PendingInvite[]) : [])
+      })
+      .catch(() => {
+        if (!cancelled) setInvites([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agencyId, version])
+
+  useEffect(() => {
+    const reload = () => setVersion((v) => v + 1)
     window.addEventListener(AGENCY_INVITES_CHANGED_EVENT, reload)
     return () => window.removeEventListener(AGENCY_INVITES_CHANGED_EVENT, reload)
-  }, [load])
+  }, [])
 
   const revoke = async (id: string) => {
     setRevokingId(id)
