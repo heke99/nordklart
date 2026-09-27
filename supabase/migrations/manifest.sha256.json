@@ -2420,7 +2420,7 @@
     {
       "file": "20260925140000_advisor_security_hardening.sql",
       "version": "20260925140000",
-      "sha256": "65e298df78b44f39b1ceb41e4e47976489f6c45beb937eeb374584d096401a24"
+      "sha256": "a33ef72d59a122d0860c657a9c992453747027c06a95efc6f1db1489f10c8f60"
     },
     {
       "file": "20260925141000_advisor_rls_policy_performance.sql",

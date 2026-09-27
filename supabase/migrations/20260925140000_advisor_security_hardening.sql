@@ -189,7 +189,7 @@ BEGIN
   -- Bolagsverket on hosted). This function stays reachable from a session only
   -- for the anonymous sandbox; a regular session calling it through PostgREST
   -- would get an unverified owner and skip that check entirely.
-  IF coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false) IS NOT TRUE THEN
+  IF coalesce((nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'is_anonymous')::boolean, false) IS NOT TRUE THEN
     RAISE EXCEPTION 'Företag skapas via onboardingen.'
       USING ERRCODE = '42501',
             HINT = 'create_company_with_owner is reserved for the anonymous sandbox.';
