@@ -65,14 +65,51 @@ export type StripeSubscription = {
   customer: string | null
   status: string
   cancel_at_period_end: boolean
-  current_period_start: number | null
-  current_period_end: number | null
+  /** Top-level before API version 2025-03-31.basil; on the item after. */
+  current_period_start?: number | null
+  current_period_end?: number | null
+  metadata?: Record<string, string | undefined>
   items: {
     data: Array<{
       id: string
+      current_period_start?: number | null
+      current_period_end?: number | null
       price?: { id?: string | null; recurring?: { interval?: 'month' | 'year' | 'week' | 'day' | null } | null } | null
     }>
   }
+}
+
+/**
+ * The billing period of a subscription, wherever the API version puts it:
+ * on the subscription (up to 2025-02-24.acacia) or on its first item
+ * (2025-03-31.basil and later). Webhook payloads follow the endpoint's API
+ * version, which is configured in Stripe, so both shapes must be read.
+ */
+export function stripeSubscriptionPeriod(subscription: {
+  current_period_start?: number | null
+  current_period_end?: number | null
+  items?: { data?: Array<{ current_period_start?: number | null; current_period_end?: number | null }> }
+}): { start: number | null; end: number | null } {
+  const item = subscription.items?.data?.[0]
+  return {
+    start: subscription.current_period_start ?? item?.current_period_start ?? null,
+    end: subscription.current_period_end ?? item?.current_period_end ?? null,
+  }
+}
+
+/**
+ * API version for outgoing Stripe requests. Unset means the account default;
+ * the code reads both pre- and post-basil shapes (see
+ * stripeSubscriptionPeriod), so either works. Set STRIPE_API_VERSION to pin.
+ */
+export function stripeApiVersion(): string | null {
+  return process.env.STRIPE_API_VERSION?.trim() || null
+}
+
+/** True when the configured secret key is a live-mode key. */
+export function isStripeLiveMode(): boolean {
+  return (process.env.STRIPE_SECRET_KEY?.trim() ?? '').startsWith('sk_live_')
+    || (process.env.STRIPE_SECRET_KEY?.trim() ?? '').startsWith('rk_live_')
 }
 
 export type StripeTaxSettings = {
@@ -145,7 +182,7 @@ async function stripeRequest<T>(
     method,
     headers: {
       Authorization: `Bearer ${key}`,
-      ...(process.env.STRIPE_API_VERSION?.trim() ? { 'Stripe-Version': process.env.STRIPE_API_VERSION.trim() } : {}),
+      ...(stripeApiVersion() ? { 'Stripe-Version': stripeApiVersion()! } : {}),
       ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
       ...(options?.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}),
     },
@@ -241,6 +278,7 @@ export async function createStripeCheckoutSession(input: {
   clientReferenceId: string
   metadata: Record<string, string>
   quantity?: number
+  trialPeriodDays?: number
   idempotencyKey?: string
 }) {
   const tax = getStripeTaxSettings()
@@ -257,7 +295,11 @@ export async function createStripeCheckoutSession(input: {
     line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
     metadata: input.metadata,
     subscription_data: input.mode === 'subscription'
-      ? { metadata: input.metadata, automatic_tax: tax.automaticTax }
+      ? {
+          metadata: input.metadata,
+          automatic_tax: tax.automaticTax,
+          ...(input.trialPeriodDays && input.trialPeriodDays > 0 ? { trial_period_days: input.trialPeriodDays } : {}),
+        }
       : undefined,
   }, { idempotencyKey: input.idempotencyKey })
 }

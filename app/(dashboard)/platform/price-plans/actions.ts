@@ -490,7 +490,7 @@ export async function processSubscriptionChangeRequestAction(formData: FormData)
   try {
     await mark('processing', `Behandlas av ${user.email ?? user.id}`)
     const stripeSubscription = await stripe.retrieveStripeSubscription(subscription.external_subscription_id)
-    const periodEnd = stripeSubscription.current_period_end
+    const { start: periodStart, end: periodEnd } = stripe.stripeSubscriptionPeriod(stripeSubscription)
     if (!periodEnd) throw new Error('Stripe-abonnemanget saknar periodslut och kan inte schemaläggas säkert.')
 
     if (request.request_type === 'cancel_subscription') {
@@ -532,7 +532,6 @@ export async function processSubscriptionChangeRequestAction(formData: FormData)
       if (!target?.stripe_price_id) throw new Error('Målplanen saknar publicerat Stripe-pris.')
       const currentItem = stripeSubscription.items.data[0]
       const currentPriceId = currentItem?.price?.id
-      const periodStart = stripeSubscription.current_period_start
       if (!currentPriceId || !periodStart || !periodEnd) throw new Error('Stripe-abonnemanget saknar period- eller prisdata och kan inte bytas säkert.')
       const schedule = await stripe.createStripeSubscriptionScheduleFromSubscription({ subscriptionId: subscription.external_subscription_id, idempotencyKey: `nordklart-change-schedule-${request.id}` })
       const updatedSchedule = await stripe.updateStripeSubscriptionSchedule({

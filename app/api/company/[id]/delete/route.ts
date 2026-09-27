@@ -6,6 +6,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { cancelStripeBillingForArchivedCompany } from '@/lib/billing/cancel-on-archive'
 
 const log = createLogger('api/company/delete')
 
@@ -127,6 +128,11 @@ export async function POST(
     log.error('Failed to archive company', { companyId, error: updateError.message })
     return NextResponse.json({ error: 'Kunde inte radera företaget.' }, { status: 500 })
   }
+
+  // 4b. An archived company must not keep being billed. Stripe renewals are
+  // cancelled at period end; failures are left for the platform team as
+  // billing events rather than blocking the archive.
+  await cancelStripeBillingForArchivedCompany(service, companyId, user.id)
 
   // 5. Clear user_preferences.active_company_id if it pointed here so the
   // middleware falls through to another membership next request.

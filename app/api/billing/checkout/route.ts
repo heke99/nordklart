@@ -57,10 +57,11 @@ export async function POST(request: Request) {
 
   const { data: plan, error: planError } = await service
     .from('platform_price_plans')
-    .select('id, code, name, product_id, status')
+    .select('id, code, name, product_id, status, is_public, audience_type, trial_days')
     .eq('id', version.plan_id)
     .maybeSingle()
   if (planError || !plan || plan.status !== 'active') return jsonError('Planen är inte tillgänglig.', 409)
+  if (plan.audience_type === 'internal') return jsonError('Planen är inte tillgänglig.', 409)
 
   const { data: product, error: productError } = await service
     .from('platform_products')
@@ -75,6 +76,20 @@ export async function POST(request: Request) {
     : product.product_type === 'addon'
       ? 'addon'
       : 'one_time'
+
+  // Same rule as the billing page: base plans are sold only when public and
+  // meant for this buyer (an agency's own company buys agency plans).
+  if (checkoutKind === 'subscription') {
+    const { data: agencyRow } = await service
+      .from('agencies')
+      .select('id')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const buyerAudience = agencyRow ? 'agency' : 'company'
+    if (plan.is_public !== true || (plan.audience_type !== buyerAudience && plan.audience_type !== 'both')) {
+      return jsonError('Planen är inte tillgänglig för det här företaget.', 409)
+    }
+  }
 
   let parentSubscriptionId: string | null = null
   if (checkoutKind === 'subscription') {
@@ -161,19 +176,38 @@ export async function POST(request: Request) {
     }
   }
 
+  // One open payment per service. For base plans that means any base plan:
+  // two parallel checkouts for different plans would both bill the company.
   let openCheckoutQuery = service
     .from('billing_checkout_sessions')
     .select('id')
     .eq('company_id', companyId)
-    .eq('plan_version_id', version.id)
     .in('status', ['created', 'open'])
     .limit(1)
-  openCheckoutQuery = fiscalPeriodId
-    ? openCheckoutQuery.eq('fiscal_period_id', fiscalPeriodId)
-    : openCheckoutQuery.is('fiscal_period_id', null)
+  openCheckoutQuery = checkoutKind === 'subscription'
+    ? openCheckoutQuery.eq('checkout_kind', 'subscription')
+    : openCheckoutQuery.eq('plan_version_id', version.id)
+  if (checkoutKind !== 'subscription') {
+    openCheckoutQuery = fiscalPeriodId
+      ? openCheckoutQuery.eq('fiscal_period_id', fiscalPeriodId)
+      : openCheckoutQuery.is('fiscal_period_id', null)
+  }
   const { data: existingCheckout } = await openCheckoutQuery.maybeSingle()
   if (existingCheckout) {
     return jsonError('Det finns redan en pågående betalning för den här tjänsten. Avsluta eller avbryt den i Stripe innan du försöker igen.', 409)
+  }
+
+  // A trial is offered once per company: not to someone who already had a
+  // base subscription.
+  let trialPeriodDays = 0
+  if (checkoutKind === 'subscription' && Number(plan.trial_days) > 0) {
+    const { data: priorBase } = await service
+      .from('company_subscriptions')
+      .select('id')
+      .eq('company_id', companyId)
+      .limit(1)
+      .maybeSingle()
+    if (!priorBase) trialPeriodDays = Math.min(Number(plan.trial_days), 730)
   }
 
   const checkoutId = crypto.randomUUID()
@@ -189,6 +223,9 @@ export async function POST(request: Request) {
     created_by: user.id,
     metadata: { plan_code: plan.code, initiated_by: user.id },
   })
+  if (checkoutInsertError?.code === '23505') {
+    return jsonError('Det finns redan en pågående betalning för den här tjänsten. Avsluta eller avbryt den i Stripe innan du försöker igen.', 409)
+  }
   if (checkoutInsertError) return jsonError('Betalningen kunde inte förberedas.', 500)
 
   const origin = billingAppOrigin(request)
@@ -203,6 +240,7 @@ export async function POST(request: Request) {
       // until Stripe's own 24h expiry fires.
       cancelUrl: `${origin}/settings/billing?checkout=cancelled&checkout_id=${checkoutId}`,
       clientReferenceId: checkoutId,
+      trialPeriodDays,
       metadata: {
         nordklart_checkout_id: checkoutId,
         nordklart_company_id: companyId,
