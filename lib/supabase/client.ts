@@ -1,4 +1,5 @@
 import { createBrowserClient } from '@supabase/ssr'
+import { supabaseCookieOptions } from '@/lib/auth/session-policy'
 
 // During Docker builds, NEXT_PUBLIC_* vars are placeholder sentinels
 // (e.g. __NEXT_PUBLIC_SUPABASE_URL__) that get replaced at runtime by
@@ -9,8 +10,10 @@ const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
 const isBuildPlaceholder = !url || url.startsWith('__')
 
 export function createClient() {
+  const secure = typeof window !== 'undefined' && window.location.protocol === 'https:'
   return createBrowserClient(
     isBuildPlaceholder ? 'https://placeholder.supabase.co' : url,
-    isBuildPlaceholder ? 'placeholder' : key
+    isBuildPlaceholder ? 'placeholder' : key,
+    { cookieOptions: supabaseCookieOptions(secure) },
   )
 }

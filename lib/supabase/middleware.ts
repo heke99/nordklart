@@ -1,5 +1,14 @@
 import { createServerClient } from '@supabase/ssr'
+import { isAuthApiError } from '@supabase/supabase-js'
 import { NextResponse, type NextRequest } from 'next/server'
+import {
+  ACTIVITY_COOKIE,
+  evaluateSessionAge,
+  latestAuthenticationAt,
+  serverCookiesSecure,
+  sessionIdleTimeoutMs,
+  supabaseCookieOptions,
+} from '@/lib/auth/session-policy'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
@@ -34,6 +43,7 @@ export async function updateSession(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      cookieOptions: supabaseCookieOptions(serverCookiesSecure()),
       cookies: {
         getAll() {
           return request.cookies.getAll()
@@ -64,11 +74,16 @@ export async function updateSession(request: NextRequest) {
 
   supabaseResponse.headers.set('x-pathname', pathname)
 
-  // If the refresh token is stale/invalid, clear the session cookies
-  // so the browser stops sending them on every request.
+  // If the refresh token is stale/invalid, clear this browser's session
+  // cookies so it stops sending them on every request. Only for a definite
+  // rejection by the auth server, and only locally: the default (global)
+  // scope would revoke every session of the user on a transient error.
   // Skip on auth routes — the callback needs PKCE cookies intact.
-  if (authError && !user && !pathname.startsWith('/auth')) {
-    await supabase.auth.signOut()
+  if (
+    authError && !user && !pathname.startsWith('/auth')
+    && isAuthApiError(authError) && [400, 401, 403].includes(authError.status ?? 0)
+  ) {
+    await supabase.auth.signOut({ scope: 'local' })
   }
 
   // Invite pages — accessible to everyone, signed in or not. A user who
@@ -105,6 +120,38 @@ export async function updateSession(request: NextRequest) {
     }
     return redirect
   }
+
+  // Session lifetime: idle and absolute timeouts on top of Supabase's
+  // refresh tokens, which never expire by themselves.
+  const { data: aalForAge } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  const lastActivityRaw = Number(request.cookies.get(ACTIVITY_COOKIE)?.value)
+  const now = Date.now()
+  const verdict = evaluateSessionAge({
+    authenticatedAt: latestAuthenticationAt(aalForAge?.currentAuthenticationMethods),
+    lastActivityAt: Number.isFinite(lastActivityRaw) && lastActivityRaw > 0 ? lastActivityRaw : null,
+    now,
+  })
+  if (verdict !== 'ok') {
+    await supabase.auth.signOut({ scope: 'local' })
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+    url.search = ''
+    url.searchParams.set('reason', 'session_expired')
+    url.searchParams.set('next', `${request.nextUrl.pathname}${request.nextUrl.search}`)
+    const redirect = NextResponse.redirect(url)
+    // Carry the cleared auth cookies set by signOut.
+    supabaseResponse.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie))
+    redirect.cookies.set(ACTIVITY_COOKIE, '', { path: '/', maxAge: 0 })
+    redirect.cookies.set('nordklart-company-id', '', { path: '/', maxAge: 0 })
+    return redirect
+  }
+  supabaseResponse.cookies.set(ACTIVITY_COOKIE, String(now), {
+    path: '/',
+    httpOnly: true,
+    secure: serverCookiesSecure(),
+    sameSite: 'lax',
+    maxAge: Math.floor(sessionIdleTimeoutMs() / 1000),
+  })
 
   // /mfa/enroll: gate behind has-password. BankID-only users who reach this
   // page can lock themselves out — Supabase requires AAL2 to change password

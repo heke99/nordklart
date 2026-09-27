@@ -62,6 +62,7 @@ function LoginPageContent() {
   const isInviteError = callbackError === 'invite_failed'
   const isMagicLinkError = callbackError === 'magic_link_failed'
   const isEmailChangeError = callbackError === 'email_change_failed'
+  const sessionExpired = searchParams.get('reason') === 'session_expired'
 
   useEffect(() => {
     let active = true
@@ -481,6 +482,11 @@ function LoginPageContent() {
                 </Link>
                 .
               </p>
+            </div>
+          )}
+          {sessionExpired && !callbackError && (
+            <div className="mb-5 rounded-lg border border-border p-4" role="status">
+              <p className="text-sm text-muted-foreground">{tAuth('session_expired_notice')}</p>
             </div>
           )}
           {bankIdEnabled && (
