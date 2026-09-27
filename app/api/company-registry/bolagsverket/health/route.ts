@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { isBolagsverketRegistryAvailable } from '@/lib/company-registry/provider'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { verifyCronSecret } from '@/lib/auth/cron'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('api/company-registry/bolagsverket/health')
 
 /**
  * GET /api/company-registry/bolagsverket/health
@@ -23,7 +27,7 @@ export async function GET(request: Request) {
       .is('revoked_at', null)
       .limit(1)
       .maybeSingle()
-    if (!role) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    if (!role) return errorResponseFromCode('FORBIDDEN', log, { messageSv: 'Behörighet saknas.', status: 403 })
   }
 
   const result = await isBolagsverketRegistryAvailable()
