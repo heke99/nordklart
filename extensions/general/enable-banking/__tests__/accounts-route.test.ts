@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock the sync module before importing the extension so the route handler picks up the spy.
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
 vi.mock('../lib/sync', () => ({
   syncAccountTransactions: vi.fn(),
 }))

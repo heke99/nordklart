@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
 import { enableBankingExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { StoredAccount } from '../types'

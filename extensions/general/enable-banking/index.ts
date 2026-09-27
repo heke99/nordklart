@@ -10,7 +10,7 @@ import {
 import { syncAccountTransactions } from './lib/sync'
 import { startSyncRun, finishSyncRun, updateConnectionSyncStatus } from './lib/sync-run'
 import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import type { StoredAccount } from './types'
 import type { Transaction } from '@/types'
 
@@ -250,7 +250,7 @@ export const enableBankingExtension: Extension = {
         }
         const companyId = ctx.companyId
 
-        const rl = await checkRateLimit({
+        const rl = await checkDurableRateLimit({
           prefix: 'enable-banking:sync',
           identifier: user.id,
           ...RATE_LIMIT_SYNC,
@@ -582,7 +582,7 @@ export const enableBankingExtension: Extension = {
         }
         const companyId = ctx.companyId
 
-        const rl = await checkRateLimit({
+        const rl = await checkDurableRateLimit({
           prefix: 'enable-banking:accounts',
           identifier: user.id,
           ...RATE_LIMIT_ACCOUNTS,
@@ -1010,7 +1010,7 @@ export const enableBankingExtension: Extension = {
         }
         const companyId = ctx.companyId
 
-        const rl = await checkRateLimit({
+        const rl = await checkDurableRateLimit({
           prefix: 'enable-banking:disconnect',
           identifier: user.id,
           ...RATE_LIMIT_DISCONNECT,

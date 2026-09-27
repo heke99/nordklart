@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
+import { clientIpKey } from '@/lib/api/client-ip'
 import { getPublicPricePlan } from '@/lib/commercial/public-pricing'
 
 const QuerySchema = z.object({
@@ -20,12 +21,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Ogiltig plan.' }, { status: 400 })
   }
 
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown'
-  const limit = await checkRateLimit({
+  const limit = await checkDurableRateLimit({
     prefix: 'public:price-plan',
-    identifier: ip,
+    identifier: clientIpKey(request),
     maxRequests: 30,
     windowMs: 60 * 1000,
   })

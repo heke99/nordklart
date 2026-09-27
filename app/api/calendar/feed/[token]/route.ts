@@ -1,22 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { generateCalendarFeed } from '@/lib/calendar/ics-generator'
-
-// In-memory rate limiting: token -> { count, resetAt }
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
-const RATE_LIMIT_WINDOW_MS = 60_000 // 1 minute
-const RATE_LIMIT_MAX = 60 // 60 requests per minute per token
-
-// Periodic cleanup to prevent memory leaks (every 5 minutes)
-let lastCleanup = Date.now()
-function cleanupRateLimitMap() {
-  const now = Date.now()
-  if (now - lastCleanup < 5 * 60_000) return
-  lastCleanup = now
-  for (const [key, value] of rateLimitMap) {
-    if (now > value.resetAt) rateLimitMap.delete(key)
-  }
-}
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 
 /**
  * GET /api/calendar/feed/[token]
@@ -35,18 +20,15 @@ export async function GET(
     return new NextResponse('Invalid token', { status: 400 })
   }
 
-  // Rate limiting per token
-  cleanupRateLimitMap()
-  const nowMs = Date.now()
-  const rateEntry = rateLimitMap.get(token)
-  if (rateEntry && nowMs < rateEntry.resetAt) {
-    if (rateEntry.count >= RATE_LIMIT_MAX) {
-      return new NextResponse('Too many requests', { status: 429 })
-    }
-    rateEntry.count++
-  } else {
-    rateLimitMap.set(token, { count: 1, resetAt: nowMs + RATE_LIMIT_WINDOW_MS })
-  }
+  // Per token, durably: the in-memory map this replaced did nothing on
+  // serverless, where every request may land on a fresh instance.
+  const limit = await checkDurableRateLimit({
+    prefix: 'calendar:feed',
+    identifier: token,
+    maxRequests: 60,
+    windowMs: 60_000,
+  })
+  if (!limit.ok) return new NextResponse('Too many requests', { status: 429 })
 
   // Create service client (no user auth required)
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -73,6 +55,17 @@ export async function GET(
   // Check token expiry
   if (feed.expires_at && new Date(feed.expires_at) < new Date()) {
     return new NextResponse('Feed token has expired', { status: 410 })
+  }
+
+  // The token is a bearer credential of the user who created it. It stops
+  // working when that user loses access to the company (removed member,
+  // deleted account), like an API key does.
+  const { data: ownerActive } = await supabase.rpc('api_key_owner_is_active', {
+    p_user_id: feed.user_id,
+    p_company_id: feed.company_id,
+  })
+  if (ownerActive !== true) {
+    return new NextResponse('Feed not found or inactive', { status: 404 })
   }
 
   // Update access tracking
