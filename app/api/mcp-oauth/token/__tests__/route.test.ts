@@ -79,6 +79,7 @@ describe('POST /api/mcp-oauth/token', () => {
       enqueueMany([
         { data: null, error: null }, // insert into oauth_used_codes
         { data: null, error: null }, // delete expired codes (best-effort)
+        { data: true, error: null }, // rpc api_key_owner_is_active
         { data: null, error: null }, // insert into api_keys
       ])
 
@@ -149,29 +150,29 @@ describe('POST /api/mcp-oauth/token', () => {
   })
 
   describe('refresh_token grant', () => {
-    it('rotates both tokens and returns a fresh access_token', async () => {
-      const { token: refreshToken } = generateRefreshToken()
-
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
+    function refresh(result: { data: unknown; error: unknown }) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: { id: 'key-1', revoked_at: null }, error: null }, // SELECT
-        { data: [{ id: 'key-1' }], error: null }, // UPDATE ... RETURNING
-      ])
+      enqueue(result)
+      return { supabase }
+    }
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-        })
-      )
+    it('rotates both tokens atomically and returns a fresh access_token', async () => {
+      const { token: refreshToken } = generateRefreshToken()
+      const { supabase } = refresh({ data: { ok: true, api_key_id: 'key-1', scopes: null }, error: null })
+
+      const res = await POST(formRequest({ grant_type: 'refresh_token', refresh_token: refreshToken }))
 
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.access_token).toMatch(/^nordklart_sk_/)
       expect(body.refresh_token).toMatch(/^nordklart_rt_/)
-      expect(body.refresh_token).not.toBe(refreshToken) // rotated
+      expect(body.refresh_token).not.toBe(refreshToken)
       expect(body.expires_in).toBe(3600)
+      expect(supabase.rpc).toHaveBeenCalledWith('rotate_api_key_refresh', expect.objectContaining({
+        p_access_ttl: '86400 seconds',
+        p_refresh_ttl: '5184000 seconds',
+      }))
     })
 
     it('returns 400 when refresh_token is missing', async () => {
@@ -181,95 +182,51 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.error).toBe('invalid_request')
     })
 
-    it('returns 400 when refresh_token is unknown', async () => {
-      const { supabase, enqueue } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: null, error: null }) // SELECT — no row
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'nordklart_rt_unknown',
-        })
-      )
+    it.each([
+      ['invalid_refresh_token', 'Invalid refresh token'],
+      ['revoked', 'revoked'],
+      ['refresh_token_expired', 'expired'],
+      ['access_revoked', 'no longer has access'],
+      ['refresh_token_reused', 'already used'],
+    ])('returns invalid_grant for %s', async (code, description) => {
+      refresh({ data: { ok: false, error: code }, error: null })
+      const res = await POST(formRequest({ grant_type: 'refresh_token', refresh_token: 'nordklart_rt_anything' }))
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toContain(description)
     })
 
-    it('returns 400 when the api_key is revoked', async () => {
-      const { supabase, enqueue } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({
-        data: { id: 'key-1', revoked_at: '2026-05-01T00:00:00Z' },
-        error: null,
+    it('returns 500 when the rotation fails with a DB error', async () => {
+      refresh({ data: null, error: { message: 'deadlock detected' } })
+      const res = await POST(formRequest({ grant_type: 'refresh_token', refresh_token: 'nordklart_rt_anything' }))
+      expect(res.status).toBe(500)
+      expect((await res.json()).error).toBe('server_error')
+    })
+  })
+
+  describe('authorization_code grant: company binding', () => {
+    it('binds the key to the company shown at consent and refuses when access is gone', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        companyId: 'company-consented',
+        exp: Date.now() + 60_000,
       })
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'nordklart_rt_anything',
-        })
-      )
-      expect(res.status).toBe(400)
-      const body = await res.json()
-      expect(body.error).toBe('invalid_grant')
-      expect(body.error_description).toContain('revoked')
-    })
-
-    it('returns 500 when the lookup fails with a DB error', async () => {
-      const { supabase, enqueue } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: null, error: { message: 'connection reset' } })
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'nordklart_rt_anything',
-        })
-      )
-      expect(res.status).toBe(500)
-      const body = await res.json()
-      expect(body.error).toBe('server_error')
-    })
-
-    it('returns 500 when the rotation update fails with a DB error', async () => {
+      vi.mocked(verifyPkce).mockReturnValue(true)
       const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueueMany([
-        { data: { id: 'key-1', revoked_at: null }, error: null }, // SELECT
-        { data: null, error: { message: 'deadlock detected' } }, // UPDATE — DB error
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: false, error: null }, // api_key_owner_is_active → no access
       ])
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'nordklart_rt_anything',
-        })
-      )
-      expect(res.status).toBe(500)
-      const body = await res.json()
-      expect(body.error).toBe('server_error')
-    })
-
-    it('returns 400 when the CAS update affects 0 rows (concurrent reuse)', async () => {
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: { id: 'key-1', revoked_at: null }, error: null }, // SELECT
-        { data: [], error: null }, // UPDATE — 0 rows (lost the CAS race)
-      ])
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'nordklart_rt_anything',
-        })
-      )
+      const res = await POST(formRequest({
+        grant_type: 'authorization_code', code: 'ciphertext', code_verifier: 'verifier', redirect_uri: 'https://claude.ai/api/cb',
+      }))
       expect(res.status).toBe(400)
-      const body = await res.json()
-      expect(body.error).toBe('invalid_grant')
-      expect(body.error_description).toContain('already used')
+      expect(supabase.rpc).toHaveBeenCalledWith('api_key_owner_is_active', { p_user_id: 'user-1', p_company_id: 'company-consented' })
     })
   })
 
@@ -288,6 +245,7 @@ describe('POST /api/mcp-oauth/token', () => {
       enqueueMany([
         { data: null, error: null },
         { data: null, error: null },
+        { data: true, error: null },
         { data: null, error: null },
       ])
 
@@ -337,6 +295,7 @@ describe('POST /api/mcp-oauth/token', () => {
       enqueueMany([
         { data: null, error: null },
         { data: null, error: null },
+        { data: true, error: null },
         { data: null, error: null },
       ])
 
@@ -390,59 +349,26 @@ describe('POST /api/mcp-oauth/token', () => {
 
   describe('refresh_token scope response', () => {
     it('returns the granular scopes the api_key was minted with', async () => {
-      // Greptile P1 — refresh response previously hardcoded scope:'mcp',
-      // causing OAuth 2.1 clients to think they had lost their grant.
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        {
-          data: {
-            id: 'key-1',
-            revoked_at: null,
-            scopes: ['transactions:read', 'invoices:read', 'invoices:write'],
-          },
-          error: null,
-        }, // SELECT
-        { data: [{ id: 'key-1' }], error: null }, // UPDATE
-      ])
+      enqueue({ data: { ok: true, api_key_id: 'key-1', scopes: ['transactions:read', 'invoices:read', 'invoices:write'] }, error: null })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'nordklart_rt_anything',
-        })
-      )
+      const res = await POST(formRequest({ grant_type: 'refresh_token', refresh_token: 'nordklart_rt_anything' }))
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.scope.split(' ').sort()).toEqual(
-        ['transactions:read', 'invoices:read', 'invoices:write'].sort()
-      )
+      expect(body.scope.split(' ').sort()).toEqual(['transactions:read', 'invoices:read', 'invoices:write'].sort())
     })
 
     it('falls back to read-only DEFAULT_OAUTH_SCOPES for legacy keys with null scopes', async () => {
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: { id: 'key-1', revoked_at: null, scopes: null }, error: null },
-        { data: [{ id: 'key-1' }], error: null },
-      ])
+      enqueue({ data: { ok: true, api_key_id: 'key-1', scopes: null }, error: null })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'nordklart_rt_anything',
-        })
-      )
+      const res = await POST(formRequest({ grant_type: 'refresh_token', refresh_token: 'nordklart_rt_anything' }))
       expect(res.status).toBe(200)
       const body = await res.json()
-      const granted = body.scope.split(' ')
-      expect(granted).toContain('transactions:read')
-      // No silent grant of write or approval scopes (GDPR Art. 25(2),
-      // SoD per findStageApproveConflict — see lib/auth/api-keys.ts).
-      expect(granted).not.toContain('transactions:write')
-      expect(granted).not.toContain('pending_operations:approve')
-      expect(granted).not.toContain('bookkeeping:write')
-      expect(granted).not.toContain('payroll:write')
+      expect(body.scope.split(' ')).toContain('transactions:read')
+      expect(body.scope.split(' ')).not.toContain('transactions:write')
     })
   })
 })

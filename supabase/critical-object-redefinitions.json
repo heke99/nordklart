@@ -134,8 +134,8 @@
       "last": "20260628180000_nordklart_commercial_admin_billing_stripe.sql"
     },
     "validate_and_increment_api_key": {
-      "definitions": 5,
-      "last": "20260512162506_api_v1_test_mode.sql"
+      "definitions": 6,
+      "last": "20260927120000_api_keys_lifecycle.sql"
     },
     "resolve_year_end_period_capability_for_user": {
       "definitions": 1,

@@ -2446,6 +2446,11 @@
       "file": "20260927110000_billing_event_ordering.sql",
       "version": "20260927110000",
       "sha256": "d0cb4ccc4f17dd5909e3e233b9db57ecae721509a6dc92514d09ddc1d79eb5de"
+    },
+    {
+      "file": "20260927120000_api_keys_lifecycle.sql",
+      "version": "20260927120000",
+      "sha256": "9a6ac4857f06f1bbd135216a2c90311534b408bca2696a97807570ab197de77a"
     }
   ]
 }
