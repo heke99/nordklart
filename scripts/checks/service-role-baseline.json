@@ -22,6 +22,7 @@
     "app/access-pending/page.tsx",
     "app/api/account/delete/route.ts",
     "app/api/account/password/route.ts",
+    "app/api/account/sessions/route.ts",
     "app/api/agency/clients/route.ts",
     "app/api/agency/staff/invite/route.ts",
     "app/api/auth/forgot-password/route.ts",

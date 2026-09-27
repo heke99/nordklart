@@ -1693,7 +1693,13 @@
     "mfa_required_note": "Tvåfaktorsautentisering är obligatorisk och kan inte inaktiveras.",
     "mfa_inactive_title": "2FA är inte aktiverad",
     "mfa_inactive_description": "Vi rekommenderar att du aktiverar tvåfaktorsautentisering.",
-    "enable_mfa": "Aktivera 2FA"
+    "enable_mfa": "Aktivera 2FA",
+    "current_password_label": "Nuvarande lösenord",
+    "current_password_placeholder": "Ditt nuvarande lösenord",
+    "sign_out_everywhere_title": "Logga ut överallt",
+    "sign_out_everywhere_description": "Avslutar alla inloggningar på andra enheter och webbläsare. Du förblir inloggad här.",
+    "sign_out_everywhere_button": "Logga ut andra enheter",
+    "sign_out_everywhere_done": "Andra enheter är utloggade."
   },
   "settings_calendar_feed": {
     "title": "Kalendersynkronisering",

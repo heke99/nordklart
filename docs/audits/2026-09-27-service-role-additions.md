@@ -29,3 +29,13 @@ role is needed.
   company's members through RLS before the link is approved, and those
   owners/admins are the people who must be told that a link awaits approval.
   Nothing is written.
+
+## `app/api/account/sessions/route.ts` (DELETE)
+
+- **Actor:** `requireAuth` authenticates the user and enforces MFA; limited
+  to 10 calls per 15 min per user.
+- **Resource:** only the caller's own sessions (`p_user_id = user.id`); the
+  current session id comes from the caller's verified JWT claims and is kept.
+- **Why service role:** `revoke_user_sessions` deletes from `auth.sessions`
+  and is granted to `service_role` only. The audit row is written with the
+  same client.

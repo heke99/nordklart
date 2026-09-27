@@ -1693,7 +1693,13 @@
     "mfa_required_note": "Two-factor authentication is mandatory and cannot be disabled.",
     "mfa_inactive_title": "2FA is not enabled",
     "mfa_inactive_description": "We recommend enabling two-factor authentication.",
-    "enable_mfa": "Enable 2FA"
+    "enable_mfa": "Enable 2FA",
+    "current_password_label": "Current password",
+    "current_password_placeholder": "Your current password",
+    "sign_out_everywhere_title": "Sign out everywhere",
+    "sign_out_everywhere_description": "Ends every sign-in on other devices and browsers. You stay signed in here.",
+    "sign_out_everywhere_button": "Sign out other devices",
+    "sign_out_everywhere_done": "Other devices are signed out."
   },
   "settings_calendar_feed": {
     "title": "Calendar sync",

@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, ShieldCheck, ShieldOff, KeyRound } from 'lucide-react'
+import { Loader2, ShieldCheck, ShieldOff, KeyRound, LogOut } from 'lucide-react'
 import { isMfaRequired } from '@/lib/auth/mfa'
 import { isBankIdEnabled } from '@/lib/auth/bankid-enabled'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
@@ -24,6 +24,7 @@ export function SecuritySettings() {
   // image whose entrypoint rewrites NEXT_PUBLIC_ placeholders on boot.
   const bankIdEnabled = isBankIdEnabled()
   const t = useTranslations('settings_security')
+  const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isChangingPassword, setIsChangingPassword] = useState(false)
@@ -86,7 +87,7 @@ export function SecuritySettings() {
       const res = await fetch('/api/account/password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: newPassword }),
+        body: JSON.stringify({ password: newPassword, currentPassword }),
       })
 
       if (!res.ok) {
@@ -112,6 +113,7 @@ export function SecuritySettings() {
         title: t('toast_password_updated_title'),
         description: t('toast_password_updated_description'),
       })
+      setCurrentPassword('')
       setNewPassword('')
       setConfirmPassword('')
       setHasPassword(true)
@@ -123,6 +125,28 @@ export function SecuritySettings() {
       })
     } finally {
       setIsChangingPassword(false)
+    }
+  }
+
+  const [isRevokingSessions, setIsRevokingSessions] = useState(false)
+  const handleSignOutEverywhere = async () => {
+    setIsRevokingSessions(true)
+    try {
+      const res = await fetch('/api/account/sessions', { method: 'DELETE' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        toast({
+          title: t('toast_update_failed_title'),
+          description: body.message ?? body.error?.message ?? t('toast_try_again'),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: t('sign_out_everywhere_done') })
+    } catch {
+      toast({ title: t('toast_generic_error_title'), description: t('toast_try_again'), variant: 'destructive' })
+    } finally {
+      setIsRevokingSessions(false)
     }
   }
 
@@ -213,6 +237,19 @@ export function SecuritySettings() {
         <CardContent>
           <form onSubmit={handleChangePassword} className="space-y-4 max-w-md">
             <div className="space-y-2">
+              <Label htmlFor="current_password">{t('current_password_label')}</Label>
+              <Input
+                id="current_password"
+                type="password"
+                autoComplete="current-password"
+                placeholder={t('current_password_placeholder')}
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                required
+                disabled={isChangingPassword}
+              />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="new_password">{t('new_password_label')}</Label>
               <Input
                 id="new_password"
@@ -254,6 +291,22 @@ export function SecuritySettings() {
         </CardContent>
       </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <LogOut className="h-5 w-5" />
+            {t('sign_out_everywhere_title')}
+          </CardTitle>
+          <CardDescription>{t('sign_out_everywhere_description')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button variant="secondary" onClick={handleSignOutEverywhere} disabled={isRevokingSessions}>
+            {isRevokingSessions ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {t('sign_out_everywhere_button')}
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* MFA — hidden for hosted */}
       {!isSelfHosted && (

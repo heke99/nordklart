@@ -5,12 +5,29 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { createLogger } from '@/lib/logger'
 import { passwordSchema } from '@/lib/auth/password-policy'
+import { userHasPassword } from '@/lib/auth/has-password'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 
 const log = createLogger('api/account/password')
 
 const SetPasswordSchema = z.object({
   password: passwordSchema,
+  // Required to change an existing password, except in a fresh recovery
+  // (reset-link) session, which already proves control of the mailbox.
+  currentPassword: z.string().max(128).optional(),
 })
+
+/** A reset-link session younger than this may set a password without the old one. */
+const RECOVERY_WINDOW_SECONDS = 60 * 60
+
+function anonymousAuthClient() {
+  return createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } },
+  )
+}
 
 /**
  * POST /api/account/password
@@ -75,10 +92,52 @@ export async function POST(request: Request) {
 
   const result = await validateBody(request, SetPasswordSchema)
   if (!result.success) return result.response
-  const { password } = result.data
+  const { password, currentPassword } = result.data
 
-  const isFirstTimeSet = user.app_metadata?.has_password !== true
+  // Same rule as the UI: an account without the flag has a password unless
+  // it was created through BankID. Only accounts that never had a password
+  // they know take the first-time path.
+  const isFirstTimeSet = !userHasPassword(user)
   const service = createServiceClient()
+
+  if (!isFirstTimeSet) {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    const nowSeconds = Math.floor(Date.now() / 1000)
+    const freshRecovery = (aal?.currentAuthenticationMethods ?? []).some(
+      (m) => typeof m === 'object' && m.method === 'recovery' && nowSeconds - m.timestamp < RECOVERY_WINDOW_SECONDS,
+    )
+
+    if (!freshRecovery) {
+      // A stolen session must not be enough to take over the account.
+      if (!currentPassword) {
+        return NextResponse.json(
+          { error: 'Ange ditt nuvarande lösenord.', code: 'current_password_required' },
+          { status: 400 },
+        )
+      }
+      const limit = await checkDurableRateLimit({
+        prefix: 'account:password-verify',
+        identifier: user.id,
+        maxRequests: 10,
+        windowMs: 15 * 60 * 1000,
+      })
+      if (!limit.ok) return limit.response!
+
+      const verifier = anonymousAuthClient()
+      const { error: verifyError } = await verifier.auth.signInWithPassword({
+        email: user.email ?? '',
+        password: currentPassword,
+      })
+      if (verifyError) {
+        return NextResponse.json(
+          { error: 'Det nuvarande lösenordet stämmer inte.', code: 'current_password_invalid' },
+          { status: 403 },
+        )
+      }
+      // The check created a throwaway session; end it.
+      await verifier.auth.signOut({ scope: 'local' }).catch(() => undefined)
+    }
+  }
 
   let updateError:
     | { message?: string; status?: number; code?: string }
@@ -156,6 +215,18 @@ export async function POST(request: Request) {
     })
   } catch {
     // Password writes must not depend on the non-critical audit trail.
+  }
+
+  // A new password ends every other session: whoever held the old password
+  // or a stolen session is signed out. The current session stays.
+  if (!wasFirstTimeSet) {
+    const { data: claims } = await supabase.auth.getClaims().catch(() => ({ data: null }))
+    const sessionId = typeof claims?.claims?.session_id === 'string' ? claims.claims.session_id : null
+    const { error: revokeError } = await service.rpc('revoke_user_sessions', {
+      p_user_id: user.id,
+      p_keep_session_id: sessionId,
+    })
+    if (revokeError) log.error('could not revoke other sessions after password change', { userId: user.id })
   }
 
   if (signupActivationError) {
