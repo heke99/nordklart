@@ -259,14 +259,19 @@ function LoginPageContent() {
     const emailValue = (formData.get('email') as string) || email
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(emailValue, {
-        redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+      // Through the server route: it applies the per-IP and per-address
+      // limits, answers the same whether or not the account exists, and
+      // writes the audit event. Calling Supabase from here skipped all three.
+      const response = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailValue }),
       })
 
-      if (error) {
+      if (!response.ok) {
         toast({
           title: tAuth('reset_failed_title'),
-          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+          description: response.status === 429 ? tAuth('reset_rate_limited') : tAuth('reset_failed_title'),
           variant: 'destructive',
         })
         return

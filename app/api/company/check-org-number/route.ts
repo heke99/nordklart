@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { createServiceClient } from '@/lib/supabase/server'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
+import { clientIpKey } from '@/lib/api/client-ip'
 
 /**
  * GET /api/company/check-org-number?org_number=XXXXXXXXXX
@@ -12,8 +14,19 @@ import { createServiceClient } from '@/lib/supabase/server'
  * cannot access.
  */
 export async function GET(request: Request) {
-  const { supabase, error: authError } = await requireAuth()
+  const { supabase, user, error: authError } = await requireAuth()
   if (authError) return authError
+
+  // platformExists tells whether an organisation number (for a sole trader,
+  // a personnummer) is a Nordklart customer. Onboarding needs that to steer
+  // to an access request, but it must not be usable as a bulk lookup.
+  for (const [prefix, identifier] of [
+    ['company:check-org:user', user.id],
+    ['company:check-org:ip', clientIpKey(request)],
+  ] as const) {
+    const limit = await checkDurableRateLimit({ prefix, identifier, maxRequests: 20, windowMs: 60 * 60 * 1000 })
+    if (!limit.ok) return limit.response!
+  }
 
   const url = new URL(request.url)
   const raw = url.searchParams.get('org_number') ?? ''
@@ -30,7 +43,7 @@ export async function GET(request: Request) {
     .eq('org_number', canonical)
     .is('archived_at', null)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ error: 'Kunde inte kontrollera organisationsnumret.' }, { status: 500 })
 
   const companies = (data ?? []).map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))
   const service = createServiceClient()

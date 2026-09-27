@@ -27,6 +27,11 @@ vi.mock('@/lib/access/company', () => ({
   resolveCompanyAccess: (...args: unknown[]) => mockAccess(...args),
 }))
 
+const mockCapacity = vi.fn()
+vi.mock('@/lib/agency/commercial', () => ({
+  assertAgencyClientCapacity: (...args: unknown[]) => mockCapacity(...args),
+}))
+
 import { PATCH } from '../route'
 
 function chain(result: { data?: unknown; error?: unknown }) {
@@ -44,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockAuth.mockResolvedValue({ data: { user: { id: 'owner-1', email: 'o@x.se' } } })
   mockAccess.mockResolvedValue({ canManageCompany: true })
+  mockCapacity.mockResolvedValue({ ok: true })
 })
 
 describe('PATCH /api/company/agency-links/[id]', () => {
@@ -66,13 +72,23 @@ describe('PATCH /api/company/agency-links/[id]', () => {
   })
 
   it('approves only a pending link of the active company', async () => {
+    const lookup = chain({ data: { id: 'link-1', agencies: { company_id: 'agency-co' } }, error: null })
     const update = chain({ data: { id: 'link-1', agency_id: 'a1', status: 'active', access_level: 'review' }, error: null })
-    mockServiceFrom.mockReturnValueOnce(update).mockReturnValue(chain({ data: null, error: null }))
+    mockServiceFrom.mockReturnValueOnce(lookup).mockReturnValueOnce(update).mockReturnValue(chain({ data: null, error: null }))
     const res = await PATCH(req({ action: 'approve', access_level: 'review' }), createMockRouteParams({ id: 'link-1' }))
     expect(res.status).toBe(200)
+    expect(mockCapacity).toHaveBeenCalledWith(expect.anything(), 'agency-co')
     expect(update.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'active', access_level: 'review', approved_by_client_user_id: 'owner-1' }))
     expect(update.eq).toHaveBeenCalledWith('company_id', 'company-1')
     expect(update.in).toHaveBeenCalledWith('status', ['pending'])
+  })
+
+  it('refuses to approve when the agency is at its client cap', async () => {
+    const lookup = chain({ data: { id: 'link-1', agencies: { company_id: 'agency-co' } }, error: null })
+    mockServiceFrom.mockReturnValueOnce(lookup)
+    mockCapacity.mockResolvedValue({ ok: false, response: new Response(null, { status: 402 }) })
+    const res = await PATCH(req({ action: 'approve' }), createMockRouteParams({ id: 'link-1' }))
+    expect(res.status).toBe(409)
   })
 
   it('returns 409 when the link was already handled', async () => {

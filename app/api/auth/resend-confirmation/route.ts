@@ -1,20 +1,15 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { clientIpKey } from '@/lib/api/client-ip'
+import { appOrigin } from '@/lib/app-origin'
 import { createServerClient } from '@supabase/ssr'
 import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { createServiceClient } from '@/lib/supabase/server'
 
-function getIp(request: NextRequest) {
-  return (
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown'
-  )
-}
 
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as { email?: string }
   const email = body.email?.trim().toLowerCase()
-  const ip = getIp(request)
+  const ip = clientIpKey(request)
 
   const limited = await checkDurableRateLimit({
     prefix: 'auth:resend-confirmation',
@@ -47,7 +42,7 @@ export async function POST(request: NextRequest) {
     { cookies: { getAll: () => [], setAll: () => {} } },
   )
 
-  const redirectTo = `${new URL(request.url).origin}/auth/callback?flow=signup&next=/account/set-password?mode=signup`
+  const redirectTo = `${appOrigin(request)}/auth/callback?flow=signup&next=/account/set-password?mode=signup`
   const { error } = await supabase.auth.resend({
     type: 'signup',
     email,

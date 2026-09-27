@@ -33,6 +33,7 @@ import {
   type SieImportAccessDecision,
 } from '@/lib/import/access'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger, type Logger } from '@/lib/logger'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -82,6 +83,13 @@ interface RouteContextOptions {
    * lines of boilerplate.
    */
   requireWrite?: boolean
+
+  /**
+   * Per-user durable rate limit for routes with a costly or outward side
+   * effect (e-mail, exports, uploads, billable providers). Applied after
+   * authentication; counted per operation and user.
+   */
+  rateLimit?: { maxRequests: number; windowMs: number }
 }
 
 // Next.js 16 always passes a `{ params: Promise<...> }` second arg to route
@@ -107,7 +115,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
   handler: RouteHandler<P>,
   options: RouteContextOptions = {},
 ): (request: Request, params: P) => Promise<Response> {
-  const { requireWrite = false, accessPolicy = 'default', allowRequestedCompany = false } = options
+  const { requireWrite = false, accessPolicy = 'default', allowRequestedCompany = false, rateLimit } = options
 
   return async function wrapped(request: Request, params: P): Promise<Response> {
     const requestId = generateRequestId()
@@ -256,6 +264,19 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
               return writeCheck.response
             }
           }
+        }
+      }
+
+      if (rateLimit) {
+        const limit = await checkDurableRateLimit({
+          prefix: `route:${operation}`,
+          identifier: user.id,
+          maxRequests: rateLimit.maxRequests,
+          windowMs: rateLimit.windowMs,
+        })
+        if (!limit.ok) {
+          limit.response!.headers.set('X-Request-Id', requestId)
+          return limit.response!
         }
       }
 

@@ -5,7 +5,7 @@ import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { createLogger } from '@/lib/logger'
 import { acceptInvitation } from '@/lib/invitations/accept'
 import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
-import { truncateIp } from '@/lib/api/truncate-ip'
+import { clientIpKey } from '@/lib/api/client-ip'
 
 const log = createLogger('api/team/accept')
 
@@ -30,11 +30,6 @@ type AgencyInviteRow = {
   expires_at: string
   invited_by?: string | null
   agencies?: { name: string | null; company_id: string | null } | { name: string | null; company_id: string | null }[] | null
-}
-
-function clientIp(request: NextRequest): string {
-  const raw = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || ''
-  return truncateIp(raw || undefined) ?? 'unknown'
 }
 
 function firstRelation<T>(value: T | T[] | null | undefined): T | null {
@@ -87,7 +82,7 @@ export async function GET(request: NextRequest) {
   // Unauthenticated lookup: bound it so tokens cannot be probed at volume.
   const limit = await checkDurableRateLimit({
     prefix: 'invite:lookup',
-    identifier: clientIp(request),
+    identifier: clientIpKey(request),
     maxRequests: 30,
     windowMs: 15 * 60 * 1000,
   })

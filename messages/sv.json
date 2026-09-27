@@ -174,7 +174,8 @@
     "auth_link_error_body": "Länken kan ha gått ut, redan använts eller inte vara giltig.",
     "request_new_confirmation_link": "Begär en ny bekräftelselänk",
     "return_to_login": "Tillbaka till login",
-    "session_expired_notice": "Du har loggats ut eftersom sessionen varit inaktiv för länge eller nått sin maxlängd. Logga in igen för att fortsätta."
+    "session_expired_notice": "Du har loggats ut eftersom sessionen varit inaktiv för länge eller nått sin maxlängd. Logga in igen för att fortsätta.",
+    "reset_rate_limited": "För många försök. Vänta en stund och försök igen."
   },
   "settings_nav": {
     "aria_label": "Inställningar",

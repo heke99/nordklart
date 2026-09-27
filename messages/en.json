@@ -174,7 +174,8 @@
     "auth_link_error_body": "The link may have expired, already been used, or is not valid.",
     "request_new_confirmation_link": "Request a new confirmation link",
     "return_to_login": "Back to sign in",
-    "session_expired_notice": "You were signed out because the session was idle too long or reached its maximum length. Sign in again to continue."
+    "session_expired_notice": "You were signed out because the session was idle too long or reached its maximum length. Sign in again to continue.",
+    "reset_rate_limited": "Too many attempts. Wait a moment and try again."
   },
   "settings_nav": {
     "aria_label": "Settings",

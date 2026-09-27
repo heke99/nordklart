@@ -2,19 +2,15 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { checkDurableRateLimit } from "@/lib/auth/rate-limit-durable";
 import { createServiceClient } from "@/lib/supabase/server";
-
-function getIp(request: NextRequest) {
-  return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip") ||
-    "unknown"
-  );
-}
+import { clientIpKey } from "@/lib/api/client-ip";
+import { appOrigin } from "@/lib/app-origin";
 
 export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as { email?: string };
   const email = body.email?.trim().toLowerCase();
-  const ip = getIp(request);
+  // Truncated (IPv4 /24, IPv6 /48) so rotating addresses inside one
+  // allocation does not buy a fresh budget; also what the audit row stores.
+  const ip = clientIpKey(request);
 
   const limited = await checkDurableRateLimit({
     prefix: "auth:forgot-password",
@@ -45,7 +41,9 @@ export async function POST(request: NextRequest) {
     { cookies: { getAll: () => [], setAll: () => {} } },
   );
 
-  const redirectTo = `${new URL(request.url).origin}/auth/callback?flow=recovery&next=/reset-password`;
+  // The configured app URL, never the request's Host header: a forged Host
+  // must not be able to put its own origin into the reset e-mail.
+  const redirectTo = `${appOrigin(request)}/auth/callback?flow=recovery&next=/reset-password`;
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo,
   });

@@ -93,4 +93,5 @@ export const GET = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
+  { rateLimit: { maxRequests: 30, windowMs: 60 * 60 * 1000 } },
 )

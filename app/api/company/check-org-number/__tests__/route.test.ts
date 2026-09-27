@@ -4,6 +4,9 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
   createServiceClient: vi.fn(),
 }))
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
 
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { GET } from '../route'

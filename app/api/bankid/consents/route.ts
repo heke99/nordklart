@@ -87,5 +87,5 @@ export const POST = withRouteContext(
       return errorResponse(err, log, { requestId })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, rateLimit: { maxRequests: 20, windowMs: 60 * 60 * 1000 } },
 )

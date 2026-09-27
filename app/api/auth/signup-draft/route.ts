@@ -1,12 +1,19 @@
 import { randomBytes, createHash } from 'crypto'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { NextResponse, type NextRequest } from 'next/server'
+import { clientIpKey } from '@/lib/api/client-ip'
 import { z } from 'zod'
 import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { createTemporarySignupPassword } from '@/lib/signup/temporary-password'
 import { verifyCompanyLookup } from '@/lib/company-registry/lookup-attestation'
 import { createServiceClient } from '@/lib/supabase/server'
+import { ensureInitialized } from '@/lib/init'
+import { getEmailService } from '@/lib/email/service'
+import { accountExistsEmail } from '@/lib/email/account-exists-templates'
+
+// Loads the e-mail extension for the account-exists notice.
+ensureInitialized()
 
 const signupDraftSchema = z.object({
   firstName: z.string().trim().min(1).max(100),
@@ -29,11 +36,6 @@ const signupDraftSchema = z.object({
   acceptedPrivacy: z.literal(true),
 })
 
-function clientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown'
-}
 
 function appOrigin(request: NextRequest): string {
   const configured = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, '')
@@ -56,7 +58,7 @@ function anonymousAuthClient() {
 }
 
 export async function POST(request: NextRequest) {
-  const ip = clientIp(request)
+  const ip = clientIpKey(request)
   const body = await request.json().catch(() => null)
   const parsed = signupDraftSchema.safeParse(body)
   const identifier = ip
@@ -200,10 +202,32 @@ export async function POST(request: NextRequest) {
       await service.auth.admin.deleteUser(authData.user.id).catch(() => undefined)
     }
 
+    if (duplicateOrUnconfirmed) {
+      // Same answer as a successful signup, so the form cannot be used to
+      // find out which addresses have an account. The owner of the address
+      // is told by e-mail instead (limited per address).
+      const perAddress = await checkDurableRateLimit({
+        prefix: 'auth:signup-draft:exists-notice',
+        identifier: email,
+        maxRequests: 2,
+        windowMs: 60 * 60 * 1000,
+      })
+      const emailService = getEmailService()
+      if (perAddress.ok && emailService.isConfigured()) {
+        const notice = accountExistsEmail(appOrigin(request))
+        await emailService.sendEmail({
+          to: email,
+          subject: notice.subject,
+          html: notice.html,
+          text: notice.text,
+          context: { templateKey: 'auth.account_exists' },
+        }).catch(() => undefined)
+      }
+      return NextResponse.json({ ok: true })
+    }
+
     return NextResponse.json({
-      error: duplicateOrUnconfirmed
-        ? 'Det finns redan ett konto med den här e-postadressen. Logga in eller återställ lösenordet.'
-        : 'Kunde inte skapa kontot. Försök igen om en stund.',
+      error: 'Kunde inte skapa kontot. Försök igen om en stund.',
     }, { status: 400 })
   }
 

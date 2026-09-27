@@ -4,6 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // searchCompanyByOrgNumber — the Phase 2 fetchers stay mocked because the
 // /profile handler shares the module, but we don't expect /lookup to invoke
 // them.
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
 vi.mock('../lib/tic-client', () => ({
   searchCompanyByOrgNumber: vi.fn(),
   getBankAccounts: vi.fn(),

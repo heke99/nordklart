@@ -5,6 +5,7 @@ import { createStripeCheckoutSession, createStripeCustomer, isStripeConfigured, 
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,6 +35,13 @@ export async function POST(request: Request) {
   const auth = await requireAuth()
   if (auth.error) return auth.error
   const { supabase, user } = auth
+  const limit = await checkDurableRateLimit({
+    prefix: 'billing:checkout',
+    identifier: user.id,
+    maxRequests: 20,
+    windowMs: 60 * 60 * 1000,
+  })
+  if (!limit.ok) return limit.response!
   if (!isStripeConfigured()) return jsonError('Betalning är inte konfigurerad ännu. Kontakta Nordklart.', 503)
 
   const parsed = CheckoutRequest.safeParse(await request.json().catch(() => ({})))

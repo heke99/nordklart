@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { clientIpKey } from '@/lib/api/client-ip'
 import { z } from 'zod'
 import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
@@ -10,11 +11,6 @@ const bodySchema = z.object({
   organizationNumber: z.string().trim().min(1).max(32),
 })
 
-function clientIp(request: NextRequest): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    || request.headers.get('x-real-ip')
-    || 'unknown'
-}
 
 /**
  * Public and deliberately narrow: it accepts only a validated Swedish
@@ -25,7 +21,7 @@ function clientIp(request: NextRequest): string {
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null)
   const parsed = bodySchema.safeParse(body)
-  const ip = clientIp(request)
+  const ip = clientIpKey(request)
 
   const limit = await checkDurableRateLimit({
     prefix: 'public:company-lookup',

@@ -10,6 +10,9 @@ const { supabase: mockUserSupabase } = createQueuedMockSupabase()
 const { supabase: mockServiceSupabase, enqueue: enqueueService, reset: resetService } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))

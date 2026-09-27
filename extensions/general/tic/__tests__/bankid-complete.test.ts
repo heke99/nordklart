@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
 vi.mock('../lib/bankid-client', () => ({
   startBankIdAuth: vi.fn(),
   pollBankIdSession: vi.fn(),

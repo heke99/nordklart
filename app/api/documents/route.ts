@@ -78,7 +78,7 @@ export const POST = withRouteContext(
       })
     }
   },
-  { requireWrite: true },
+  { requireWrite: true, rateLimit: { maxRequests: 200, windowMs: 60 * 60 * 1000 } },
 )
 
 /**

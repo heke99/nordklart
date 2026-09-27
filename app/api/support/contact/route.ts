@@ -6,6 +6,7 @@ import { getSupportRecipientEmail } from '@/lib/support'
 import { requireCompanyId } from '@/lib/company/context'
 import { ensureInitialized } from '@/lib/init'
 import { getBranding } from '@/lib/branding/service'
+import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 
 ensureInitialized()
 
@@ -22,6 +23,14 @@ export async function POST(request: Request) {
 
   await requireCompanyId(supabase, user.id)
 
+  const limit = await checkDurableRateLimit({
+    prefix: 'support:contact',
+    identifier: user.id,
+    maxRequests: 10,
+    windowMs: 60 * 60 * 1000,
+  })
+  if (!limit.ok) return limit.response!
+
   let body: { subject?: string; message?: string }
   try {
     body = await request.json()
@@ -37,7 +46,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Meddelandet får vara max 5000 tecken' }, { status: 400 })
   }
 
-  const subject = body.subject?.trim() || 'Supportärende'
+  const subject = (body.subject?.trim() || 'Supportärende').replace(/[\r\n]+/g, ' ').slice(0, 200)
 
   const emailService = getEmailService()
   if (!emailService.isConfigured()) {
