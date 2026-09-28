@@ -72,7 +72,6 @@ export default async function RootLayout({
     <html lang={locale} suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable}`}>
       <head>
         <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
-        <RecaptLoader />
       </head>
       <body
         className="antialiased"
@@ -86,6 +85,8 @@ export default async function RootLayout({
           >
             {children}
             <Toaster />
+            {/* Consent banner; loads Recapt only after opt-in, never on auth pages. */}
+            <RecaptLoader />
             <RecaptHideWidget />
           </ThemeProvider>
         </NextIntlClientProvider>
