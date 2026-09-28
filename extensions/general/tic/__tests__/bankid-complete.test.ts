@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { BANKID_BINDING_COOKIE, bankIdBindingValue } from '../lib/browser-binding'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 vi.mock('@/lib/auth/rate-limit-durable', () => ({
@@ -30,6 +31,15 @@ function findCompleteHandler() {
   )
   if (!route) throw new Error('POST /bankid/complete route not found in ticExtension.apiRoutes')
   return route.handler
+}
+
+/** The complete request as the browser that started the order sends it. */
+function completeRequest(opts: { method: string; body: { sessionId?: string; mode?: string } & Record<string, unknown> }) {
+  const sessionId = opts.body.sessionId ?? ''
+  return createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+    ...opts,
+    headers: { cookie: `${BANKID_BINDING_COOKIE}=${bankIdBindingValue(sessionId)}` },
+  })
 }
 
 function makeSession(overrides: Partial<{ status: string; user: unknown }> = {}) {
@@ -98,6 +108,7 @@ function mockServiceClient(fromResults: QueuedResult[], opts: { consumed?: boole
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('BANKID_ENCRYPTION_KEY', TEST_KEY)
+  vi.stubEnv('BANKID_BINDING_SECRET', 'test-binding-secret')
   // Login now resolves its provider through getBankIdProvider() like every
   // other BankID flow, so the kill switch has to be on for the TIC provider
   // (and therefore the mocked TIC client) to be the one that answers.
@@ -110,11 +121,25 @@ afterEach(() => {
 })
 
 describe('POST /bankid/complete', () => {
+  it('refuses to complete an order in a browser that did not start it', async () => {
+    vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+    const { admin } = mockServiceClient([])
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      method: 'POST',
+      body: { sessionId: 'test-session', mode: 'login' },
+      headers: { cookie: `${BANKID_BINDING_COOKIE}=${bankIdBindingValue('another-order')}` },
+    })
+    const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+    expect(status).toBe(403)
+    expect(vi.mocked(collectBankIdResult)).not.toHaveBeenCalled()
+    expect(admin.generateLink).not.toHaveBeenCalled()
+  })
+
   it('refuses a replayed order and mints no login token', async () => {
     vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
     const { admin, client } = mockServiceClient([], { consumed: false })
 
-    const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+    const req = completeRequest({
       method: 'POST',
       body: { sessionId: 'test-session', mode: 'login' },
     })
@@ -138,7 +163,7 @@ describe('POST /bankid/complete', () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin } = mockServiceClient([])
 
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      const req = completeRequest({
         method: 'POST',
         body: { sessionId: 'test-session', mode: 'login' },
       })
@@ -158,7 +183,7 @@ describe('POST /bankid/complete', () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession({ status: 'pending', user: undefined }))
       const { admin } = mockServiceClient([])
 
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      const req = completeRequest({
         method: 'POST',
         body: { sessionId: 'test-session', mode: 'login' },
       })
@@ -186,7 +211,7 @@ describe('POST /bankid/complete', () => {
         { data: { id: 'victim-user-uuid' } },
       ])
 
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      const req = completeRequest({
         method: 'POST',
         body: { sessionId: 'test-session', mode: 'signup', email: 'victim@example.com' },
       })
@@ -210,7 +235,7 @@ describe('POST /bankid/complete', () => {
     it('refuses any mode that is not login', async () => {
       const { client } = mockServiceClient([])
       for (const mode of ['link', 'verify', '']) {
-        const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        const req = completeRequest({
           method: 'POST',
           body: { sessionId: 'test-session', mode },
         })
@@ -228,7 +253,7 @@ describe('POST /bankid/complete', () => {
         { data: null }, // pnr lookup → not linked
       ])
 
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      const req = completeRequest({
         method: 'POST',
         body: { sessionId: 'test-session', mode: 'login' },
       })
@@ -304,7 +329,7 @@ describe('POST /bankid/complete', () => {
         return queuedFrom(table)
       })
 
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      const req = completeRequest({
         method: 'POST',
         body: { sessionId: 'test-session', mode: 'login' },
       })
@@ -343,7 +368,7 @@ describe('POST /bankid/complete', () => {
       )
       mockServiceClient([])
 
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      const req = completeRequest({
         method: 'POST',
         body: { sessionId: 'test-session', mode: 'login' },
       })
@@ -358,7 +383,7 @@ describe('POST /bankid/complete', () => {
     it('returns 400 when mode is missing entirely', async () => {
       mockServiceClient([])
 
-      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+      const req = completeRequest({
         method: 'POST',
         body: { sessionId: 'test-session' },
       })

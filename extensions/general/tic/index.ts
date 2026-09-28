@@ -41,6 +41,12 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { createLogger } from '@/lib/logger'
 import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { clientIpKey } from '@/lib/api/client-ip'
+import {
+  BANKID_BINDING_COOKIE,
+  BANKID_BINDING_MAX_AGE_SECONDS,
+  bankIdBindingValue,
+  verifyBankIdBinding,
+} from './lib/browser-binding'
 
 /**
  * Durable limit for the unauthenticated BankID proxy routes and the billable
@@ -863,7 +869,7 @@ export const ticExtension: Extension = {
             initiatorUserId,
           })
 
-          return NextResponse.json({
+          const startResponse = NextResponse.json({
             data: {
               sessionId: session.sessionRef,
               autoStartToken: session.autoStartToken,
@@ -876,6 +882,15 @@ export const ticExtension: Extension = {
               qrOrderAgeMs: Date.now() - startedAt,
             },
           })
+          // Only this browser may complete the order (see browser-binding).
+          startResponse.cookies.set(BANKID_BINDING_COOKIE, bankIdBindingValue(session.sessionRef), {
+            httpOnly: true,
+            secure: new URL(request.url).protocol === 'https:',
+            sameSite: 'lax',
+            path: '/',
+            maxAge: BANKID_BINDING_MAX_AGE_SECONDS,
+          })
+          return startResponse
         } catch (error) {
           if (error instanceof TICAPIError) {
             if (error.code === 'NOT_CONFIGURED') {
@@ -1006,6 +1021,16 @@ export const ticExtension: Extension = {
                 message: 'Endast inloggning stöds här. Skapa konto via registreringen och koppla BankID i inställningarna.',
               },
               { status: 400 }
+            )
+          }
+
+          if (!verifyBankIdBinding(request, sessionId)) {
+            return NextResponse.json(
+              {
+                error: 'browser_mismatch',
+                message: 'Slutför BankID-inloggningen i samma webbläsare som startade den.',
+              },
+              { status: 403 }
             )
           }
 
@@ -1252,8 +1277,18 @@ export const ticExtension: Extension = {
           // set-password banner on their next session.
           const { data: priorUser } = await supabase.auth.admin.getUserById(userId)
           const priorMeta = priorUser?.user?.app_metadata ?? {}
+          // A linking account that has no has_password flag signed in some
+          // other way than BankID signup (which writes false), so it has a
+          // password. Record that before bankid_linked: userHasPassword()
+          // reads a missing flag plus bankid_linked as "BankID-only", which
+          // would exempt the account from MFA and from the current-password
+          // check.
           await supabase.auth.admin.updateUserById(userId, {
-            app_metadata: { ...priorMeta, bankid_linked: true },
+            app_metadata: {
+              ...priorMeta,
+              ...(priorMeta.has_password === undefined ? { has_password: true } : {}),
+              bankid_linked: true,
+            },
           })
 
           // Company roles (TIC Identity / Bolagsverket) for founder verification.
