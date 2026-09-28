@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { Mail, Phone } from 'lucide-react'
 import { MarketingInfoPage } from '@/components/marketing/MarketingInfoPage'
 import { marketingPrimaryCta, marketingSecondaryCta } from '@/components/marketing/MarketingChrome'
+import { NORDKLART_LEGAL_NAME } from '@/lib/branding/legal-identity'
 
 export const metadata: Metadata = {
   title: 'Kontakta Nordklart',
@@ -15,7 +16,7 @@ export default function KontaktPage() {
       showLegalEntity
       eyebrow="Kontakt"
       title="Berätta vad du behöver hjälp med."
-      description="Oavsett om du vill börja bokföra, göra ett fristående bokslut, ansöka om Bankgiro eller prata byråupplägg kan du kontakta Nordklart här. Tjänsten tillhandahålls av Gridex El AB."
+      description={`Oavsett om du vill börja bokföra, göra ett fristående bokslut, ansöka om Bankgiro eller prata byråupplägg kan du kontakta Nordklart här. Tjänsten tillhandahålls av ${NORDKLART_LEGAL_NAME}.`}
       highlights={['Bokföring', 'Enbart bokslut', 'Bankgiro via partner', 'Byrå och allt i ett']}
     >
       <section className="px-5 pb-16 md:px-8">

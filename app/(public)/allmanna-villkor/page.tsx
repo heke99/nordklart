@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { MarketingInfoPage } from '@/components/marketing/MarketingInfoPage'
+import { NORDKLART_LEGAL_NAME } from '@/lib/branding/legal-identity'
 
 export const metadata: Metadata = {
   title: 'Allmänna villkor – Nordklart',
@@ -12,11 +13,11 @@ export default function AllmannaVillkorPage() {
       showLegalEntity
       eyebrow="Juridik"
       title="Allmänna villkor"
-      description="Villkoren beskriver huvudprinciperna för användning av Nordklart, en tjänst som tillhandahålls av Gridex El AB. Nordklart är produktnamnet och inte ett separat aktiebolag. Slutliga kundvillkor är de versioner som presenteras och accepteras vid teckning eller köp."
+      description={`Villkoren beskriver huvudprinciperna för användning av Nordklart, en tjänst som tillhandahålls av ${NORDKLART_LEGAL_NAME}. Nordklart är produktnamnet och inte ett separat aktiebolag. Slutliga kundvillkor är de versioner som presenteras och accepteras vid teckning eller köp.`}
       sections={[
         {
           title: 'Tjänsten',
-          body: 'Gridex El AB tillhandahåller Nordklart, ett digitalt system med funktioner för bokföring, bokslut, rapportering, Bankgiroansökan via partner och relaterade administrativa flöden.',
+          body: `${NORDKLART_LEGAL_NAME} tillhandahåller Nordklart, ett digitalt system med funktioner för bokföring, bokslut, rapportering, Bankgiroansökan via partner och relaterade administrativa flöden.`,
           points: ['Funktioner kan variera beroende på vald tjänst', 'Bankgiro och betalflöden kan hanteras via partner', 'Vissa flöden kräver kompletterande uppgifter eller granskning'],
         },
         {

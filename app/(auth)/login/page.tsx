@@ -21,6 +21,7 @@ import { isRecoverableSignupProvisioningStatus } from '@/lib/signup/provisioning
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { clearRecaptIdentity } from '@/lib/recapt'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
+import { pendingInvitePath } from '@/lib/invitations/pending-invite'
 
 const branding = getBranding()
 
@@ -61,6 +62,7 @@ function LoginPageContent() {
   const isInviteError = callbackError === 'invite_failed'
   const isMagicLinkError = callbackError === 'magic_link_failed'
   const isEmailChangeError = callbackError === 'email_change_failed'
+  const sessionExpired = searchParams.get('reason') === 'session_expired'
 
   useEffect(() => {
     let active = true
@@ -140,27 +142,12 @@ function LoginPageContent() {
           return
         }
 
-        // Check for pending invite token
-        const bankIdCookieMatch = document.cookie.match(/nordklart-invite-token=([^;]+)/)
-        const bankIdInviteToken = bankIdCookieMatch?.[1]
-
-        if (bankIdInviteToken) {
-          try {
-            const res = await fetch('/api/team/accept', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: bankIdInviteToken }),
-            })
-
-            if (res.ok) {
-              document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
-              window.location.href = '/app'
-              return
-            }
-          } catch (err) {
-            console.error('[login] invite acceptance failed:', err)
-          }
-          document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
+        // A pending invitation wins: the invite page accepts it (and routes
+        // through MFA when required) and keeps the token until it has an outcome.
+        const bankIdInvitePath = pendingInvitePath()
+        if (bankIdInvitePath) {
+          navigateAfterAuth(bankIdInvitePath)
+          return
         }
 
         // Always land on the picker after BankID login so the user sees
@@ -202,36 +189,20 @@ function LoginPageContent() {
         return
       }
 
+      // A pending invitation is accepted on the invite page, after MFA.
+      const invitePath = pendingInvitePath()
+
       // Check MFA status
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
 
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        navigateAfterAuth('/mfa/verify')
+        navigateAfterAuth(invitePath ? `/mfa/verify?returnTo=${encodeURIComponent(invitePath)}` : '/mfa/verify')
         return
       }
 
-      // Check for pending invite token
-      const cookieMatch = document.cookie.match(/nordklart-invite-token=([^;]+)/)
-      const inviteToken = cookieMatch?.[1]
-
-      if (inviteToken) {
-        try {
-          const res = await fetch('/api/team/accept', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: inviteToken }),
-          })
-
-          if (res.ok) {
-            document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
-            window.location.href = '/app'
-            return
-          }
-        } catch (err) {
-          console.error('[login] invite acceptance failed:', err)
-        }
-        // Clear cookie even on failure to avoid retrying stale tokens
-        document.cookie = 'nordklart-invite-token=; path=/; max-age=0'
+      if (invitePath) {
+        navigateAfterAuth(invitePath)
+        return
       }
 
       const activation = await fetch('/api/auth/signup-draft/claim', { method: 'POST' })
@@ -288,14 +259,19 @@ function LoginPageContent() {
     const emailValue = (formData.get('email') as string) || email
 
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(emailValue, {
-        redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+      // Through the server route: it applies the per-IP and per-address
+      // limits, answers the same whether or not the account exists, and
+      // writes the audit event. Calling Supabase from here skipped all three.
+      const response = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailValue }),
       })
 
-      if (error) {
+      if (!response.ok) {
         toast({
           title: tAuth('reset_failed_title'),
-          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+          description: response.status === 429 ? tAuth('reset_rate_limited') : tAuth('reset_failed_title'),
           variant: 'destructive',
         })
         return
@@ -511,6 +487,11 @@ function LoginPageContent() {
                 </Link>
                 .
               </p>
+            </div>
+          )}
+          {sessionExpired && !callbackError && (
+            <div className="mb-5 rounded-lg border border-border p-4" role="status">
+              <p className="text-sm text-muted-foreground">{tAuth('session_expired_notice')}</p>
             </div>
           )}
           {bankIdEnabled && (

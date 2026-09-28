@@ -40,6 +40,28 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createLogger } from '@/lib/logger'
 import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
+import { clientIpKey } from '@/lib/api/client-ip'
+import {
+  BANKID_BINDING_COOKIE,
+  BANKID_BINDING_MAX_AGE_SECONDS,
+  bankIdBindingValue,
+  verifyBankIdBinding,
+} from './lib/browser-binding'
+
+/**
+ * Durable limit for the unauthenticated BankID proxy routes and the billable
+ * TIC lookups. Each call reaches TIC, so none of them may be free to hammer.
+ */
+async function limitTic(prefix: string, identifier: string, maxRequests: number, windowMs: number) {
+  const rl = await checkDurableRateLimit({
+    prefix,
+    identifier,
+    maxRequests,
+    windowMs,
+    message: 'För många försök. Vänta en stund och försök igen.',
+  })
+  return rl.ok ? null : rl.response!
+}
 import { truncateIp } from '@/lib/api/truncate-ip'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
@@ -330,6 +352,10 @@ export const ticExtension: Extension = {
       skipCompanyContext: true,
       handler: async (request: Request, ctx?) => {
         const log = ctx?.log ?? console
+        // Billable TIC call: per user and per network.
+        const limited = await limitTic('tic:lookup:user', ctx?.userId ?? clientIpKey(request), 60, 60 * 60 * 1000)
+          ?? await limitTic('tic:lookup:ip', clientIpKey(request), 120, 60 * 60 * 1000)
+        if (limited) return limited
         const url = new URL(request.url)
         const orgNumber = url.searchParams.get('org_number')
 
@@ -435,6 +461,9 @@ export const ticExtension: Extension = {
       skipCompanyContext: true,
       handler: async (request: Request, ctx?) => {
         const log = ctx?.log ?? console
+        const limited = await limitTic('tic:profile:user', ctx?.userId ?? clientIpKey(request), 60, 60 * 60 * 1000)
+          ?? await limitTic('tic:profile:ip', clientIpKey(request), 120, 60 * 60 * 1000)
+        if (limited) return limited
         const url = new URL(request.url)
         const orgNumber = url.searchParams.get('org_number')
 
@@ -840,7 +869,7 @@ export const ticExtension: Extension = {
             initiatorUserId,
           })
 
-          return NextResponse.json({
+          const startResponse = NextResponse.json({
             data: {
               sessionId: session.sessionRef,
               autoStartToken: session.autoStartToken,
@@ -853,6 +882,15 @@ export const ticExtension: Extension = {
               qrOrderAgeMs: Date.now() - startedAt,
             },
           })
+          // Only this browser may complete the order (see browser-binding).
+          startResponse.cookies.set(BANKID_BINDING_COOKIE, bankIdBindingValue(session.sessionRef), {
+            httpOnly: true,
+            secure: new URL(request.url).protocol === 'https:',
+            sameSite: 'lax',
+            path: '/',
+            maxAge: BANKID_BINDING_MAX_AGE_SECONDS,
+          })
+          return startResponse
         } catch (error) {
           if (error instanceof TICAPIError) {
             if (error.code === 'NOT_CONFIGURED') {
@@ -886,6 +924,10 @@ export const ticExtension: Extension = {
           if (!sessionId || typeof sessionId !== 'string') {
             return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
           }
+          // The client polls about once a second while an order is open.
+          const limited = await limitTic('bankid:poll:session', sessionId.slice(0, 128), 400, 10 * 60 * 1000)
+            ?? await limitTic('bankid:poll:ip', clientIpKey(request), 2000, 10 * 60 * 1000)
+          if (limited) return limited
 
           const provider = getBankIdProvider()
           const polledAt = Date.now()
@@ -949,6 +991,8 @@ export const ticExtension: Extension = {
       skipAuth: true,
       handler: async (request: Request) => {
         try {
+          const limited = await limitTic('bankid:complete:ip', clientIpKey(request), 30, 15 * 60 * 1000)
+          if (limited) return limited
           const body: BankIdCompleteRequest = await request.json()
           const { sessionId, mode } = body
 
@@ -977,6 +1021,16 @@ export const ticExtension: Extension = {
                 message: 'Endast inloggning stöds här. Skapa konto via registreringen och koppla BankID i inställningarna.',
               },
               { status: 400 }
+            )
+          }
+
+          if (!verifyBankIdBinding(request, sessionId)) {
+            return NextResponse.json(
+              {
+                error: 'browser_mismatch',
+                message: 'Slutför BankID-inloggningen i samma webbläsare som startade den.',
+              },
+              { status: 403 }
             )
           }
 
@@ -1106,6 +1160,8 @@ export const ticExtension: Extension = {
           if (!sessionId) {
             return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
           }
+          const limited = await limitTic('bankid:cancel:ip', clientIpKey(request), 60, 15 * 60 * 1000)
+          if (limited) return limited
 
           const provider = getBankIdProvider()
           await provider.cancel(sessionId)
@@ -1221,8 +1277,18 @@ export const ticExtension: Extension = {
           // set-password banner on their next session.
           const { data: priorUser } = await supabase.auth.admin.getUserById(userId)
           const priorMeta = priorUser?.user?.app_metadata ?? {}
+          // A linking account that has no has_password flag signed in some
+          // other way than BankID signup (which writes false), so it has a
+          // password. Record that before bankid_linked: userHasPassword()
+          // reads a missing flag plus bankid_linked as "BankID-only", which
+          // would exempt the account from MFA and from the current-password
+          // check.
           await supabase.auth.admin.updateUserById(userId, {
-            app_metadata: { ...priorMeta, bankid_linked: true },
+            app_metadata: {
+              ...priorMeta,
+              ...(priorMeta.has_password === undefined ? { has_password: true } : {}),
+              bankid_linked: true,
+            },
           })
 
           // Company roles (TIC Identity / Bolagsverket) for founder verification.

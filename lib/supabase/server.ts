@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { serverCookiesSecure, supabaseCookieOptions } from '@/lib/auth/session-policy'
 
 // During Docker builds, NEXT_PUBLIC_* vars are placeholder sentinels
 // replaced at runtime by docker-entrypoint.sh.
@@ -16,6 +17,7 @@ export async function createClient() {
     safeUrl,
     safeKey,
     {
+      cookieOptions: supabaseCookieOptions(serverCookiesSecure()),
       cookies: {
         getAll() {
           return cookieStore.getAll()

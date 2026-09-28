@@ -28,6 +28,11 @@ export interface AuthCodePayload {
    * to ALL_SCOPES so existing Claude flows are unaffected.
    */
   scopes?: string[]
+  /**
+   * Company shown on the consent screen. The key is bound to it at /token.
+   * Undefined on codes minted before this field existed.
+   */
+  companyId?: string
   exp: number
 }
 

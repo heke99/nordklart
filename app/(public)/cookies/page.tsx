@@ -12,20 +12,27 @@ export default function CookiesPage() {
       showLegalEntity
       eyebrow="Cookies"
       title="Cookies och lokal lagring"
-      description="Nordklart använder nödvändiga cookies och lokal lagring för inloggning, säkerhet, språkval och grundläggande funktioner."
+      description="Nordklart använder nödvändiga cookies för inloggning, säkerhet och språkval. Analys och sessionsinspelning används bara om du samtycker."
       sections={[
         {
           title: 'Nödvändiga cookies',
-          body: 'Dessa används för att hålla dig inloggad, skydda sessionen, spara språk och se till att tjänsten fungerar korrekt.',
-          points: ['Inloggning och session', 'Säkerhet', 'Språk och grundläggande inställningar'],
+          body: 'Dessa krävs för att tjänsten ska fungera och kräver inget samtycke. Inloggningen avslutas efter 12 timmars inaktivitet och senast 7 dagar efter senaste inloggning.',
+          points: [
+            'Inloggning och session (Supabase, sb-*), högst 7 dagar',
+            'Senaste aktivitet (nordklart-last-activity), för automatisk utloggning',
+            'Valt företag och språk (nordklart-company-id, språkcookie)',
+            'BankID-inloggning bunden till din webbläsare (nordklart-bankid-order), 10 minuter',
+            'Inbjudan under pågående inloggning (nordklart-invite-token), 24 timmar',
+            'Ditt cookieval (nordklart-consent), 12 månader',
+          ],
         },
         {
-          title: 'Analys och förbättring',
-          body: 'Om analysverktyg används ska de beskrivas tydligt och hanteras enligt gällande samtycke och inställningar.',
+          title: 'Analys och sessionsinspelning (samtycke)',
+          body: 'Med ditt samtycke laddas Recapt, som registrerar hur tjänsten används och låter dig lämna feedback. Det laddas aldrig på inloggnings-, registrerings-, MFA- eller BankID-sidor. Utan samtycke laddas det inte alls.',
         },
         {
-          title: 'Ändra inställningar',
-          body: 'Du kan begränsa cookies i webbläsaren. Vissa delar av tjänsten kan sluta fungera om nödvändiga cookies blockeras.',
+          title: 'Ändra ditt val',
+          body: 'Radera cookien nordklart-consent i webbläsaren så visas valet igen. Du kan också blockera cookies i webbläsaren, men då slutar inloggningen att fungera.',
         },
       ]}
     />

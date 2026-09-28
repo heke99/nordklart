@@ -1,5 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -13,13 +13,11 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const supabase = await createClient()
+  // requireAuth enforces MFA (AAL2) on hosted; a bare getUser() does not.
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { supabase, user } = auth
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
 
   const writeCheck = await requireWritePermission(supabase, user.id)
   if (!writeCheck.ok) return writeCheck.response

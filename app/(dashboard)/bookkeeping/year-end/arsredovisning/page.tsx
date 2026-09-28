@@ -911,7 +911,7 @@ export default function ArsredovisningPage() {
                 id="ar-legal-name"
                 value={reportLegalName}
                 onChange={(e) => setReportLegalName(e.target.value)}
-                placeholder="Exempel: Gridex EL AB"
+                placeholder="Exempel: Exempelbolaget AB"
               />
               <p className="text-xs text-muted-foreground">
                 Dokumentuppgift. Ändrar inte företagsregistret eller huvudboken.
@@ -952,7 +952,7 @@ export default function ArsredovisningPage() {
               value={eventsAfterBalanceSheet}
               onChange={(e) => setEventsAfterBalanceSheet(e.target.value)}
               rows={3}
-              placeholder="Exempel: Bolaget ändrade under 2026 företagsnamn från Div3rsa AB till Gridex EL AB."
+              placeholder="Exempel: Bolaget ändrade under 2026 företagsnamn från Gamla Namnet AB till Exempelbolaget AB."
             />
           </div>
           <div className="space-y-1.5">

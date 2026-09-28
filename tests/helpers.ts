@@ -638,6 +638,7 @@ export function createMockRequest(
     method?: string
     body?: unknown
     searchParams?: Record<string, string>
+    headers?: Record<string, string>
   }
 ): Request {
   const fullUrl = new URL(url, 'http://localhost:3000')
@@ -648,7 +649,7 @@ export function createMockRequest(
   }
   return new Request(fullUrl.toString(), {
     method: options?.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) },
     ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
   })
 }

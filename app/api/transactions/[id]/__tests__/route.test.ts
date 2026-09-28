@@ -40,11 +40,15 @@ describe('DELETE /api/transactions/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(requireAuth).mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null } as never)
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    } as never)
 
     const request = new Request('http://localhost/api/transactions/tx-1', { method: 'DELETE' })
     const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))

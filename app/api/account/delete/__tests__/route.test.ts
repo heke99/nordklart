@@ -38,29 +38,40 @@ function mockAuth(
 
 function mockServiceClient(blockers: { id: string; name: string }[] = []) {
   const updateUserById = vi.fn().mockResolvedValue({ data: {}, error: null })
-  const adminSignOut = vi.fn().mockResolvedValue({ data: null, error: null })
+  const getUserById = vi.fn().mockResolvedValue({
+    data: { user: { user_metadata: { first_name: 'Anna', company_name: 'Acme' }, app_metadata: { provider: 'email', has_password: true } } },
+    error: null,
+  })
+  const serviceRpc = vi.fn().mockResolvedValue({ data: 1, error: null })
+  const tableWrites: Array<{ table: string; op: string }> = []
 
-  const chain = {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    is: vi.fn().mockResolvedValue({
+  const from = vi.fn((table: string) => {
+    const chain: Record<string, unknown> = {}
+    chain.select = vi.fn(() => chain)
+    chain.eq = vi.fn(() => chain)
+    chain.is = vi.fn(() => Promise.resolve({
       data: blockers.map((b) => ({ companies: { id: b.id, name: b.name } })),
       error: null,
-    }),
-  }
+    }))
+    chain.update = vi.fn(() => { tableWrites.push({ table, op: 'update' }); return chain })
+    chain.delete = vi.fn(() => { tableWrites.push({ table, op: 'delete' }); return chain })
+    chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+    return chain
+  })
 
   mockCreateServiceClient.mockReturnValue({
-    from: vi.fn().mockReturnValue(chain),
+    from,
+    rpc: serviceRpc,
     auth: {
       admin: {
         updateUserById,
-        signOut: adminSignOut,
+        getUserById,
       },
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any)
 
-  return { updateUserById, adminSignOut }
+  return { updateUserById, serviceRpc, tableWrites }
 }
 
 beforeEach(() => {
@@ -114,7 +125,7 @@ describe('POST /api/account/delete', () => {
 
   it('anonymizes, bans, signs out, and emits event on happy path', async () => {
     const { rpc } = mockAuth({ id: 'user-1', email: 'u@example.com' })
-    const { updateUserById, adminSignOut } = mockServiceClient()
+    const { updateUserById, serviceRpc, tableWrites } = mockServiceClient()
 
     const emitted: unknown[] = []
     eventBus.on('account.deleted', (payload) => {
@@ -135,11 +146,12 @@ describe('POST /api/account/delete', () => {
     expect(rpc).toHaveBeenCalledWith('anonymize_user_account', {
       target_user_id: 'user-1',
     })
+    // GoTrue merges metadata, so every existing key is nulled explicitly.
     expect(updateUserById).toHaveBeenCalledWith(
       'user-1',
       expect.objectContaining({
-        user_metadata: {},
-        app_metadata: {},
+        user_metadata: { first_name: null, company_name: null },
+        app_metadata: { provider: null, has_password: null, anonymized: true },
         ban_duration: expect.any(String),
       })
     )
@@ -147,7 +159,12 @@ describe('POST /api/account/delete', () => {
     // with the same address. Recovery goes through support instead.
     const updatePayload = updateUserById.mock.calls[0][1]
     expect(updatePayload).not.toHaveProperty('email')
-    expect(adminSignOut).toHaveBeenCalledWith('user-1', 'global')
+    expect(serviceRpc).toHaveBeenCalledWith('revoke_user_sessions', { p_user_id: 'user-1' })
+    expect(tableWrites).toEqual(expect.arrayContaining([
+      { table: 'api_keys', op: 'update' },
+      { table: 'bankid_identities', op: 'delete' },
+      { table: 'calendar_feeds', op: 'delete' },
+    ]))
     expect(emitted).toHaveLength(1)
     expect(emitted[0]).toMatchObject({ userId: 'user-1' })
   })

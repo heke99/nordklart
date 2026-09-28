@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolveCompanyAccess } from '@/lib/access/company'
 import { createServiceClient } from '@/lib/supabase/server'
+import { assertAgencyClientCapacity } from '@/lib/agency/commercial'
 
 const BodySchema = z.discriminatedUnion('action', [
   z.object({
@@ -33,6 +34,28 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = await params
     const now = new Date().toISOString()
     const service = createServiceClient()
+
+    // The agency's plan caps its active clients. Links are created as
+    // pending, so the cap is enforced when the client activates one.
+    if (parsed.data.action === 'approve') {
+      const { data: link } = await service
+        .from('agency_clients')
+        .select('id, agencies:agency_id(company_id)')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .eq('status', 'pending')
+        .maybeSingle()
+      const agency = (Array.isArray(link?.agencies) ? link?.agencies[0] : link?.agencies) as { company_id: string | null } | null | undefined
+      if (link && agency?.company_id) {
+        const capacity = await assertAgencyClientCapacity(service, agency.company_id)
+        if (!capacity.ok) {
+          return errorResponseFromCode('CONFLICT', log, {
+            messageSv: 'Byrån har nått taket för antal kundbolag i sin plan. Be byrån uppgradera innan du godkänner kopplingen.',
+            status: 409,
+          })
+        }
+      }
+    }
 
     const update = parsed.data.action === 'approve'
       ? {

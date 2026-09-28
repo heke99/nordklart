@@ -42,6 +42,15 @@ function resolveContentType(fileName: string, dbMimeType: string | null): string
   const ext = fileName.toLowerCase().split('.').pop() ?? ''
   return EXTENSION_MIME_MAP[ext] ?? dbMimeType ?? 'application/octet-stream'
 }
+
+/**
+ * Types a browser renders without running scripts. Everything else — notably
+ * application/xhtml+xml (iXBRL uploads), text/html and image/svg+xml — would
+ * execute embedded script on this origin with the viewer's session, so it is
+ * only ever offered as a download.
+ */
+const INLINE_SAFE_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'])
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -77,19 +86,21 @@ export async function GET(
     .download(doc.storage_path)
 
   if (downloadError || !blob) {
-    return NextResponse.json(
-      { error: `Failed to download document: ${downloadError?.message ?? 'unknown error'}` },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Failed to download document' }, { status: 500 })
   }
 
   const safeFileName = doc.file_name.replace(/[\r\n"]/g, '_')
+  const contentType = resolveContentType(doc.file_name, doc.mime_type)
+  const inlineSafe = INLINE_SAFE_TYPES.has(contentType)
 
   return new NextResponse(blob, {
     status: 200,
     headers: {
-      'Content-Type': resolveContentType(doc.file_name, doc.mime_type),
-      'Content-Disposition': `inline; filename="${safeFileName}"`,
+      'Content-Type': inlineSafe ? contentType : 'application/octet-stream',
+      'Content-Disposition': `${inlineSafe ? 'inline' : 'attachment'}; filename="${safeFileName}"`,
+      // Belt and braces for anything not rendered inline: even if a browser
+      // decided to render it, it gets no script and no same-origin access.
+      ...(inlineSafe ? {} : { 'Content-Security-Policy': "default-src 'none'; sandbox" }),
       'Cache-Control': 'private, max-age=300',
       // Block MIME sniffing — Content-Type is derived from DB metadata
       // (with extension fallback for legacy rows), never from response

@@ -103,22 +103,46 @@ export async function POST(request: Request) {
   //
   // user_metadata / app_metadata ARE wiped — they may contain display
   // name, avatar, or provider info that isn't needed for recovery.
-  // The admin API replaces (not merges) these, so passing {} clears them.
+  // GoTrue MERGES metadata on update, so `{}` would change nothing: every
+  // existing key is set to null, which removes it. Admin calls report
+  // failure through `{ error }` rather than throwing, so each one is checked.
   const service = createServiceClient()
-  try {
-    await service.auth.admin.updateUserById(user.id, {
-      user_metadata: {},
-      app_metadata: {},
-      ban_duration: '876000h',
-    })
-  } catch (err) {
-    log.error('Failed to wipe metadata and ban anonymized user', { userId: user.id, err })
+  const { data: existing, error: fetchError } = await service.auth.admin.getUserById(user.id)
+  if (fetchError) log.error('Failed to read user before anonymizing auth metadata', { userId: user.id })
+  const nulled = (meta: Record<string, unknown> | undefined) =>
+    Object.fromEntries(Object.keys(meta ?? {}).map((key) => [key, null]))
+  const { error: banError } = await service.auth.admin.updateUserById(user.id, {
+    user_metadata: nulled(existing?.user?.user_metadata),
+    app_metadata: { ...nulled(existing?.user?.app_metadata), anonymized: true },
+    ban_duration: '876000h',
+  })
+  if (banError) {
+    log.error('Failed to wipe metadata and ban anonymized user', { userId: user.id, code: banError.code })
   }
 
-  try {
-    await service.auth.admin.signOut(user.id, 'global')
-  } catch (err) {
-    log.error('Failed to global sign out anonymized user', { userId: user.id, err })
+  // End every session server-side. auth.admin.signOut() expects a JWT, not a
+  // user id, so it never did this.
+  const { error: sessionError } = await service.rpc('revoke_user_sessions', { p_user_id: user.id })
+  if (sessionError) log.error('Failed to revoke sessions of anonymized user', { userId: user.id })
+
+  // Credentials and personal data that anonymize_user_account does not own.
+  const cleanup = await Promise.all([
+    service.from('api_keys').update({ revoked_at: new Date().toISOString(), refresh_token_hash: null })
+      .eq('user_id', user.id).is('revoked_at', null),
+    service.from('oauth_client_registrations').update({ revoked_at: new Date().toISOString() })
+      .eq('user_id', user.id).is('revoked_at', null),
+    service.from('bankid_identities').delete().eq('user_id', user.id),
+    service.from('calendar_feeds').delete().eq('user_id', user.id),
+    service.from('push_subscriptions').delete().eq('user_id', user.id),
+  ])
+  for (const result of cleanup) {
+    if (result.error) log.error('Account cleanup step failed', { userId: user.id, code: result.error.code })
+  }
+
+  if (banError) {
+    // The account must not remain able to log in; tell the user to retry
+    // rather than reporting success.
+    return NextResponse.json({ error: 'Kontot anonymiserades men kunde inte spärras. Försök igen.' }, { status: 500 })
   }
 
   const deletedAt = new Date().toISOString()

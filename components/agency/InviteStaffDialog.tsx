@@ -23,6 +23,9 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 
+/** Fired after an invitation is created so pending lists can reload. */
+export const AGENCY_INVITES_CHANGED_EVENT = 'nordklart:agency-invites-changed'
+
 const ROLE_OPTIONS = [
   { value: 'accountant', label: 'Redovisningskonsult', helper: 'Bokför och hanterar kundernas löpande arbete.' },
   { value: 'payroll', label: 'Lönekonsult', helper: 'Hanterar lönekörningar och AGI för kunderna.' },
@@ -72,6 +75,7 @@ export function InviteStaffDialog({ agencyId }: { agencyId?: string }) {
       })
       setEmail('')
       setOpen(false)
+      window.dispatchEvent(new Event(AGENCY_INVITES_CHANGED_EVENT))
       router.refresh()
     } catch {
       toast({

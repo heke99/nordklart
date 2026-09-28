@@ -12,12 +12,17 @@ function mockClient(opts: {
   aal?: { currentLevel: string; nextLevel: string }
   aalError?: unknown
   company?: { id: string } | null
+  agencyMembership?: { agency_id: string } | null
 }) {
-  const maybeSingle = vi.fn().mockResolvedValue({ data: opts.company ?? null, error: null })
-  const query = { select: vi.fn(), is: vi.fn(), limit: vi.fn(), maybeSingle }
-  query.select.mockReturnValue(query)
-  query.is.mockReturnValue(query)
-  query.limit.mockReturnValue(query)
+  const makeQuery = (data: unknown) => {
+    const maybeSingle = vi.fn().mockResolvedValue({ data, error: null })
+    const query = { select: vi.fn(), is: vi.fn(), eq: vi.fn(), limit: vi.fn(), maybeSingle }
+    query.select.mockReturnValue(query)
+    query.is.mockReturnValue(query)
+    query.eq.mockReturnValue(query)
+    query.limit.mockReturnValue(query)
+    return query
+  }
 
   const client = {
     auth: {
@@ -29,7 +34,9 @@ function mockClient(opts: {
         }),
       },
     },
-    from: vi.fn().mockReturnValue(query),
+    from: vi.fn((table: string) =>
+      makeQuery(table === 'agency_members' ? opts.agencyMembership ?? null : opts.company ?? null),
+    ),
   }
   vi.mocked(createClient).mockResolvedValue(client as never)
   return client
@@ -72,6 +79,18 @@ describe('requireAuth', () => {
     mockClient({ user: USER, aal: { currentLevel: 'aal1', nextLevel: 'aal1' }, company: null })
     const result = await requireAuth()
     expect(result.error).toBeNull()
+  })
+
+  it('requires enrollment from agency staff who have no company yet', async () => {
+    mockClient({
+      user: USER,
+      aal: { currentLevel: 'aal1', nextLevel: 'aal1' },
+      company: null,
+      agencyMembership: { agency_id: 'a1' },
+    })
+    const result = await requireAuth()
+    expect(result.error?.status).toBe(403)
+    expect((await result.error!.json()).code).toBe('mfa_enrollment_required')
   })
 
   it('passes a verified aal2 session', async () => {

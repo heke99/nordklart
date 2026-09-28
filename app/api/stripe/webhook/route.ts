@@ -1,6 +1,18 @@
 import { NextResponse } from 'next/server'
-import { verifyStripeWebhookSignature } from '@/lib/billing/stripe'
+import {
+  cancelStripeSubscription,
+  isStripeLiveMode,
+  retrieveStripeSubscription,
+  stripeSubscriptionPeriod,
+  verifyStripeWebhookSignature,
+} from '@/lib/billing/stripe'
 import { createServiceClient } from '@/lib/supabase/server'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('api/stripe/webhook')
+
+/** A delivery still marked 'received' this long is treated as abandoned. */
+const IN_FLIGHT_STALE_MS = 5 * 60 * 1000
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -21,9 +33,10 @@ type StripeObject = {
   status?: string | null
   current_period_start?: number | null
   current_period_end?: number | null
-  items?: { data?: Array<{ price?: { id?: string | null } | null }> }
+  items?: { data?: Array<{ price?: { id?: string | null } | null; current_period_start?: number | null; current_period_end?: number | null }> }
   parent?: { subscription_details?: { subscription?: string | null } | null } | null
   amount_paid?: number | null
+  amount_due?: number | null
   amount?: number | null
   amount_refunded?: number | null
   hosted_invoice_url?: string | null
@@ -100,6 +113,67 @@ async function applyOneTimeLifecycle(
   return result
 }
 
+/**
+ * Base subscriptions of a company that are billed by Stripe right now. Used
+ * to cancel, in Stripe, a base plan that a newer checkout superseded (the
+ * finalize RPC only cancels it locally).
+ */
+async function liveStripeBaseSubscriptionIds(service: ReturnType<typeof createServiceClient>, companyId: string) {
+  const { data } = await service
+    .from('company_subscriptions')
+    .select('external_subscription_id')
+    .eq('company_id', companyId)
+    .eq('external_provider', 'stripe')
+    .in('status', ['trialing', 'active', 'past_due', 'paused'])
+  return (data ?? [])
+    .map((row) => row.external_subscription_id as string | null)
+    .filter((id): id is string => Boolean(id))
+}
+
+async function syncSubscription(
+  service: ReturnType<typeof createServiceClient>,
+  event: StripeEvent,
+  object: StripeObject,
+) {
+  // Stripe delivers events out of order. Read the subscription as it is now
+  // and let the RPC drop anything older than what it already applied.
+  let current: StripeObject = object
+  if (event.type !== 'customer.subscription.deleted') {
+    try {
+      current = await retrieveStripeSubscription(object.id!) as unknown as StripeObject
+    } catch (error) {
+      log.warn('could not refetch subscription; using the event payload', {
+        eventId: event.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  const period = stripeSubscriptionPeriod(current)
+  const { data } = await service.rpc('stripe_sync_subscription_v3', {
+    p_stripe_event_id: event.id,
+    p_event_created_at: toIso(event.created),
+    p_stripe_subscription_id: object.id,
+    p_stripe_customer_id: current.customer || object.customer || null,
+    p_stripe_status: current.status || object.status || 'incomplete',
+    p_stripe_price_id: current.items?.data?.[0]?.price?.id || null,
+    p_current_period_start: toIso(period.start),
+    p_current_period_end: toIso(period.end),
+    p_cancel_at_period_end: current.cancel_at_period_end === true,
+  }).throwOnError()
+
+  const result = data as { applied?: boolean; reason?: string } | null
+  if (result?.applied === false && result.reason === 'subscription_not_found') {
+    // A Nordklart subscription whose checkout has not been recorded yet:
+    // fail so Stripe retries once checkout.session.completed has landed.
+    // Subscriptions Stripe knows but Nordklart never sold are ignored.
+    if (companyIdFromMetadata(object.metadata) || companyIdFromMetadata(current.metadata)) {
+      throw new Error('STRIPE_SUBSCRIPTION_NOT_READY')
+    }
+    return { ignored: true }
+  }
+  return { ignored: false }
+}
+
 export async function POST(request: Request) {
   const rawBody = await request.text()
   if (!verifyStripeWebhookSignature(rawBody, request.headers.get('stripe-signature'))) {
@@ -119,9 +193,15 @@ export async function POST(request: Request) {
   if (!object.id) return NextResponse.json({ error: 'Stripe event object is missing an id.' }, { status: 400 })
   const companyId = companyIdFromMetadata(object.metadata)
 
+  // Events from the other Stripe mode (test vs live) never touch this
+  // environment's data.
+  if (typeof event.livemode === 'boolean' && process.env.STRIPE_SECRET_KEY && event.livemode !== isStripeLiveMode()) {
+    return NextResponse.json({ received: true, ignored: 'livemode_mismatch' })
+  }
+
   const { data: existing, error: existingError } = await service
     .from('stripe_webhook_events')
-    .select('id, status, attempt_count')
+    .select('id, status, attempt_count, updated_at')
     .eq('stripe_event_id', event.id)
     .maybeSingle()
   if (existingError) return NextResponse.json({ error: 'Webhook storage unavailable.' }, { status: 500 })
@@ -130,12 +210,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ received: true, duplicate: true })
   }
 
+  // Claim the event so two concurrent deliveries cannot both process it. A
+  // retry may take over a failed attempt, or one abandoned mid-flight.
   if (existing) {
-    const { error } = await service
+    const staleBefore = new Date(Date.now() - IN_FLIGHT_STALE_MS).toISOString()
+    const { data: claimed, error } = await service
       .from('stripe_webhook_events')
       .update({ status: 'received', processing_error: null, attempt_count: existing.attempt_count + 1, payload: event, company_id: companyId })
       .eq('id', existing.id)
+      .or(`status.eq.failed,and(status.eq.received,updated_at.lt.${staleBefore})`)
+      .select('id')
+      .maybeSingle()
     if (error) return NextResponse.json({ error: 'Webhook retry could not be recorded.' }, { status: 500 })
+    if (!claimed) return NextResponse.json({ error: 'Event is already being processed.' }, { status: 409 })
   } else {
     const { error } = await service.from('stripe_webhook_events').insert({
       stripe_event_id: event.id,
@@ -145,6 +232,9 @@ export async function POST(request: Request) {
       company_id: companyId,
       payload: event,
     })
+    if (error?.code === '23505') {
+      return NextResponse.json({ error: 'Event is already being processed.' }, { status: 409 })
+    }
     if (error) return NextResponse.json({ error: 'Webhook could not be stored.' }, { status: 500 })
   }
 
@@ -154,6 +244,9 @@ export async function POST(request: Request) {
       event.type === 'checkout.session.completed' ||
       event.type === 'checkout.session.async_payment_succeeded'
     ) {
+      const newSubscriptionId = subscriptionIdFromObject(object)
+      const isBaseCheckout = object.metadata?.nordklart_checkout_kind === 'subscription' && companyId && newSubscriptionId
+      const previousBase = isBaseCheckout ? await liveStripeBaseSubscriptionIds(service, companyId) : []
       await service.rpc('stripe_finalize_checkout_v2', {
         p_stripe_event_id: event.id,
         p_stripe_checkout_session_id: object.id,
@@ -166,6 +259,15 @@ export async function POST(request: Request) {
         p_currency: object.currency || null,
         p_stripe_invoice_id: typeof object.invoice === 'string' ? object.invoice : null,
       }).throwOnError()
+      // The finalize RPC cancels a superseded base plan in Nordklart; stop
+      // Stripe from billing it too.
+      for (const superseded of previousBase.filter((id) => id !== newSubscriptionId)) {
+        await cancelStripeSubscription({ subscriptionId: superseded, idempotencyKey: `nordklart-supersede-${superseded}` })
+          .catch((error) => log.error('could not cancel superseded Stripe subscription', {
+            eventId: event.id,
+            error: error instanceof Error ? error.message : String(error),
+          }))
+      }
       await applyOneTimeLifecycle(service, event, object)
     } else if (event.type === 'checkout.session.async_payment_failed') {
       await applyOneTimeLifecycle(service, event, object)
@@ -175,17 +277,7 @@ export async function POST(request: Request) {
         p_stripe_checkout_session_id: object.id,
       }).throwOnError()
     } else if (event.type.startsWith('customer.subscription.')) {
-      const priceId = object.items?.data?.[0]?.price?.id || null
-      await service.rpc('stripe_sync_subscription_v2', {
-        p_stripe_event_id: event.id,
-        p_stripe_subscription_id: object.id,
-        p_stripe_customer_id: object.customer || null,
-        p_stripe_status: object.status || 'paused',
-        p_stripe_price_id: priceId,
-        p_current_period_start: toIso(object.current_period_start),
-        p_current_period_end: toIso(object.current_period_end),
-        p_cancel_at_period_end: object.cancel_at_period_end === true,
-      }).throwOnError()
+      ignored = (await syncSubscription(service, event, object)).ignored
     } else if (
       event.type.startsWith('refund.') ||
       event.type === 'charge.refunded' ||
@@ -202,7 +294,9 @@ export async function POST(request: Request) {
         p_invoice_status: object.status || event.type.replace('invoice.', ''),
         p_amount_subtotal_minor: object.amount_subtotal ?? null,
         p_amount_tax_minor: object.total_details?.amount_tax ?? null,
-        p_amount_total_minor: object.amount_paid ?? object.amount_total ?? null,
+        // The invoice's value incl. VAT, not what has been paid so far (an
+        // open invoice has amount_paid 0).
+        p_amount_total_minor: object.amount_total ?? object.amount_due ?? null,
         p_currency: object.currency || null,
         p_hosted_invoice_url: object.hosted_invoice_url || null,
         p_invoice_pdf_url: object.invoice_pdf || null,

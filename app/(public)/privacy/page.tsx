@@ -151,9 +151,12 @@ export default function PrivacyPolicyPage() {
                   <tr className="border-b">
                     <td className="py-2 pr-4 font-medium">Recapt</td>
                     <td className="py-2 pr-4">
-                      Produktanalys och användarfeedback. Laddas endast för
-                      inloggade användare (ej testmiljöer). Överförda
-                      uppgifter: användar-ID, e-postadress och företagsnamn.
+                      Produktanalys, sessionsinspelning och användarfeedback.
+                      Laddas endast efter ditt samtycke i cookiebannern och
+                      aldrig på inloggnings-, registrerings-, MFA- eller
+                      BankID-sidor. Samtycket kan återkallas genom att radera
+                      cookien nordklart-consent. För inloggade användare
+                      överförs användar-ID, e-postadress och företagsnamn.
                     </td>
                     <td className="py-2 pr-4">EU</td>
                     <td className="py-2">SCCs vid eventuella underbiträden utanför EES</td>

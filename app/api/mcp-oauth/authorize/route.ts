@@ -644,7 +644,7 @@ export async function POST(request: Request) {
     )
   }
 
-  await requireCompanyId(supabase, user.id)
+  const consentCompanyId = await requireCompanyId(supabase, user.id)
 
   // Parse form body
   const formData = await request.formData()
@@ -717,6 +717,7 @@ export async function POST(request: Request) {
     codeChallenge,
     redirectUri,
     scopes: grantedScopes,
+    companyId: consentCompanyId,
   })
 
   // Redirect to callback with the code

@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **486**.
+Antal SQL-migreringar: **490**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -510,3 +510,7 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 484 | 20260925140000 | `20260925140000_advisor_security_hardening.sql` | `a33ef72d59a122d0860c657a9c992453747027c06a95efc6f1db1489f10c8f60` |
 | 485 | 20260925141000 | `20260925141000_advisor_rls_policy_performance.sql` | `a5a9c206532f1001e53f0885821cd4e5cd73265ba32fbf9f846f1e30946f929d` |
 | 486 | 20260925142000 | `20260925142000_advisor_indexes.sql` | `810c29616d3899342e6de4ffab90a1469848086253b1fd31c9493ae23ff8d1eb` |
+| 487 | 20260925142001 | `20260925142001_seed_agent_atom_bodies.sql` | `4e6261f7309f5c8da60f6535acad6fb00269a6035ece9da2b36b2961ac47892c` |
+| 488 | 20260927100000 | `20260927100000_invitations_hardening.sql` | `f5879c4ac876a0ca9f08d505d521944460fbc297c8ba39ab3eefadbf39bfaba3` |
+| 489 | 20260927110000 | `20260927110000_billing_event_ordering.sql` | `d0cb4ccc4f17dd5909e3e233b9db57ecae721509a6dc92514d09ddc1d79eb5de` |
+| 490 | 20260927120000 | `20260927120000_api_keys_lifecycle.sql` | `9a6ac4857f06f1bbd135216a2c90311534b408bca2696a97807570ab197de77a` |

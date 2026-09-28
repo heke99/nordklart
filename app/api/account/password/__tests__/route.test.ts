@@ -6,6 +6,16 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+const verifierSignIn = vi.fn()
+vi.mock('@supabase/supabase-js', () => ({
+  createClient: () => ({
+    auth: { signInWithPassword: verifierSignIn, signOut: vi.fn().mockResolvedValue({ error: null }) },
+  }),
+}))
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { POST } from '../route'
 
@@ -17,7 +27,7 @@ type AuthMetadata = Record<string, unknown>
 function mockUserClient(opts: {
   user: { id: string; app_metadata?: AuthMetadata } | null
   updateUserError?: { message: string; status?: number; code?: string } | null
-  aal?: { currentLevel: string; nextLevel: string }
+  aal?: { currentLevel: string; nextLevel: string; currentAuthenticationMethods?: Array<{ method: string; timestamp: number }> }
   aalError?: { message: string } | null
 }) {
   const updateUser = vi.fn().mockResolvedValue({
@@ -28,6 +38,7 @@ function mockUserClient(opts: {
   mockCreateClient.mockResolvedValue({
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: opts.user } }),
+      getClaims: vi.fn().mockResolvedValue({ data: { claims: { session_id: 'sess-current' } } }),
       updateUser,
       // requireAuth() probes the assurance level whenever MFA is enforced.
       // Default to a session that needs no step-up so the existing cases are
@@ -78,10 +89,11 @@ function mockService(opts: {
   mockCreateServiceClient.mockReturnValue({
     auth: { admin: { getUserById, updateUserById } },
     rpc,
+    from: vi.fn(() => ({ insert: vi.fn().mockResolvedValue({ error: null }) })),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any)
 
-  return { getUserById, updateUserById }
+  return { getUserById, updateUserById, rpc }
 }
 
 const STRONG_PASSWORD = 'StrongP@ssword1'
@@ -100,6 +112,7 @@ function passwordSetCall(updateUserById: ReturnType<typeof vi.fn>) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  verifierSignIn.mockResolvedValue({ data: { session: {} }, error: null })
 })
 
 describe('POST /api/account/password', () => {
@@ -168,11 +181,11 @@ describe('POST /api/account/password', () => {
       ])
     })
 
-    it('treats unset has_password as first-time set', async () => {
+    it('treats unset has_password on a BankID-created account as first-time set', async () => {
       const { updateUser } = mockUserClient({
-        user: { id: 'user-1' /* no app_metadata */ },
+        user: { id: 'user-1', app_metadata: { bankid_linked: true } },
       })
-      const { updateUserById } = mockService({})
+      const { updateUserById } = mockService({ priorAppMetadata: { bankid_linked: true } })
 
       const req = createMockRequest('/api/account/password', {
         method: 'POST',
@@ -231,6 +244,56 @@ describe('POST /api/account/password', () => {
   })
 
   describe('change-password (has_password === true)', () => {
+    it('requires the current password', async () => {
+      const { updateUser } = mockUserClient({ user: { id: 'user-1', email: 'u@example.se', app_metadata: { has_password: true } } as never })
+      mockService({ priorAppMetadata: { has_password: true } })
+      const req = createMockRequest('/api/account/password', { method: 'POST', body: { password: STRONG_PASSWORD } })
+      const { status, body } = await parseJsonResponse<{ code?: string }>(await POST(req))
+      expect(status).toBe(400)
+      expect(body.code).toBe('current_password_required')
+      expect(updateUser).not.toHaveBeenCalled()
+    })
+
+    it('treats an account without the flag (not BankID) as having a password', async () => {
+      const { updateUser } = mockUserClient({ user: { id: 'user-1', app_metadata: {} } })
+      mockService({})
+      const req = createMockRequest('/api/account/password', { method: 'POST', body: { password: STRONG_PASSWORD } })
+      const { status } = await parseJsonResponse(await POST(req))
+      expect(status).toBe(400)
+      expect(updateUser).not.toHaveBeenCalled()
+    })
+
+    it('refuses a wrong current password', async () => {
+      verifierSignIn.mockResolvedValue({ data: null, error: { message: 'Invalid login credentials' } })
+      const { updateUser } = mockUserClient({ user: { id: 'user-1', email: 'u@example.se', app_metadata: { has_password: true } } as never })
+      mockService({ priorAppMetadata: { has_password: true } })
+      const req = createMockRequest('/api/account/password', { method: 'POST', body: { password: STRONG_PASSWORD, currentPassword: 'wrong' } })
+      const { status } = await parseJsonResponse(await POST(req))
+      expect(status).toBe(403)
+      expect(updateUser).not.toHaveBeenCalled()
+    })
+
+    it('lets a fresh reset-link session set a password without the old one', async () => {
+      const { updateUser } = mockUserClient({
+        user: { id: 'user-1', app_metadata: { has_password: true } },
+        aal: { currentLevel: 'aal1', nextLevel: 'aal1', currentAuthenticationMethods: [{ method: 'recovery', timestamp: Math.floor(Date.now() / 1000) - 60 }] },
+      })
+      mockService({ priorAppMetadata: { has_password: true } })
+      const req = createMockRequest('/api/account/password', { method: 'POST', body: { password: STRONG_PASSWORD } })
+      const { status } = await parseJsonResponse(await POST(req))
+      expect(status).toBe(200)
+      expect(updateUser).toHaveBeenCalledWith({ password: STRONG_PASSWORD })
+    })
+
+    it('ends every other session after a change', async () => {
+      mockUserClient({ user: { id: 'user-1', email: 'u@example.se', app_metadata: { has_password: true } } as never })
+      const { rpc } = mockService({ priorAppMetadata: { has_password: true } })
+      const req = createMockRequest('/api/account/password', { method: 'POST', body: { password: STRONG_PASSWORD, currentPassword: 'OldP@ssword1' } })
+      const { status } = await parseJsonResponse(await POST(req))
+      expect(status).toBe(200)
+      expect(rpc).toHaveBeenCalledWith('revoke_user_sessions', { p_user_id: 'user-1', p_keep_session_id: 'sess-current' })
+    })
+
     it('writes via the user session so Supabase enforces AAL2', async () => {
       const { updateUser } = mockUserClient({
         user: { id: 'user-1', app_metadata: { has_password: true } },
@@ -241,7 +304,7 @@ describe('POST /api/account/password', () => {
 
       const req = createMockRequest('/api/account/password', {
         method: 'POST',
-        body: { password: STRONG_PASSWORD },
+        body: { password: STRONG_PASSWORD, currentPassword: 'OldP@ssword1' },
       })
       const { status, body } = await parseJsonResponse<{
         data?: { ok: boolean }
@@ -275,7 +338,7 @@ describe('POST /api/account/password', () => {
 
       const req = createMockRequest('/api/account/password', {
         method: 'POST',
-        body: { password: STRONG_PASSWORD },
+        body: { password: STRONG_PASSWORD, currentPassword: 'OldP@ssword1' },
       })
       const { status, body } = await parseJsonResponse<{ error?: string }>(
         await POST(req),
@@ -300,7 +363,7 @@ describe('POST /api/account/password', () => {
 
       const req = createMockRequest('/api/account/password', {
         method: 'POST',
-        body: { password: STRONG_PASSWORD },
+        body: { password: STRONG_PASSWORD, currentPassword: 'OldP@ssword1' },
       })
       const { status, body } = await parseJsonResponse<{ error?: string }>(
         await POST(req),

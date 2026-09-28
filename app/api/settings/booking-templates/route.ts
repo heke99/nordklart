@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -139,9 +139,10 @@ export const GET = withRouteContext(
 // company is not something I could establish from the code, and guessing is
 // how a working flow gets broken.
 export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // requireAuth enforces MFA (AAL2) on hosted; a bare getUser() does not.
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { supabase, user } = auth
 
   const writeCheck = await requireWritePermission(supabase, user.id)
   if (!writeCheck.ok) return writeCheck.response

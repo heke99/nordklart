@@ -45,7 +45,7 @@ describe('sysorg config production safety', () => {
     vi.unstubAllEnvs()
   })
 
-  it('has NO hardcoded filframställare identity (no Gridex fallback)', async () => {
+  it('has NO hardcoded filframställare identity (no supplier fallback)', async () => {
     expect(getSkvFilframstallareOrNull()).toBeNull()
     expect(() => getSkvFilframstallare()).toThrow(SkvConfigurationError)
     // The legal-identity defaults must be gone from the module entirely.
@@ -55,6 +55,8 @@ describe('sysorg config production safety', () => {
     expect(source).not.toMatch(/gridex/i)
     expect(source).not.toMatch(/div3rsa/i)
     expect(source).not.toContain('559416-7149')
+    expect(source).not.toMatch(/trafexa/i)
+    expect(source).not.toContain('556855-4884')
   })
 
   it('returns the configured identity and derives the 12-digit id', () => {

@@ -14,6 +14,10 @@ import { checkDurableRateLimit } from '@/lib/auth/rate-limit-durable'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
+// Clients are told to refresh hourly (expires_in); the key itself stops
+// working server-side after a day, and an unused refresh token after 60 days.
+const ACCESS_KEY_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000
+const REFRESH_TOKEN_LIFETIME_MS = 60 * 24 * 60 * 60 * 1000
 
 // The sibling /register endpoint has carried a per-/24 limit since it shipped;
 // the token endpoint did not, even though it is the one that hands out
@@ -31,9 +35,10 @@ const TOKEN_RATE_LIMIT = {
  * Supports two grant types:
  *   - authorization_code: exchange a PKCE-protected auth code for a fresh
  *     api_key (access_token) plus a refresh_token.
- *   - refresh_token: rotate the refresh_token and return the same api_key
- *     with a fresh expires_in. The api_key itself does not expire
- *     server-side; expires_in is a hint so clients refresh on a cadence.
+ *   - refresh_token: rotate the refresh_token and the api_key. The key
+ *     expires server-side after ACCESS_KEY_MAX_LIFETIME_MS, the refresh token
+ *     after REFRESH_TOKEN_LIFETIME_MS without use, and replaying a rotated
+ *     refresh token revokes the key (rotate_api_key_refresh).
  */
 export async function POST(request: Request) {
   const forwarded = request.headers.get('x-forwarded-for')
@@ -141,7 +146,19 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     .lt('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString())
     .then(() => {})
 
-  const companyId = await requireCompanyId(supabase, payload.userId)
+  // The company the user saw on the consent screen, not whichever one
+  // happens to be active when the client exchanges the code.
+  const companyId = payload.companyId ?? await requireCompanyId(supabase, payload.userId)
+  const { data: access } = await supabase.rpc('api_key_owner_is_active', {
+    p_user_id: payload.userId,
+    p_company_id: companyId,
+  })
+  if (access !== true) {
+    return NextResponse.json(
+      { error: 'invalid_grant', error_description: 'The user no longer has access to the company' },
+      { status: 400 }
+    )
+  }
 
   const { key, hash, prefix } = generateApiKey()
   const refresh = generateRefreshToken()
@@ -177,6 +194,8 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       name: 'MCP-klient (OAuth)',
       scopes: grantedScopes,
       refresh_token_hash: refresh.hash,
+      expires_at: new Date(Date.now() + ACCESS_KEY_MAX_LIFETIME_MS).toISOString(),
+      refresh_expires_at: new Date(Date.now() + REFRESH_TOKEN_LIFETIME_MS).toISOString(),
     })
 
   if (insertError) {
@@ -205,72 +224,42 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   }
 
   const supabase = createServiceClientNoCookies()
-  const presentedHash = hashRefreshToken(refreshToken)
-
-  // Look up the api_key row by refresh_token_hash. The hash is unique among
-  // non-null values, so there's at most one match. We pull `scopes` so the
-  // rotated token response advertises the same granular grant the key
-  // already carries (otherwise OAuth 2.1 clients would re-authorize on
-  // every refresh).
-  const { data: row, error: lookupError } = await supabase
-    .from('api_keys')
-    .select('id, revoked_at, scopes')
-    .eq('refresh_token_hash', presentedHash)
-    .maybeSingle()
-
-  if (lookupError) {
-    return NextResponse.json(
-      { error: 'server_error', error_description: 'Failed to look up refresh token' },
-      { status: 500 }
-    )
-  }
-
-  if (!row) {
-    return NextResponse.json(
-      { error: 'invalid_grant', error_description: 'Invalid refresh token' },
-      { status: 400 }
-    )
-  }
-
-  if (row.revoked_at) {
-    return NextResponse.json(
-      { error: 'invalid_grant', error_description: 'Refresh token revoked' },
-      { status: 400 }
-    )
-  }
-
-  // Rotate both tokens atomically. OAuth 2.1 §6.1 recommends rotating the
-  // refresh token; we also rotate the api_key because key_hash is one-way
-  // and we cannot recover the original plaintext to return to the client.
-  // The .eq('refresh_token_hash', presentedHash) guard makes this a CAS:
-  // a concurrent refresh with the same token will affect 0 rows.
   const rotated = generateRefreshToken()
   const { key: newKey, hash: newKeyHash, prefix: newKeyPrefix } = generateApiKey()
 
-  const { data: updated, error: updateError } = await supabase
-    .from('api_keys')
-    .update({
-      refresh_token_hash: rotated.hash,
-      key_hash: newKeyHash,
-      key_prefix: newKeyPrefix,
-    })
-    .eq('id', row.id)
-    .eq('refresh_token_hash', presentedHash)
-    .select('id')
+  // One transaction: find the key by refresh token (CAS on the hash),
+  // re-check the owner's access, rotate key + refresh token and extend their
+  // lifetimes. A replayed, already-rotated refresh token revokes the key.
+  const { data, error } = await supabase.rpc('rotate_api_key_refresh', {
+    p_presented_refresh_hash: hashRefreshToken(refreshToken),
+    p_new_refresh_hash: rotated.hash,
+    p_new_key_hash: newKeyHash,
+    p_new_key_prefix: newKeyPrefix,
+    p_access_ttl: `${ACCESS_KEY_MAX_LIFETIME_MS / 1000} seconds`,
+    p_refresh_ttl: `${REFRESH_TOKEN_LIFETIME_MS / 1000} seconds`,
+  })
 
-  if (updateError) {
+  if (error || !data) {
     return NextResponse.json(
       { error: 'server_error', error_description: 'Failed to rotate refresh token' },
       { status: 500 }
     )
   }
 
-  if (!updated || updated.length === 0) {
+  const result = data as { ok: boolean; error?: string; scopes?: unknown }
+  if (!result.ok) {
+    const description: Record<string, string> = {
+      refresh_token_reused: 'Refresh token already used; the grant has been revoked',
+      refresh_token_expired: 'Refresh token expired',
+      access_revoked: 'The user no longer has access to the company',
+      revoked: 'Refresh token revoked',
+    }
     return NextResponse.json(
-      { error: 'invalid_grant', error_description: 'Refresh token already used' },
+      { error: 'invalid_grant', error_description: description[result.error ?? ''] ?? 'Invalid refresh token' },
       { status: 400 }
     )
   }
+  const row = { scopes: result.scopes }
 
   // Return the granular scopes the key was originally minted with. Falling
   // back to the read-only OAuth defaults preserves the pre-scope-plumbing

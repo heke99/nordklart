@@ -33,6 +33,14 @@ export default function RegisterPage() {
 function RegisterContent() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
+  // Invited users register on the invite page: regular signup always creates
+  // a new company, which is not what an invitee wants.
+  const inviteToken = searchParams.get('invite')
+  useEffect(() => {
+    if (inviteToken && /^[A-Za-z0-9_-]{16,200}$/.test(inviteToken)) {
+      window.location.replace(`/invite/${encodeURIComponent(inviteToken)}`)
+    }
+  }, [inviteToken])
   const intent = searchParams.get('intent') ?? ''
   const planCode = searchParams.get('plan') ?? ''
   const planVersionId = searchParams.get('plan_version_id') ?? ''

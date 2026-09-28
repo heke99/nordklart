@@ -10,6 +10,9 @@ const { supabase: mockUserSupabase } = createQueuedMockSupabase()
 const { supabase: mockServiceSupabase, enqueue: enqueueService, reset: resetService } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
@@ -152,5 +155,45 @@ describe('POST /api/billing/checkout — year-end one-time', () => {
     const args = vi.mocked(createStripeCheckoutSession).mock.calls[0][0] as { cancelUrl: string }
     expect(args.cancelUrl).toContain('checkout=cancelled')
     expect(args.cancelUrl).toContain('checkout_id=')
+  })
+})
+
+describe('POST /api/billing/checkout — base plans', () => {
+  const baseVersion = { ...version, billing_interval: 'month', price_excl_vat: 199 }
+  const baseProduct = { id: 'prod-2', code: 'bookkeeping', product_type: 'subscription', status: 'active', stripe_tax_code: 'txcd_x' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetService()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'a@b.se' }, supabase: mockUserSupabase })
+    canManageBillingMock.mockResolvedValue(true)
+  })
+
+  it('refuses a plan that is not public', async () => {
+    enqueueService({ data: baseVersion, error: null })
+    enqueueService({ data: { ...plan, code: 'company_secret', is_public: false, audience_type: 'company', trial_days: 0 }, error: null })
+    enqueueService({ data: baseProduct, error: null })
+    enqueueService({ data: null, error: null }) // agencies lookup: not an agency
+
+    const response = await POST(checkoutRequest({ planVersionId: VERSION_ID }))
+    expect(response.status).toBe(409)
+  })
+
+  it('refuses an agency plan for an ordinary company', async () => {
+    enqueueService({ data: baseVersion, error: null })
+    enqueueService({ data: { ...plan, code: 'agency_start', is_public: true, audience_type: 'agency', trial_days: 0 }, error: null })
+    enqueueService({ data: baseProduct, error: null })
+    enqueueService({ data: null, error: null })
+
+    const response = await POST(checkoutRequest({ planVersionId: VERSION_ID }))
+    expect(response.status).toBe(409)
+  })
+
+  it('refuses internal plans outright', async () => {
+    enqueueService({ data: baseVersion, error: null })
+    enqueueService({ data: { ...plan, is_public: true, audience_type: 'internal', trial_days: 0 }, error: null })
+
+    const response = await POST(checkoutRequest({ planVersionId: VERSION_ID }))
+    expect(response.status).toBe(409)
   })
 })

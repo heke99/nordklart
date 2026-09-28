@@ -173,7 +173,9 @@
     "auth_link_error_title": "Länken fungerade inte",
     "auth_link_error_body": "Länken kan ha gått ut, redan använts eller inte vara giltig.",
     "request_new_confirmation_link": "Begär en ny bekräftelselänk",
-    "return_to_login": "Tillbaka till login"
+    "return_to_login": "Tillbaka till login",
+    "session_expired_notice": "Du har loggats ut eftersom sessionen varit inaktiv för länge eller nått sin maxlängd. Logga in igen för att fortsätta.",
+    "reset_rate_limited": "För många försök. Vänta en stund och försök igen."
   },
   "settings_nav": {
     "aria_label": "Inställningar",
@@ -998,7 +1000,18 @@
     "unexpected_error": "Ett oväntat fel uppstod. Försök igen.",
     "welcome_title": "Välkommen!",
     "joined_named": "Du är nu medlem i {companyName}.",
-    "joined_generic": "Du är nu medlem."
+    "joined_generic": "Du är nu medlem.",
+    "signup_first_name": "Förnamn",
+    "signup_last_name": "Efternamn",
+    "signup_email": "E-post",
+    "signup_password": "Lösenord",
+    "signup_password_hint": "Minst 8 tecken med versaler, gemener, siffror och specialtecken.",
+    "signup_accept_terms": "Jag godkänner de allmänna villkoren och har tagit del av integritetspolicyn.",
+    "signup_submit": "Skapa konto och gå med",
+    "signup_submitting": "Skapar konto…",
+    "signup_failed_title": "Kunde inte skapa kontot",
+    "mfa_required_title": "Tvåstegsverifiering krävs",
+    "mfa_required_body": "Slutför tvåstegsverifieringen så går du med direkt efteråt."
   },
   "settings_company": {
     "company_info_heading": "Företagsuppgifter",
@@ -1682,7 +1695,13 @@
     "mfa_required_note": "Tvåfaktorsautentisering är obligatorisk och kan inte inaktiveras.",
     "mfa_inactive_title": "2FA är inte aktiverad",
     "mfa_inactive_description": "Vi rekommenderar att du aktiverar tvåfaktorsautentisering.",
-    "enable_mfa": "Aktivera 2FA"
+    "enable_mfa": "Aktivera 2FA",
+    "current_password_label": "Nuvarande lösenord",
+    "current_password_placeholder": "Ditt nuvarande lösenord",
+    "sign_out_everywhere_title": "Logga ut överallt",
+    "sign_out_everywhere_description": "Avslutar alla inloggningar på andra enheter och webbläsare. Du förblir inloggad här.",
+    "sign_out_everywhere_button": "Logga ut andra enheter",
+    "sign_out_everywhere_done": "Andra enheter är utloggade."
   },
   "settings_calendar_feed": {
     "title": "Kalendersynkronisering",

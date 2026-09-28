@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { AGENCY_ADMIN_ROLES } from '@/lib/agency/commercial'
 import { InviteStaffDialog } from '@/components/agency/InviteStaffDialog'
+import { PendingStaffInvites } from '@/components/agency/PendingStaffInvites'
 import { NordklartActionCard, NordklartPageShell, NordklartStatCard } from '@/components/nordklart/NordklartShell'
 import { Button } from '@/components/ui/button'
 import { buildAgencyWorkQueue, type AgencyClientOverviewRow } from '@/lib/agency/work-queue'
@@ -74,6 +75,8 @@ export default async function AgencyPage() {
         <NordklartActionCard meta="Team" title="Ansvarig konsult" description="Varje kund kan tilldelas ansvarig konsult med rätt behörighet för arbetet." />
         <NordklartActionCard meta="Mallar" title={`${templateCount || 0} aktiva byråmallar`} description="Återanvändbara mallar hjälper byrån att standardisera onboarding, deadlines, granskning och rapporter." />
       </div>
+
+      {adminMembership ? <PendingStaffInvites agencyId={adminMembership.agency_id} /> : null}
 
       {/* Work queue — clients ranked by urgency (deadlines, review, bank, moms). */}
       <div className="rounded-3xl border bg-card p-5 shadow-sm">

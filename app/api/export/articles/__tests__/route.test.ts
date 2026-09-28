@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+vi.mock('@/lib/auth/rate-limit-durable', () => ({
+  checkDurableRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
 vi.mock('server-only', () => ({}))
 import { parseArticlesFile } from '@/lib/import/articles/parser'
 import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'

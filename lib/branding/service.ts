@@ -64,7 +64,7 @@ const DEFAULT_BRANDING: BrandingConfig = {
   appDescription: NORDKLART_SHORT_DISCLOSURE,
   legalEntity: NORDKLART_LEGAL_NAME,
   // Nordklart remains the product/domain identity while legal responsibility
-  // is carried by Gridex El AB.
+  // is carried by the supplier in lib/branding/legal-identity.ts.
   supportEmail: 'support@nordklart.se',
   privacyEmail: 'privacy@nordklart.se',
   securityEmail: 'security@nordklart.se',

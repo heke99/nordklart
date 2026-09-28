@@ -31,10 +31,11 @@ function makeQuery(): Record<string, unknown> {
 const getUser = vi.fn()
 const getAuthenticatorAssuranceLevel = vi.fn()
 const listFactors = vi.fn()
+const signOut = vi.fn().mockResolvedValue({ error: null })
 
 vi.mock('@supabase/ssr', () => ({
   createServerClient: () => ({
-    auth: { getUser, mfa: { getAuthenticatorAssuranceLevel, listFactors } },
+    auth: { getUser, signOut, mfa: { getAuthenticatorAssuranceLevel, listFactors } },
     // Chainable stub: every builder method returns the same object, and the
     // chain is awaitable. resolveCompanyForMiddleware chains
     // select/eq/in/order/limit in varying combinations, so mirroring the exact
@@ -121,5 +122,58 @@ describe('middleware MFA enforcement', () => {
     const res = await updateSession(req('/account/set-password'))
 
     expect(res.headers.get('location') ?? '').not.toContain('/mfa/')
+  })
+})
+
+describe('middleware session lifetime', () => {
+  const nowSeconds = () => Math.floor(Date.now() / 1000)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', '')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    getUser.mockResolvedValue({ data: { user: passwordUser } })
+  })
+
+  function withCookie(path: string, cookie: string): NextRequest {
+    return new NextRequest(new URL(`https://app.nordklart.se${path}`), { headers: { cookie } })
+  }
+
+  it('signs the browser out once the absolute lifetime has passed', async () => {
+    getAuthenticatorAssuranceLevel.mockResolvedValue({
+      data: { currentLevel: 'aal1', nextLevel: 'aal1', currentAuthenticationMethods: [{ method: 'password', timestamp: nowSeconds() - 8 * 24 * 3600 }] },
+      error: null,
+    })
+    const res = await updateSession(req('/dashboard'))
+    expect(res.headers.get('location')).toContain('/login?reason=session_expired')
+    expect(signOut).toHaveBeenCalledWith({ scope: 'local' })
+  })
+
+  it('signs the browser out after the idle timeout', async () => {
+    getAuthenticatorAssuranceLevel.mockResolvedValue({
+      data: { currentLevel: 'aal1', nextLevel: 'aal1', currentAuthenticationMethods: [{ method: 'password', timestamp: nowSeconds() - 3600 }] },
+      error: null,
+    })
+    const res = await updateSession(withCookie('/dashboard', `nordklart-last-activity=${Date.now() - 13 * 3600 * 1000}`))
+    expect(res.headers.get('location')).toContain('reason=session_expired')
+  })
+
+  it('keeps an active session and refreshes the activity cookie', async () => {
+    getAuthenticatorAssuranceLevel.mockResolvedValue({
+      data: { currentLevel: 'aal1', nextLevel: 'aal1', currentAuthenticationMethods: [{ method: 'password', timestamp: nowSeconds() - 3600 }] },
+      error: null,
+    })
+    // /settings/account passes through without a company, so the response is
+    // the session response that carries the refreshed cookie.
+    const res = await updateSession(withCookie('/settings/account', `nordklart-last-activity=${Date.now() - 60_000}`))
+    expect(res.headers.get('location')).toBeNull()
+    expect(signOut).not.toHaveBeenCalled()
+    expect(res.cookies.get('nordklart-last-activity')?.value).toMatch(/^\d+$/)
+  })
+
+  it('does not revoke sessions on a transient auth error', async () => {
+    getUser.mockResolvedValue({ data: { user: null }, error: new Error('fetch failed') })
+    await updateSession(req('/dashboard'))
+    expect(signOut).not.toHaveBeenCalled()
   })
 })

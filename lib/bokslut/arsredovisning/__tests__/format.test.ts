@@ -24,6 +24,6 @@ describe('annual report formatting', () => {
   })
 
   it('creates a stable Swedish company filename slug', () => {
-    expect(annualReportFileSlug('Gridex EL AB')).toBe('gridex-el-ab')
+    expect(annualReportFileSlug('Trafexa Nordic AB')).toBe('trafexa-nordic-ab')
   })
 })

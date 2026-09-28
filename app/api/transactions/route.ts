@@ -1,5 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { requireCompanyId } from '@/lib/company/context'
 import { scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconciliation'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -9,12 +9,10 @@ import { CreateTransactionSchema } from '@/lib/api/schemas'
 const MAX_ROWS = 500
 
 export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  // requireAuth enforces MFA (AAL2) on hosted; a bare getUser() does not.
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { supabase, user } = auth
 
   const companyId = await requireCompanyId(supabase, user.id)
 
