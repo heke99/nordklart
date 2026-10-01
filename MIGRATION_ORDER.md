@@ -3,7 +3,7 @@
 > Genererad av `node scripts/checks/migration-integrity.mjs --write`.
 > Ändra inte filen manuellt.
 
-Antal SQL-migreringar: **493**.
+Antal SQL-migreringar: **494**.
 
 ## Kända versionskollisioner som måste reconcileras framåtriktat
 
@@ -517,3 +517,4 @@ Verktyget jämför både `supabase_migrations.schema_migrations` och Nordklarts 
 | 491 | 20261001100000 | `20261001100000_legal_reacceptance_trafexa.sql` | `bce91188f1e6863a8a4df760b57281c5e20735bf0e75d694e54d0aefd29943e5` |
 | 492 | 20261001120000 | `20261001120000_agent_response_cache.sql` | `425fa11d3c06a79c457c090078e172e68bf8e09696039a4548be4ccfad50cf57` |
 | 493 | 20261001130000 | `20261001130000_recurring_invoices_v2.sql` | `f925f8a39f26e4d565e8e97e373b8d8c1c448b7f3bfba7bff6beffa262ca1722` |
+| 494 | 20261001140000 | `20261001140000_prior_period_correction_source.sql` | `e2641c0f365386785e4e32ce114dd5c4297dcb8975ecc1bcf2bbe37c71b2eabb` |

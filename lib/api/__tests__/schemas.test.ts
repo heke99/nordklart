@@ -799,6 +799,12 @@ describe('MarkSupplierInvoicePaidSchema', () => {
 // ============================================================
 
 describe('CreateJournalEntrySchema', () => {
+  it('refuses prior-period corrections, which have their own route', () => {
+    const result = CreateJournalEntrySchema.safeParse(validJournalEntry({ source_type: 'prior_period_correction' }))
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0].path).toEqual(['source_type'])
+  })
+
   it('accepts valid balanced entry', () => {
     const result = CreateJournalEntrySchema.safeParse(validJournalEntry())
     expect(result.success).toBe(true)

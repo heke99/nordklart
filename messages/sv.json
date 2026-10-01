@@ -3191,7 +3191,8 @@
     "source_label_result_appropriation": "Omföring av föregående års resultat",
     "source_label_dividend_decision": "Utdelningsbeslut",
     "source_label_dividend_payment": "Utbetald utdelning",
-    "source_label_year_end_inventory": "Lagerförändring"
+    "source_label_year_end_inventory": "Lagerförändring",
+    "source_label_prior_period_correction": "Rättelse av fel från tidigare år"
   },
   "journal_correction": {
     "title": "Ändringskedja",

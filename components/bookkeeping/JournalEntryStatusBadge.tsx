@@ -48,6 +48,7 @@ const SOURCE_TYPES = [
   'dividend_decision',
   'dividend_payment',
   'year_end_inventory',
+  'prior_period_correction',
 ] as const
 
 /**

@@ -208,6 +208,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'dividend_decision',
   'dividend_payment',
   'year_end_inventory',
+  'prior_period_correction',
 ])
 
 export const AccountTypeSchema = z.enum([
@@ -758,6 +759,11 @@ export const CreateJournalEntrySchema = z.object({
   voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
   notes: z.string().max(2000).optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
+}).refine((body) => body.source_type !== 'prior_period_correction', {
+  // Prior-year corrections carry rules (closed source year, later open
+  // target year, K2/K3 account limits) that only their own route enforces.
+  path: ['source_type'],
+  message: 'Rättelse av fel från tidigare år görs via bokslutsflödet.',
 })
 
 export const CorrectJournalEntrySchema = z.object({

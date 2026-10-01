@@ -3191,7 +3191,8 @@
     "source_label_result_appropriation": "Prior-year result transfer",
     "source_label_dividend_decision": "Dividend decision",
     "source_label_dividend_payment": "Dividend payment",
-    "source_label_year_end_inventory": "Inventory change"
+    "source_label_year_end_inventory": "Inventory change",
+    "source_label_prior_period_correction": "Correction of a prior-year error"
   },
   "journal_correction": {
     "title": "Correction chain",
