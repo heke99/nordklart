@@ -73,7 +73,10 @@ describe('/api/invoices/recurring/[id]', () => {
     expect(mockSupabase.rpc).toHaveBeenCalledWith('replace_recurring_schedule_items', {
       p_schedule_id: 'sched-1',
       p_company_id: 'company-1',
-      p_items: [{ description: 'Rad', quantity: 2, unit: 'st', unit_price: 100, vat_rate: 25 }],
+      p_items: [{
+        description: 'Rad', quantity: 2, unit: 'st', unit_price: 100, vat_rate: 25,
+        article_id: null, revenue_account: null, valid_from: null, valid_until: null, remaining_occurrences: null,
+      }],
     })
   })
 

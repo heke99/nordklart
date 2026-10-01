@@ -5,8 +5,9 @@ import { withCronContext, type CronItemContext } from '@/lib/api/with-cron-conte
 import { createServiceClient } from '@/lib/supabase/server'
 import {
   executeRecurringSchedule,
-  computeNextRunDate,
+  RecurringRunSkipped,
 } from '@/lib/invoices/recurring-schedule-service'
+import { nextRunDate as advanceRunDate, scheduleEndsAfterRun } from '@/lib/invoices/recurring-period'
 import type {
   RecurringInvoiceSchedule,
   RecurringInvoiceScheduleItem,
@@ -142,6 +143,18 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     // next_run_date failed to advance.
     const runDate = schedule.next_run_date <= todayIso ? schedule.next_run_date : todayIso
 
+    // An end date moved before the next run (or a schedule created with an
+    // end date in the past) ends the schedule without invoicing.
+    if (schedule.end_date && runDate > schedule.end_date) {
+      await supabase
+        .from('recurring_invoice_schedules')
+        .update({ status: 'ended', ended_at: new Date().toISOString() })
+        .eq('id', schedule.id)
+        .eq('company_id', schedule.company_id)
+      skipped += 1
+      return
+    }
+
     const claim = await claimRun(supabase, schedule, runDate, itemCtx.requestId)
 
     if (!claim.claimed) {
@@ -149,7 +162,7 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
         // Self-heal: the invoice for this run date exists but the schedule
         // pointer was never advanced (finalize failure on a previous run).
         // Advance next_run_date so the schedule resumes its normal cadence.
-        const nextRunDate = computeNextRunDate(today, schedule.day_of_month)
+        const nextRunDate = advanceRunDate(runDate, schedule.day_of_month, schedule.interval_months ?? 1)
         await supabase
           .from('recurring_invoice_schedules')
           .update({ next_run_date: nextRunDate })
@@ -167,10 +180,37 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       return
     }
 
+    // The run date is the scheduled one even when catching up; the next
+    // run is one interval after it, so a missed period is invoiced on the
+    // following days instead of being skipped.
+    const nextRunDate = advanceRunDate(runDate, schedule.day_of_month, schedule.interval_months ?? 1)
+
     let result: Awaited<ReturnType<typeof executeRecurringSchedule>>
     try {
-      result = await executeRecurringSchedule(supabase, schedule, today)
+      result = await executeRecurringSchedule(supabase, schedule, today, runDate)
     } catch (err) {
+      if (err instanceof RecurringRunSkipped) {
+        // Nothing to invoice for this period (every line is limited to other
+        // periods). Record it, move on to the next period.
+        await finalizeRun(supabase, claim.runId, { status: 'skipped', warning: err.message }, itemCtx.log)
+        const ends = scheduleEndsAfterRun({
+          generatedAfterRun: schedule.generated_count,
+          maxOccurrences: schedule.max_occurrences ?? null,
+          endDate: schedule.end_date ?? null,
+          nextRunDate,
+        })
+        await supabase
+          .from('recurring_invoice_schedules')
+          .update({
+            next_run_date: nextRunDate,
+            last_run_warning: err.message,
+            ...(ends ? { status: 'ended', ended_at: new Date().toISOString() } : {}),
+          })
+          .eq('id', schedule.id)
+          .eq('company_id', schedule.company_id)
+        skipped += 1
+        return
+      }
       await finalizeRun(supabase, claim.runId, {
         status: 'failed',
         error: err instanceof Error ? err.message : String(err),
@@ -185,7 +225,17 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       warning: result.warning,
     }, itemCtx.log)
 
-    const nextRunDate = computeNextRunDate(today, schedule.day_of_month)
+    // Lines limited to the next N invoices count down; a line that has been
+    // used up is removed from the template.
+    await consumeLimitedLines(supabase, schedule, result.usedItemIds, itemCtx.log)
+
+    const generatedAfterRun = schedule.generated_count + 1
+    const ends = scheduleEndsAfterRun({
+      generatedAfterRun,
+      maxOccurrences: schedule.max_occurrences ?? null,
+      endDate: schedule.end_date ?? null,
+      nextRunDate,
+    })
     const { error: updateError } = await supabase
       .from('recurring_invoice_schedules')
       .update({
@@ -193,7 +243,8 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
         last_run_at: new Date().toISOString(),
         last_invoice_id: result.invoiceId,
         last_run_warning: result.warning,
-        generated_count: schedule.generated_count + 1,
+        generated_count: generatedAfterRun,
+        ...(ends ? { status: 'ended', ended_at: new Date().toISOString() } : {}),
       })
       .eq('id', schedule.id)
       .eq('company_id', schedule.company_id)
@@ -236,5 +287,25 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     failureCount: summary.failures.length,
   })
 })
+
+async function consumeLimitedLines(
+  supabase: SupabaseClient,
+  schedule: DueSchedule,
+  usedItemIds: string[],
+  itemLog: CronItemContext['log'],
+): Promise<void> {
+  const used = new Set(usedItemIds)
+  for (const item of schedule.items ?? []) {
+    if (!used.has(item.id) || item.remaining_occurrences == null) continue
+    const { error } = item.remaining_occurrences <= 1
+      ? await supabase.from('recurring_invoice_schedule_items').delete().eq('id', item.id).eq('schedule_id', schedule.id)
+      : await supabase
+          .from('recurring_invoice_schedule_items')
+          .update({ remaining_occurrences: item.remaining_occurrences - 1 })
+          .eq('id', item.id)
+          .eq('schedule_id', schedule.id)
+    if (error) itemLog.error('failed to count down a limited recurring line', error, { itemId: item.id })
+  }
+}
 
 export const POST = GET

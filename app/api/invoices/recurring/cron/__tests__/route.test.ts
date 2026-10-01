@@ -221,3 +221,93 @@ describe('GET /api/invoices/recurring/cron', () => {
     expect(text).not.toContain('inv-1')
   })
 })
+
+describe('GET /api/invoices/recurring/cron — cadence and end conditions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    queue = []
+    calls.length = 0
+  })
+
+  const scheduleUpdate = () =>
+    calls.filter((c) => c.table === 'recurring_invoice_schedules' && c.method === 'update').at(-1)?.payload as Record<string, unknown>
+
+  it('advances from the scheduled run date, so an overdue schedule catches up period by period', async () => {
+    executeMock.mockResolvedValue({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: false, warning: null, usedItemIds: ['item-1'], period: { start: '2026-01-01', end: '2026-01-31' } })
+    queue = [
+      { data: [makeSchedule({ next_run_date: '2026-01-15', interval_months: 1 })], error: null },
+      { data: { id: 'run-1' }, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+    ]
+    await GET(cronRequest('test-cron-secret'))
+    expect(executeMock.mock.calls[0][3]).toBe('2026-01-15')
+    expect(scheduleUpdate()).toMatchObject({ next_run_date: '2026-02-15', generated_count: 1 })
+  })
+
+  it('moves a quarterly schedule three months ahead', async () => {
+    executeMock.mockResolvedValue({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: false, warning: null, usedItemIds: [], period: { start: '2026-01-01', end: '2026-03-31' } })
+    queue = [
+      { data: [makeSchedule({ next_run_date: '2026-01-15', interval_months: 3 })], error: null },
+      { data: { id: 'run-1' }, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+    ]
+    await GET(cronRequest('test-cron-secret'))
+    expect(scheduleUpdate()).toMatchObject({ next_run_date: '2026-04-15' })
+  })
+
+  it('ends the schedule after its last allowed invoice', async () => {
+    executeMock.mockResolvedValue({ invoiceId: 'inv-12', invoiceNumber: 'F-12', autoSent: false, warning: null, usedItemIds: [], period: { start: '2026-01-01', end: '2026-01-31' } })
+    queue = [
+      { data: [makeSchedule({ next_run_date: '2026-01-15', generated_count: 11, max_occurrences: 12 })], error: null },
+      { data: { id: 'run-1' }, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+    ]
+    await GET(cronRequest('test-cron-secret'))
+    expect(scheduleUpdate()).toMatchObject({ status: 'ended', generated_count: 12 })
+  })
+
+  it('counts down a line limited to the next invoices', async () => {
+    executeMock.mockResolvedValue({ invoiceId: 'inv-1', invoiceNumber: 'F-1', autoSent: false, warning: null, usedItemIds: ['item-1'], period: { start: '2026-01-01', end: '2026-01-31' } })
+    const items = [{ id: 'item-1', schedule_id: 'sched-1', sort_order: 0, description: 'X', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25, remaining_occurrences: 3 }]
+    queue = [
+      { data: [makeSchedule({ next_run_date: '2026-01-15', items })], error: null },
+      { data: { id: 'run-1' }, error: null },
+      { data: null, error: null }, // finalize run
+      { data: null, error: null }, // item countdown
+      { data: null, error: null }, // schedule update
+    ]
+    await GET(cronRequest('test-cron-secret'))
+    const countdown = calls.find((c) => c.table === 'recurring_invoice_schedule_items' && c.method === 'update')
+    expect(countdown?.payload).toEqual({ remaining_occurrences: 2 })
+  })
+
+  it('records a period with no applicable lines as skipped and moves on', async () => {
+    const { RecurringRunSkipped } = await import('@/lib/invoices/recurring-schedule-service')
+    executeMock.mockRejectedValue(new RecurringRunSkipped('Inga fakturarader gäller för perioden.'))
+    queue = [
+      { data: [makeSchedule({ next_run_date: '2026-01-15' })], error: null },
+      { data: { id: 'run-1' }, error: null },
+      { data: null, error: null }, // finalize run (skipped)
+      { data: null, error: null }, // schedule update
+    ]
+    const response = await GET(cronRequest('test-cron-secret'))
+    const { body } = await parseJsonResponse<{ skipped: number; failed: number }>(response)
+    expect(body).toMatchObject({ skipped: 1, failed: 0 })
+    const run = calls.find((c) => c.table === 'recurring_invoice_runs' && c.method === 'update')
+    expect(run?.payload).toMatchObject({ status: 'skipped' })
+    expect(scheduleUpdate()).toMatchObject({ next_run_date: '2026-02-15' })
+  })
+
+  it('ends a schedule whose end date has passed without invoicing', async () => {
+    queue = [
+      { data: [makeSchedule({ next_run_date: '2026-01-15', end_date: '2025-12-31' })], error: null },
+      { data: null, error: null },
+    ]
+    await GET(cronRequest('test-cron-secret'))
+    expect(executeMock).not.toHaveBeenCalled()
+    expect(scheduleUpdate()).toMatchObject({ status: 'ended' })
+  })
+})

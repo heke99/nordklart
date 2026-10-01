@@ -13,8 +13,14 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
-import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import {
+  applyPeriodPlaceholders,
+  billingPeriod,
+  formatPeriodSv,
+  lineAppliesToPeriod,
+  type BillingPeriod,
+} from '@/lib/invoices/recurring-period'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { renderToBuffer } from '@react-pdf/renderer'
@@ -42,6 +48,22 @@ export interface ExecuteResult {
   invoiceNumber: string | null
   autoSent: boolean
   warning: string | null
+  /** Schedule lines that went onto this invoice (for remaining_occurrences). */
+  usedItemIds: string[]
+  /** Calendar period the invoice covers. */
+  period: BillingPeriod
+}
+
+/** A run that had nothing to invoice (no line applies to its period). Not a failure. */
+export class RecurringRunSkipped extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RecurringRunSkipped'
+  }
+}
+
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10)
 }
 
 /**
@@ -122,6 +144,7 @@ export async function executeRecurringSchedule(
   supabase: SupabaseClient,
   schedule: RecurringInvoiceSchedule & { items: RecurringInvoiceScheduleItem[] },
   today: Date = new Date(),
+  runDate?: string,
 ): Promise<ExecuteResult> {
   const opLog = log.child({ scheduleId: schedule.id, companyId: schedule.company_id })
 
@@ -137,89 +160,78 @@ export async function executeRecurringSchedule(
     throw new Error(`customer not found for schedule ${schedule.id}`)
   }
 
-  const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
-  const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
-  const allowedRates = new Set(availableRates.map((r) => r.rate))
-
-  // 2. Compute amounts (mirrors POST /api/invoices).
-  const items = (schedule.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
+  // 2. The period this run covers, and the lines that apply to it.
+  const invoiceDate = isoDay(today)
+  const period = billingPeriod(
+    runDate ?? invoiceDate,
+    schedule.interval_months ?? 1,
+    schedule.billing_timing ?? 'current_period',
+  )
+  const items = (schedule.items || [])
+    .slice()
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .filter((item) => lineAppliesToPeriod(item, period))
   if (items.length === 0) {
-    throw new Error(`schedule ${schedule.id} has no items`)
+    throw new RecurringRunSkipped(
+      `Inga fakturarader gäller för perioden ${formatPeriodSv(period)} — ingen faktura skapades.`,
+    )
   }
 
-  const subtotal = items.reduce((sum, it) => sum + it.quantity * it.unit_price, 0)
-  let vatAmount = 0
-  for (const item of items) {
-    const itemRate = item.vat_rate != null ? item.vat_rate : vatRules.rate
-    if (!allowedRates.has(itemRate)) {
-      throw new Error(
-        `VAT rate ${itemRate}% not allowed for customer type ${customer.customer_type}`,
-      )
-    }
-    const lineTotal = item.quantity * item.unit_price
-    vatAmount += Math.round((lineTotal * itemRate) / 100 * 100) / 100
-  }
-  const total = subtotal + vatAmount
-
-  const uniqueRates = new Set(items.map((it) => (it.vat_rate != null ? it.vat_rate : vatRules.rate)))
-  const isMixedRate = uniqueRates.size > 1
-
-  // 3. Dates: invoice_date = today (UTC), due_date = +payment_terms_days.
-  const yyyy = today.getUTCFullYear().toString().padStart(4, '0')
-  const mm = (today.getUTCMonth() + 1).toString().padStart(2, '0')
-  const dd = today.getUTCDate().toString().padStart(2, '0')
-  const invoiceDate = `${yyyy}-${mm}-${dd}`
+  // 3. Dates: invoice_date = the run day, due_date = +payment_terms_days.
   const due = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()))
   due.setUTCDate(due.getUTCDate() + schedule.payment_terms_days)
   const dueDate = due.toISOString().slice(0, 10)
 
-  // 4. Foreign currency: fetch exchange rate.
-  let exchangeRate: number | null = null
-  let exchangeRateDate: string | null = null
-  let subtotalSek: number | null = null
-  let vatAmountSek: number | null = null
-  let totalSek: number | null = null
-  if (schedule.currency !== 'SEK') {
-    // ML 8 kap 21–23 §§: rate valid on the invoice date (= the spawn day).
-    const rateData = await fetchExchangeRate(schedule.currency, new Date(invoiceDate))
-    if (rateData) {
-      exchangeRate = rateData.rate
-      exchangeRateDate = rateData.date
-      subtotalSek = convertToSEK(subtotal, exchangeRate)
-      vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-      totalSek = convertToSEK(total, exchangeRate)
+  // 4. Amounts, VAT treatment and line rows through the same builder as a
+  //    manual invoice: customer VAT rules, a company that is not VAT
+  //    registered (no output VAT), reverse charge requiring the buyer's VAT
+  //    number, revenue-account overrides and currency conversion all behave
+  //    exactly as when the user creates the invoice by hand.
+  const built = await buildInvoiceWriteData({
+    supabase,
+    companyId: schedule.company_id,
+    customer,
+    documentType: 'invoice',
+    input: {
+      customer_id: schedule.customer_id,
+      invoice_date: invoiceDate,
+      due_date: dueDate,
+      delivery_date: null,
+      currency: schedule.currency,
+      sale_type: schedule.sale_type ?? 'services',
+      your_reference: schedule.your_reference ?? undefined,
+      our_reference: schedule.our_reference ?? undefined,
+      notes: schedule.notes ?? undefined,
+      items: items.map((item) => ({
+        line_type: 'product' as const,
+        description: applyPeriodPlaceholders(item.description, period),
+        quantity: Number(item.quantity),
+        unit: item.unit,
+        unit_price: Number(item.unit_price),
+        // undefined = the customer's default rate (resolved by the builder).
+        vat_rate: item.vat_rate != null ? Number(item.vat_rate) : undefined,
+        article_id: item.article_id ?? null,
+        revenue_account: item.revenue_account ?? null,
+      })),
+    },
+  })
+  if (!built.ok) {
+    if ('code' in built) {
+      throw new Error(`invoice validation failed (${built.code}): ${JSON.stringify(built.details ?? {})}`)
     }
+    throw new Error(`invoice validation failed: ${String((built.dbError as { message?: string })?.message ?? built.dbError)}`)
   }
 
   // 5. Insert invoice header.
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
+      ...built.invoiceFields,
       user_id: schedule.user_id,
       company_id: schedule.company_id,
-      customer_id: schedule.customer_id,
       invoice_number: null,
-      invoice_date: invoiceDate,
-      due_date: dueDate,
-      delivery_date: null,
-      currency: schedule.currency,
-      exchange_rate: exchangeRate,
-      exchange_rate_date: exchangeRateDate,
-      subtotal,
-      subtotal_sek: subtotalSek,
-      vat_amount: vatAmount,
-      vat_amount_sek: vatAmountSek,
-      total,
-      total_sek: totalSek,
-      remaining_amount: total,
-      vat_treatment: vatRules.treatment,
-      vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
-      moms_ruta: vatRules.momsRuta,
-      reverse_charge_text: vatRules.reverseChargeText || null,
-      your_reference: schedule.your_reference,
-      our_reference: schedule.our_reference,
-      notes: schedule.notes,
-      document_type: 'invoice',
+      period_start: period.start,
+      period_end: period.end,
     })
     .select()
     .single()
@@ -229,22 +241,7 @@ export async function executeRecurringSchedule(
   }
 
   // 6. Insert items.
-  const itemRows = items.map((item, index) => {
-    const itemRate = item.vat_rate != null ? item.vat_rate : vatRules.rate
-    const lineTotal = item.quantity * item.unit_price
-    const itemVat = Math.round((lineTotal * itemRate) / 100 * 100) / 100
-    return {
-      invoice_id: invoice.id,
-      sort_order: index,
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      line_total: lineTotal,
-      vat_rate: itemRate,
-      vat_amount: itemVat,
-    }
-  })
+  const itemRows = built.items.map((row) => ({ ...row, invoice_id: invoice.id }))
   const { error: itemsError } = await supabase.from('invoice_items').insert(itemRows)
   if (itemsError) {
     // Hard-delete is safe here only because step 5 inserted invoice_number: null
@@ -254,6 +251,7 @@ export async function executeRecurringSchedule(
     await supabase.from('invoices').delete().eq('id', invoice.id)
     throw new Error(`failed to insert invoice items: ${itemsError.message}`)
   }
+  const usedItemIds = items.map((item) => item.id)
 
   // 7a. Preflight PDF for auto-send BEFORE consuming an F-series number —
   //     mirrors the manual send route. If the PDF pipeline is broken the
@@ -295,6 +293,8 @@ export async function executeRecurringSchedule(
           invoiceId: invoice.id,
           invoiceNumber: null,
           autoSent: false,
+          usedItemIds,
+          period,
           warning: 'PDF-genereringen misslyckades — inget e-postmeddelande skickades. Fakturan finns som utkast utan fakturanummer och kan skickas manuellt.',
         }
       }
@@ -388,6 +388,8 @@ export async function executeRecurringSchedule(
     invoiceId: invoice.id,
     invoiceNumber: (completeInvoice as Invoice).invoice_number,
     autoSent,
+    usedItemIds,
+    period,
     warning,
   }
 }

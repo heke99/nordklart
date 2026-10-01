@@ -466,7 +466,7 @@ export const CreateSelfBillingInvoiceSchema = z.object({
 // invoice (buyer cannot deduct ingående moms). Cron-time validation against
 // the customer's allowed set still runs in executeRecurringSchedule.
 export const RecurringScheduleItemSchema = z.object({
-  description: z.string().min(1, 'Item description is required'),
+  description: z.string().min(1, 'Item description is required').max(500),
   quantity: z.number().positive('Quantity must be positive'),
   unit: z.string().min(1, 'Unit is required').default('st'),
   unit_price: z.number(),
@@ -474,12 +474,30 @@ export const RecurringScheduleItemSchema = z.object({
     .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
     .nullable()
     .optional(),
-})
+  article_id: uuid.nullable().optional(),
+  revenue_account: z.string().regex(/^3\d{3}$/, 'Revenue account must be a 3xxx account').nullable().optional(),
+  // Limit the line to invoices whose period overlaps this range (e.g. one month).
+  valid_from: isoDate.nullable().optional(),
+  valid_until: isoDate.nullable().optional(),
+  // Limit the line to the next N invoices; null/omitted = every invoice.
+  remaining_occurrences: z.number().int().min(1).max(1200).nullable().optional(),
+}).refine(
+  (item) => !item.valid_from || !item.valid_until || item.valid_from <= item.valid_until,
+  { message: 'valid_from must be on or before valid_until', path: ['valid_until'] },
+)
+
+const RecurringIntervalSchema = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(6), z.literal(12)])
+const RecurringBillingTimingSchema = z.enum(['current_period', 'next_period', 'previous_period'])
 
 export const CreateRecurringScheduleSchema = z.object({
   customer_id: uuid,
   name: z.string().min(1, 'Schedule name is required').max(200),
   day_of_month: z.number().int().min(1).max(31),
+  interval_months: RecurringIntervalSchema.default(1),
+  billing_timing: RecurringBillingTimingSchema.default('current_period'),
+  sale_type: z.enum(['goods', 'services']).default('services'),
+  end_date: isoDate.nullable().optional(),
+  max_occurrences: z.number().int().min(1).max(1200).nullable().optional(),
   payment_terms_days: z.number().int().min(0).max(90).default(30),
   currency: CurrencySchema.default('SEK'),
   your_reference: z.string().optional(),
@@ -496,6 +514,13 @@ export const UpdateRecurringScheduleSchema = z.object({
   customer_id: uuid.optional(),
   name: z.string().min(1).max(200).optional(),
   day_of_month: z.number().int().min(1).max(31).optional(),
+  interval_months: RecurringIntervalSchema.optional(),
+  billing_timing: RecurringBillingTimingSchema.optional(),
+  sale_type: z.enum(['goods', 'services']).optional(),
+  end_date: isoDate.nullable().optional(),
+  max_occurrences: z.number().int().min(1).max(1200).nullable().optional(),
+  // Move the next invoice to a specific day (e.g. send the first one later).
+  next_run_date: isoDate.optional(),
   payment_terms_days: z.number().int().min(0).max(90).optional(),
   currency: CurrencySchema.optional(),
   your_reference: z.string().nullable().optional(),
