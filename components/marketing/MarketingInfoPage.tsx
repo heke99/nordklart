@@ -25,6 +25,8 @@ type InfoPageProps = {
    * not a formal identification.
    */
   showLegalEntity?: boolean
+  /** Date (yyyy-MM-dd) the current version of a legal text applies from. */
+  effectiveFrom?: string
   children?: ReactNode
 }
 
@@ -37,6 +39,7 @@ export function MarketingInfoPage({
   highlights = [],
   sections = [],
   showLegalEntity = false,
+  effectiveFrom,
   children,
 }: InfoPageProps) {
   return (
@@ -48,6 +51,9 @@ export function MarketingInfoPage({
             <p className={marketingSectionLabel}>{eyebrow}</p>
             <h1 className="text-balance font-display text-5xl font-semibold leading-[0.98] tracking-tight md:text-7xl">{title}</h1>
             <p className="max-w-3xl text-lg leading-8 text-muted-foreground md:text-xl">{description}</p>
+            {effectiveFrom ? (
+              <p className="text-sm text-muted-foreground tabular-nums">Gäller från {effectiveFrom}</p>
+            ) : null}
             {(primaryCta || secondaryCta) ? (
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 {primaryCta ? (

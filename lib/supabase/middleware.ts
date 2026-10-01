@@ -13,6 +13,14 @@ import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { isPublicAuthPath, isPublicMarketingPath } from '@/lib/auth/route-access'
+import {
+  LEGAL_ACCEPT_PATH,
+  LEGAL_ACK_COOKIE,
+  LEGAL_ACK_MAX_AGE_SECONDS,
+  isLegalGateExempt,
+  signLegalAck,
+  verifyLegalAck,
+} from '@/lib/legal/acceptance-gate'
 
 export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname
@@ -229,6 +237,41 @@ export async function updateSession(request: NextRequest) {
         return NextResponse.redirect(new URL('/mfa/enroll', request.url))
       }
     }
+  }
+
+  // Terms re-acceptance: a new version of the terms or privacy policy must be
+  // accepted before anything else. Runs before company resolution so a user
+  // without a company can still reach the acceptance page.
+  if (!(await verifyLegalAck(request.cookies.get(LEGAL_ACK_COOKIE)?.value, user.id))) {
+    const { data: pending, error: pendingError } = await supabase.rpc('pending_legal_documents')
+    if (pendingError) {
+      // Do not lock everyone out on a transient error; no cookie is set, so
+      // the next request asks again.
+    } else if ((pending?.length ?? 0) > 0) {
+      if (!isLegalGateExempt(pathname)) {
+        const url = request.nextUrl.clone()
+        url.pathname = LEGAL_ACCEPT_PATH
+        url.search = ''
+        url.searchParams.set('next', `${request.nextUrl.pathname}${request.nextUrl.search}`)
+        const redirect = NextResponse.redirect(url)
+        supabaseResponse.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie))
+        return redirect
+      }
+    } else {
+      const ack = await signLegalAck(user.id)
+      if (ack) {
+        supabaseResponse.cookies.set(LEGAL_ACK_COOKIE, ack, {
+          path: '/',
+          httpOnly: true,
+          secure: serverCookiesSecure(),
+          sameSite: 'lax',
+          maxAge: LEGAL_ACK_MAX_AGE_SECONDS,
+        })
+      }
+    }
+  }
+  if (pathname.startsWith(LEGAL_ACCEPT_PATH)) {
+    return supabaseResponse
   }
 
   // Forward the pathname so server layouts can branch on it (e.g. render a

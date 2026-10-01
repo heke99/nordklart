@@ -4217,5 +4217,19 @@
     "link_failed": "BankID-identifieringen misslyckades. Försök igen.",
     "already_linked": "Detta BankID är redan kopplat till ett annat konto.",
     "manual_review_note": "Om du inte står som behörig i Bolagsverkets register skapas företaget med läsbehörighet tills vi har granskat din behörighet."
+  },
+  "legal_gate": {
+    "title": "Nya villkor från 1 oktober 2026",
+    "intro": "Nordklart tillhandahålls nu av {entity} (org.nr {orgNumber}). Därför har vi uppdaterat våra allmänna villkor och vår integritetspolicy. Läs igenom dem och godkänn för att fortsätta använda tjänsten.",
+    "documents": "Dokument att godkänna",
+    "version": "Version {version}",
+    "open": "Läs",
+    "checkbox": "Jag har läst och godkänner de allmänna villkoren och har tagit del av integritetspolicyn.",
+    "accept": "Godkänn och fortsätt",
+    "saving": "Sparar…",
+    "decline": "Om du inte godkänner villkoren kan du logga ut eller avsluta ditt konto under kontoinställningar. Din bokföring finns kvar och kan exporteras.",
+    "logout": "Logga ut",
+    "account": "Kontoinställningar",
+    "error": "Kunde inte spara ditt godkännande. Försök igen."
   }
 }

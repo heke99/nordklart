@@ -4217,5 +4217,19 @@
     "link_failed": "BankID identification failed. Please try again.",
     "already_linked": "This BankID is already linked to another account.",
     "manual_review_note": "If you are not listed as authorised in the register, the company is created with read-only access until we have reviewed your authority."
+  },
+  "legal_gate": {
+    "title": "New terms from 1 October 2026",
+    "intro": "Nordklart is now provided by {entity} (org. no. {orgNumber}). We have therefore updated our terms of service and privacy policy. Please read them and accept to keep using the service.",
+    "documents": "Documents to accept",
+    "version": "Version {version}",
+    "open": "Read",
+    "checkbox": "I have read and accept the terms of service and have read the privacy policy.",
+    "accept": "Accept and continue",
+    "saving": "Saving…",
+    "decline": "If you do not accept the terms you can sign out or close your account under account settings. Your bookkeeping is kept and can be exported.",
+    "logout": "Sign out",
+    "account": "Account settings",
+    "error": "Could not save your acceptance. Please try again."
   }
 }

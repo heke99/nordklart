@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { MarketingInfoPage } from '@/components/marketing/MarketingInfoPage'
 import { NORDKLART_LEGAL_NAME } from '@/lib/branding/legal-identity'
+import { CURRENT_LEGAL_VERSION } from '@/lib/legal/acceptance-gate'
 
 export const metadata: Metadata = {
   title: 'Integritetspolicy – Nordklart',
@@ -11,6 +12,7 @@ export default function IntegritetspolicyPage() {
   return (
     <MarketingInfoPage
       showLegalEntity
+      effectiveFrom={CURRENT_LEGAL_VERSION}
       eyebrow="Integritet"
       title="Integritetspolicy"
       description={`${NORDKLART_LEGAL_NAME} tillhandahåller Nordklart och behandlar person- och bolagsuppgifter för att tillhandahålla bokföring, bokslut, Bankgiroflöden, support och säker drift.`}

@@ -2451,6 +2451,11 @@
       "file": "20260927120000_api_keys_lifecycle.sql",
       "version": "20260927120000",
       "sha256": "9a6ac4857f06f1bbd135216a2c90311534b408bca2696a97807570ab197de77a"
+    },
+    {
+      "file": "20261001100000_legal_reacceptance_trafexa.sql",
+      "version": "20261001100000",
+      "sha256": "bce91188f1e6863a8a4df760b57281c5e20735bf0e75d694e54d0aefd29943e5"
     }
   ]
 }
