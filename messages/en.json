@@ -2871,7 +2871,11 @@
     "account_2647": "Calculated input VAT, domestic reverse charge",
     "account_2614": "Output VAT, reverse charge 25%",
     "account_2624": "Output VAT, reverse charge 12%",
-    "account_2634": "Output VAT, reverse charge 6%"
+    "account_2634": "Output VAT, reverse charge 6%",
+    "accounts_proposed_history": "Accounts proposed from how this supplier was booked before. Change anything that is not right.",
+    "accounts_proposed_default": "Account proposed from the supplier's default account. Change it if it is not right.",
+    "account_missing_title": "Account missing",
+    "account_missing_description": "Choose an account for every line before registering the invoice."
   },
   "supplier_invoice_detail": {
     "back": "Back",

@@ -31,6 +31,7 @@ import { createClient } from '@/lib/supabase/client'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InvoiceExtractionResult } from '@/types'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
+import BookingProposalCard from '@/components/extensions/general/BookingProposalCard'
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 
@@ -1667,6 +1668,16 @@ function FieldsRail({
                 which works without a bank transaction and lets the user attach
                 one if they want. Per BFL 5 kap 6-7 § the underlag must be
                 bookable as a verifikat, not forced into a supplier invoice. */}
+            {/* Known supplier: offer the booking learned from earlier
+                invoices — approve as is, or edit it in the full form. */}
+            {item.matched_supplier_id && data && (
+              <BookingProposalCard
+                itemId={item.id}
+                supplierId={item.matched_supplier_id}
+                data={data}
+                onRegistered={() => void onRetryRequested()}
+              />
+            )}
             <Button
               variant="default"
               size="sm"
