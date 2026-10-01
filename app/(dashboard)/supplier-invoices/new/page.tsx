@@ -298,6 +298,8 @@ export default function NewSupplierInvoicePage() {
     existing: ExistingSupplierInvoice | null
   } | null>(null)
   const [isResolvingConflict, setIsResolvingConflict] = useState(false)
+  // Set when expense accounts were proposed from the supplier's history or default account.
+  const [accountsProposedFrom, setAccountsProposedFrom] = useState<'history' | 'default' | null>(null)
   const invoiceNumberInputRef = useRef<HTMLInputElement | null>(null)
 
   const { register, control, handleSubmit, watch, setValue, getValues, reset, formState: { isDirty } } = useForm<FormData>({
@@ -313,7 +315,7 @@ export default function NewSupplierInvoicePage() {
       payment_reference: '',
       notes: '',
       paid_with_private_funds: false,
-      items: [{ description: '', amount: 0, account_number: '5010', vat_rate: 0.25, reverse_charge_rate: 0.25 }],
+      items: [{ description: '', amount: 0, account_number: '', vat_rate: 0.25, reverse_charge_rate: 0.25 }],
     },
   })
 
@@ -439,7 +441,9 @@ export default function NewSupplierInvoicePage() {
             extracted.lineItems.map((li) => ({
               description: li.description || '',
               amount: typeof li.lineTotal === 'number' ? li.lineTotal : 0,
-              account_number: '5010',
+              // Filled from the supplier's booking history once the supplier
+              // is known (see the booking-proposal effect below).
+              account_number: '',
               vat_rate: vatRateFromAi(li.vatRate),
             })),
           )
@@ -482,13 +486,30 @@ export default function NewSupplierInvoicePage() {
       due.setDate(due.getDate() + supplier.default_payment_terms)
       setValue('due_date', due.toISOString().split('T')[0])
     }
-    if (supplier.default_expense_account && fields.length > 0) {
-      // Only override the first row if it's still the seeded default (5010 with empty desc)
-      const firstRow = watch('items.0')
-      if (firstRow && (firstRow.account_number === '5010' || !firstRow.account_number) && !firstRow.description) {
-        setValue('items.0.account_number', supplier.default_expense_account)
+    // Propose expense accounts from how this supplier was booked before
+    // (falling back to its default account). Only rows without an account
+    // are filled, so nothing the user chose is overwritten.
+    void (async () => {
+      try {
+        const res = await fetch(`/api/supplier-invoices/booking-proposal?supplier_id=${watchedSupplierId}`)
+        if (!res.ok) return
+        const { data: suggestion } = (await res.json()) as {
+          data: { byVatRate: Record<string, string>; primary: string | null; historyLines: number }
+        }
+        let filled = 0
+        getValues('items').forEach((row, index) => {
+          if (row.account_number) return
+          const account = suggestion.byVatRate[Number(row.vat_rate ?? 0).toFixed(2)] ?? suggestion.primary
+          if (account) {
+            setValue(`items.${index}.account_number`, account, { shouldDirty: false })
+            filled += 1
+          }
+        })
+        if (filled > 0) setAccountsProposedFrom(suggestion.historyLines > 0 ? 'history' : 'default')
+      } catch {
+        // No proposal: the user picks the accounts.
       }
-    }
+    })()
     if (supplier.default_currency && watch('currency') === 'SEK') {
       setValue('currency', supplier.default_currency)
     }
@@ -799,6 +820,10 @@ export default function NewSupplierInvoicePage() {
     }
     if (!data.supplier_invoice_number) {
       toast({ title: t('invoice_number_missing_title'), description: t('invoice_number_missing_description'), variant: 'destructive' })
+      return
+    }
+    if (data.items.some((item) => !item.account_number)) {
+      toast({ title: t('account_missing_title'), description: t('account_missing_description'), variant: 'destructive' })
       return
     }
 
@@ -1275,6 +1300,11 @@ export default function NewSupplierInvoicePage() {
             </Button>
           </CardHeader>
           <CardContent>
+            {accountsProposedFrom ? (
+              <p className="mb-4 text-sm text-muted-foreground">
+                {accountsProposedFrom === 'history' ? t('accounts_proposed_history') : t('accounts_proposed_default')}
+              </p>
+            ) : null}
             {/* Valuta & moms — kept inline with the line items because they
                 drive how each row is interpreted. Hidden defaults (SEK +
                 normal moms) collapse to nothing so most users don't see this. */}

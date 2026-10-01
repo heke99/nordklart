@@ -2871,7 +2871,11 @@
     "account_2647": "Beräknad ing. moms omvänd i Sverige",
     "account_2614": "Utg. moms omvänd 25%",
     "account_2624": "Utg. moms omvänd 12%",
-    "account_2634": "Utg. moms omvänd 6%"
+    "account_2634": "Utg. moms omvänd 6%",
+    "accounts_proposed_history": "Konton föreslagna utifrån hur leverantören bokförts tidigare. Ändra om något inte stämmer.",
+    "accounts_proposed_default": "Konto föreslaget från leverantörens standardkonto. Ändra om något inte stämmer.",
+    "account_missing_title": "Konto saknas",
+    "account_missing_description": "Välj konto för varje rad innan fakturan registreras."
   },
   "supplier_invoice_detail": {
     "back": "Tillbaka",
