@@ -13,6 +13,7 @@ import { fallbackAtomSelection, fallbackNarrative } from '@/lib/agent/composer/f
 import { filterRedundantQuestions } from '@/lib/agent/composer/atom-selection'
 import { preWarmAtomCache } from '@/lib/agent/composer/prewarm'
 import { OPUS_MODEL } from '@/lib/agent/composer/client'
+import { isAiConfigured } from '@/lib/agent/availability'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import type { AtomSelection } from '@/lib/agent/composer/schemas'
 
@@ -164,6 +165,7 @@ export async function POST(request: Request) {
         send({ step: 'select', status: 'in_progress' })
         let selection: AtomSelection
         try {
+          if (!isAiConfigured()) throw new Error('ai_not_configured')
           selection = await withTimeout(selectAtoms(inputs), SELECT_BUDGET_MS)
           send({ step: 'select', status: 'success', selection })
         } catch {
@@ -186,6 +188,7 @@ export async function POST(request: Request) {
         send({ step: 'narrative', status: 'in_progress' })
         let narrative: string
         try {
+          if (!isAiConfigured()) throw new Error('ai_not_configured')
           narrative = await withTimeout(writeNarrative(inputs, selection), NARRATIVE_BUDGET_MS)
           send({ step: 'narrative', status: 'success', narrative })
         } catch {

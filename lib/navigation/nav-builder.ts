@@ -72,6 +72,11 @@ export interface NavBuilderInput {
   hasYearEndAccess?: boolean
   /** Sandbox companies see everything unlocked — the demo must be explorable. */
   isSandbox?: boolean
+  /**
+   * False when the deployment has no AI provider configured. The assistant
+   * entry is then hidden instead of linking to a chat that cannot answer.
+   */
+  aiAvailable?: boolean
   badges?: {
     pendingOperations?: number
     uncategorizedTransactions?: number
@@ -189,10 +194,12 @@ export function buildNavGroups(input: NavBuilderInput): NavGroupSpec[] {
           href: '/automation', label: 'Automatisering', icon: 'automation', requiresCompany: true,
           ...lockState(input, NORDKLART_FEATURES.bookkeepingAutomation),
         },
-        {
-          href: '/chat', label: 'Bokföringsassistent', icon: 'assistant', requiresCompany: true,
-          ...lockState(input, NORDKLART_FEATURES.aiAssistant),
-        },
+        ...(input.aiAvailable === false && !input.isSandbox
+          ? []
+          : [{
+              href: '/chat', label: 'Bokföringsassistent', icon: 'assistant', requiresCompany: true,
+              ...lockState(input, NORDKLART_FEATURES.aiAssistant),
+            } satisfies NavItemSpec]),
         ...(canManageAgency ? [{ href: '/agency', label: 'Redovisningsbyrå', icon: 'agency' } satisfies NavItemSpec] : []),
         ...(canManagePlatform ? [{ href: '/platform', label: 'Plattform', icon: 'platform' } satisfies NavItemSpec] : []),
         { href: '/settings', label: 'Inställningar', icon: 'settings' },

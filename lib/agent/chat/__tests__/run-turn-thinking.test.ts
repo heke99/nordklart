@@ -9,7 +9,8 @@ import type { AgentIntent } from '@/lib/agent/intents/types'
 // chainable no-op and finalMessage() delegates to a queued mock that records
 // the args the stream was called with.
 const messagesCreate = vi.fn()
-vi.mock('@/lib/agent/composer/client', () => ({
+vi.mock('@/lib/agent/composer/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/agent/composer/client')>()),
   getAnthropic: () => ({
     messages: {
       stream: (args: unknown) => {
@@ -92,17 +93,52 @@ beforeEach(() => {
 })
 
 describe('runChatTurn — extended thinking wiring', () => {
-  it('passes a thinking config and bumps max_tokens when the intent opts in', async () => {
-    const args = await runWith({ ...baseIntent(), thinking: { budgetTokens: 2000 } })
-    expect(args.thinking).toEqual({ type: 'enabled', budget_tokens: 2000 })
-    // budget must be strictly below max_tokens — we add the normal output budget.
-    expect(args.max_tokens).toBe(2000 + 4096)
+  it('uses adaptive thinking with medium effort when the intent opts in on a 4.6+ model', async () => {
+    const args = (await runWith({ ...baseIntent(), thinking: { budgetTokens: 2000 } })) as Record<string, unknown>
+    expect(args.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+    expect(args.output_config).toEqual({ effort: 'medium' })
+    expect(args.max_tokens).toBe(16_000)
   })
 
-  it('omits thinking and keeps the default budget when the intent does not opt in', async () => {
-    const args = await runWith(baseIntent())
-    expect(args.thinking).toBeUndefined()
-    expect(args.max_tokens).toBe(4096)
+  it('raises effort to high for deep-reasoning intents', async () => {
+    const args = (await runWith({ ...baseIntent(), model: 'claude-opus-5-5', thinking: { budgetTokens: 12_000 } })) as Record<string, unknown>
+    expect(args.output_config).toEqual({ effort: 'high' })
+  })
+
+  it('runs Sonnet 5.5 at low effort when the intent does not opt in (thinking cannot be disabled there)', async () => {
+    const args = (await runWith({ ...baseIntent(), model: 'claude-sonnet-5-5' })) as Record<string, unknown>
+    expect(args.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+    expect(args.output_config).toEqual({ effort: 'low' })
+    expect(args).not.toHaveProperty('budget_tokens')
+  })
+
+  it('uses a token budget on Haiku 4.5 and no thinking without opt-in', async () => {
+    const withBudget = await runWith({ ...baseIntent(), model: 'claude-haiku-4-5', thinking: { budgetTokens: 2000 } })
+    expect(withBudget.thinking).toEqual({ type: 'enabled', budget_tokens: 2000 })
+    expect(withBudget.max_tokens).toBe(2000 + 4096)
+    vi.clearAllMocks()
+    const plain = await runWith({ ...baseIntent(), model: 'claude-haiku-4-5' })
+    expect(plain.thinking).toBeUndefined()
+    expect(plain.max_tokens).toBe(4096)
+  })
+
+  it('reports a refusal as a chat error instead of an answer', async () => {
+    messagesCreate.mockResolvedValueOnce({ content: [], stop_reason: 'refusal' })
+    getManyMock.mockResolvedValue([])
+    const events: Array<{ kind: string }> = []
+    await runChatTurn({
+      supabase: fakeSupabase(),
+      userId: 'u',
+      companyId: 'c',
+      companyName: 'X',
+      firstName: 'A',
+      intent: baseIntent(),
+      conversationId: 'conv',
+      userMessage: 'hej',
+      persist: false,
+      emit: (e) => { events.push(e); return true },
+    })
+    expect(events.map((e) => e.kind)).toEqual(['error', 'turn_complete'])
   })
 })
 

@@ -1,12 +1,17 @@
 import { createClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
+import { AI_UNAVAILABLE_MESSAGE_SV, isAiConfigured } from '@/lib/agent/availability'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createLogger } from '@/lib/logger'
 import { z } from 'zod'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { getCompanyReadAccess } from '@/lib/access/route-guards'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { composeAgentProfile } from '@/lib/agent/composer'
 import { guardSandbox } from '@/lib/sandbox/guard'
+
+const log = createLogger('api/agent/composer')
 
 const BodySchema = z.object({
   // Optional override; if absent we use the user's active_company_id.
@@ -33,6 +38,12 @@ export async function POST(request: Request) {
   if (authResult.error) return authResult.error
   const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // No AI provider configured: the UI hides the assistant, and a direct call
+  // gets a clear answer instead of a provider error.
+  if (!isAiConfigured()) {
+    return errorResponseFromCode('NOT_IMPLEMENTED', log, { messageSv: AI_UNAVAILABLE_MESSAGE_SV, status: 503 })
+  }
 
   const rate = await checkAgentRateLimit(supabase, user.id)
   if (!rate.ok) {

@@ -8,7 +8,8 @@ import type { StreamEvent } from '../run-turn'
 // `messages.stream()` for token-level streaming, so we expose a stream
 // adapter that delegates `finalMessage()` to the same queued mock.
 const messagesCreate = vi.fn()
-vi.mock('@/lib/agent/composer/client', () => ({
+vi.mock('@/lib/agent/composer/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/agent/composer/client')>()),
   getAnthropic: () => ({
     messages: {
       create: messagesCreate,
@@ -25,6 +26,14 @@ vi.mock('@/lib/agent/composer/client', () => ({
 }))
 
 // system-prompt builder — return a minimal valid shape.
+// The saved-answer cache uses the service role; these tests cover the model loop.
+vi.mock('../response-cache', () => ({
+  faqDirectAnswer: () => null,
+  lookupCachedResponse: async () => null,
+  responseCacheKey: () => 'k'.repeat(64),
+  storeCachedResponse: async () => undefined,
+}))
+
 vi.mock('../system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockResolvedValue({
     blocks: [],

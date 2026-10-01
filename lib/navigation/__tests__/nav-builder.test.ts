@@ -127,3 +127,21 @@ describe('buildNavGroups — badges', () => {
     expect(items.find((item) => item.href === '/transactions')?.badge).toBe(7)
   })
 })
+
+describe('assistant entry and AI availability', () => {
+  const chatItem = (input: NavBuilderInput) =>
+    buildNavGroups(input).flatMap((g) => g.items).find((i) => i.href === '/chat')
+
+  it('shows the assistant when an AI provider is configured', () => {
+    expect(chatItem(companyInput({ aiAvailable: true }))).toBeDefined()
+    expect(chatItem(companyInput())).toBeDefined()
+  })
+
+  it('hides the assistant when no AI provider is configured', () => {
+    expect(chatItem(companyInput({ aiAvailable: false }))).toBeUndefined()
+  })
+
+  it('keeps the sandbox preview', () => {
+    expect(chatItem(companyInput({ aiAvailable: false, isSandbox: true }))).toBeDefined()
+  })
+})

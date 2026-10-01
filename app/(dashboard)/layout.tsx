@@ -24,6 +24,7 @@ import { checkFeatureAccess, listCompanyFeatureAccess } from '@/lib/platform/ent
 import { hasActiveOneTimePurchase, type OneTimePurchaseRow } from '@/lib/year-end/period-access'
 import { featureForDashboardPath, purchaseHrefForFeature } from '@/lib/navigation/feature-access-routing'
 import { resolveWorkspaceType } from '@/lib/workspace/resolve'
+import { isAiConfigured } from '@/lib/agent/availability'
 import type { EntityType, CompanyRole, Team } from '@/types'
 
 /**
@@ -380,7 +381,9 @@ export default async function DashboardLayout({
         identity={{
           displayName: resolvedAgentIdentity?.display_name ?? null,
           avatarId: resolvedAgentIdentity?.avatar_id ?? null,
-          isVerified: Boolean(resolvedAgentIdentity?.verified_at),
+          // Without an AI provider the assistant cannot answer: report it as
+          // not set up so every trigger and sparkle button hides itself.
+          isVerified: Boolean(resolvedAgentIdentity?.verified_at) && (isAiConfigured() || isSandbox),
         }}
       >
         <CompanyTabSync />
@@ -410,6 +413,7 @@ export default async function DashboardLayout({
             userEmail={user.email ?? null}
             enabledFeatures={enabledFeatures}
             hasYearEndAccess={hasYearEndAccess}
+            aiAvailable={isAiConfigured()}
           />
           <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
             <MainContainer companyId={companyId}>{children}</MainContainer>

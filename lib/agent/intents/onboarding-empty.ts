@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL } from '@/lib/agent/composer/client'
+import { HAIKU_MODEL } from '@/lib/agent/composer/client'
 
 // onboarding.empty — "Hjälp mig komma igång" on an empty-state page
 // (no transactions, no customers, no invoices, etc.).
@@ -43,7 +43,7 @@ export const onboardingEmpty = defineAgentIntent<OnboardingEmptyArgs, CapturedOn
     'nordklart_forget_fact',
   ],
 
-  model: SONNET_MODEL,
+  model: HAIKU_MODEL,
 
   capture: async ({ route, subject }) => ({
     route: route ?? null,

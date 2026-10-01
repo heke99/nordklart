@@ -1,6 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
+import { AI_UNAVAILABLE_MESSAGE_SV, isAiConfigured } from '@/lib/agent/availability'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createLogger } from '@/lib/logger'
 import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
 import { getActiveCompanyId } from '@/lib/company/context'
@@ -9,6 +12,8 @@ import { getIntent } from '@/lib/agent/intents/registry'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
 import { guardSandbox } from '@/lib/sandbox/guard'
+
+const log = createLogger('api/agent/invoke')
 
 // Make sure extensions are loaded — the chat loop dispatches against the
 // agent tool registry which is populated by the mcp-server extension at load.
@@ -73,6 +78,12 @@ export async function POST(request: Request) {
   if (authResult.error) return authResult.error
   const { user } = authResult
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // No AI provider configured: the UI hides the assistant, and a direct call
+  // gets a clear answer instead of a provider error.
+  if (!isAiConfigured()) {
+    return errorResponseFromCode('NOT_IMPLEMENTED', log, { messageSv: AI_UNAVAILABLE_MESSAGE_SV, status: 503 })
+  }
 
   // Generous per-user rate limit — bounds runaway Bedrock spend (loop-firing
   // sessions). Fails open on infra error.

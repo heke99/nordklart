@@ -1,4 +1,4 @@
-import { getAnthropic, SONNET_MODEL } from './client'
+import { getAnthropic, HAIKU_MODEL } from './client'
 import type { AtomSelection } from './schemas'
 import type { ComposerInputs } from './inputs'
 
@@ -37,7 +37,7 @@ export async function writeNarrative(
   const anthropic = getAnthropic()
 
   const response = await anthropic.messages.create({
-    model: SONNET_MODEL,
+    model: HAIKU_MODEL,
     max_tokens: 400,
     system: systemPromptFor(inputs.userIsConfirmedDirector),
     messages: [

@@ -56,6 +56,8 @@ interface DashboardNavProps {
   enabledFeatures?: string[] | null
   /** Year-end access incl. fiscal-period-bound one-time purchases. */
   hasYearEndAccess?: boolean
+  /** False hides the assistant entry (no AI provider configured). */
+  aiAvailable?: boolean
 }
 
 const NAV_ICONS: Record<NavIconKey, typeof LayoutDashboard> = {
@@ -153,6 +155,7 @@ export default function DashboardNav({
   userEmail = null,
   enabledFeatures = null,
   hasYearEndAccess = false,
+  aiAvailable = true,
 }: DashboardNavProps) {
   const pathname = usePathname()
   const {
@@ -175,12 +178,13 @@ export default function DashboardNav({
         enabledFeatures: enabledFeatures ? new Set(enabledFeatures) : null,
         hasYearEndAccess,
         isSandbox,
+        aiAvailable,
         badges: {
           pendingOperations: pendingOperationsCount,
           uncategorizedTransactions: uncategorizedTransactionCount,
         },
       }),
-    [workspaceType, hasCompany, canManageAgency, canManagePlatform, enabledFeatures, hasYearEndAccess, isSandbox, pendingOperationsCount, uncategorizedTransactionCount],
+    [workspaceType, hasCompany, canManageAgency, canManagePlatform, enabledFeatures, hasYearEndAccess, isSandbox, aiAvailable, pendingOperationsCount, uncategorizedTransactionCount],
   )
 
   const logout = async () => {
