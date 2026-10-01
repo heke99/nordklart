@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL } from '@/lib/agent/composer/client'
+import { HAIKU_MODEL } from '@/lib/agent/composer/client'
 
 // settings.help — "Vad gör den här inställningen?" from a settings panel.
 //
@@ -37,7 +37,7 @@ export const settingsHelp = defineAgentIntent<SettingsHelpArgs, CapturedSettings
     'nordklart_forget_fact',
   ],
 
-  model: SONNET_MODEL,
+  model: HAIKU_MODEL,
 
   capture: async ({ panel }) => ({ panel: panel ?? null }),
 

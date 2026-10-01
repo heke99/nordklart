@@ -2456,6 +2456,11 @@
       "file": "20261001100000_legal_reacceptance_trafexa.sql",
       "version": "20261001100000",
       "sha256": "bce91188f1e6863a8a4df760b57281c5e20735bf0e75d694e54d0aefd29943e5"
+    },
+    {
+      "file": "20261001120000_agent_response_cache.sql",
+      "version": "20261001120000",
+      "sha256": "425fa11d3c06a79c457c090078e172e68bf8e09696039a4548be4ccfad50cf57"
     }
   ]
 }

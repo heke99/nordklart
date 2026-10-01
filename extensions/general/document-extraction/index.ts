@@ -62,7 +62,7 @@ async function extractAndPersist(
   // schema (legacy supabase types). Fail closed on missing schema.
   const { data: existing, error: existingErr } = await supabase
     .from('document_attachments')
-    .select('id, mime_type, storage_path, extracted_at')
+    .select('id, mime_type, storage_path, extracted_at, sha256_hash')
     .eq('id', document.id)
     .single()
   if (existingErr || !existing) {
@@ -103,8 +103,20 @@ async function extractAndPersist(
   let extractedData: Record<string, unknown> | null = null
   let model: string = 'copied-from-invoice-inbox'
 
+  // The same file uploaded again in this company (same SHA-256) was already
+  // read: reuse that result instead of running OCR on it a second time.
+  const duplicate = inboxRow?.extracted_data ? null : await findExtractedDuplicate(
+    supabase,
+    companyId,
+    document.id,
+    existing.sha256_hash as string | null,
+  )
+
   if (inboxRow?.extracted_data) {
     extractedData = inboxRow.extracted_data as Record<string, unknown>
+  } else if (duplicate) {
+    extractedData = duplicate
+    model = 'copied-from-duplicate'
   } else {
     const mimeType = existing.mime_type as string | null
     if (!mimeType || !SUPPORTED_MIME_TYPES.has(mimeType)) {
@@ -186,4 +198,24 @@ async function extractAndPersist(
     return
   }
   log.info('extraction persisted', { doc: document.id, model, companyId })
+}
+
+async function findExtractedDuplicate(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+  sha256: string | null,
+): Promise<Record<string, unknown> | null> {
+  if (!sha256) return null
+  const { data } = await supabase
+    .from('document_attachments')
+    .select('extracted_data')
+    .eq('company_id', companyId)
+    .eq('sha256_hash', sha256)
+    .neq('id', documentId)
+    .not('extracted_data', 'is', null)
+    .like('extraction_model', 'opendataloader%')
+    .limit(1)
+    .maybeSingle()
+  return (data?.extracted_data as Record<string, unknown> | undefined) ?? null
 }

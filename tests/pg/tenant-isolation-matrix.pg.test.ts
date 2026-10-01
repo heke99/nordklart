@@ -26,6 +26,7 @@ import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
  * service_role may touch; giving them policies would weaken them.
  */
 const DENY_ALL_TABLES = new Set([
+  'agent_response_cache',
   'company_registry_sync_events',
   'financial_operation_idempotency',
   'financial_outbox_events',

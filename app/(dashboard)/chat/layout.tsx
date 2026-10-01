@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import ChatSidebar from '@/components/agent/ChatSidebar'
+import { isAiConfigured } from '@/lib/agent/availability'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +17,17 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
 
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
+
+  // No AI provider configured: the assistant cannot answer, so the chat is
+  // not offered (the nav entry is hidden too). The sandbox keeps its preview.
+  if (!isAiConfigured()) {
+    const { data: sandbox } = await supabase
+      .from('company_settings')
+      .select('is_sandbox')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (!sandbox?.is_sandbox) redirect('/app')
+  }
 
   // Block the chat surface until the agent is built. Without this a user
   // who deep-links to /chat (bookmark, ⌘K, "+ Ny" elsewhere) lands on an

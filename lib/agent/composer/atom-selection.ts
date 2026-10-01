@@ -1,4 +1,5 @@
-import { getAnthropic, OPUS_MODEL } from './client'
+import type { MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/messages'
+import { getAnthropic, OPUS_MODEL, forcedToolChoice, thinkingParams } from './client'
 import { AtomSelectionSchema, ATOM_SELECTION_TOOL_SCHEMA, type AtomSelection } from './schemas'
 import type { ComposerInputs } from './inputs'
 
@@ -54,9 +55,14 @@ export async function selectAtoms(inputs: ComposerInputs): Promise<AtomSelection
 
   const userPrompt = buildUserPrompt(inputs)
 
+  // Opus 5.5 and Sonnet 5.5 reject a forced tool_choice; there the system
+  // prompt's "Använd verktyget compose_agent_profile" carries the instruction
+  // and a missing tool_use block falls through to the composer fallback.
+  const { thinking, output_config } = thinkingParams(OPUS_MODEL, undefined)
   const response = await anthropic.messages.create({
     model: OPUS_MODEL,
-    max_tokens: 2048,
+    max_tokens: 4096,
+    ...(thinking ? { thinking, output_config } : {}),
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userPrompt }],
     tools: [
@@ -66,11 +72,11 @@ export async function selectAtoms(inputs: ComposerInputs): Promise<AtomSelection
         input_schema: ATOM_SELECTION_TOOL_SCHEMA,
       },
     ],
-    tool_choice: { type: 'tool', name: 'compose_agent_profile' },
-  })
+    tool_choice: forcedToolChoice(OPUS_MODEL, 'compose_agent_profile'),
+  } as MessageCreateParamsNonStreaming)
 
-  // Forced tool_use guarantees exactly one tool_use block. We still validate
-  // defensively in case the API ever returns something unexpected.
+  // A forced tool_use guarantees exactly one tool_use block; with auto the
+  // model may answer in text instead, which the caller treats as a failure.
   const toolUse = response.content.find((b) => b.type === 'tool_use')
   if (!toolUse || toolUse.type !== 'tool_use') {
     throw new Error('Opus did not return a tool_use block')

@@ -1,10 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getAnthropic, SONNET_MODEL } from '@/lib/agent/composer/client'
+import { getAnthropic, SONNET_MODEL, thinkingParams } from '@/lib/agent/composer/client'
 import type { AgentIntent } from '@/lib/agent/intents/types'
 import { agentToolRegistry } from '@/lib/agent/tools/registry'
 import type { AgentTool, AgentActorContext, StagedOperationResult } from '@/lib/agent/tools/types'
 import { isStagedOperation } from '@/lib/agent/tools/types'
 import { buildSystemPrompt } from './system-prompt'
+import {
+  faqDirectAnswer,
+  lookupCachedResponse,
+  responseCacheKey,
+  storeCachedResponse,
+} from './response-cache'
 import { createLogger } from '@/lib/logger'
 import { swedishToday } from '@/lib/utils'
 
@@ -218,25 +224,62 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     label: 'In-app chat',
   }
 
-  const anthropic = getAnthropic()
   const model = intent.model || SONNET_MODEL
 
   let assistantText = ''
   let iterations = 0
 
+  // Answer a repeated first turn without the model: from the FAQ for a typed
+  // help question that matches an entry almost word for word, otherwise from
+  // an answer saved for exactly this company, intent, model, system prompt
+  // and question (see response-cache.ts). Only when persisting: tests and
+  // dry runs must not touch the cache.
+  const cacheable = persist && history.length === 0
+  const cacheKey = cacheable
+    ? responseCacheKey({
+        companyId,
+        intentId: intent.id,
+        model,
+        promptHash: systemPrompt.promptHash,
+        userMessage,
+      })
+    : null
+  let reused: { content: ContentBlock[]; text: string } | null = null
+  if (cacheable && cacheKey) {
+    const faq = userMessageHidden ? null : faqDirectAnswer(intent.id, userMessage)
+    if (faq) {
+      reused = { content: [{ type: 'text', text: faq }], text: faq }
+    } else {
+      const saved = await lookupCachedResponse(companyId, cacheKey)
+      if (saved) reused = { content: saved.response, text: saved.text }
+    }
+  }
+
+  if (reused) {
+    log.info('Answered from saved response', { conversationId, companyId, intent: intent.id })
+    assistantText = reused.text
+    emit({ kind: 'text_delta', delta: reused.text })
+    await persistMessage(supabase, conversationId, 'assistant', reused.content)
+  }
+
+  // Set while the model runs; used to decide whether the answer may be saved.
+  let usedTools = false
+  let refused = false
+  let finalContent: ContentBlock[] | null = null
+
+  const anthropic = getAnthropic()
+
   // Extended thinking ("tänka längre"): when the intent opts in, every model
-  // call in the loop gets a reasoning channel so the agent reasons BEFORE it
-  // answers or commits to a tool, instead of narrating its steps in the
-  // visible reply. budget_tokens must be ≥ 1024 and strictly below max_tokens,
-  // so the normal 4096 output budget is added on top. The reasoning streams to
-  // the client as reasoning_delta and renders in a collapsible "Tänkte…" block.
-  const thinking = intent.thinking
-    ? { type: 'enabled' as const, budget_tokens: intent.thinking.budgetTokens }
-    : undefined
-  const maxTokens = (intent.thinking?.budgetTokens ?? 0) + 4096
+  // call in the loop reasons BEFORE it answers or commits to a tool, instead
+  // of narrating its steps in the visible reply. thinkingParams() maps the
+  // intent's budget onto what the model accepts (adaptive thinking + effort on
+  // Claude 4.6 and later, a token budget on older models). The reasoning
+  // streams to the client as reasoning_delta and renders in a collapsible
+  // "Tänkte…" block.
+  const { max_tokens: maxTokens, ...reasoning } = thinkingParams(model, intent.thinking?.budgetTokens)
 
   // 4 + 5 + 6 — iterate until the model stops requesting tools.
-  while (iterations < MAX_TOOL_ITERATIONS) {
+  while (!reused && iterations < MAX_TOOL_ITERATIONS) {
     iterations++
 
     // Token-by-token streaming. The Anthropic SDK's MessageStream emits a
@@ -250,8 +293,8 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
       system: systemPrompt.blocks,
       messages,
       tools: tools.length > 0 ? tools.map(toAnthropicTool) : undefined,
-      ...(thinking ? { thinking } : {}),
-    })
+      ...reasoning,
+    } as Parameters<typeof anthropic.messages.stream>[0])
 
     stream.on('text', (delta) => {
       assistantText += delta
@@ -301,7 +344,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
       // Surface as a chat error so the UI clears its streaming state. Re-throw
       // to let the route's outer try/catch persist the failure if needed.
       // Normalize Bedrock throttling/timeout/5xx into a friendly Swedish line.
-      log.error('Bedrock stream failed', err, {
+      log.error('Model stream failed', err, {
         conversationId,
         companyId,
         model,
@@ -309,6 +352,18 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
       })
       emit({ kind: 'error', message: friendlyModelError(err) })
       throw err
+    }
+
+    // A safety classifier declined the request (HTTP 200, stop_reason
+    // 'refusal'). The partial output is discarded, not persisted.
+    if (response.stop_reason === 'refusal') {
+      log.warn('Model declined the request', { conversationId, companyId, model })
+      emit({
+        kind: 'error',
+        message: 'Anna kan inte svara på den frågan. Formulera om den eller kontakta supporten.',
+      })
+      refused = true
+      break
     }
 
     const assistantContent: ContentBlock[] = response.content
@@ -323,8 +378,10 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     // If the model didn't request any tool, we're done.
     const toolUses = assistantContent.filter((b: ContentBlock) => b.type === 'tool_use')
     if (toolUses.length === 0 || response.stop_reason !== 'tool_use') {
+      finalContent = stripThinking(assistantContent)
       break
     }
+    usedTools = true
 
     // 7 — dispatch each tool_use sequentially. Anthropic accepts parallel
     // tool_results within a single user turn, so we collect them and emit
@@ -446,6 +503,24 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     if (persist) {
       await persistMessage(supabase, conversationId, 'tool', toolResultBlocks)
     }
+  }
+
+  // Save a first-turn answer that needed no tools, so the same question in
+  // the same context is not paid for again.
+  const finalText = (finalContent ?? [])
+    .filter((b: ContentBlock) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b: ContentBlock) => b.text as string)
+    .join('')
+  if (cacheKey && !reused && !usedTools && !refused && finalContent && finalText.trim()) {
+    await storeCachedResponse({
+      companyId,
+      cacheKey,
+      intentId: intent.id,
+      model,
+      promptHash: systemPrompt.promptHash,
+      response: finalContent,
+      text: finalText,
+    })
   }
 
   if (iterations >= MAX_TOOL_ITERATIONS) {
