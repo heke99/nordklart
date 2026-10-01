@@ -95,6 +95,12 @@ export async function POST(request: NextRequest) {
       signup_state: 'invited',
       accepted_terms_at: now,
       accepted_privacy_at: now,
+      // Read by the signup trigger, which records legal_acceptances for the
+      // active terms and privacy policy versions.
+      accepted_terms: true,
+      accepted_privacy: true,
+      legal_acceptance_source: 'invite_signup',
+      legal_acceptance_user_agent: request.headers.get('user-agent')?.slice(0, 500) ?? null,
     },
     app_metadata: { has_password: true },
   })

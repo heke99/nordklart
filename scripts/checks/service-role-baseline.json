@@ -1,6 +1,6 @@
 {
-  "description": "Files allowed to construct a service-role Supabase client. A service-role client bypasses RLS, so every entry here must verify actor -> company -> resource -> permission before the privileged operation. Reviewed 2026-08-08 (see docs/audits/2026-08-08-service-role-review.md) and extended 2026-08-21 for the three atomicity RPC call sites (see docs/audits/2026-08-21-service-role-additions.md). Adding a file requires the same review; the ratchet fails otherwise, and 2026-09-25 for agency links and founder verification (see docs/audits/2026-09-25-service-role-additions.md), and 2026-09-25 for dividends and inventory (see docs/audits/2026-09-25-service-role-additions.md), and 2026-09-25 for the public pricing catalog (see docs/audits/2026-09-25-service-role-additions.md), and 2026-09-27 for invitations, billing and session hardening (see docs/audits/2026-09-27-service-role-additions.md).",
-  "reviewedAt": "2026-09-27",
+  "description": "Files allowed to construct a service-role Supabase client. A service-role client bypasses RLS, so every entry here must verify actor -> company -> resource -> permission before the privileged operation. Reviewed 2026-08-08 (see docs/audits/2026-08-08-service-role-review.md) and extended 2026-08-21 for the three atomicity RPC call sites (see docs/audits/2026-08-21-service-role-additions.md). Adding a file requires the same review; the ratchet fails otherwise, and 2026-09-25 for agency links and founder verification (see docs/audits/2026-09-25-service-role-additions.md), and 2026-09-25 for dividends and inventory (see docs/audits/2026-09-25-service-role-additions.md), and 2026-09-25 for the public pricing catalog (see docs/audits/2026-09-25-service-role-additions.md), and 2026-09-27 for invitations, billing and session hardening (see docs/audits/2026-09-27-service-role-additions.md), and 2026-10-01 for terms re-acceptance (see docs/audits/2026-10-01-service-role-additions.md).",
+  "reviewedAt": "2026-10-01",
   "allowed": [
     "app/(auth)/auth/callback/route.ts",
     "app/(dashboard)/platform/access/page.tsx",
@@ -76,6 +76,7 @@
     "app/api/invoice-financing/provider-webhook/route.ts",
     "app/api/invoices/recurring/cron/route.ts",
     "app/api/invoices/reminders/action/route.ts",
+    "app/api/legal/accept/route.ts",
     "app/api/mcp-oauth/register/route.ts",
     "app/api/mcp-oauth/token/route.ts",
     "app/api/onboarding/complete-core/route.ts",

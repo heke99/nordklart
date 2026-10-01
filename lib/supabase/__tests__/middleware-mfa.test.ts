@@ -32,6 +32,7 @@ const getUser = vi.fn()
 const getAuthenticatorAssuranceLevel = vi.fn()
 const listFactors = vi.fn()
 const signOut = vi.fn().mockResolvedValue({ error: null })
+const rpc = vi.fn()
 
 vi.mock('@supabase/ssr', () => ({
   createServerClient: () => ({
@@ -41,7 +42,7 @@ vi.mock('@supabase/ssr', () => ({
     // select/eq/in/order/limit in varying combinations, so mirroring the exact
     // sequence would make the test brittle against a harmless reorder.
     from: () => makeQuery(),
-    rpc: async () => ({ data: null, error: null }),
+    rpc: (...args: unknown[]) => rpc(...args),
   }),
 }))
 
@@ -68,6 +69,7 @@ describe('middleware MFA enforcement', () => {
     vi.clearAllMocks()
     vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    rpc.mockResolvedValue({ data: null, error: null })
     getUser.mockResolvedValue({ data: { user: passwordUser } })
     listFactors.mockResolvedValue({ data: { totp: [{ status: 'verified' }] } })
   })
@@ -132,6 +134,7 @@ describe('middleware session lifetime', () => {
     vi.clearAllMocks()
     vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', '')
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    rpc.mockResolvedValue({ data: null, error: null })
     getUser.mockResolvedValue({ data: { user: passwordUser } })
   })
 
@@ -175,5 +178,70 @@ describe('middleware session lifetime', () => {
     getUser.mockResolvedValue({ data: { user: null }, error: new Error('fetch failed') })
     await updateSession(req('/dashboard'))
     expect(signOut).not.toHaveBeenCalled()
+  })
+})
+
+describe('middleware terms re-acceptance', () => {
+  const nowSeconds = () => Math.floor(Date.now() / 1000)
+  const pendingTerms = [{ legal_text_version_id: 'v-terms', document_type: 'terms', version: '2026-10-01' }]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', '')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-key')
+    getUser.mockResolvedValue({ data: { user: passwordUser } })
+    getAuthenticatorAssuranceLevel.mockResolvedValue({
+      data: { currentLevel: 'aal1', nextLevel: 'aal1', currentAuthenticationMethods: [{ method: 'password', timestamp: nowSeconds() - 60 }] },
+      error: null,
+    })
+  })
+
+  it('sends a user with pending documents to the acceptance page and keeps the destination', async () => {
+    rpc.mockResolvedValue({ data: pendingTerms, error: null })
+    const res = await updateSession(req('/invoices?status=open'))
+    const location = new URL(res.headers.get('location')!)
+    expect(location.pathname).toBe('/villkor/godkann')
+    expect(location.searchParams.get('next')).toBe('/invoices?status=open')
+    expect(rpc).toHaveBeenCalledWith('pending_legal_documents')
+  })
+
+  it('lets the acceptance page and account settings through while documents are pending', async () => {
+    rpc.mockResolvedValue({ data: pendingTerms, error: null })
+    const gate = await updateSession(req('/villkor/godkann'))
+    expect(gate.headers.get('location')).toBeNull()
+    const account = await updateSession(req('/settings/account'))
+    expect(account.headers.get('location') ?? '').not.toContain('/villkor/godkann')
+  })
+
+  it('caches a clean result in a signed cookie that skips the lookup next time', async () => {
+    rpc.mockResolvedValue({ data: [], error: null })
+    const first = await updateSession(req('/settings/account'))
+    const ack = first.cookies.get('nordklart-legal-ack')?.value
+    expect(ack).toMatch(/^2026-10-01\.[0-9a-f]{64}$/)
+
+    rpc.mockClear()
+    await updateSession(new NextRequest(new URL('https://app.nordklart.se/settings/account'), {
+      headers: { cookie: `nordklart-legal-ack=${ack}` },
+    }))
+    expect(rpc).not.toHaveBeenCalledWith('pending_legal_documents')
+  })
+
+  it('ignores a cookie signed for another user', async () => {
+    rpc.mockResolvedValue({ data: pendingTerms, error: null })
+    getUser.mockResolvedValue({ data: { user: { ...passwordUser, id: 'user-2' } } })
+    const { signLegalAck } = await import('@/lib/legal/acceptance-gate')
+    const forged = await signLegalAck('user-1')
+    const res = await updateSession(new NextRequest(new URL('https://app.nordklart.se/dashboard'), {
+      headers: { cookie: `nordklart-legal-ack=${forged}` },
+    }))
+    expect(res.headers.get('location')).toContain('/villkor/godkann')
+  })
+
+  it('does not lock users out when the lookup fails', async () => {
+    rpc.mockResolvedValue({ data: null, error: { code: '57014' } })
+    const res = await updateSession(req('/settings/account'))
+    expect(res.headers.get('location')).toBeNull()
+    expect(res.cookies.get('nordklart-legal-ack')).toBeUndefined()
   })
 })
