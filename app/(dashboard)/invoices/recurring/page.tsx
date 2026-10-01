@@ -180,6 +180,8 @@ export default function RecurringInvoicesPage() {
                     <TableCell>
                       {s.status === 'active' ? (
                         <Badge variant="success">{t('status_active')}</Badge>
+                      ) : s.status === 'ended' ? (
+                        <Badge variant="outline">{t('status_ended')}</Badge>
                       ) : (
                         <Badge variant="secondary">{t('status_paused')}</Badge>
                       )}

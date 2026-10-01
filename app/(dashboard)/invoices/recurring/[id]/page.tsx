@@ -1,18 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { useForm, useFieldArray, Controller } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import {
   Table,
   TableBody,
@@ -25,7 +19,13 @@ import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { AlertTriangle, ArrowLeft, Pencil, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Pencil } from 'lucide-react'
+import {
+  RecurringScheduleForm,
+  toRecurringRequestBody,
+  type RecurringFormValues,
+} from '@/components/invoices/RecurringScheduleForm'
+import { billingPeriod, formatPeriodSv } from '@/lib/invoices/recurring-period'
 import type { Customer, RecurringInvoiceSchedule, RecurringInvoiceScheduleItem } from '@/types'
 
 type ScheduleDetail = RecurringInvoiceSchedule & {
@@ -61,39 +61,7 @@ export default function RecurringScheduleDetailPage() {
   const [isEditing, setIsEditing] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const schema = useMemo(() => {
-    const itemSchema = z.object({
-      description: z.string().min(1, t('validation_description_required')),
-      quantity: z.number().min(0.01, t('validation_quantity_min')),
-      unit: z.string().min(1),
-      unit_price: z.number(),
-      vat_rate: z
-        .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
-        .nullable()
-        .optional(),
-    })
-    return z.object({
-      name: z.string().min(1, t('validation_name_required')),
-      day_of_month: z.number().int().min(1).max(31),
-      payment_terms_days: z.number().int().min(0).max(90),
-      auto_send: z.boolean(),
-      your_reference: z.string().optional(),
-      our_reference: z.string().optional(),
-      notes: z.string().optional(),
-      items: z.array(itemSchema).min(1, t('validation_min_one_row')),
-    })
-  }, [t])
-
-  type FormData = z.infer<typeof schema>
-
-  const {
-    register,
-    control,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<FormData>({ resolver: zodResolver(schema) })
-  const { fields, append, remove } = useFieldArray({ control, name: 'items' })
+  const [formDefaults, setFormDefaults] = useState<RecurringFormValues | null>(null)
 
   // Note: no synchronous setState here — isLoading starts as true and
   // refreshes reuse the already-rendered data while refetching.
@@ -108,31 +76,13 @@ export default function RecurringScheduleDetailPage() {
       const json = await res.json()
       setSchedule(json.data)
       setRuns(json.runs ?? [])
-      reset({
-        name: json.data.name,
-        day_of_month: json.data.day_of_month,
-        payment_terms_days: json.data.payment_terms_days,
-        auto_send: json.data.auto_send,
-        your_reference: json.data.your_reference ?? '',
-        our_reference: json.data.our_reference ?? '',
-        notes: json.data.notes ?? '',
-        items: (json.data.items ?? [])
-          .slice()
-          .sort((a: RecurringInvoiceScheduleItem, b: RecurringInvoiceScheduleItem) => a.sort_order - b.sort_order)
-          .map((it: RecurringInvoiceScheduleItem) => ({
-            description: it.description,
-            quantity: Number(it.quantity),
-            unit: it.unit,
-            unit_price: Number(it.unit_price),
-            vat_rate: it.vat_rate === null ? null : (Number(it.vat_rate) as 0 | 6 | 12 | 25),
-          })),
-      })
+      setFormDefaults(scheduleToFormValues(json.data))
     } catch {
       toast({ title: tList('load_failed_title'), variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [params.id, reset, toast, tList])
+  }, [params.id, toast, tList])
 
   useEffect(() => {
     // Defer to a macrotask so the effect body never touches state
@@ -171,14 +121,17 @@ export default function RecurringScheduleDetailPage() {
     }
   }
 
-  async function onSave(data: FormData) {
+  async function onSave(values: RecurringFormValues) {
     if (!schedule) return
     setIsSubmitting(true)
     try {
+      const body = toRecurringRequestBody(values, 'edit')
+      // An unchanged next run date is not re-sent.
+      if (body.next_run_date === schedule.next_run_date) delete body.next_run_date
       const res = await fetch(`/api/invoices/recurring/${schedule.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(body),
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -270,6 +223,8 @@ export default function RecurringScheduleDetailPage() {
             <div className="mt-1">
               {schedule.status === 'active' ? (
                 <Badge variant="success">{tList('status_active')}</Badge>
+              ) : schedule.status === 'ended' ? (
+                <Badge variant="outline">{t('status_ended')}</Badge>
               ) : (
                 <Badge variant="secondary">{tList('status_paused')}</Badge>
               )}
@@ -280,7 +235,11 @@ export default function RecurringScheduleDetailPage() {
           <CardContent className="pt-6">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">{t('next_run_label')}</p>
             <p className="mt-1 font-medium tabular-nums">{formatDate(schedule.next_run_date)}</p>
-            <p className="text-xs text-muted-foreground">{t('day_of_month_hint', { day: schedule.day_of_month })}</p>
+            <p className="text-xs text-muted-foreground">
+              {t('next_period_hint', {
+                period: formatPeriodSv(billingPeriod(schedule.next_run_date, schedule.interval_months ?? 1, schedule.billing_timing ?? 'current_period')),
+              })}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -328,6 +287,20 @@ export default function RecurringScheduleDetailPage() {
               <dt className="text-muted-foreground">{t('currency_label')}</dt>
               <dd className="font-medium">{schedule.currency}</dd>
             </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">{t('cadence_label')}</dt>
+              <dd className="font-medium">{t(`cadence_${schedule.interval_months ?? 1}`, { day: schedule.day_of_month })}</dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">{t('ends_label')}</dt>
+              <dd className="font-medium tabular-nums">
+                {schedule.end_date
+                  ? formatDate(schedule.end_date)
+                  : schedule.max_occurrences
+                    ? t('ends_after', { count: schedule.max_occurrences })
+                    : t('ends_never')}
+              </dd>
+            </div>
           </dl>
           {schedule.auto_send && !schedule.customer?.email ? (
             <p className="mt-4 flex items-center gap-2 text-sm text-warning-foreground">
@@ -338,116 +311,16 @@ export default function RecurringScheduleDetailPage() {
         </CardContent>
       </Card>
 
-      {isEditing && canWrite ? (
-        <form onSubmit={handleSubmit(onSave)}>
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{t('edit_card_title')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="name">{t('name_label')}</Label>
-                <Input id="name" {...register('name')} />
-                {errors.name && <p className="mt-1 text-sm text-destructive">{errors.name.message}</p>}
-              </div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="day_of_month">{t('day_label')}</Label>
-                  <Input id="day_of_month" type="number" min={1} max={31} className="tabular-nums" {...register('day_of_month', { valueAsNumber: true })} />
-                </div>
-                <div>
-                  <Label htmlFor="payment_terms_days">{t('payment_terms_label')}</Label>
-                  <Input id="payment_terms_days" type="number" min={0} max={90} className="tabular-nums" {...register('payment_terms_days', { valueAsNumber: true })} />
-                </div>
-              </div>
-              <div className="rounded-lg border border-border p-4">
-                <div className="flex items-start gap-3">
-                  <Controller
-                    control={control}
-                    name="auto_send"
-                    render={({ field }) => (
-                      <input
-                        type="checkbox"
-                        id="auto_send"
-                        checked={field.value ?? false}
-                        onChange={(e) => field.onChange(e.target.checked)}
-                        className="mt-1 h-4 w-4"
-                      />
-                    )}
-                  />
-                  <div className="flex-1">
-                    <Label htmlFor="auto_send" className="font-medium">{t('auto_send_label')}</Label>
-                    <p className="mt-1 text-sm text-muted-foreground">{t('auto_send_description')}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <Label>{t('items_label')}</Label>
-                {fields.map((field, index) => (
-                  <div key={field.id} className="grid grid-cols-12 items-start gap-2">
-                    <div className="col-span-12 sm:col-span-6">
-                      <Input placeholder={t('description_placeholder')} {...register(`items.${index}.description`)} />
-                    </div>
-                    <div className="col-span-3 sm:col-span-2">
-                      <Input type="number" step="0.01" className="tabular-nums" {...register(`items.${index}.quantity`, { valueAsNumber: true })} />
-                    </div>
-                    <div className="col-span-3 sm:col-span-1">
-                      <Input {...register(`items.${index}.unit`)} />
-                    </div>
-                    <div className="col-span-4 sm:col-span-2">
-                      <Input type="number" step="0.01" className="tabular-nums" {...register(`items.${index}.unit_price`, { valueAsNumber: true })} />
-                    </div>
-                    <div className="col-span-2 sm:col-span-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => fields.length > 1 && remove(index)}
-                        aria-label={t('remove_row')}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => append({ description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: 25 })}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  {t('add_row')}
-                </Button>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="your_reference">{t('your_reference_label')}</Label>
-                  <Input id="your_reference" {...register('your_reference')} />
-                </div>
-                <div>
-                  <Label htmlFor="our_reference">{t('our_reference_label')}</Label>
-                  <Input id="our_reference" {...register('our_reference')} />
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="notes">{t('notes_label')}</Label>
-                <Textarea id="notes" rows={3} {...register('notes')} />
-              </div>
-
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="secondary" onClick={() => setIsEditing(false)}>
-                  {t('cancel')}
-                </Button>
-                <Button type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? t('saving') : t('save')}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </form>
+      {isEditing && canWrite && formDefaults ? (
+        <RecurringScheduleForm
+          mode="edit"
+          companyId={schedule.company_id}
+          defaultValues={formDefaults}
+          submitting={isSubmitting}
+          submitLabel={t('save')}
+          onSubmit={onSave}
+          onCancel={() => setIsEditing(false)}
+        />
       ) : null}
 
       <Card>
@@ -509,4 +382,37 @@ export default function RecurringScheduleDetailPage() {
       </Card>
     </div>
   )
+}
+
+function scheduleToFormValues(data: ScheduleDetail): RecurringFormValues {
+  return {
+    name: data.name,
+    currency: data.currency,
+    day_of_month: data.day_of_month,
+    interval_months: (data.interval_months ?? 1) as RecurringFormValues['interval_months'],
+    billing_timing: data.billing_timing ?? 'current_period',
+    first_run_date: data.next_run_date,
+    payment_terms_days: data.payment_terms_days,
+    end_date: data.end_date ?? '',
+    max_occurrences: data.max_occurrences ?? null,
+    auto_send: data.auto_send,
+    your_reference: data.your_reference ?? '',
+    our_reference: data.our_reference ?? '',
+    notes: data.notes ?? '',
+    items: (data.items ?? [])
+      .slice()
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((it) => ({
+        article_id: it.article_id ?? '',
+        description: it.description,
+        quantity: Number(it.quantity),
+        unit: it.unit,
+        unit_price: Number(it.unit_price),
+        vat_rate: (it.vat_rate == null ? '' : String(Number(it.vat_rate))) as RecurringFormValues['items'][number]['vat_rate'],
+        revenue_account: it.revenue_account ?? '',
+        valid_from: it.valid_from ?? '',
+        valid_until: it.valid_until ?? '',
+        remaining_occurrences: it.remaining_occurrences ?? null,
+      })),
+  }
 }

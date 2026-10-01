@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { UpdateRecurringScheduleSchema } from '@/lib/api/schemas'
+import { toItemPayload } from '@/lib/invoices/recurring-items'
 
 ensureInitialized()
 
@@ -74,11 +75,25 @@ export const PATCH = withRouteContext(
     const input = parsed.data
     const { items, ...scheduleFields } = input
 
+    if (input.customer_id) {
+      const { data: customer } = await supabase
+        .from('customers')
+        .select('id')
+        .eq('id', input.customer_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (!customer) {
+        return NextResponse.json({ error: 'Customer not found', type: 'not_found' }, { status: 404 })
+      }
+    }
+
     // Only forward fields the user actually supplied.
     const updateRow: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(scheduleFields)) {
       if (v !== undefined) updateRow[k] = v
     }
+    // Reactivating an ended schedule clears its end marker.
+    if (input.status === 'active') updateRow.ended_at = null
 
     if (Object.keys(updateRow).length > 0) {
       const { error: updateError } = await supabase
@@ -99,13 +114,7 @@ export const PATCH = withRouteContext(
       // failed replace can therefore never leave the schedule with zero
       // items (which would make every subsequent cron run throw "schedule
       // has no items" and silently skip billing dates).
-      const itemPayload = items.map((item) => ({
-        description: item.description,
-        quantity: item.quantity,
-        unit: item.unit,
-        unit_price: item.unit_price,
-        vat_rate: item.vat_rate ?? null,
-      }))
+      const itemPayload = items.map(toItemPayload)
       const { error: replaceError } = await supabase.rpc('replace_recurring_schedule_items', {
         p_schedule_id: id,
         p_company_id: companyId,

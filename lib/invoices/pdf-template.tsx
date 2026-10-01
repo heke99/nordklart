@@ -39,6 +39,7 @@ const LABELS = {
     invoiceDate: 'Fakturadatum:',
     dueDate: 'Förfallodatum:',
     deliveryDate: 'Leveransdatum:',
+    period: 'Period:',
     yourReference: 'Er referens:',
     ourReference: 'Vår referens:',
     // Customer box
@@ -107,6 +108,7 @@ const LABELS = {
     invoiceDate: 'Invoice date:',
     dueDate: 'Due date:',
     deliveryDate: 'Delivery date:',
+    period: 'Period:',
     yourReference: 'Your reference:',
     ourReference: 'Our reference:',
     orgNo: 'Reg. no.:',
@@ -744,6 +746,15 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               <View style={styles.row}>
                 <Text style={styles.label}>{L.deliveryDate}</Text>
                 <Text style={styles.value}>{formatDate(invoice.delivery_date)}</Text>
+              </View>
+            )}
+            {invoice.period_start && invoice.period_end && (
+              // ML 17 kap. 24 § p. 8: a continuous service states the period it covers.
+              <View style={styles.row}>
+                <Text style={styles.label}>{L.period}</Text>
+                <Text style={styles.value}>
+                  {formatDate(invoice.period_start)} – {formatDate(invoice.period_end)}
+                </Text>
               </View>
             )}
             {invoice.your_reference && (

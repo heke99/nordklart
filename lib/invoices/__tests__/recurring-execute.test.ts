@@ -85,6 +85,12 @@ function makeSchedule(overrides: Partial<RecurringInvoiceSchedule> = {}): Recurr
     customer_id: 'cust-1',
     name: 'Retainer',
     day_of_month: 15,
+    interval_months: 1,
+    billing_timing: 'current_period',
+    sale_type: 'services',
+    end_date: null,
+    max_occurrences: null,
+    ended_at: null,
     payment_terms_days: 30,
     currency: 'SEK',
     your_reference: null,
@@ -109,6 +115,11 @@ function makeSchedule(overrides: Partial<RecurringInvoiceSchedule> = {}): Recurr
         unit: 'st',
         unit_price: 100,
         vat_rate: 25,
+        article_id: null,
+        revenue_account: null,
+        valid_from: null,
+        valid_until: null,
+        remaining_occurrences: null,
         created_at: '2026-01-01T00:00:00Z',
       },
     ],
@@ -129,6 +140,7 @@ function enqueueSpawnPipeline(options: {
 } = {}) {
   const { customerRow = customer, complete = completeInvoice, autoSend = false } = options
   enqueue({ data: customerRow, error: null }) // customers select
+  enqueue({ data: { vat_registered: true }, error: null }) // invoice builder: company VAT registration
   enqueue({ data: insertedInvoice, error: null }) // invoices insert
   enqueue({ data: null, error: null }) // invoice_items insert
   if (autoSend) enqueue({ data: companySettings, error: null }) // preflight company_settings

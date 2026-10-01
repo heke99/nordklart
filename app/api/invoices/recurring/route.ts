@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { CreateRecurringScheduleSchema } from '@/lib/api/schemas'
 import { computeInitialRunDate } from '@/lib/invoices/recurring-schedule-service'
+import { toItemPayload } from '@/lib/invoices/recurring-items'
 
 ensureInitialized()
 
@@ -90,6 +91,11 @@ export const POST = withRouteContext(
         customer_id: input.customer_id,
         name: input.name,
         day_of_month: input.day_of_month,
+        interval_months: input.interval_months,
+        billing_timing: input.billing_timing,
+        sale_type: input.sale_type,
+        end_date: input.end_date ?? null,
+        max_occurrences: input.max_occurrences ?? null,
         payment_terms_days: input.payment_terms_days,
         currency: input.currency,
         your_reference: input.your_reference ?? null,
@@ -107,19 +113,13 @@ export const POST = withRouteContext(
       return errorResponse(insertError ?? new Error('insert failed'), log, { requestId })
     }
 
-    const itemRows = input.items.map((item, idx) => ({
-      schedule_id: schedule.id,
-      sort_order: idx,
-      description: item.description,
-      quantity: item.quantity,
-      unit: item.unit,
-      unit_price: item.unit_price,
-      vat_rate: item.vat_rate ?? null,
-    }))
-
-    const { error: itemsError } = await supabase
-      .from('recurring_invoice_schedule_items')
-      .insert(itemRows)
+    // Items go through the same RPC as an edit: one transaction, and an
+    // article from another company is refused.
+    const { error: itemsError } = await supabase.rpc('replace_recurring_schedule_items', {
+      p_schedule_id: schedule.id,
+      p_company_id: companyId,
+      p_items: input.items.map(toItemPayload),
+    })
 
     if (itemsError) {
       // Roll back the parent so a half-created schedule doesn't ship.
@@ -129,6 +129,9 @@ export const POST = withRouteContext(
         .eq('id', schedule.id)
         .eq('company_id', companyId)
       log.error('failed to insert schedule items; rolled back schedule', itemsError)
+      if (itemsError.code === 'P0002') {
+        return NextResponse.json({ error: 'Article not found', type: 'not_found' }, { status: 404 })
+      }
       return errorResponse(itemsError, log, { requestId })
     }
 

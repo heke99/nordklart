@@ -954,6 +954,9 @@ export interface Invoice {
   invoice_date: string
   due_date: string
   delivery_date: string | null
+  // Period a continuous service invoice covers (recurring invoices).
+  period_start?: string | null
+  period_end?: string | null
 
   // Status
   status: InvoiceStatus
@@ -1108,8 +1111,11 @@ export interface InvoiceItem {
   created_at: string
 }
 
-// Recurring Invoice Schedule (template + monthly cadence)
-export type RecurringInvoiceScheduleStatus = 'active' | 'paused'
+// Recurring Invoice Schedule (template + cadence)
+export type RecurringInvoiceScheduleStatus = 'active' | 'paused' | 'ended'
+
+/** Calendar months an invoice covers relative to its run date. */
+export type RecurringBillingTiming = 'current_period' | 'next_period' | 'previous_period'
 
 export interface RecurringInvoiceSchedule {
   id: string
@@ -1119,10 +1125,18 @@ export interface RecurringInvoiceSchedule {
 
   name: string
 
-  // Monthly cadence, day-of-month 1-31. Clamped to last day of month in
-  // shorter months (handled by computeNextRunDate).
+  // Day-of-month 1-31, clamped to the last day of shorter months, every
+  // interval_months months (1, 2, 3, 6 or 12).
   day_of_month: number
+  interval_months: number
   payment_terms_days: number
+
+  billing_timing: RecurringBillingTiming
+  sale_type: 'goods' | 'services'
+  // The schedule ends after end_date or after max_occurrences invoices.
+  end_date: string | null
+  max_occurrences: number | null
+  ended_at: string | null
 
   currency: Currency
   your_reference: string | null
@@ -1156,6 +1170,13 @@ export interface RecurringInvoiceScheduleItem {
   unit_price: number
   // null = inherit customer's default VAT rate at spawn time
   vat_rate: number | null
+  article_id: string | null
+  revenue_account: string | null
+  // Limit the line to invoices whose period overlaps valid_from..valid_until.
+  valid_from: string | null
+  valid_until: string | null
+  // Limit the line to the next N invoices; null = every invoice.
+  remaining_occurrences: number | null
   created_at: string
 }
 
