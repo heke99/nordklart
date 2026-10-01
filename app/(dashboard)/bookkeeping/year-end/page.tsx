@@ -31,6 +31,7 @@ import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 import { PreflightStep } from '@/components/bookkeeping/year-end/PreflightStep'
 import { DispositionsStep } from '@/components/bookkeeping/year-end/DispositionsStep'
 import { AccrualsStep } from '@/components/bookkeeping/year-end/AccrualsStep'
+import ClosingEntryCard from '@/components/bookkeeping/year-end/ClosingEntryCard'
 import { InventoryCountCard } from '@/components/bookkeeping/year-end/InventoryCountCard'
 import { PreviewStep } from '@/components/bookkeeping/year-end/PreviewStep'
 import { ExecuteStep } from '@/components/bookkeeping/year-end/ExecuteStep'
@@ -428,6 +429,7 @@ export default function YearEndPage() {
   }, [companySuffix, newPeriodName, newPeriodStart, newPeriodEnd, toast])
 
   const currentStepIndex = STEP_ORDER.indexOf(step)
+  const activePeriod = periods?.find((period) => period.id === selectedPeriodId) ?? null
   const progressValue = ((currentStepIndex + 1) / STEP_ORDER.length) * 100
 
   const showWizard = useMemo(
@@ -575,6 +577,10 @@ export default function YearEndPage() {
 
       {showWizard && step === 'accruals' && selectedPeriodId && (
         <InventoryCountCard periodId={selectedPeriodId} companyId={companyId} />
+      )}
+
+      {showWizard && step === 'accruals' && activePeriod && !activePeriod.is_closed && (
+        <ClosingEntryCard periodEnd={activePeriod.period_end} />
       )}
 
       {showWizard && step === 'accruals' && selectedPeriodId && (

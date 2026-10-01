@@ -262,7 +262,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   TARGET_PERIOD_CLOSED: {
     httpStatus: 409,
     message_sv:
-      'Räkenskapsåret som täcker datumet är stängt (bokslut) och kan inte öppnas. Bokför i en öppen period i stället.',
+      'Räkenskapsåret som täcker datumet är stängt (bokslut). Begär återöppning under Bokslut → Årsredovisning, eller – om årsredovisningen redan är fastställd eller inlämnad – bokför en rättelse av fel från tidigare år i det öppna året.',
     message_en: 'The fiscal year covering the date is closed and cannot be reopened.',
   },
   TARGET_PERIOD_LOCKED: {
@@ -324,6 +324,23 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Fakturan har redan skickats eller betalats.',
     message_en: 'The invoice is already sent or paid.',
+  },
+  PRIOR_CORRECTION_PERIOD_NOT_CLOSED: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret är inte stängt. Bokför rättelsen direkt i det året med en vanlig verifikation eller rättelse.',
+    message_en: 'The fiscal year is not closed. Book the correction in that year instead.',
+  },
+  PRIOR_CORRECTION_TARGET_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Rättelsen ska bokföras i ett öppet räkenskapsår efter det år felet avser, med ett datum inom det året.',
+    message_en: 'The correction must be booked in an open fiscal year after the erroneous year, dated within it.',
+  },
+  PRIOR_CORRECTION_LINES_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Raderna i rättelsen följer inte reglerna för vald metod.',
+    message_en: 'The correction lines do not follow the rules for the chosen method.',
   },
 }
 

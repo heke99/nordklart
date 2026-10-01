@@ -28,6 +28,7 @@ import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
 import { ConsentSigningDialog } from '@/components/bankid/ConsentSigningDialog'
 import { getYearEndApiErrorMessage } from '@/lib/year-end/api-error'
+import PriorPeriodCorrectionCard from '@/components/bookkeeping/year-end/PriorPeriodCorrectionCard'
 
 type PresentationReclassification = {
   id: string
@@ -587,7 +588,10 @@ export default function ArsredovisningPage() {
       setReopenApprover('')
       toast({
         title: request?.status === 'blocked' ? 'Särskilt rättelseflöde krävs' : 'Återöppningsbegäran skapad',
-        description: request?.error_message ?? 'Begäran är sparad och kan godkännas av behörig person.',
+        description:
+          request?.status === 'blocked'
+            ? 'Årsredovisningen är redan inlämnad, så året kan inte öppnas igen. Rätta felet i ett senare år under "Rätta fel från tidigare år" nedan.'
+            : request?.error_message ?? 'Begäran är sparad och kan godkännas av behörig person.',
         variant: request?.status === 'blocked' ? 'destructive' : 'default',
       })
     } catch (requestError) {
@@ -1526,6 +1530,8 @@ export default function ArsredovisningPage() {
           )}
         </CardContent>
       </Card>
+
+      {periodId && <PriorPeriodCorrectionCard periodId={periodId} companySuffix={companySuffix} />}
 
       <Card>
         <CardHeader>

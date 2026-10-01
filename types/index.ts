@@ -1459,6 +1459,7 @@ export type JournalEntrySourceType =
   | 'dividend_decision'
   | 'dividend_payment'
   | 'year_end_inventory'
+  | 'prior_period_correction'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'

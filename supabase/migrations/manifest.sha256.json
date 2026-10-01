@@ -2466,6 +2466,11 @@
       "file": "20261001130000_recurring_invoices_v2.sql",
       "version": "20261001130000",
       "sha256": "f925f8a39f26e4d565e8e97e373b8d8c1c448b7f3bfba7bff6beffa262ca1722"
+    },
+    {
+      "file": "20261001140000_prior_period_correction_source.sql",
+      "version": "20261001140000",
+      "sha256": "e2641c0f365386785e4e32ce114dd5c4297dcb8975ecc1bcf2bbe37c71b2eabb"
     }
   ]
 }
